@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-// Hintergrundaufgaben mit dem echten Modell (poc/README.md, „Hintergrundaufgaben“).
+// Hintergrundaufgaben mit dem echten Modell (docs/entwurf.md, „Hintergrundaufgaben“).
 
 type bgTask struct {
 	ID        string `json:"id"`

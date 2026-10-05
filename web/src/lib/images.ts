@@ -1,4 +1,4 @@
-// Bilder in Antworten des Agenten (siehe „Anzeige-Bilder“ in poc/README.md). Fremde Adressen lädt die UI
+// Bilder in Antworten des Agenten (siehe „Anzeige-Bilder“ in docs/entwurf.md). Fremde Adressen lädt die UI
 // nie: Über die Bildadresse könnten Daten aus der Sandbox zu einem fremden Server gelangen, ohne dass der
 // Nutzer Internet bestätigt hat (Markdown-Image-Exfiltration, Review K1). Lokale Pfade aus der Sandbox holt
 // der Orchestrator selbst, prüft sie und liefert sie aus; data:-Bilder bleiben im Browser.

@@ -172,3 +172,10 @@ Modul zu laden und schlägt fehl; das Muster `*.test.mjs` angeben.
 5. Test laufen lassen (siehe oben), außerdem `diff -r` gegen den neuen Tarball: Die Ausgabe muss
    genau die hier gelisteten Änderungen zeigen.
 6. Diese Datei nachziehen: Tabelle *Herkunft*, Liste *Weitere Stellen*, ggf. neue Änderungen.
+
+## Hinweis zum eigenen Repo (05.10.2026)
+
+Das Gateway liegt seit dem 05.10.2026 in einem eigenen Repo. Die oben genannten Commits stehen im
+Masterarbeits-Repo (`poc/third_party/…`); hier kam die Kopie mit dem ersten Commit **bereits angepasst**
+herein. Die eigenen Änderungen lassen sich trotzdem jederzeit nachprüfen: `npm pack` mit der oben
+genannten Version holen, entpacken und mit `diff -r package/ <dieses Verzeichnis>` vergleichen.

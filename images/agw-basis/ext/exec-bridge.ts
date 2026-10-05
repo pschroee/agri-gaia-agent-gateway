@@ -5,12 +5,12 @@
 //
 // Dazu ein Wächter für das Werkzeug subagent: Er lässt nur Parameter durch, die keinen Code und
 // keine Agentendefinition in den Container von pi bringen (Prüfpunkte P4/P4b in
-// poc/e9-ausfuehrungs-sandbox.md). Der Wächter ist ein Kontrollpunkt, weil nach E9 kein Code des
+// docs/e9-ausfuehrungs-sandbox.md). Der Wächter ist ein Kontrollpunkt, weil nach E9 kein Code des
 // Agenten im pi-Prozess läuft: Der Agent erreicht pi nur über die Parameter seiner Aufrufe.
 //
 // Hintergrundaufgaben: bash mit run_in_background startet den Befehl über den Orchestrator in der
 // Ausführungs-Sandbox und kehrt sofort zurück; bg_output und bg_stop fragen ab bzw. beenden. Das
-// Ende meldet der Orchestrator dem Agenten selbst (poc/README.md, „Hintergrundaufgaben“).
+// Ende meldet der Orchestrator dem Agenten selbst (docs/entwurf.md, „Hintergrundaufgaben“).
 //
 // Geladen im Hauptagenten per -e und in jedem Subagenten über
 // settings.json → subagents.defaultSubagentOnlyExtensions.

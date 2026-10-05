@@ -18,7 +18,7 @@ import (
 
 // DefaultMaxLine begrenzt eine Zeile. pi liest Daten, die der Agent erzeugt;
 // eine Grenze schützt den Orchestrator. Längere Zeilen werden nicht still
-// verworfen, sondern als Ereignis TypeOversized gemeldet (poc/README.md).
+// verworfen, sondern als Ereignis TypeOversized gemeldet (docs/entwurf.md).
 const DefaultMaxLine = 32 << 20
 
 const (

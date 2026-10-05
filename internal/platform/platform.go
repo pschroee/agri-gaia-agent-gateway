@@ -6,7 +6,7 @@
 // Token-Austausch (Exchange=false) gilt dieses Token für alle Chats, über den Keycloak-Client
 // „frontend“. Mit Token-Austausch (eigener vertraulicher Client, etwa „agw-agent“) tauscht der
 // Orchestrator es je Chat nach RFC 8693 gegen ein eigenes Token mit eingeschränkter Zielgruppe:
-// sub bleibt der Nutzer, azp nennt den Agenten (../docs/keycloak-token-austausch.md).
+// sub bleibt der Nutzer, azp nennt den Agenten (keycloak-token-austausch.md im Masterarbeits-Repo).
 package platform
 
 import (
@@ -241,7 +241,7 @@ var (
 	pathRe           = regexp.MustCompile(`^/[A-Za-z0-9_\-.:~/ ]*$`) // Leerzeichen: Architektur „Mask R-CNN“
 	methods          = map[string]bool{"GET": true, "POST": true, "PUT": true, "PATCH": true, "DELETE": true}
 	// Gesperrte Bereiche: /urls liefert Zugangsdaten integrierter Dienste (Fuseki-Admin,
-	// ../docs/rechtemodell.md), /service sind interne Rückrufe von Keycloak und Registry,
+	// rechtemodell.md im Masterarbeits-Repo), /service sind interne Rückrufe von Keycloak und Registry,
 	// /users gibt das Token-Profil des Orchestrator-Kontos preis, /network liefert Passwort und
 	// API-Schlüssel des Dataspace-Connectors (Review K2). Die Liste ist eine Negativliste und
 	// nicht vollständig; Schlüssel mit Geheimnissen schwärzt redact zusätzlich in jeder Antwort.

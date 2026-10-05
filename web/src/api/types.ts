@@ -535,7 +535,7 @@ export type ServerEvent =
 /** Regel einer Delegation: Aktion auf Ressource, ohne ids nur für Aufrufe ohne Objekt. */
 export type DelegationRule = { action: string; resource: string; ids?: string[] }
 
-/** Übertragene Rechte eines Chats (poc/plan-delegation-rest-plattform.md, Schritt 1). */
+/** Übertragene Rechte eines Chats (docs/plan-delegation-rest-plattform.md, Schritt 1). */
 export type Delegation = {
   rules: DelegationRule[]
   expires_at?: string

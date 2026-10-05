@@ -39,3 +39,10 @@ MIT, Copyright bei den Autoren von pi-intercom; der Lizenztext liegt unveränder
    Sitzungen mit UI: Einschleusen per `steer`, also nach den laufenden Werkzeugen und vor dem nächsten
    Modellaufruf. Mit `PI_INTERCOM_REFUSE_WHEN_BUSY=1` gilt wieder das Verhalten des Originals.
    Belegt durch `TestSlotSubagentIntercom` (`poc/internal/worker/talk_docker_test.go`).
+
+## Hinweis zum eigenen Repo (05.10.2026)
+
+Das Gateway liegt seit dem 05.10.2026 in einem eigenen Repo. Die oben genannten Commits stehen im
+Masterarbeits-Repo (`poc/third_party/…`); hier kam die Kopie mit dem ersten Commit **bereits angepasst**
+herein. Die eigenen Änderungen lassen sich trotzdem jederzeit nachprüfen: `npm pack` mit der oben
+genannten Version holen, entpacken und mit `diff -r package/ <dieses Verzeichnis>` vergleichen.

@@ -472,7 +472,7 @@ Orchestrator liest die Dateien dort selbst (Operation `read`, je Datei höchsten
 Austausch als `socket_calls`-Eintrag mit `via: "orchestrator"`, `op: "token_exchange"` und den Angaben des neuen
 Tokens im `detail` (Nutzer, `azp`, `aud`, Ablauf, ob ein `act`-Claim kam).
 
-**Delegation** (`POST /api/chats` mit Feld `delegation`, Aufbau in `plan-delegation-rest-plattform.md`):
+**Delegation** (`POST /api/chats` mit Feld `delegation`, Aufbau in `docs/plan-delegation-rest-plattform.md`):
 Jeder Plattform-Aufruf wird aus Methode und Pfad einer Aktion, Ressource und Kennung zugeordnet und gegen die
 Regeln geprüft. Ein Übergriff ergibt `{status: "denied", message}` (Socket-Protokoll: `übergriff abgewiesen: …`);
 mit `enforce: false` geht er durch und steht im Protokoll als `… · übergriff, nur protokolliert: …`. Das Werkzeug

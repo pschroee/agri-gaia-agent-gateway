@@ -49,7 +49,7 @@ func (a *app) chatFlags(fs *flag.FlagSet, req *agwclient.CreateChatRequest, inet
 	fs.StringVar(&req.Title, "title", "", "Titel des Chats")
 	fs.Var(inet, "internet", "Internetzugang der Sandbox (true|false)")
 	fs.Var(maxSub, "max-subagents", "höchstens so viele Subagenten (Standard: Voreinstellung des Servers)")
-	fs.Func("delegation", "übertragene Rechte als JSON-Datei (siehe poc/plan-delegation-rest-plattform.md); - liest von stdin", func(p string) error {
+	fs.Func("delegation", "übertragene Rechte als JSON-Datei (siehe docs/plan-delegation-rest-plattform.md); - liest von stdin", func(p string) error {
 		var b []byte
 		var err error
 		if p == "-" {

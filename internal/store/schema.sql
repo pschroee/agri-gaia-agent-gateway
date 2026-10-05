@@ -342,7 +342,7 @@ ALTER TABLE socket_calls ADD COLUMN IF NOT EXISTS tool_call_id text NOT NULL DEF
 -- Chats werden nicht mehr beendet (30.09.2026): früher beendete ruhen und lassen sich fortsetzen.
 UPDATE chats SET state='dormant' WHERE state='closed';
 
--- Delegation (plan-delegation-rest-plattform.md, Schritt 1): übertragene Rechte je Chat und das
+-- Delegation (docs/plan-delegation-rest-plattform.md, Schritt 1): übertragene Rechte je Chat und das
 -- Herkunftsregister der Objekte, die in dieser Delegation entstanden sind. Das Register gilt beim
 -- Fortsetzen weiter; Einträge entstehen nur aus Antworten auf Anlage-Aufrufe.
 ALTER TABLE chats ADD COLUMN IF NOT EXISTS delegation jsonb;

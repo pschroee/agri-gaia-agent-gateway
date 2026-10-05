@@ -1,7 +1,7 @@
 // Package delegation prüft Plattform-Aufrufe gegen die übertragenen Rechte eines Chats: welche
 // Aktionen auf welchen Objekten der Agent für diese Aufgabe ausführen darf. Alles andere ist ein
 // Übergriff. Jeder Aufruf wird allein aus Methode und normalisiertem Pfad eingeordnet, nie aus
-// Angaben des Agenten (plan-delegation-rest-plattform.md, Schritt 1).
+// Angaben des Agenten (docs/plan-delegation-rest-plattform.md, Schritt 1).
 package delegation
 
 import (

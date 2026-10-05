@@ -22,13 +22,13 @@ FROM node:24-bookworm-slim AS pi
 ARG PI_VERSION=0.87.1
 RUN npm install -g @earendil-works/pi-coding-agent@${PI_VERSION} \
  && npm cache clean --force
-# Aufgabenliste des Agenten: Werkzeug `todo` aus rpiv-todo (Wahl begründet in poc/README.md,
+# Aufgabenliste des Agenten: Werkzeug `todo` aus rpiv-todo (Wahl begründet in docs/entwurf.md,
 # „Aufgaben“). Der Zustand steckt in den Werkzeugergebnissen der pi-Sitzung, nicht in Dateien.
 # Vor pi-subagents, weil `pi install` per npm im selben Präfix nicht aufgeführte Pakete entfernt.
 ARG RPIV_TODO_VERSION=2.11.0
 # Websuche: web_search und web_extract aus pi-searxng-suite (MIT, unverändert). Die Anfragen gehen
 # über den Web-Proxy des Orchestrators an den eigenen SearXNG bzw. ins Web, nur mit Internet;
-# web-gate.ts blendet die Werkzeuge ohne Internet aus (poc/README.md, „Websuche“).
+# web-gate.ts blendet die Werkzeuge ohne Internet aus (docs/entwurf.md, „Websuche“).
 ARG SEARXNG_SUITE_VERSION=0.2.3
 # Nachrichten zwischen den Sitzungen eines Platzes (Haupt- und Subagenten): pi-intercom (MIT),
 # Werkzeug intercom; der Broker läuft im Container von pi über einen Unix-Socket im Home. pi install

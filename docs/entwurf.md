@@ -1,5 +1,8 @@
 # PoC: Agent in isolierter Sandbox, Orchestrator in Go
 
+> **Herkunft:** Diese Notizen stammen aus dem Masterarbeits-Repo (dort `poc/README.md`). Pfade wie
+> `poc/…` beziehen sich auf dieses Repo, `../docs/…` und `../masterarbeit/…` auf das Masterarbeits-Repo.
+
 > **Stand 29.09.2026, Entscheidung des Verfassers.** Dieser Ordner hält fest, wie der erste PoC
 > gebaut wird. **Stufe 1 ist umgesetzt** (siehe *Stufe 1 (umgesetzt)* direkt unten); die
 > Abschnitte danach beschreiben den Zielaufbau. Die Wahl von pi als Harness ist in
