@@ -279,3 +279,41 @@ func TestBackgroundEnv(t *testing.T) {
 		t.Fatalf("gesetzt: %d %d %v", e.BgMax, e.BgWakesPerHour, e.BgKeepAlive)
 	}
 }
+
+func TestCheckAuth(t *testing.T) {
+	tok := strings.Repeat("a", 32)
+	oidc := Env{AuthMode: AuthOIDC, OIDCIssuer: "https://kc.example/realms/r", OIDCClientID: "agw-agent", OIDCClientSecret: "s", PublicURL: "https://agent.example"}
+	cases := []struct {
+		name string
+		env  Env
+		ok   bool
+	}{
+		{"token", Env{AuthMode: AuthToken, APIToken: tok}, true},
+		{"token zu kurz", Env{AuthMode: AuthToken, APIToken: "kurz"}, false},
+		{"oidc ohne Token", oidc, true},
+		{"oidc ohne Issuer", func() Env { e := oidc; e.OIDCIssuer = ""; return e }(), false},
+		{"oidc ohne Secret", func() Env { e := oidc; e.OIDCClientSecret = ""; return e }(), false},
+		{"oidc mit Einbettung", func() Env { e := oidc; e.FrameAncestors = []string{"https://app.example"}; return e }(), true},
+		{"oidc mit kaputter Herkunft", func() Env { e := oidc; e.FrameAncestors = []string{"app.example;"}; return e }(), false},
+		{"unbekannt", Env{AuthMode: "basic"}, false},
+	}
+	for _, c := range cases {
+		if err := c.env.CheckAuth(); (err == nil) != c.ok {
+			t.Errorf("%s: %v", c.name, err)
+		}
+	}
+}
+
+func TestOIDCEnvDefaults(t *testing.T) {
+	t.Setenv("AGW_AUTH_MODE", "OIDC")
+	t.Setenv("AGW_PLATFORM_CLIENT_SECRET", "plattform")
+	t.Setenv("AGW_FRAME_ANCESTORS", "https://app.a  https://app.b")
+	t.Setenv("AGW_PUBLIC_URL", "https://agent.example/")
+	e := FromEnv()
+	if e.AuthMode != AuthOIDC || e.OIDCClientID != "agw-agent" || e.OIDCClientSecret != "plattform" || e.PublicURL != "https://agent.example" {
+		t.Fatalf("%+v", e)
+	}
+	if len(e.FrameAncestors) != 2 || e.FrameAncestors[1] != "https://app.b" {
+		t.Fatalf("frame ancestors: %v", e.FrameAncestors)
+	}
+}
