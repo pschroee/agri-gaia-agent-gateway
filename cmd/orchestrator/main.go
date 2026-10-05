@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"slices"
 	"syscall"
 	"time"
 
@@ -20,6 +21,7 @@ import (
 	"agw/internal/chat"
 	"agw/internal/config"
 	"agw/internal/llmproxy"
+	"agw/internal/oidc"
 	"agw/internal/platform"
 	"agw/internal/pool"
 	"agw/internal/sandbox"
@@ -55,8 +57,19 @@ func run() error {
 			slog.Warn("kein Schlüssel für Anbieter gesetzt", "anbieter", p.ID, "variable", p.APIKeyEnv)
 		}
 	}
-	if len(env.APIToken) < 32 {
-		return errors.New("AGW_API_TOKEN fehlt oder ist kürzer als 32 Zeichen (./dev.sh init legt ihn an)")
+	if err := env.CheckAuth(); err != nil {
+		return err
+	}
+	var auth *oidc.Service
+	if env.AuthMode == config.AuthOIDC {
+		if auth, err = oidc.New(oidc.Config{Issuer: env.OIDCIssuer, ClientID: env.OIDCClientID, ClientSecret: env.OIDCClientSecret, PublicURL: env.PublicURL}); err != nil {
+			return err
+		}
+		// Die UI wird unter der öffentlichen Adresse aufgerufen; ihr Host gilt damit als erlaubt.
+		if u, err := url.Parse(env.PublicURL); err == nil && !slices.Contains(env.AllowedHosts, u.Host) {
+			env.AllowedHosts = append(env.AllowedHosts, u.Host)
+		}
+		slog.Info("Anmeldung über die Plattform (OIDC)", "issuer", env.OIDCIssuer, "client", env.OIDCClientID, "redirect", env.PublicURL+oidc.CallbackPath, "einbettung", env.FrameAncestors)
 	}
 	blocked, err := api.ParseSubnets(env.BlockedSubnets)
 	if err != nil {
@@ -99,16 +112,26 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	plat, err := platform.New(platform.Config{APIURL: env.PlatformAPIURL, TokenURL: env.PlatformTokenURL,
+	pcfg := platform.Config{APIURL: env.PlatformAPIURL, TokenURL: env.PlatformTokenURL,
 		ClientID: env.PlatformClientID, ClientSecret: env.PlatformClientSecret, User: env.PlatformUser, Password: env.PlatformPassword,
-		Exchange: env.PlatformExchange, Audiences: env.PlatformAudiences})
+		Exchange: env.PlatformExchange, Audiences: env.PlatformAudiences}
+	konto := env.PlatformUser
+	if auth != nil {
+		// Jeder Chat handelt für seinen Besitzer: dessen Token aus der Sitzung ist das subject_token.
+		pcfg.Subject = ownerToken(st, auth)
+		pcfg.User, pcfg.Password, konto = "", "", "Besitzer des Chats"
+		if env.PlatformAPIURL != "" && !env.PlatformExchange {
+			slog.Warn("Anmeldung über die Plattform ohne Token-Austausch: das Token des Nutzers geht unverändert an die API (AGW_PLATFORM_TOKEN_EXCHANGE=true empfohlen)")
+		}
+	}
+	plat, err := platform.New(pcfg)
 	if err != nil {
 		return err
 	}
 	if plat == nil {
 		slog.Info("Plattform-Anbindung aus (AGW_PLATFORM_API_URL leer)")
 	} else {
-		slog.Info("Plattform-Anbindung an", "api", env.PlatformAPIURL, "konto", env.PlatformUser, "client", env.PlatformClientID, "token_austausch", plat.Exchanging())
+		slog.Info("Plattform-Anbindung an", "api", env.PlatformAPIURL, "konto", konto, "client", env.PlatformClientID, "token_austausch", plat.Exchanging())
 	}
 	p := pool.New[chat.Agent](fac.Create, fac.Destroy, env.PoolSizes)
 	m := chat.NewManager(st, p, cat, blobs, artifacts.NewBroker(), chat.Options{
@@ -141,7 +164,8 @@ func run() error {
 	// SSE-Verbindungen geschlossen, die Shutdown sonst bis zur Frist aufhielten.
 	baseCtx, cancelBase := context.WithCancel(context.Background())
 	defer cancelBase()
-	apiSrv := &http.Server{Addr: env.HTTPAddr, Handler: (&api.Server{M: m, Pool: p, Cat: cat, Env: env, Web: webFS, Blocked: blocked, Token: env.APIToken, AllowedHosts: env.AllowedHosts}).Handler(),
+	apiSrv := &http.Server{Addr: env.HTTPAddr, Handler: (&api.Server{M: m, Pool: p, Cat: cat, Env: env, Web: webFS, Blocked: blocked, Token: env.APIToken, AllowedHosts: env.AllowedHosts,
+		OIDC: auth, FrameAncestors: env.FrameAncestors}).Handler(),
 		ReadHeaderTimeout: 10 * time.Second, MaxHeaderBytes: 64 << 10, BaseContext: func(net.Listener) context.Context { return baseCtx }}
 	proxy := llmproxy.New(cat)
 	proxy.SetRecorder(m) // Zuordnung je Platz, Abrechnung, harte Grenze gleichzeitiger Agenten
@@ -184,6 +208,21 @@ func run() error {
 	_ = proxySrv.Shutdown(sctx)
 	_ = webSrv.Shutdown(sctx)
 	return nil
+}
+
+// ownerToken liefert je Chat das Zugangstoken seines Besitzers aus dessen Sitzung am Orchestrator.
+// Ohne lebende Sitzung scheitert der Plattform-Aufruf mit oidc.ErrNoSession (Meldung an den Agenten).
+func ownerToken(st *store.Store, auth *oidc.Service) func(ctx context.Context, chatID string) (string, error) {
+	return func(ctx context.Context, chatID string) (string, error) {
+		owner, err := st.ChatOwner(ctx, chatID)
+		if err != nil {
+			return "", err
+		}
+		if owner == "" {
+			return "", errors.New("Chat ohne Besitzer (angelegt im token-Modus); für die Plattform einen neuen Chat anlegen")
+		}
+		return auth.AccessToken(ctx, owner)
+	}
 }
 
 // newTitler: Chattitel vom Modell des Chats oder von AGW_TITLE_MODEL; "off" schaltet sie ab.

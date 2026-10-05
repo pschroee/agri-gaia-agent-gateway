@@ -3,8 +3,10 @@ package config
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -339,7 +341,22 @@ type Env struct {
 	PlatformClientSecret string
 	PlatformExchange     bool
 	PlatformAudiences    []string
+	// Anmeldung an der API: AuthMode "token" (AGW_API_TOKEN, Standard) oder "oidc" (Anmeldung über
+	// den Keycloak der Plattform, Authorization Code mit PKCE; Chats gehören dann dem Nutzer).
+	AuthMode         string
+	OIDCIssuer       string // https://keycloak.<basis>/realms/<realm>
+	OIDCClientID     string // Standard agw-agent
+	OIDCClientSecret string // Standard: AGW_PLATFORM_CLIENT_SECRET
+	PublicURL        string // https://agent.<basis>; Redirect-URI = PublicURL + "/oidc/callback"
+	// FrameAncestors: Herkünfte, die die UI einbetten dürfen (leer: frame-ancestors 'none').
+	FrameAncestors []string
 }
+
+// Anmeldearten der API (AGW_AUTH_MODE).
+const (
+	AuthToken = "token"
+	AuthOIDC  = "oidc"
+)
 
 func FromEnv() Env {
 	return Env{
@@ -404,7 +421,46 @@ func FromEnv() Env {
 		PlatformClientSecret: str("AGW_PLATFORM_CLIENT_SECRET", ""),
 		PlatformExchange:     str("AGW_PLATFORM_TOKEN_EXCHANGE", "false") == "true",
 		PlatformAudiences:    strings.Split(str("AGW_PLATFORM_AUDIENCES", "backend,minio"), ","),
+		AuthMode:             strings.ToLower(strings.TrimSpace(str("AGW_AUTH_MODE", AuthToken))),
+		OIDCIssuer:           strings.TrimRight(str("AGW_OIDC_ISSUER", ""), "/"),
+		OIDCClientID:         str("AGW_OIDC_CLIENT_ID", "agw-agent"),
+		OIDCClientSecret:     str("AGW_OIDC_CLIENT_SECRET", str("AGW_PLATFORM_CLIENT_SECRET", "")),
+		PublicURL:            strings.TrimRight(str("AGW_PUBLIC_URL", ""), "/"),
+		FrameAncestors:       strings.Fields(str("AGW_FRAME_ANCESTORS", "")),
 	}
+}
+
+// CheckAuth prüft die Einstellungen der gewählten Anmeldeart.
+func (e Env) CheckAuth() error {
+	switch e.AuthMode {
+	case AuthToken:
+		if len(e.APIToken) < 32 {
+			return errors.New("AGW_API_TOKEN fehlt oder ist kürzer als 32 Zeichen (./dev.sh init legt ihn an)")
+		}
+	case AuthOIDC:
+		var missing []string
+		for k, v := range map[string]string{"AGW_OIDC_ISSUER": e.OIDCIssuer, "AGW_OIDC_CLIENT_ID": e.OIDCClientID,
+			"AGW_OIDC_CLIENT_SECRET (oder AGW_PLATFORM_CLIENT_SECRET)": e.OIDCClientSecret, "AGW_PUBLIC_URL": e.PublicURL} {
+			if v == "" {
+				missing = append(missing, k)
+			}
+		}
+		if len(missing) > 0 {
+			sort.Strings(missing)
+			return fmt.Errorf("AGW_AUTH_MODE=oidc verlangt %s", strings.Join(missing, ", "))
+		}
+		for _, o := range e.FrameAncestors {
+			if !strings.HasPrefix(o, "https://") && !strings.HasPrefix(o, "http://") && o != "'self'" {
+				return fmt.Errorf("AGW_FRAME_ANCESTORS: %q ist keine Herkunft (https://…)", o)
+			}
+			if strings.ContainsAny(o, ";,") {
+				return fmt.Errorf("AGW_FRAME_ANCESTORS: %q enthält ; oder ,", o)
+			}
+		}
+	default:
+		return fmt.Errorf("AGW_AUTH_MODE muss token oder oidc sein, nicht %q", e.AuthMode)
+	}
+	return nil
 }
 
 // keepAlive: AGW_BG_KEEPALIVE=0 heißt „Leerlauf nicht verschieben“ (-1 für den Manager).

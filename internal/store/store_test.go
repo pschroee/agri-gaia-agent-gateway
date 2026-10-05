@@ -426,3 +426,31 @@ func TestLLMCallCompletenessAndRejections(t *testing.T) {
 		t.Fatalf("Abweisungen: %v %v", rej, err)
 	}
 }
+
+func TestChatOwner(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	a, err := s.CreateChat(ctx, NewChat{Title: "A", Model: "m/x", Variant: "cli", Owner: "sub-anna"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := s.CreateChat(ctx, NewChat{Title: "B", Model: "m/x", Variant: "cli"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.Owner != "sub-anna" || b.Owner != "" {
+		t.Fatalf("Besitzer: %q %q", a.Owner, b.Owner)
+	}
+	if o, err := s.ChatOwner(ctx, a.ID); err != nil || o != "sub-anna" {
+		t.Fatalf("ChatOwner: %q %v", o, err)
+	}
+	if o, err := s.ChatOwner(ctx, b.ID); err != nil || o != "" {
+		t.Fatalf("ohne Besitzer: %q %v", o, err)
+	}
+	if _, err := s.ChatOwner(ctx, "00000000-0000-0000-0000-000000000000"); err != ErrNotFound {
+		t.Fatalf("unbekannt: %v", err)
+	}
+	if _, err := s.ChatOwner(ctx, "kein-uuid"); err != ErrNotFound {
+		t.Fatalf("keine UUID: %v", err)
+	}
+}

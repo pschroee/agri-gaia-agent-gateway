@@ -71,6 +71,8 @@ type Chat struct {
 	Workspace *WorkspaceInfo `json:"workspace,omitempty"`
 	// Delegation: übertragene Rechte des Chats (nil: ohne Delegation, Verhalten wie vor Schritt 1).
 	Delegation json.RawMessage `json:"delegation,omitempty"`
+	// Owner: sub des Nutzers, dem der Chat gehört (Anmeldung über die Plattform); leer im token-Modus.
+	Owner string `json:"owner,omitempty"`
 }
 
 // Herkunft des Titels: TitleDefault (Platzhalter „Neuer Chat …“, wird mit der ersten Frage ersetzt),
@@ -89,6 +91,7 @@ type NewChat struct {
 	AutoCompact           bool
 	MaxSubagents          int
 	Delegation            json.RawMessage // nil: ohne Delegation
+	Owner                 string          // leer: ohne Besitzer (token-Modus)
 }
 
 type Message struct {
@@ -268,7 +271,7 @@ SELECT c.id::text, c.title, c.model, c.thinking_level, c.variant, c.state, c.int
    FROM chat_workspaces w WHERE w.chat_id = c.id),
   (SELECT count(*) FROM chat_queue q WHERE q.chat_id = c.id AND q.delivered_at IS NULL),
   (SELECT count(*) FROM background_tasks b WHERE b.chat_id = c.id AND b.state = 'running'),
-  c.delegation
+  c.delegation, COALESCE(c.owner, '')
 FROM chats c
 LEFT JOIN LATERAL (
   SELECT sum((m.message->'usage'->>'input')::bigint)       AS input,
@@ -292,7 +295,7 @@ func scanChat(row pgx.Row) (Chat, error) {
 	var ctxRaw, wsRaw, delRaw []byte
 	err := row.Scan(&c.ID, &c.Title, &c.Model, &c.ThinkingLevel, &c.Variant, &c.State, &c.Internet, &c.AutoCompact, &c.MaxSubagents, &c.Compactions, &ctxRaw, &c.CreatedAt, &c.UpdatedAt,
 		&c.Tokens.Input, &c.Tokens.Output, &c.Tokens.CacheRead, &c.Tokens.Total, &c.Cost, &c.ArtifactCount, &c.PendingApprovals,
-		&c.Subagents, &c.LLMCalls, &c.CostOther, &wsRaw, &c.Queued, &c.BackgroundRunning, &delRaw)
+		&c.Subagents, &c.LLMCalls, &c.CostOther, &wsRaw, &c.Queued, &c.BackgroundRunning, &delRaw, &c.Owner)
 	if len(delRaw) > 0 {
 		c.Delegation = delRaw
 	}
@@ -321,8 +324,12 @@ func (s *Store) CreateChat(ctx context.Context, n NewChat) (Chat, error) {
 	if len(n.Delegation) > 0 {
 		del = string(n.Delegation)
 	}
-	err := s.pool.QueryRow(ctx, `INSERT INTO chats (title, title_source, model, variant, internet, auto_compact, max_subagents, delegation) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb) RETURNING id::text`,
-		n.Title, src, n.Model, n.Variant, n.Internet, n.AutoCompact, n.MaxSubagents, del).Scan(&id)
+	var owner any // NULL ohne Besitzer
+	if n.Owner != "" {
+		owner = n.Owner
+	}
+	err := s.pool.QueryRow(ctx, `INSERT INTO chats (title, title_source, model, variant, internet, auto_compact, max_subagents, delegation, owner) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9) RETURNING id::text`,
+		n.Title, src, n.Model, n.Variant, n.Internet, n.AutoCompact, n.MaxSubagents, del, owner).Scan(&id)
 	if err != nil {
 		return Chat{}, err
 	}
@@ -334,6 +341,19 @@ func (s *Store) GetChat(ctx context.Context, id string) (Chat, error) {
 		return Chat{}, ErrNotFound
 	}
 	return scanChat(s.pool.QueryRow(ctx, chatSelect+` WHERE c.id = $1`, id))
+}
+
+// ChatOwner liefert den Besitzer eines Chats (leer: ohne Besitzer); unbekannt: ErrNotFound.
+func (s *Store) ChatOwner(ctx context.Context, id string) (string, error) {
+	if !isUUID(id) {
+		return "", ErrNotFound
+	}
+	var owner string
+	err := s.pool.QueryRow(ctx, `SELECT COALESCE(owner, '') FROM chats WHERE id = $1`, id).Scan(&owner)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", ErrNotFound
+	}
+	return owner, err
 }
 
 func (s *Store) ListChats(ctx context.Context) ([]Chat, error) {

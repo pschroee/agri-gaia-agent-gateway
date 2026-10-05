@@ -115,6 +115,8 @@ export type Chat = {
   max_subagents?: number
   /** Übertragene Rechte des Chats; fehlt: ohne Delegation (lesen frei, schreiben mit Bestätigung). */
   delegation?: Delegation
+  /** sub des Besitzers (Anmeldung über die Plattform); fehlt im token-Modus. */
+  owner?: string
   /** Bisher gestartete Subagenten-Läufe. */
   subagents?: number
   /** Am LLM-Proxy erfasste Modellaufrufe. */
@@ -484,7 +486,12 @@ export type CreateChatRequest = {
   internet?: boolean
   auto_compact?: boolean
   max_subagents?: number
+  /** Übertragene Rechte (fehlt: ohne Delegation). */
+  delegation?: Delegation
 }
+
+/** Angemeldeter Nutzer (GET /api/me); im token-Modus nur mode. */
+export type Me = { mode: "token" | "oidc"; sub?: string; username?: string; name?: string }
 
 export type Config = {
   internet_default: boolean

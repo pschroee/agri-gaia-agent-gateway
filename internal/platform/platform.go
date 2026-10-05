@@ -38,6 +38,10 @@ type Config struct {
 	ClientSecret string
 	User         string
 	Password     string
+	// Subject liefert, falls gesetzt, das Token des Nutzers, dem der Chat gehört (Anmeldung über
+	// die Plattform, AGW_AUTH_MODE=oidc). Es ersetzt den Passwort-Grant: User und Password entfallen.
+	// Mit Exchange ist es das subject_token des Austauschs, ohne Exchange geht es direkt an die API.
+	Subject func(ctx context.Context, chatID string) (string, error)
 	// Exchange: je Chat ein eigenes Token per Token-Austausch (verlangt ClientSecret).
 	Exchange bool
 	// Audiences sind die Zielgruppen des getauschten Tokens (Standard: backend, minio; MinIO
@@ -423,8 +427,11 @@ func New(cfg Config) (*Client, error) {
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		return nil, fmt.Errorf("AGW_PLATFORM_API_URL ungültig: %q", cfg.APIURL)
 	}
-	if cfg.TokenURL == "" || cfg.User == "" || cfg.Password == "" {
+	if cfg.Subject == nil && (cfg.TokenURL == "" || cfg.User == "" || cfg.Password == "") {
 		return nil, errors.New("AGW_PLATFORM_TOKEN_URL, AGW_PLATFORM_USER und AGW_PLATFORM_PASSWORD müssen gesetzt sein")
+	}
+	if cfg.Subject != nil && cfg.Exchange && cfg.TokenURL == "" {
+		return nil, errors.New("Token-Austausch verlangt AGW_PLATFORM_TOKEN_URL")
 	}
 	if cfg.ClientID == "" {
 		cfg.ClientID = "frontend"
@@ -655,7 +662,7 @@ func (c *Client) Exchanging() bool { return c != nil && c.cfg.Exchange }
 // getauschte Token des Chats (zwischengespeichert bis ChatTokenMaxAge oder kurz vor Ablauf).
 func (c *Client) tokenFor(ctx context.Context, chatID string, force bool) (string, error) {
 	if !c.cfg.Exchange {
-		return c.token(ctx, force)
+		return c.userToken(ctx, chatID, force)
 	}
 	if chatID == "" {
 		return "", errors.New("Token-Austausch braucht einen Chat")
@@ -674,13 +681,14 @@ func (c *Client) tokenFor(ctx context.Context, chatID string, force bool) (strin
 	if ok && ct2.access != ct.access && time.Until(ct2.expires) > 30*time.Second {
 		return ct2.access, nil // inzwischen von einem anderen Aufruf getauscht
 	}
-	user, err := c.token(ctx, force)
+	user, err := c.userToken(ctx, chatID, force)
 	if err != nil {
 		return "", err
 	}
 	tok, err := c.exchange(ctx, user)
-	if err != nil && !force {
+	if err != nil && !force && c.cfg.Subject == nil {
 		// Das Nutzertoken kann serverseitig verfallen sein (Sitzung beendet): einmal neu anmelden.
+		// Mit Subject gibt es kein Passwort; das Token kommt frisch aus der Sitzung des Nutzers.
 		if user, err = c.token(ctx, true); err == nil {
 			tok, err = c.exchange(ctx, user)
 		}
@@ -703,6 +711,17 @@ func (c *Client) tokenFor(ctx context.Context, chatID string, force bool) (strin
 		notify(chatID, cl)
 	}
 	return tok.Access, nil
+}
+
+// userToken: das Token des Nutzers, dem der Chat gehört (Subject), sonst das des eingestellten Kontos.
+func (c *Client) userToken(ctx context.Context, chatID string, force bool) (string, error) {
+	if c.cfg.Subject == nil {
+		return c.token(ctx, force)
+	}
+	if chatID == "" {
+		return "", errors.New("Anmeldung des Nutzers braucht einen Chat")
+	}
+	return c.cfg.Subject(ctx, chatID)
 }
 
 // exchange tauscht das Nutzertoken nach RFC 8693 gegen eines mit den eingestellten Zielgruppen.

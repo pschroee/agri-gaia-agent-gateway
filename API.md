@@ -3,6 +3,37 @@
 Basis: `http://127.0.0.1:18480`. Alle Antworten JSON, Zeitangaben RFC 3339, Fehler als
 `{"error": "<text>"}` mit passendem Statuscode. Die Web-UI wird unter `/` ausgeliefert.
 
+## Anmeldung
+
+Zwei Arten (`AGW_AUTH_MODE`):
+
+- **`token`** (Standard): `Authorization: Bearer <AGW_API_TOKEN>` oder das Cookie `agw_token`, das
+  `GET /login?token=<Token>` setzt. Chats haben keinen Besitzer.
+- **`oidc`**: Anmeldung über den Keycloak der Plattform. Die API nimmt nur das Sitzungs-Cookie `agw_session` an
+  (HttpOnly, Secure, SameSite=Lax); `/login?token=` leitet nach `/oidc/login`. Ohne gültige Sitzung antwortet jede
+  Route unter `/api/` mit **401** `{"error": "nicht angemeldet", "login": "/oidc/login"}`; die UI navigiert dann
+  einmal still nach `/oidc/login?prompt=none&return=<Pfad>`.
+
+| Methode und Pfad | Zweck |
+|---|---|
+| `GET /oidc/login?prompt=none\|login&return=<Pfad>` | Authorization Code mit PKCE (S256), `state` und `nonce` in einem Cookie je Anmeldung (10 min, Pfad `/oidc/`); leitet zu Keycloak. `return` nur als lokaler Pfad |
+| `GET /oidc/callback` | prüft `state`, tauscht den Code, prüft ID- und Zugangstoken (RS256 gegen JWKS, `iss`, `aud`/`azp`, `exp`, `nonce`), legt die Sitzung an und leitet nach `return`. Bei `error=login_required` (prompt=none ohne Keycloak-Sitzung): Seite „Nicht angemeldet. Bitte in der Plattform anmelden.“ mit Link (`target=_blank`) auf `/oidc/login` |
+| `POST /oidc/logout` | beendet die Sitzung am Orchestrator (nicht in Keycloak), 204; nur gleiche Herkunft |
+| `GET /api/me` | `{mode: "token"}` bzw. `{mode: "oidc", sub, username, name}` |
+
+**Besitz im oidc-Modus:** `POST /api/chats` setzt `owner` auf den `sub` der Sitzung (ein `owner` im Körper wird
+ignoriert). `GET /api/chats` liefert nur eigene Chats, `GET /api/approvals` nur Bestätigungen eigener Chats. Jede
+Route unter `/api/chats/{id}` (auch SSE `events`) und `POST /api/approvals/{id}` antwortet für fremde Chats mit
+**404** wie für unbekannte. `GET /api/pool` zeigt bei fremden Chats weder Kennung noch Titel. Chats ohne Besitzer
+(aus dem token-Modus) sind im oidc-Modus niemandem zugänglich.
+
+**Plattform-Aufrufe** eines Chats im oidc-Modus nehmen das Zugangstoken des Besitzers aus seiner Sitzung (bei Bedarf
+per `refresh_token` erneuert) als `subject_token` des Token-Austauschs. Ohne lebende Sitzung endet der Aufruf mit
+`{status: "error", message: "Anmeldung an der Plattform: Anmeldung des Nutzers abgelaufen; Chat in der Plattform öffnen"}`.
+
+**Einbettung:** `frame-ancestors` der CSP aus `AGW_FRAME_ANCESTORS` (sonst `'none'`). `/?embed=1` zeigt die
+schmale Ansicht für das Seitenpanel.
+
 ## Typen
 
 ```ts
@@ -70,6 +101,8 @@ type Chat = {
   queue_held: boolean;    // Eingereihtes geht nicht von selbst (nach Abbruch, bei ruhendem Chat, über einer Grenze für Durchgänge ohne Nutzer), sondern mit der nächsten Nachricht oder über POST …/queue/send
   hold_reason?: "abort" | "wake_limit" | "auto_turns"; // warum zurückgehalten (nur bei aktivem Chat mit queue_held)
   background_running: number; // laufende Hintergrundaufgaben
+  delegation?: object;        // übertragene Rechte, Aufbau in docs/plan-delegation-rest-plattform.md (fehlt: ohne Delegation)
+  owner?: string;             // sub des Besitzers (oidc-Modus); fehlt im token-Modus
 };
 
 // Eingereihte Nachricht (Warteschlange, siehe unten). attachments: Namen hochgeladener Eingaben.
@@ -238,7 +271,7 @@ type SocketCall = { id: number; chat_id?: string; slot_id: string; via: "cli" | 
 | `GET /api/config` | `{internet_default: boolean, approval_timeout_s: number, artifact_max_mb: number, idle_timeout_s: number, auto_compact_default: boolean, compact_reserve_tokens: number, compact_keep_recent_tokens: number, max_subagents_default: number, max_subagents_limit: number, workspace_max_mb: number /* 0 = Arbeitsbereich wird nicht gesichert */, bg_wakes_per_hour: number /* 0 = nie wecken */, bg_keepalive_s: number, auto_turns_max: number /* Durchgänge ohne Nutzer in Folge, 0 = keiner */, executed_tools: string[] /* Werkzeuge, deren Ausführung am Socket belegt wird, sortiert */}` | Voreinstellungen für die UI |
 | `GET /api/pool` | `Pool` | Pool-Status (UI fragt jede Sekunde ab) |
 | `GET /api/chats` | `Chat[]` | neueste zuerst |
-| `POST /api/chats` `{model?, variant?, title?, message?, internet?, auto_compact?, max_subagents?}` | `Chat` (201) | holt einen Platz aus dem Pool; mit `message` wird sie sofort gesendet. 503, wenn kein Platz frei ist |
+| `POST /api/chats` `{model?, variant?, title?, message?, internet?, auto_compact?, max_subagents?, delegation?}` | `Chat` (201) | holt einen Platz aus dem Pool; mit `message` wird sie sofort gesendet. 503, wenn kein Platz frei ist |
 | `GET /api/chats/{id}` | `{chat, messages: StoredMessage[], artifacts: Artifact[], approvals: Approval[], socket_calls: SocketCall[], subagent_entries: SubagentEntry[], queue: QueueEntry[], background: BackgroundTask[]}` | vollständiger Chat |
 | `GET /api/chats/{id}/background` | `BackgroundTask[]` | Hintergrundaufgaben des Chats nach `seq`; laufende mit dem aktuellen Stand des Platzes |
 | `GET /api/chats/{id}/web_requests` | `WebRequest[]` | Anfragen von `web_search`/`web_extract` über den Web-Proxy, auch abgewiesene (`denied`); bei HTTPS nur Ziel und Bytes |

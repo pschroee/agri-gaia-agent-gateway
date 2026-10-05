@@ -997,6 +997,45 @@ der Agent Datensätze, Modelle und Trainings; in der CLI-Variante erkundet er di
 eine `train_config` und ruft `create-training` auf, die Bestätigung wird abgelehnt, und auf der Plattform
 entsteht keine Aufgabe.
 
+### Anmeldung über die Plattform (OIDC)
+
+Seit dem 05.10.2026 kann der Orchestrator als Dienst der Plattform laufen (`https://agent.<basis>`) und als
+`<iframe>` im Frontend (`https://app.<basis>`) erscheinen. Wer in der Plattform angemeldet ist, chattet ohne eigene
+Anmeldung, und der Token-Austausch je Chat nimmt das Token **dieses Nutzers** statt des fest eingestellten Kontos.
+
+- **Schalter:** `AGW_AUTH_MODE=token` (Standard, wie bisher mit `AGW_API_TOKEN`) oder `oidc`. Im oidc-Modus
+  gelten `AGW_OIDC_ISSUER`, `AGW_OIDC_CLIENT_ID` (Standard `agw-agent`), `AGW_OIDC_CLIENT_SECRET` (Standard: der
+  Wert von `AGW_PLATFORM_CLIENT_SECRET`), `AGW_PUBLIC_URL` und `AGW_FRAME_ANCESTORS`. Das API-Token gilt dann
+  nicht; CLI und E2E-Tests laufen weiter im token-Modus.
+- **Ablauf:** Authorization Code mit PKCE (S256), `state` und `nonce`, vertraulicher Client, ganz im Orchestrator
+  (`internal/oidc`). `GET /oidc/login` legt `state`, Verifier und `nonce` in ein kurzlebiges Cookie je Anmeldung
+  und leitet zu Keycloak; `GET /oidc/callback` prüft `state`, tauscht den Code, prüft ID- und Zugangstoken
+  (RS256 gegen die JWKS des Issuers, selbst geschrieben mit `crypto/rsa`, weil keine JWT-Bibliothek im Modul ist;
+  dazu `iss`, `aud`/`azp` = Client, `exp`, `nonce`, gleicher `sub`) und legt eine Sitzung an. Der Browser bekommt
+  nur ein Cookie mit 32 Zufallsbytes (HttpOnly, Secure, SameSite=Lax); die Tokens bleiben im Speicher.
+- **Stille Anmeldung:** Meldet die API 401 mit `login`, navigiert die UI einmal nach `/oidc/login?prompt=none`.
+  Kennt Keycloak niemanden, kommt eine kleine Seite „Nicht angemeldet. Bitte in der Plattform anmelden.“ mit
+  einem Link in einem neuen Tab. Ein Merker in `sessionStorage` verhindert eine Schleife. Nach einem Neustart
+  sind die Sitzungen weg, und die UI meldet sich auf demselben Weg still neu an.
+- **Erneuerung:** Ein Zugangstoken, das in weniger als 30 s abläuft, erneuert der Orchestrator mit dem
+  `refresh_token`, bei jeder Anfrage der UI und vor jedem Austausch. Weist Keycloak die Erneuerung ab, endet die
+  Sitzung. Höchstens 12 h je Sitzung.
+- **Chats gehören Nutzern:** Spalte `chats.owner` (sub). Im oidc-Modus sieht jeder nur seine Chats; alle Routen
+  unter `/api/chats/{id}` und die Entscheidung über Bestätigungen prüft **ein** Wrapper (`ownChat`,
+  `ownApproval` in `internal/api`) und antwortet für fremde wie für unbekannte Chats mit 404. Chats aus dem
+  token-Modus (`owner` leer) gehören im oidc-Modus niemandem.
+- **Token je Chat:** `platform.Config.Subject` liefert das Token des Besitzers (Chat → `owner` → Sitzung →
+  frisches Zugangstoken). Es ist an `agw-agent` ausgestellt und damit genau das `subject_token`, das Keycloak schon
+  im Passwort-Modus getauscht hat. Ohne lebende Sitzung scheitert der Plattform-Aufruf mit „Anmeldung des Nutzers
+  abgelaufen; Chat in der Plattform öffnen“; der Agent sieht einen gescheiterten Aufruf, nichts stürzt ab.
+- **Einbettung:** `AGW_FRAME_ANCESTORS` setzt `frame-ancestors` der CSP (ohne Angabe bleibt `'none'`). Das Cookie
+  ist `SameSite=Lax`; es kommt im `<iframe>` nur an, wenn Agent und Frontend **dieselbe Site** sind
+  (Subdomains derselben Basis). `?embed=1` zeigt eine schmale Ansicht für ein Panel von rund 420 px.
+- **Keycloak-Client `agw-agent`:** Standard Flow an, Redirect-URI `https://agent.<basis>/oidc/callback`, Web
+  Origins `https://agent.<basis>`, Token-Austausch und die Audience-Mapper wie bisher.
+- **Grenze:** Discovery und Token-Endpunkt ruft der Orchestrator unter der Issuer-Adresse auf; sie muss also aus
+  dem Container erreichbar sein (im Compose-Stack der Plattform gegebenenfalls über `extra_hosts`).
+
 ### Was beim Bau aufgefallen ist
 
 - **DeepSeek V4.1 Flash heißt in der API `deepseek-flash`**, nicht `deepseek-v4.1-flash`

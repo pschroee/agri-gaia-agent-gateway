@@ -417,6 +417,8 @@ type NewChat struct {
 	// Delegation: übertragene Rechte (delegation.Delegation als JSON); fehlt sie, verhält sich der
 	// Chat wie vor Schritt 1 (lesen frei, schreiben mit Bestätigung).
 	Delegation json.RawMessage `json:"delegation,omitempty"`
+	// Owner setzt die API aus der Anmeldung (sub), nie aus dem Körper der Anfrage.
+	Owner string `json:"-"`
 }
 
 func (m *Manager) Create(ctx context.Context, req NewChat) (ChatView, error) {
@@ -461,7 +463,7 @@ func (m *Manager) Create(ctx context.Context, req NewChat) (ChatView, error) {
 		}
 		del, _ = json.Marshal(d) // gespeichert wird die geprüfte, einheitliche Form
 	}
-	c, err := m.st.CreateChat(ctx, store.NewChat{Title: title, TitleSource: titleSrc, Model: req.Model, Variant: req.Variant, Internet: internet, AutoCompact: autoCompact, MaxSubagents: maxSub, Delegation: del})
+	c, err := m.st.CreateChat(ctx, store.NewChat{Title: title, TitleSource: titleSrc, Model: req.Model, Variant: req.Variant, Internet: internet, AutoCompact: autoCompact, MaxSubagents: maxSub, Delegation: del, Owner: req.Owner})
 	if err != nil {
 		return ChatView{}, err
 	}
@@ -2151,6 +2153,21 @@ func (m *Manager) Shutdown(ctx context.Context) {
 func (m *Manager) Messages(ctx context.Context, chatID string) ([]store.Message, error) {
 	return m.st.Messages(ctx, chatID)
 }
+
+// ChatOwner liefert den Besitzer eines Chats (leer: ohne Besitzer, token-Modus).
+func (m *Manager) ChatOwner(ctx context.Context, chatID string) (string, error) {
+	return m.st.ChatOwner(ctx, chatID)
+}
+
+// ApprovalChat liefert den Chat einer Bestätigung.
+func (m *Manager) ApprovalChat(ctx context.Context, approvalID string) (string, error) {
+	ap, err := m.st.GetApproval(ctx, approvalID)
+	if err != nil {
+		return "", err
+	}
+	return ap.ChatID, nil
+}
+
 func (m *Manager) Approvals(ctx context.Context, state, chatID string) ([]store.Approval, error) {
 	return m.st.ListApprovals(ctx, state, chatID)
 }

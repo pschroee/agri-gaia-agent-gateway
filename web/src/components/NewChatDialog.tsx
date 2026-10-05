@@ -1,5 +1,5 @@
 import { useState } from "react"
-import { BotIcon, GlobeIcon, PlusIcon, ShrinkIcon } from "lucide-react"
+import { BotIcon, GlobeIcon, KeyRoundIcon, PlusIcon, ShrinkIcon } from "lucide-react"
 import { ApiError, api } from "@/api/client"
 import type { Chat, Model, Pricing, VariantId } from "@/api/types"
 import { Alert, AlertDescription } from "@/components/ui/alert"
@@ -20,13 +20,14 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import type { Meta } from "@/hooks/useMeta"
+import { DEFAULT_DELEGATION_HOURS, DELEGATION_TEMPLATES, delegationFrom } from "@/lib/delegationTemplates"
 import { formatPrice, modelPriceSource, sourceLabel } from "@/lib/format"
 import { formatPeakWindows } from "@/lib/tariff"
 import { cn } from "@/lib/utils"
 
-type Props = { meta: Meta & { reload: () => Promise<void> }; onCreated: (chat: Chat) => void }
+type Props = { meta: Meta & { reload: () => Promise<void> }; onCreated: (chat: Chat) => void; compact?: boolean }
 
-export function NewChatDialog({ meta, onCreated }: Props) {
+export function NewChatDialog({ meta, onCreated, compact }: Props) {
   const { reload } = meta
   const [open, setOpen] = useState(false)
   const [modelChoice, setModel] = useState("")
@@ -38,8 +39,11 @@ export function NewChatDialog({ meta, onCreated }: Props) {
   const [autoCompactChoice, setAutoCompact] = useState<boolean>()
   // undefined: Vorgabe des Servers (config.max_subagents_default)
   const [maxSubChoice, setMaxSub] = useState<number>()
+  const [templateId, setTemplateId] = useState("none")
+  const [hours, setHours] = useState(DEFAULT_DELEGATION_HOURS)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string>()
+  const template = DELEGATION_TEMPLATES.find((t) => t.id === templateId)
 
   // Voreinstellungen ableiten, solange nichts gewählt ist
   const model = modelChoice || (meta.models.find((m) => m.default) ?? meta.models[0])?.id || ""
@@ -73,6 +77,7 @@ export function NewChatDialog({ meta, onCreated }: Props) {
         internet,
         auto_compact: autoCompactChoice ?? meta.config?.auto_compact_default,
         max_subagents: maxSubChoice ?? meta.config?.max_subagents_default,
+        delegation: delegationFrom(template, hours),
       })
       setOpen(false)
       setTitle("")
@@ -92,8 +97,8 @@ export function NewChatDialog({ meta, onCreated }: Props) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogTrigger asChild>
-        <Button size="sm" className="w-full">
-          <PlusIcon /> Neuer Chat
+        <Button size="sm" className={compact ? "shrink-0" : "w-full"} title="Neuer Chat">
+          <PlusIcon /> {compact ? "Neu" : "Neuer Chat"}
         </Button>
       </DialogTrigger>
       <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-lg [&>*]:min-w-0">
@@ -134,6 +139,30 @@ export function NewChatDialog({ meta, onCreated }: Props) {
             </Select>
             {selectedVariant && selectedVariant.tools.length > 0 && (
               <p className="text-xs text-muted-foreground">Werkzeuge: {selectedVariant.tools.join(", ")}</p>
+            )}
+          </div>
+          <div className="grid gap-1.5 rounded-md border px-3 py-2">
+            <Label className="flex items-center gap-1.5">
+              <KeyRoundIcon className="size-3.5" /> Rechte des Agenten (Delegation)
+            </Label>
+            <Select value={templateId} onValueChange={setTemplateId}>
+              <SelectTrigger className="w-full min-w-0" aria-label="Vorlage für die Delegation">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {DELEGATION_TEMPLATES.map((t) => (
+                  <SelectItem key={t.id} value={t.id}>
+                    {t.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {template && <p className="text-xs text-muted-foreground">{template.description}</p>}
+            {template?.rules && (
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-xs text-muted-foreground">Gültig für Stunden; Übergriffe werden abgewiesen.</p>
+                <NumberStepper id="new-hours" value={hours} min={1} max={72} onChange={setHours} aria-label="Gültigkeit in Stunden" />
+              </div>
             )}
           </div>
           <div className="flex items-start justify-between gap-3 rounded-md border px-3 py-2">

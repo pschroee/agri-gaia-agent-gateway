@@ -1,3 +1,4 @@
+import { claimSilentLogin, silentLoginUrl } from "@/lib/auth"
 import type {
   Approval,
   Artifact,
@@ -9,6 +10,7 @@ import type {
   Config,
   CreateChatRequest,
   LLMCall,
+  Me,
   Model,
   Pool,
   SendResult,
@@ -21,13 +23,28 @@ export class ApiError extends Error {
   /** Maschinenlesbarer Grund, etwa „context_too_large“ beim Modellwechsel. */
   readonly code?: string
   readonly details?: unknown
-  constructor(status: number, message: string, code?: string, details?: unknown) {
+  /** Bei 401 im oidc-Modus: Pfad der Anmeldung (/oidc/login). */
+  readonly login?: string
+  constructor(status: number, message: string, code?: string, details?: unknown, login?: string) {
     super(message)
     this.name = "ApiError"
     this.status = status
     this.code = code
     this.details = details
+    this.login = login
   }
+}
+
+/** Anmeldung über die Plattform: einmal still anmelden (prompt=none), danach „nicht angemeldet“ zeigen. */
+function silentLogin(loginPath: string) {
+  if (!loginPath.startsWith("/oidc/")) return
+  let store: Storage | undefined
+  try {
+    store = window.sessionStorage
+  } catch {
+    store = undefined
+  }
+  if (claimSilentLogin(store, Date.now())) window.location.assign(silentLoginUrl(loginPath, window.location))
 }
 
 /** Details zu „context_too_large“: Der Kontext passt nicht in das gewünschte Modell. */
@@ -46,15 +63,18 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     let message = `${res.status} ${res.statusText}`
     let code: string | undefined
     let details: unknown
+    let login: string | undefined
     try {
-      const body = (await res.json()) as { error?: string; code?: string; details?: unknown }
+      const body = (await res.json()) as { error?: string; code?: string; details?: unknown; login?: string }
       if (body?.error) message = body.error
       code = body?.code
       details = body?.details
+      login = body?.login
     } catch {
       // Antwort ohne JSON-Körper
     }
-    throw new ApiError(res.status, message, code, details)
+    if (res.status === 401 && login) silentLogin(login)
+    throw new ApiError(res.status, message, code, details, login)
   }
   return (await res.json()) as T
 }
@@ -65,6 +85,11 @@ const post = <T>(path: string, body?: unknown) =>
 const enc = encodeURIComponent
 
 export const api = {
+  me: () => request<Me>("/api/me"),
+  /** Sitzung am Orchestrator beenden (nur oidc-Modus). */
+  logout: async () => {
+    await fetch("/oidc/logout", { method: "POST" })
+  },
   config: () => request<Config>("/api/config"),
   models: () => request<Model[]>("/api/models"),
   variants: () => request<Variant[]>("/api/variants"),

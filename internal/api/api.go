@@ -21,6 +21,7 @@ import (
 	"agw/internal/bgtask"
 	"agw/internal/chat"
 	"agw/internal/config"
+	"agw/internal/oidc"
 	"agw/internal/pool"
 	"agw/internal/store"
 	"agw/internal/worker"
@@ -41,6 +42,20 @@ type Server struct {
 
 	// Images liefert Anzeige-Bilder; nil heißt M (für Tests austauschbar).
 	Images ImageOpener
+
+	// OIDC: Anmeldung über den Keycloak der Plattform (AGW_AUTH_MODE=oidc); nil: token-Modus.
+	// Dann gehören Chats dem angemeldeten Nutzer, und Token gilt nicht.
+	OIDC *oidc.Service
+	// FrameAncestors: Herkünfte, die die UI einbetten dürfen (leer: frame-ancestors 'none').
+	FrameAncestors []string
+}
+
+type userKey struct{}
+
+// UserFrom liefert den angemeldeten Nutzer (nur im oidc-Modus).
+func UserFrom(ctx context.Context) (oidc.User, bool) {
+	u, ok := ctx.Value(userKey{}).(oidc.User)
+	return u, ok
 }
 
 // ImageOpener liefert ein Anzeige-Bild einer Antwort (siehe chat.Manager.OpenImage).
@@ -51,16 +66,25 @@ type ImageOpener interface {
 // CookieName ist das Anmelde-Cookie der Web-UI.
 const CookieName = "agw_token"
 
-const csp = "default-src 'self'; img-src 'self' data:; connect-src 'self'; script-src 'self'; " +
-	"style-src 'self' 'unsafe-inline'; font-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
+const cspBase = "default-src 'self'; img-src 'self' data:; connect-src 'self'; script-src 'self'; " +
+	"style-src 'self' 'unsafe-inline'; font-src 'self' data:; base-uri 'none'; form-action 'self'; frame-ancestors "
+
+// csp: frame-ancestors aus AGW_FRAME_ANCESTORS (Einbettung in die Plattform), sonst 'none'.
+func (s *Server) csp() string {
+	if len(s.FrameAncestors) == 0 {
+		return cspBase + "'none'"
+	}
+	return cspBase + strings.Join(s.FrameAncestors, " ")
+}
 
 // auth setzt Sicherheitskopfzeilen und verlangt für /api/ das Token (Bearer
 // oder Cookie), einen erlaubten Host und bei ändernden Anfragen gleiche Herkunft.
 func (s *Server) auth(next http.Handler) http.Handler {
 	cop := http.NewCrossOriginProtection()
+	policy := s.csp()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
-		h.Set("Content-Security-Policy", csp)
+		h.Set("Content-Security-Policy", policy)
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("Referrer-Policy", "no-referrer")
 		if !strings.HasPrefix(r.URL.Path, "/api/") {
@@ -72,7 +96,15 @@ func (s *Server) auth(next http.Handler) http.Handler {
 			writeErr(w, http.StatusForbidden, "unbekannter Host")
 			return
 		}
-		if !s.tokenOK(r) {
+		if s.OIDC != nil {
+			u, ok := s.OIDC.SessionUser(r)
+			if !ok {
+				// login sagt der UI, wohin sie zur stillen Anmeldung (prompt=none) navigiert.
+				writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "nicht angemeldet", "login": oidc.LoginPath})
+				return
+			}
+			r = r.WithContext(context.WithValue(r.Context(), userKey{}, u))
+		} else if !s.tokenOK(r) {
 			writeErr(w, http.StatusUnauthorized, "nicht angemeldet: den Anmeldelink aus ./dev.sh start öffnen")
 			return
 		}
@@ -100,6 +132,10 @@ func (s *Server) tokenOK(r *http.Request) bool {
 
 // login setzt das Anmelde-Cookie und leitet auf die UI weiter.
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {
+	if s.OIDC != nil {
+		http.Redirect(w, r, oidc.LoginPath, http.StatusSeeOther) // /login?token= gilt nur im token-Modus
+		return
+	}
 	given := r.URL.Query().Get("token")
 	if s.Token == "" || subtle.ConstantTimeCompare([]byte(given), []byte(s.Token)) != 1 {
 		http.Error(w, "Anmeldung fehlgeschlagen: Token falsch", http.StatusUnauthorized)
@@ -111,43 +147,49 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	// Routen eines Chats und einer Bestätigung prüfen zentral, ob sie dem Nutzer gehören (oidc).
+	chat := func(pattern string, h http.HandlerFunc) { mux.Handle(pattern, s.ownChat(h)) }
 	mux.HandleFunc("GET /login", s.login)
+	if s.OIDC != nil {
+		mux.Handle("/oidc/", s.OIDC.Handler())
+	}
+	mux.HandleFunc("GET /api/me", s.me)
 	mux.HandleFunc("GET /api/models", s.models)
 	mux.HandleFunc("GET /api/variants", s.variants)
 	mux.HandleFunc("GET /api/config", s.config)
 	mux.HandleFunc("GET /api/pool", s.pool)
 	mux.HandleFunc("GET /api/chats", s.listChats)
 	mux.HandleFunc("POST /api/chats", s.createChat)
-	mux.HandleFunc("GET /api/chats/{id}", s.getChat)
-	mux.HandleFunc("POST /api/chats/{id}/messages", s.send)
-	mux.HandleFunc("GET /api/chats/{id}/queue", s.queue)
-	mux.HandleFunc("POST /api/chats/{id}/queue/send", s.flushQueue)
-	mux.HandleFunc("DELETE /api/chats/{id}/queue/{qid}", s.unqueue)
-	mux.HandleFunc("POST /api/chats/{id}/abort", s.action(s.M.Abort))
-	mux.HandleFunc("POST /api/chats/{id}/suspend", s.action(s.M.Suspend))
-	mux.HandleFunc("POST /api/chats/{id}/internet", s.internet)
-	mux.HandleFunc("POST /api/chats/{id}/model", s.setModel)
-	mux.HandleFunc("GET /api/chats/{id}/tools/running", s.runningTools)
-	mux.HandleFunc("GET /api/chats/{id}/web_requests", s.webRequests)
-	mux.HandleFunc("POST /api/chats/{id}/tools/{call}/stop", s.stopTool)
-	mux.HandleFunc("POST /api/chats/{id}/tools/{call}/background", s.backgroundTool)
-	mux.HandleFunc("POST /api/chats/{id}/effort", s.setEffort)
-	mux.HandleFunc("POST /api/chats/{id}/autocompact", s.autocompact)
-	mux.HandleFunc("POST /api/chats/{id}/subagents", s.maxSubagents)
-	mux.HandleFunc("GET /api/chats/{id}/llm_calls", s.llmCalls)
-	mux.HandleFunc("GET /api/chats/{id}/tool_executions", s.toolExecutions)
-	mux.HandleFunc("GET /api/chats/{id}/background", s.background)
-	mux.HandleFunc("POST /api/chats/{id}/background/{bg}/stop", s.stopBackground)
-	mux.HandleFunc("GET /api/chats/{id}/commands", s.commands)
-	mux.HandleFunc("POST /api/chats/{id}/commands", s.runCommand)
-	mux.HandleFunc("GET /api/chats/{id}/session", s.session)
-	mux.HandleFunc("GET /api/chats/{id}/artifacts", s.artifacts)
-	mux.HandleFunc("GET /api/chats/{id}/artifacts/{name}", s.download)
-	mux.HandleFunc("POST /api/chats/{id}/files", s.upload)
-	mux.HandleFunc("GET /api/chats/{id}/images", s.image)
-	mux.HandleFunc("GET /api/chats/{id}/events", s.events)
+	chat("GET /api/chats/{id}", s.getChat)
+	chat("POST /api/chats/{id}/messages", s.send)
+	chat("GET /api/chats/{id}/queue", s.queue)
+	chat("POST /api/chats/{id}/queue/send", s.flushQueue)
+	chat("DELETE /api/chats/{id}/queue/{qid}", s.unqueue)
+	chat("POST /api/chats/{id}/abort", s.action(s.M.Abort))
+	chat("POST /api/chats/{id}/suspend", s.action(s.M.Suspend))
+	chat("POST /api/chats/{id}/internet", s.internet)
+	chat("POST /api/chats/{id}/model", s.setModel)
+	chat("GET /api/chats/{id}/tools/running", s.runningTools)
+	chat("GET /api/chats/{id}/web_requests", s.webRequests)
+	chat("POST /api/chats/{id}/tools/{call}/stop", s.stopTool)
+	chat("POST /api/chats/{id}/tools/{call}/background", s.backgroundTool)
+	chat("POST /api/chats/{id}/effort", s.setEffort)
+	chat("POST /api/chats/{id}/autocompact", s.autocompact)
+	chat("POST /api/chats/{id}/subagents", s.maxSubagents)
+	chat("GET /api/chats/{id}/llm_calls", s.llmCalls)
+	chat("GET /api/chats/{id}/tool_executions", s.toolExecutions)
+	chat("GET /api/chats/{id}/background", s.background)
+	chat("POST /api/chats/{id}/background/{bg}/stop", s.stopBackground)
+	chat("GET /api/chats/{id}/commands", s.commands)
+	chat("POST /api/chats/{id}/commands", s.runCommand)
+	chat("GET /api/chats/{id}/session", s.session)
+	chat("GET /api/chats/{id}/artifacts", s.artifacts)
+	chat("GET /api/chats/{id}/artifacts/{name}", s.download)
+	chat("POST /api/chats/{id}/files", s.upload)
+	chat("GET /api/chats/{id}/images", s.image)
+	chat("GET /api/chats/{id}/events", s.events)
 	mux.HandleFunc("GET /api/approvals", s.approvals)
-	mux.HandleFunc("POST /api/approvals/{id}", s.decide)
+	mux.Handle("POST /api/approvals/{id}", s.ownApproval(s.decide))
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "unbekannter Endpunkt")
 	})
@@ -155,6 +197,86 @@ func (s *Server) Handler() http.Handler {
 		mux.Handle("/", spa(s.Web))
 	}
 	return s.guard(s.auth(mux))
+}
+
+// Owners beantwortet, wem Chats und Bestätigungen gehören (chat.Manager).
+type Owners interface {
+	ChatOwner(ctx context.Context, chatID string) (string, error)
+	ApprovalChat(ctx context.Context, approvalID string) (string, error)
+}
+
+func (s *Server) owners() Owners { return s.M }
+
+// owns sagt, ob der Chat dem angemeldeten Nutzer gehört. Im token-Modus gehört jeder Chat dem
+// Inhaber des Tokens. Fremde und unbekannte Chats sind gleich (nicht gefunden), damit sich Kennungen
+// fremder Chats nicht erraten lassen.
+func (s *Server) owns(ctx context.Context, chatID string) (bool, error) {
+	if s.OIDC == nil {
+		return true, nil
+	}
+	u, ok := UserFrom(ctx)
+	if !ok || u.Sub == "" {
+		return false, nil
+	}
+	owner, err := s.owners().ChatOwner(ctx, chatID)
+	if errors.Is(err, store.ErrNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return owner == u.Sub, nil
+}
+
+// ownChat lässt eine Route unter /api/chats/{id} nur für Chats des Nutzers durch (sonst 404).
+func (s *Server) ownChat(next http.HandlerFunc) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ok, err := s.owns(r.Context(), r.PathValue("id"))
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		if !ok {
+			writeErr(w, http.StatusNotFound, store.ErrNotFound.Error())
+			return
+		}
+		next(w, r)
+	})
+}
+
+// ownApproval lässt eine Bestätigung nur entscheiden, wenn ihr Chat dem Nutzer gehört (sonst 404).
+func (s *Server) ownApproval(next http.HandlerFunc) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.OIDC != nil {
+			chatID, err := s.owners().ApprovalChat(r.Context(), r.PathValue("id"))
+			if err != nil && !errors.Is(err, store.ErrNotFound) {
+				fail(w, err)
+				return
+			}
+			ok := false
+			if err == nil {
+				if ok, err = s.owns(r.Context(), chatID); err != nil {
+					fail(w, err)
+					return
+				}
+			}
+			if !ok {
+				writeErr(w, http.StatusNotFound, store.ErrNotFound.Error())
+				return
+			}
+		}
+		next(w, r)
+	})
+}
+
+// me: angemeldeter Nutzer und Anmeldeart.
+func (s *Server) me(w http.ResponseWriter, r *http.Request) {
+	if s.OIDC == nil {
+		writeJSON(w, 200, map[string]any{"mode": config.AuthToken})
+		return
+	}
+	u, _ := UserFrom(r.Context())
+	writeJSON(w, 200, map[string]any{"mode": config.AuthOIDC, "sub": u.Sub, "username": u.Username, "name": u.Name})
 }
 
 // guard weist Anfragen aus den Sandbox-Netzen ab. Die Sandboxen erreichen
@@ -321,6 +443,17 @@ func (s *Server) pool(w http.ResponseWriter, r *http.Request) {
 				v.ExecContainerID, v.ExecContainerName, v.ExecImage = xid, x.ExecContainerName(), s.Env.Image
 			}
 		}
+		if in.ChatID != "" {
+			// Kennung und Titel fremder Chats sieht der Nutzer nicht (oidc).
+			if ok, _ := s.owns(r.Context(), in.ChatID); !ok {
+				v.ChatID, v.Activity = "", nil
+				if in.State == pool.StateAssigned {
+					active++
+				}
+				out = append(out, v)
+				continue
+			}
+		}
 		if in.ChatID != "" && in.State == pool.StateAssigned {
 			if c, err := s.M.View(r.Context(), in.ChatID); err == nil {
 				v.ChatTitle = c.Title
@@ -345,6 +478,15 @@ func (s *Server) listChats(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
+	if u, ok := UserFrom(r.Context()); ok && s.OIDC != nil {
+		own := make([]chat.ChatView, 0, len(cs))
+		for _, c := range cs {
+			if c.Owner == u.Sub {
+				own = append(own, c)
+			}
+		}
+		cs = own
+	}
 	writeJSON(w, 200, cs)
 }
 
@@ -353,6 +495,15 @@ func (s *Server) createChat(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil && err != io.EOF {
 		writeErr(w, 400, "ungültiges JSON")
 		return
+	}
+	req.Owner = ""
+	if s.OIDC != nil {
+		u, ok := UserFrom(r.Context())
+		if !ok || u.Sub == "" {
+			writeErr(w, http.StatusUnauthorized, "nicht angemeldet")
+			return
+		}
+		req.Owner = u.Sub
 	}
 	c, err := s.M.Create(r.Context(), req)
 	if err != nil {
@@ -813,10 +964,40 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) approvals(w http.ResponseWriter, r *http.Request) {
-	a, err := s.M.Approvals(r.Context(), r.URL.Query().Get("state"), r.URL.Query().Get("chat"))
+	ctx := r.Context()
+	chatID := r.URL.Query().Get("chat")
+	if chatID != "" {
+		if ok, err := s.owns(ctx, chatID); err != nil || !ok {
+			if err != nil {
+				fail(w, err)
+				return
+			}
+			writeJSON(w, 200, []store.Approval{})
+			return
+		}
+	}
+	a, err := s.M.Approvals(ctx, r.URL.Query().Get("state"), chatID)
 	if err != nil {
 		fail(w, err)
 		return
+	}
+	if s.OIDC != nil && chatID == "" {
+		mine := map[string]bool{}
+		own := make([]store.Approval, 0, len(a))
+		for _, ap := range a {
+			ok, seen := mine[ap.ChatID]
+			if !seen {
+				if ok, err = s.owns(ctx, ap.ChatID); err != nil {
+					fail(w, err)
+					return
+				}
+				mine[ap.ChatID] = ok
+			}
+			if ok {
+				own = append(own, ap)
+			}
+		}
+		a = own
 	}
 	writeJSON(w, 200, a)
 }
