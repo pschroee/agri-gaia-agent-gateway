@@ -44,7 +44,7 @@ export default function App() {
           (oidc ? (
             <div role="alert" className="border-b border-amber-300 bg-amber-100 px-4 py-2 text-sm text-amber-950">
               Nicht angemeldet. Bitte in der Plattform anmelden.{" "}
-              <a className="underline underline-offset-2" href="/oidc/login" target="_blank" rel="noopener">
+              <a className="underline underline-offset-2" href="oidc/login" target="_blank" rel="noopener">
                 Anmelden
               </a>
             </div>

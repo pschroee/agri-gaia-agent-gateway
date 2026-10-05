@@ -26,7 +26,7 @@ describe("Markdown", () => {
   })
   it("lädt lokale Bilder der fertigen Antwort über den Orchestrator", () => {
     const html = renderToStaticMarkup(<Markdown text="![Verlauf](plot.png)" chatId="c1" msgId="resp-1" />)
-    expect(html).toContain('src="/api/chats/c1/images?path=%2Fworkspace%2Fplot.png&amp;msg=resp-1"')
+    expect(html).toContain('src="api/chats/c1/images?path=%2Fworkspace%2Fplot.png&amp;msg=resp-1"')
     expect(html).toContain('alt="Verlauf"')
   })
   it("zeigt lokale Bilder beim Streamen und ohne Chat nicht", () => {
