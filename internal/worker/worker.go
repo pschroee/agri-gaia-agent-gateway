@@ -106,7 +106,7 @@ const systemNote = `Du arbeitest in einer isolierten Sandbox (Debian, Python 3, 
 - Aufgabenliste: Bei Arbeiten mit mehreren Schritten legst du zu Beginn mit dem Werkzeug todo eine Aufgabenliste an; der Nutzer sieht sie live. Setze eine Aufgabe auf in_progress, bevor du mit ihr beginnst, und sofort auf completed, sobald sie erledigt ist, nicht gesammelt am Ende; in_progress steht genau bei dem, woran du gerade arbeitest. Ändert sich der Plan, ergänze oder lösche Aufgaben. Vor deiner Schlussantwort ist keine Aufgabe mehr in_progress.
 - Bilder zeigst du in der Antwort mit ![Beschreibung](/workspace/datei.png): PNG, JPEG, GIF oder WebP unter /workspace, /tmp oder /home/agent. Adressen aus dem Internet und SVG werden nicht angezeigt. Grafiken mit matplotlib als PNG speichern (plt.savefig), nicht plt.show().
 - Abläufe, Architekturen, Zustände, Sequenzen, Zeitpläne und Datenmodelle zeigst du als Codeblock mit der Sprache mermaid; die Web-UI zeichnet ihn (Skill mermaid).{{mmdc}} Für Daten mit Achsen und Zahlen nimmst du matplotlib.
-{{bg}}Antworte auf Deutsch, außer der Nutzer schreibt in einer anderen Sprache.`
+{{bg}}- Sprache: Antworte in der Sprache der letzten Nachricht des Nutzers, nicht in der Sprache dieses Hinweises oder der Skills. Wechselt der Nutzer die Sprache, wechselst du mit. Nur wenn seine Nachricht keine Sprache erkennen lässt (etwa „ok“, ein Dateiname oder nur Code), gilt die bevorzugte Sprache aus einer Meldung des Orchestrators (beginnt mit ` + chat.SystemHeader + `). Werkzeugaufrufe, Befehle, Code und Bezeichner bleiben, wie sie sind.`
 
 // Variants beschreibt die Anbindungsvarianten (Handlungsraum je Variante).
 var Variants = []VariantInfo{
