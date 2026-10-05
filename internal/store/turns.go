@@ -3,7 +3,10 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // Durchgänge (Review 3, H1/H2): Jeder Auftrag an pi ist ein Durchgang mit Auslöser und Herkunft.
@@ -27,7 +30,7 @@ const (
 // Source ist ein Teil eines Auftrags, in Reihenfolge.
 type Source struct {
 	Kind    string   `json:"kind"`               // QueueUser oder QueueSystem
-	Type    string   `json:"type,omitempty"`     // bei system: NoteBackground, NoteSandbox
+	Type    string   `json:"type,omitempty"`     // bei system: NoteBackground, NoteSandbox, NoteLanguage
 	Refs    []string `json:"refs,omitempty"`     // bei system: betroffene Aufgaben
 	QueueID string   `json:"queue_id,omitempty"` // Eintrag der Warteschlange, falls eingereiht
 	// Marker: Marke des Zauns um die Daten aus der Sandbox (nur system, wenn es Daten gibt).
@@ -65,6 +68,20 @@ func (s *Store) CreateTurn(ctx context.Context, chatID, trigger, origin string, 
 func (s *Store) DeleteTurn(ctx context.Context, id int64) error {
 	_, err := s.pool.Exec(ctx, `DELETE FROM chat_turns WHERE id=$1`, id)
 	return err
+}
+
+// FirstTurnLanguage liefert die bevorzugte Sprache des Chats, solange er noch keinen Durchgang hat;
+// sonst (und ohne Angabe) "".
+func (s *Store) FirstTurnLanguage(ctx context.Context, chatID string) (string, error) {
+	if !isUUID(chatID) {
+		return "", nil
+	}
+	var lang string
+	err := s.pool.QueryRow(ctx, `SELECT COALESCE(language, '') FROM chats c WHERE id=$1 AND NOT EXISTS (SELECT 1 FROM chat_turns t WHERE t.chat_id=c.id)`, chatID).Scan(&lang)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	return lang, err
 }
 
 // Turns liefert die Durchgänge eines Chats in Reihenfolge.

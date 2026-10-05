@@ -53,7 +53,7 @@ export function SystemNoteLine({
       </div>
       <CollapsibleContent>
         <div className="mt-1 ml-4.5 min-w-0 border-l-2 pl-2.5">
-          {note.type === "sandbox" ? (
+          {note.type === "sandbox" || note.type === "language" ? (
             <div className="break-words">
               {note.summary}
               {note.items && note.items.length > 0 && (

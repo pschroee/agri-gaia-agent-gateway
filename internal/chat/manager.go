@@ -419,6 +419,9 @@ type NewChat struct {
 	Delegation json.RawMessage `json:"delegation,omitempty"`
 	// Owner setzt die API aus der Anmeldung (sub), nie aus dem Körper der Anfrage.
 	Owner string `json:"-"`
+	// Language: bevorzugte Sprache des Nutzers laut Browser (BCP 47, etwa „en-US“); optional. Geht mit
+	// dem ersten Auftrag als Meldung an den Agenten (language.go).
+	Language string `json:"language,omitempty"`
 }
 
 func (m *Manager) Create(ctx context.Context, req NewChat) (ChatView, error) {
@@ -455,6 +458,10 @@ func (m *Manager) Create(ctx context.Context, req NewChat) (ChatView, error) {
 	if maxSub < 0 || maxSub > m.opt.MaxSubagentsLimit {
 		return ChatView{}, fmt.Errorf("%w: max_subagents muss zwischen 0 und %d liegen", ErrInvalid, m.opt.MaxSubagentsLimit)
 	}
+	lang, err := NormalizeLanguage(req.Language)
+	if err != nil {
+		return ChatView{}, err
+	}
 	var del json.RawMessage
 	if t := bytes.TrimSpace(req.Delegation); len(t) > 0 && string(t) != "null" {
 		d, err := delegation.Parse(t)
@@ -463,7 +470,7 @@ func (m *Manager) Create(ctx context.Context, req NewChat) (ChatView, error) {
 		}
 		del, _ = json.Marshal(d) // gespeichert wird die geprüfte, einheitliche Form
 	}
-	c, err := m.st.CreateChat(ctx, store.NewChat{Title: title, TitleSource: titleSrc, Model: req.Model, Variant: req.Variant, Internet: internet, AutoCompact: autoCompact, MaxSubagents: maxSub, Delegation: del, Owner: req.Owner})
+	c, err := m.st.CreateChat(ctx, store.NewChat{Title: title, TitleSource: titleSrc, Model: req.Model, Variant: req.Variant, Internet: internet, AutoCompact: autoCompact, MaxSubagents: maxSub, Delegation: del, Owner: req.Owner, Language: lang})
 	if err != nil {
 		return ChatView{}, err
 	}

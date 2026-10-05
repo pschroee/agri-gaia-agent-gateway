@@ -358,3 +358,7 @@ CREATE TABLE IF NOT EXISTS delegation_objects (
 -- NULL: angelegt mit dem API-Token (token-Modus), ohne Besitzer.
 ALTER TABLE chats ADD COLUMN IF NOT EXISTS owner text;
 CREATE INDEX IF NOT EXISTS chats_owner ON chats (owner);
+
+-- Bevorzugte Sprache des Nutzers laut Browser (BCP 47, etwa en-US); NULL: unbekannt. Geht mit dem ersten
+-- Auftrag des Chats als Meldung des Orchestrators an den Agenten (internal/chat, languageNote).
+ALTER TABLE chats ADD COLUMN IF NOT EXISTS language text;

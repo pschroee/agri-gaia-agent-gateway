@@ -39,6 +39,7 @@ const (
 const (
 	NoteBackground = "background" // Ende einer Hintergrundaufgabe
 	NoteSandbox    = "sandbox"    // Aufgaben sind mit der vorigen Sandbox beendet worden
+	NoteLanguage   = "language"   // bevorzugte Sprache des Nutzers laut Browser (erster Auftrag des Chats)
 )
 
 const queueCols = `id::text, chat_id::text, text, attachments, created_at, kind, note, refs`
