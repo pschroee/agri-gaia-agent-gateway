@@ -1,8 +1,8 @@
-# Typst-Pakete, die in der Sandbox verfügbar sind (Namensraum @preview).
-# Beim Bau des Abbilds in einen schreibgeschützten Cache geladen; andere Pakete
-# lassen sich in der Sandbox nicht nachladen. Versionen mit Typst 0.14.2 verträglich
-# (packages.typst.org/preview/index.json, Feld compiler; Abruf 29.09.2026).
-# Versionen aus den eigenen Arbeiten des Verfassers:
+# Typst packages available in the sandbox (namespace @preview).
+# Loaded into a read-only cache while building the image; other packages
+# cannot be fetched in the sandbox. Versions compatible with Typst 0.14.2
+# (packages.typst.org/preview/index.json, field compiler; retrieved 2026-09-29).
+# Versions from the author's own work:
 cetz:0.4.0
 cetz-plot:0.1.2
 glossarium:0.5.9
@@ -10,7 +10,7 @@ zebraw:0.6.1
 pintorita:0.1.4
 cmarker:0.1.8
 cheq:0.3.0
-# Jeweils neueste verträgliche Version:
+# Newest compatible version of each:
 cetz:0.5.2
 cetz-plot:0.1.4
 glossarium:0.5.10

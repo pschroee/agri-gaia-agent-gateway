@@ -1,25 +1,25 @@
 ---
 name: artifacts
-description: Dateien als Artefakt des aktuellen Chats beim Orchestrator ablegen, auflisten und wieder holen. Verwenden, wenn der Nutzer ein Ergebnis als Datei behalten, herunterladen oder „hochladen" möchte.
+description: Store files as an artifact of the current chat at the orchestrator, list them and fetch them again. Use when the user wants to keep, download or "upload" a result as a file.
 ---
 
-# Artefakte ablegen
+# Storing artifacts
 
-In dieser Sandbox gibt es das Kommando `agw-artifact`. Es legt Dateien dauerhaft beim
-Orchestrator ab, getrennt je Chat. Das Arbeitsverzeichnis dieser Sandbox ist dagegen
-flüchtig: Es verschwindet, wenn der Chat ruht.
+This sandbox has the command `agw-artifact`. It stores files permanently at the
+orchestrator, separately per chat. The working directory of this sandbox, by contrast, is
+volatile: it disappears when the chat is idle.
 
 ```bash
-agw-artifact upload <datei> [--name <name>]
+agw-artifact upload <file> [--name <name>]
 agw-artifact list
-agw-artifact get <name> [-o <datei>]
+agw-artifact get <name> [-o <file>]
 ```
 
-**Jeder Upload muss vom Nutzer bestätigt werden.** `agw-artifact upload` wartet, bis der
-Nutzer in der Oberfläche bestätigt oder ablehnt, das kann mehrere Minuten dauern. Rufe es
-deshalb mit einer großzügigen Zeitgrenze auf (mindestens 900 Sekunden), nicht im Hintergrund,
-und warte das Ergebnis ab.
+**Every upload must be approved by the user.** `agw-artifact upload` waits until the
+user approves or rejects in the UI, which can take several minutes. So call it
+with a generous timeout (at least 900 seconds), not in the background,
+and wait for the result.
 
-- Exit-Code 0 und `bestätigt: …` — das Artefakt ist gespeichert.
-- Exit-Code 3 und `abgelehnt: …` — der Nutzer hat abgelehnt. Nicht erneut versuchen, ohne
-  vorher nachzufragen; dem Nutzer die Ablehnung mitteilen.
+- Exit code 0 and `approved: …` — the artifact is stored.
+- Exit code 3 and `rejected: …` — the user rejected it. Do not try again without
+  asking first; tell the user about the rejection.

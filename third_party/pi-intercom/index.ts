@@ -1275,9 +1275,9 @@ export default function piIntercomExtension(pi: ExtensionAPI) {
     const activeContext = getLiveContext(ctx, generation);
     if (!activeContext) return;
     if (!activeContext.isIdle()) {
-      // agw: Beschäftigte Sitzungen ohne Oberfläche (Subagenten, RPC) nehmen Nachrichten wie Sitzungen
-      // mit Oberfläche per steer an, statt sie abzulehnen; sonst erreichen sich laufende Subagenten nie.
-      // Abschalten mit PI_INTERCOM_REFUSE_WHEN_BUSY=1 (Verhalten des Originals). Siehe VENDORED.md.
+      // agw: busy sessions without a UI (subagents, RPC) accept messages via steer like sessions
+      // with a UI, instead of refusing them; otherwise running subagents never reach each other.
+      // Turn off with PI_INTERCOM_REFUSE_WHEN_BUSY=1 (behaviour of the original). See VENDORED.md.
       if (!activeContext.hasUI && process.env.PI_INTERCOM_REFUSE_WHEN_BUSY === "1") {
         const activeClient = client;
         if (!entry.message.replyTo && activeClient?.isConnected()) {

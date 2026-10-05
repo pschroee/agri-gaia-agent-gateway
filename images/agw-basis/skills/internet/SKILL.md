@@ -1,33 +1,33 @@
 ---
 name: internet
-description: Internetzugang beim Nutzer erbitten. Verwenden, bevor etwas aus dem Netz geholt wird (pip install, curl, git clone, Webseiten), wenn Netzaufrufe fehlschlagen oder absehbar gebraucht werden.
+description: Ask the user for internet access. Use before fetching anything from the network (pip install, curl, git clone, web pages), when network calls fail or will foreseeably be needed.
 ---
 
-# Internetzugang erbitten
+# Asking for internet access
 
-Diese Sandbox hat **standardmäßig kein Internet**. Netzaufrufe schlagen dann mit Namens- oder
-Verbindungsfehlern fehl. Der Weg zum Sprachmodell und zum Orchestrator besteht unabhängig davon.
+This sandbox has **no internet by default**. Network calls then fail with name resolution or
+connection errors. The route to the language model and to the orchestrator exists regardless.
 
-Braucht die Aufgabe Internet, bitte den Nutzer darum — mit einer kurzen, konkreten Begründung:
+If the task needs internet, ask the user for it — with a short, concrete reason:
 
 ```bash
-agw-internet "pip install scikit-learn, um ein Klassifikationsmodell zu trainieren"
+agw-internet "pip install scikit-learn to train a classification model"
 ```
 
-Der Befehl **wartet**, bis der Nutzer entscheidet (das kann Minuten dauern); rufe ihn mit großzügiger
-Zeitgrenze auf (mindestens 900 Sekunden) und nicht im Hintergrund.
+The command **waits** until the user decides (this can take minutes); call it with a generous
+timeout (at least 900 seconds) and not in the background.
 
-- Exit-Code 0, `bestätigt: …` — Internet ist jetzt da, fahre fort.
-- Exit-Code 3, `abgelehnt: …` — nicht erneut fragen, ohne dass der Nutzer es wünscht. Arbeite ohne
-  Netz weiter oder erkläre, was ohne Internet nicht geht.
+- Exit code 0, `approved: …` — internet is now available, carry on.
+- Exit code 3, `rejected: …` — do not ask again unless the user wants it. Continue without
+  network or explain what cannot be done without internet.
 
-Frage nicht vorsorglich, sondern erst, wenn die Aufgabe es wirklich braucht. Vorinstalliert sind
-unter anderem numpy, pandas, matplotlib, plotly, jinja2 und openpyxl; dafür braucht es kein Internet.
+Do not ask as a precaution, only when the task really needs it. Preinstalled are, among
+others, numpy, pandas, matplotlib, plotly, jinja2 and openpyxl; these need no internet.
 
-## Pakete installieren
+## Installing packages
 
-Mit Internetzugang laufen `pip install` und `npm install` automatisch über Paket-Zwischenspeicher
-(`pip-cache`, `npm-cache`); einmal geladene Pakete kommen beim nächsten Mal schneller. Ohne
-Internetzugang scheitern sie nach wenigen Sekunden. Dann nicht wiederholen, sondern Internet erbitten
-oder mit den vorinstallierten Paketen arbeiten. Nachinstallierte Pakete gehen verloren, wenn der Chat
-ruht und in einer frischen Sandbox fortgesetzt wird; installiere sie dann erneut.
+With internet access, `pip install` and `npm install` automatically go through package caches
+(`pip-cache`, `npm-cache`); packages loaded once come faster the next time. Without
+internet access they fail after a few seconds. Then do not retry, but ask for internet
+or work with the preinstalled packages. Packages installed later are lost when the chat
+is idle and resumed in a fresh sandbox; install them again then.

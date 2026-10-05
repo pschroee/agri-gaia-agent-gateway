@@ -318,16 +318,16 @@ Upstream docs (GitHub, for when local files are missing/outdated):
 - Raw doc example: https://raw.githubusercontent.com/typst/typst/main/references/overview.md
 
 
-## In dieser Sandbox (agw-basis)
+## In this sandbox (agw-basis)
 
-- `typst` **0.14.2** ist installiert: `typst compile datei.typ` erzeugt `datei.pdf`,
-  `typst compile datei.typ ausgabe.png` ein Bild.
-- **Nur diese Pakete sind verfügbar** (ohne Internet, fest im Abbild; andere lassen sich nicht nachladen):
-  `@preview/cetz` 0.4.0 und 0.5.2, `@preview/cetz-plot` 0.1.2 und 0.1.4, `@preview/fletcher:0.5.8`,
-  `@preview/touying:0.7.4`, `@preview/codly:1.3.0`, `@preview/glossarium` 0.5.9 und 0.5.10,
-  `@preview/zebraw` 0.6.1 und 0.6.3, `@preview/pintorita:0.1.4`, `@preview/cmarker:0.1.8`,
-  `@preview/cheq` 0.3.0 und 0.3.1, `@preview/showybox:2.0.4`, `@preview/lilaq:0.6.0`, `@preview/tablem:0.3.0`.
-  Die Liste steht auch in `/opt/typst/packages.txt`.
-- Schlägt ein `#import "@preview/…"` fehl, liegt das Paket nicht im Abbild: auf eines der obigen
-  ausweichen, nicht versuchen, es herunterzuladen.
-- Das fertige PDF bei Bedarf als Artefakt ablegen (`agw-artifact upload datei.pdf`).
+- `typst` **0.14.2** is installed: `typst compile file.typ` produces `file.pdf`,
+  `typst compile file.typ output.png` an image.
+- **Only these packages are available** (no internet, baked into the image; others cannot be fetched):
+  `@preview/cetz` 0.4.0 and 0.5.2, `@preview/cetz-plot` 0.1.2 and 0.1.4, `@preview/fletcher:0.5.8`,
+  `@preview/touying:0.7.4`, `@preview/codly:1.3.0`, `@preview/glossarium` 0.5.9 and 0.5.10,
+  `@preview/zebraw` 0.6.1 and 0.6.3, `@preview/pintorita:0.1.4`, `@preview/cmarker:0.1.8`,
+  `@preview/cheq` 0.3.0 and 0.3.1, `@preview/showybox:2.0.4`, `@preview/lilaq:0.6.0`, `@preview/tablem:0.3.0`.
+  The list is also in `/opt/typst/packages.txt`.
+- If an `#import "@preview/…"` fails, the package is not in the image: fall back to one of the
+  packages above, do not try to download it.
+- Store the finished PDF as an artifact if needed (`agw-artifact upload file.pdf`).

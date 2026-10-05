@@ -1,10 +1,10 @@
 import { accessSync, constants, readFileSync, realpathSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, resolve as resolvePath } from "node:path";
-// agw: Laufzeit des Workflow-Workers einstellbar (siehe VENDORED.md, Änderung 2).
+// agw: runtime of the workflow worker configurable (see VENDORED.md, change 2).
 const workerModule = process.env.PI_SUBAGENTS_WORKFLOW_WORKER || undefined;
 const { Worker } = workerModule ? await import(workerModule) : await import("node:worker_threads");
-/** agw: Modul, aus dem `Worker` für workflowScript stammt; die Bridge prüft daran die Umleitung. */
+/** agw: module that `Worker` for workflowScript comes from; the bridge checks the redirection with it. */
 export const workflowWorkerModule = workerModule ?? "node:worker_threads";
 import { DEFAULT_GLOBAL_CONCURRENCY_LIMIT, Semaphore } from "../runs/shared/parallel-utils.js";
 import { HOST_STEP_MAX_COUNT } from "../runs/shared/host-step-status.js";

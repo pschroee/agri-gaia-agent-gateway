@@ -1,5 +1,5 @@
-// Unit-Tests des Wächters in exec-bridge.ts (Testlücke aus dem Code-Review: checkSubagentCall;
-// dazu die Prüfung der Nachrichten aus workflowScript). Läuft mit node --test im Test-Abbild
+// Unit tests of the guard in exec-bridge.ts (test gap from the code review: checkSubagentCall;
+// plus the check of messages from workflowScript). Runs with node --test in the test image
 // agw-parity (TestBridgeParity).
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -9,20 +9,20 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { bgStatus, bgTailLines, checkSubagentCall, checkWorkflowMessage, formatDuration, REMOTE_WORKER, workflowRuntimeRedirected } from "../ext/exec-bridge.ts";
 
-test("einzelne Subagenten und lesende Aktionen gehen durch", () => {
+test("single subagents and read-only actions pass", () => {
 	for (const input of [
 		{ agent: "worker", task: "x" },
 		{ agent: "scout", task: "x", async: true, context: "fork", model: "deepseek/deepseek-flash", timeoutMs: 1000 },
 		{ action: "list", capabilities: true },
 		{ action: "status", id: "abc" },
 		{ action: "get", agent: "worker" },
-		{ action: "steer", id: "abc", message: "weiter" },
+		{ action: "steer", id: "abc", message: "continue" },
 	]) {
 		assert.equal(checkSubagentCall(input), undefined, JSON.stringify(input));
 	}
 });
 
-test("gesperrt: Code, Agentendefinitionen, fremde Laufzeiten, Pfade", () => {
+test("blocked: code, agent definitions, foreign runtimes, paths", () => {
 	for (const [input, want] of [
 		[null, "invalid parameters"],
 		[[], "invalid parameters"],
@@ -30,7 +30,7 @@ test("gesperrt: Code, Agentendefinitionen, fremde Laufzeiten, Pfade", () => {
 		[{ action: "create" }, "action create is blocked"],
 		[{ action: "delete", agent: "worker" }, "action delete is blocked"],
 		[{ agent: "claude-code", task: "x" }, "agent claude-code is not allowed"],
-		// L2: agent wird auch neben einer Aktion geprüft
+		// L2: agent is also checked next to an action
 		[{ action: "get", agent: "codex-exec" }, "agent codex-exec is not allowed"],
 		[{ agent: "worker", task: "x", context: "profile" }, "context profile is blocked"],
 		[{ agent: "worker", task: "x", cwd: "/agent" }, "parameter cwd is blocked"],
@@ -42,7 +42,7 @@ test("gesperrt: Code, Agentendefinitionen, fremde Laufzeiten, Pfade", () => {
 	}
 });
 
-test("workflowScript nur mit umgeleiteter Laufzeit und ohne gefährliche Parameter", () => {
+test("workflowScript only with a redirected runtime and without dangerous parameters", () => {
 	const ok = { workflowScript: "return 1", async: false, args: { a: 1 }, timeoutMs: 5000 };
 	assert.match(checkSubagentCall(ok), /not redirected/);
 	assert.equal(checkSubagentCall(ok, { workflowReady: true }), undefined);
@@ -59,7 +59,7 @@ test("workflowScript nur mit umgeleiteter Laufzeit und ohne gefährliche Paramet
 	assert.match(checkSubagentCall({ workflowScript: " " }, { workflowReady: true }), /non-empty/);
 });
 
-test("Nachrichten des Workers: Läufe wie einzelne Subagenten, runs.host gesperrt", () => {
+test("worker messages: runs like single subagents, runs.host blocked", () => {
 	const run = (params) => ({ type: "call", callId: 1, method: "run", args: { key: "k", params } });
 	assert.equal(checkWorkflowMessage({ type: "emit", value: 1 }), undefined);
 	assert.equal(checkWorkflowMessage({ type: "complete", value: [1] }), undefined);
@@ -76,7 +76,7 @@ test("Nachrichten des Workers: Läufe wie einzelne Subagenten, runs.host gesperr
 	assert.match(checkWorkflowMessage(null), /invalid/);
 });
 
-test("Umleitung der Laufzeit wird an workflowWorkerModule erkannt, sonst gesperrt", async () => {
+test("runtime redirection is recognised by workflowWorkerModule, otherwise blocked", async () => {
 	const dir = mkdtempSync(join(tmpdir(), "wf-"));
 	const mod = (name, src) => {
 		const f = join(dir, name);
@@ -84,18 +84,18 @@ test("Umleitung der Laufzeit wird an workflowWorkerModule erkannt, sonst gesperr
 		return f;
 	};
 	assert.equal(REMOTE_WORKER, "/opt/agw/ext/remote-worker.mjs");
-	assert.equal(await workflowRuntimeRedirected(mod("an.mjs", `export const workflowWorkerModule = ${JSON.stringify(REMOTE_WORKER)};\n`)), true);
-	// ohne Variable: pi-subagents meldet node:worker_threads
-	assert.equal(await workflowRuntimeRedirected(mod("aus.mjs", 'export const workflowWorkerModule = "node:worker_threads";\n')), false);
-	assert.equal(await workflowRuntimeRedirected(mod("fremd.mjs", 'export const workflowWorkerModule = "/tmp/remote-worker.mjs";\n')), false);
-	// eine unveränderte pi-subagents-Fassung hat den Export nicht
-	assert.equal(await workflowRuntimeRedirected(mod("ohne.mjs", 'export const x = 1;\n')), false);
-	assert.equal(await workflowRuntimeRedirected(mod("wirft.mjs", 'throw new Error("kaputt");\n')), false);
-	assert.equal(await workflowRuntimeRedirected(join(dir, "fehlt.mjs")), false);
+	assert.equal(await workflowRuntimeRedirected(mod("on.mjs", `export const workflowWorkerModule = ${JSON.stringify(REMOTE_WORKER)};\n`)), true);
+	// without the variable: pi-subagents reports node:worker_threads
+	assert.equal(await workflowRuntimeRedirected(mod("off.mjs", 'export const workflowWorkerModule = "node:worker_threads";\n')), false);
+	assert.equal(await workflowRuntimeRedirected(mod("foreign.mjs", 'export const workflowWorkerModule = "/tmp/remote-worker.mjs";\n')), false);
+	// an unmodified pi-subagents version does not have the export
+	assert.equal(await workflowRuntimeRedirected(mod("without.mjs", 'export const x = 1;\n')), false);
+	assert.equal(await workflowRuntimeRedirected(mod("throws.mjs", 'throw new Error("broken");\n')), false);
+	assert.equal(await workflowRuntimeRedirected(join(dir, "missing.mjs")), false);
 });
 
-// Am echten Modul der Kopie (im Test-Abbild agw-parity unter /opt/pi/node_modules). Die Variable
-// wird beim Laden gelesen, deshalb je Fall ein eigener Node-Prozess.
+// On the real module of the copy (in the test image agw-parity under /opt/pi/node_modules). The variable
+// is read at load time, hence a separate Node process per case.
 const VENDORED = "/opt/pi/node_modules/pi-subagents/src/workflows/scripted-workflow.js";
 const BRIDGE = new URL("../ext/exec-bridge.ts", import.meta.url).pathname;
 function guardInChild(env) {
@@ -108,19 +108,19 @@ process.stdout.write(JSON.stringify({ module: m.workflowWorkerModule, ready, rea
 	return JSON.parse(execFileSync(process.execPath, ["--input-type=module", "-e", code], { env: { ...e, ...env }, encoding: "utf8" }));
 }
 
-test("Kopie von pi-subagents: ohne PI_SUBAGENTS_WORKFLOW_WORKER bleibt workflowScript gesperrt", { skip: !existsSync(VENDORED) && "Kopie von pi-subagents fehlt (nur im Abbild agw-parity)" }, () => {
+test("copy of pi-subagents: without PI_SUBAGENTS_WORKFLOW_WORKER workflowScript stays blocked", { skip: !existsSync(VENDORED) && "copy of pi-subagents missing (only in the agw-parity image)" }, () => {
 	const off = guardInChild({});
 	assert.deepEqual(off, { module: "node:worker_threads", ready: false, reason: "workflowScript is unavailable here (the workflow runtime is not redirected to the execution sandbox)" });
 	const empty = guardInChild({ PI_SUBAGENTS_WORKFLOW_WORKER: "" });
 	assert.equal(empty.ready, false);
-	// Ein anderer Pfad als der des pi-Abbilds: Das Modul lädt, aber die Sperre bleibt.
+	// A path other than the pi image's: the module loads, but the block stays.
 	const other = guardInChild({ PI_SUBAGENTS_WORKFLOW_WORKER: "/opt/pi/ext/remote-worker.mjs" });
 	assert.deepEqual(other, { module: "/opt/pi/ext/remote-worker.mjs", ready: false, reason: off.reason });
-	// Wie im pi-Abbild: frei.
+	// As in the pi image: allowed.
 	assert.deepEqual(guardInChild({ PI_SUBAGENTS_WORKFLOW_WORKER: REMOTE_WORKER }), { module: REMOTE_WORKER, ready: true, reason: null });
 });
 
-test("Hintergrundaufgaben: Stand und Dauer als eine Zeile", () => {
+test("background tasks: state and duration as one line", () => {
 	assert.equal(formatDuration(8_400), "8s");
 	assert.equal(formatDuration(83_000), "1m 23s");
 	assert.equal(formatDuration(3_723_000), "1h 2m");
@@ -133,8 +133,8 @@ test("Hintergrundaufgaben: Stand und Dauer als eine Zeile", () => {
 	assert.equal(bgStatus({ ...t, state: "failed", error: "boom" }, now), "bg-3 failed: boom");
 });
 
-// Review 3, N5: tail_lines kommt vom Modell; was keine Zahl ist, ergibt die Vorgabe statt NaN.
-test("bg_output: tail_lines wird geprüft", () => {
+// Review 3, N5: tail_lines comes from the model; anything that is not a number yields the default instead of NaN.
+test("bg_output: tail_lines is checked", () => {
 	for (const [v, want] of [
 		[undefined, 2000],
 		[null, 2000],

@@ -1,14 +1,14 @@
-// pi-Extension: bindet den MCP-Endpunkt des Orchestrators am Unix-Socket des
-// Platzes an. pi bringt kein MCP mit; diese Extension spricht JSON-RPC 2.0 im
-// zustandslosen Streamable-HTTP-Modus (POST /mcp) über Node-http mit socketPath
-// und registriert jedes MCP-Werkzeug als pi-Werkzeug mit der Vorsilbe "mcp_".
+// pi extension: connects the orchestrator's MCP endpoint at the slot's Unix
+// socket. pi has no built-in MCP; this extension speaks JSON-RPC 2.0 in
+// stateless Streamable HTTP mode (POST /mcp) via Node http with socketPath
+// and registers every MCP tool as a pi tool with the prefix "mcp_".
 //
-// Die Extension ist kein Kontrollpunkt. Geprüft und bestätigt wird allein im
-// Orchestrator am Socket.
+// The extension is not a control point. Checking and approval happen only in
+// the orchestrator at the socket.
 //
-// mcp_upload_artifact nennt einen Pfad in der Ausführungs-Sandbox (E9). Die Datei liegt nicht im
-// Container von pi; der Orchestrator liest sie dort selbst (POST /tool/upload, protokolliert wie
-// ein read) und reicht sie an denselben Upload mit Bestätigung weiter wie das MCP-Werkzeug.
+// mcp_upload_artifact names a path in the execution sandbox (E9). The file is not in the
+// pi container; the orchestrator reads it there itself (POST /tool/upload, logged like
+// a read) and passes it on to the same upload with approval as the MCP tool.
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { request } from "node:http";
 import { resolve } from "node:path";
@@ -30,7 +30,7 @@ function postJSON(path: string, body: unknown, signal?: AbortSignal): Promise<an
 					try {
 						resolvePromise(JSON.parse(data));
 					} catch {
-						reject(new Error(`unlesbare Antwort vom Orchestrator (${res.statusCode})`));
+						reject(new Error(`unreadable response from the orchestrator (${res.statusCode})`));
 					}
 				});
 			},
@@ -75,18 +75,18 @@ function rpc(method: string, params: unknown, signal?: AbortSignal): Promise<any
 	});
 }
 
-// Antwort als JSON oder als SSE-Strom mit einem "message"-Ereignis.
+// Response as JSON or as an SSE stream with one "message" event.
 function parseResponse(data: string, contentType: string): any {
 	let msg: any;
 	if (contentType.includes("text/event-stream")) {
 		const lines = data.split("\n").filter((l) => l.startsWith("data:"));
 		const last = lines.map((l) => l.slice(5).trim()).filter(Boolean).pop();
-		if (!last) throw new Error(`leere SSE-Antwort vom MCP-Endpunkt: ${data.slice(0, 200)}`);
+		if (!last) throw new Error(`empty SSE response from the MCP endpoint: ${data.slice(0, 200)}`);
 		msg = JSON.parse(last);
 	} else {
 		msg = JSON.parse(data);
 	}
-	if (msg.error) throw new Error(`MCP-Fehler ${msg.error.code}: ${msg.error.message}`);
+	if (msg.error) throw new Error(`MCP error ${msg.error.code}: ${msg.error.message}`);
 	return msg.result;
 }
 
@@ -100,7 +100,7 @@ export default async function (pi: ExtensionAPI) {
 		});
 		tools = (await rpc("tools/list", {})).tools ?? [];
 	} catch (e) {
-		console.error(`[agw-mcp] MCP-Endpunkt nicht erreichbar: ${(e as Error).message}`);
+		console.error(`[agw-mcp] MCP endpoint not reachable: ${(e as Error).message}`);
 		return;
 	}
 
@@ -108,12 +108,12 @@ export default async function (pi: ExtensionAPI) {
 		const name = `mcp_${tool.name}`;
 		let schema = tool.inputSchema ?? { type: "object", properties: {} };
 		if (tool.name === "upload_artifact") {
-			// Das Modell nennt einen Pfad; den Inhalt liest die Extension selbst.
+			// The model names a path; the extension reads the content itself.
 			schema = {
 				type: "object",
 				properties: {
-					path: { type: "string", description: "Pfad der Datei in der Sandbox" },
-					name: { type: "string", description: "Name des Artefakts (Standard: Dateiname)" },
+					path: { type: "string", description: "Path of the file in the sandbox" },
+					name: { type: "string", description: "Name of the artifact (default: file name)" },
 				},
 				required: ["path"],
 			};
@@ -127,7 +127,7 @@ export default async function (pi: ExtensionAPI) {
 			async execute(toolCallId: string, params: any, signal: AbortSignal, _onUpdate: any, ctx: any) {
 				const args = params ?? {};
 				if (tool.name === "upload_artifact") {
-					if (typeof args.path !== "string") throw new Error("path fehlt");
+					if (typeof args.path !== "string") throw new Error("path is missing");
 					let sessionFile = "";
 					try {
 						sessionFile = ctx?.sessionManager?.getSessionFile?.() ?? "";
@@ -139,16 +139,16 @@ export default async function (pi: ExtensionAPI) {
 					);
 					if (r.error) throw new Error(r.error);
 					if (r.status === "approved") {
-						return { content: [{ type: "text", text: `bestätigt: Artefakt "${r.name}" gespeichert (${r.size} Bytes, sha256 ${r.sha256})` }], details: { structured: null } };
+						return { content: [{ type: "text", text: `approved: artifact "${r.name}" stored (${r.size} bytes, sha256 ${r.sha256})` }], details: { structured: null } };
 					}
-					return { content: [{ type: "text", text: `abgelehnt: Artefakt "${r.name}" wurde nicht gespeichert (${r.message || "vom Nutzer abgelehnt"})` }], details: { structured: null } };
+					return { content: [{ type: "text", text: `rejected: artifact "${r.name}" was not stored (${r.message || "rejected by the user"})` }], details: { structured: null } };
 				}
 				const result = await rpc("tools/call", { name: tool.name, arguments: args }, signal);
 				const content = (result?.content ?? []).map((c: any) =>
 					c.type === "text" ? { type: "text", text: c.text } : { type: "text", text: JSON.stringify(c) },
 				);
 				if (result?.isError) {
-					throw new Error(content.map((c: any) => c.text).join("\n") || "MCP-Werkzeug meldet einen Fehler");
+					throw new Error(content.map((c: any) => c.text).join("\n") || "MCP tool reports an error");
 				}
 				return { content, details: { structured: result?.structuredContent ?? null } };
 			},

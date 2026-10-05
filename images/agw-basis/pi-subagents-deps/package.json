@@ -1,7 +1,7 @@
 {
   "name": "agw-pi-subagents-deps",
   "private": true,
-  "description": "Laufzeitabhängigkeiten der Kopie von pi-subagents (third_party/pi-subagents) mit fester Integrität; muss mit deren package.json übereinstimmen (Prüfung im Dockerfile).",
+  "description": "Runtime dependencies of the copy of pi-subagents (third_party/pi-subagents) with pinned integrity; must match its package.json (checked in the Dockerfile).",
   "dependencies": {
     "acorn": "8.18.0",
     "jiti": "2.7.0",

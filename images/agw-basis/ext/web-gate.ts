@@ -1,13 +1,13 @@
-// pi-Extension: bietet web_search und web_extract (pi-searxng-suite) dem Modell nur an, solange der
-// Chat Internet hat. Den Schalter fragt sie am Socket ab (GET /tool/internet).
+// pi extension: offers web_search and web_extract (pi-searxng-suite) to the model only while the
+// chat has internet. It queries the switch at the socket (GET /tool/internet).
 //
-// Die Extension ist kein Kontrollpunkt: Durchgesetzt wird der Schalter am Web-Proxy des
-// Orchestrators, über den pis Node die Anfragen der beiden Werkzeuge schickt. Hier geht es nur
-// darum, dass das Modell ohne Internet keine Werkzeuge sieht, die es nicht nutzen kann.
+// The extension is not a control point: the switch is enforced at the orchestrator's web proxy,
+// through which pi's Node sends the requests of the two tools. This is only about the model not
+// seeing tools without internet that it cannot use.
 //
-// Einblenden geht jederzeit vor dem nächsten Modellaufruf (turn_start; pi übernimmt rein additive
-// Änderungen). Ausgeblendet wird nur zwischen zwei Aufträgen (before_agent_start), damit sich die
-// Werkzeugliste nicht mitten im Durchgang verkleinert.
+// Showing works any time before the next model call (turn_start; pi accepts purely additive
+// changes). Hiding happens only between two requests (before_agent_start), so that the tool list
+// does not shrink in the middle of a turn.
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { request } from "node:http";
 
@@ -37,7 +37,7 @@ function internetOn(): Promise<boolean> {
 	});
 }
 
-/** Neue Liste aktiver Werkzeuge: mit Internet die Web-Werkzeuge dazu, ohne (wenn removeAllowed) weg. */
+/** New list of active tools: with internet add the web tools, without it (if removeAllowed) remove them. */
 export function nextActive(active: string[], registered: string[], on: boolean, removeAllowed: boolean): string[] | undefined {
 	const has = WEB_TOOLS.filter((t) => active.includes(t));
 	const avail = WEB_TOOLS.filter((t) => registered.includes(t));
