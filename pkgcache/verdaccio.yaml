@@ -22,18 +22,18 @@ uplinks:
     maxage: 10m
     cache: true
 
-# "agwpoc-niemand" is a group that does not exist: publishing and
+# "agwpoc-nobody" is a group that does not exist: publishing and
 # unpublishing are thus blocked for everyone, including logged-in users.
 packages:
   '@*/*':
     access: $all
-    publish: agwpoc-niemand
-    unpublish: agwpoc-niemand
+    publish: agwpoc-nobody
+    unpublish: agwpoc-nobody
     proxy: npmjs
   '**':
     access: $all
-    publish: agwpoc-niemand
-    unpublish: agwpoc-niemand
+    publish: agwpoc-nobody
+    unpublish: agwpoc-nobody
     proxy: npmjs
 
 server:

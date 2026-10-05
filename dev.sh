@@ -314,11 +314,11 @@ cmd_e2e() {
   local rc=0
   set -a; . ./.env; set +a
   AGW_E2E=1 go test -count=1 -v -timeout 45m ./e2e/ "$@" || rc=$?
-  dc logs --no-color orchestrator > e2e/letzter-lauf.log 2>&1 || true
-  if grep -q -E "panic|fatal error" e2e/letzter-lauf.log; then
-    warn "orchestrator crashed during the tests, see e2e/letzter-lauf.log"; rc=1
+  dc logs --no-color orchestrator > e2e/last-run.log 2>&1 || true
+  if grep -q -E "panic|fatal error" e2e/last-run.log; then
+    warn "orchestrator crashed during the tests, see e2e/last-run.log"; rc=1
   fi
-  info "orchestrator log: e2e/letzter-lauf.log"
+  info "orchestrator log: e2e/last-run.log"
   info "restarting orchestrator with normal settings"
   dc up -d --wait >/dev/null
   wait_api || true
@@ -330,7 +330,7 @@ cmd_cli() { set -a; . ./.env; set +a; go run ./cmd/agw "$@"; }
 cmd_reset() {
   if [[ "${1:-}" != "-y" ]]; then
     read -r -p "Really delete EVERYTHING (chats, artifacts, package caches, volumes, networks, images)? [y/N] " a
-    [[ "$a" == "y" || "$a" == "Y" || "$a" == "j" || "$a" == "J" ]] || { info "aborted"; exit 0; }
+    [[ "$a" == "y" || "$a" == "Y" ]] || { info "aborted"; exit 0; }
   fi
   stop_vite
   remove_sandboxes

@@ -1,6 +1,6 @@
 // Types following poc/API.md (binding contract).
 
-export type VariantId = "cli" | "mcp" | "api" | "beide"
+export type VariantId = "cli" | "mcp" | "api" | "both"
 
 export type Pricing = {
   input: number

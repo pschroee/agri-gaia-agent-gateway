@@ -79,7 +79,7 @@ exist.
 
 **Tool set unchanged:** if an extension registers `grep`, `find` and `ls`, pi enables them in the
 main agent. `exec-bridge.ts` hides them there again (`AGW_BRIDGE_HIDE`, only variants `cli` and
-`beide`), so the main agent has `read`, `bash`, `edit`, `write` as before E9. Subagents keep the
+`both`), so the main agent has `read`, `bash`, `edit`, `write` as before E9. Subagents keep the
 tools of their agent definition. In the MCP variant `--tools` fixes the set; a tool not named there
 is not registered by pi at all.
 

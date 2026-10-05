@@ -1,5 +1,5 @@
 {
-  "_hinweis": "Model catalogue of the orchestrator. Keys are never stored here but in .env under api_key_env. pi_builtin: pi knows the model itself (prices, compat); it is only redirected to the proxy. Own pricing entries (USD per 1M tokens) take precedence over pi's registry. tariff: peak windows in UTC; outside them offpeak_factor applies.",
+  "_note": "Model catalogue of the orchestrator. Keys are never stored here but in .env under api_key_env. pi_builtin: pi knows the model itself (prices, compat); it is only redirected to the proxy. Own pricing entries (USD per 1M tokens) take precedence over pi's registry. tariff: peak windows in UTC; outside them offpeak_factor applies.",
   "default": "deepseek/deepseek-flash",
   "providers": [
     {

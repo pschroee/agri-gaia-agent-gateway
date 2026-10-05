@@ -21,10 +21,10 @@ func TestPiArgsPerVariant(t *testing.T) {
 	if !strings.Contains(s, "pi-subagents") || !strings.Contains(s, "--skill /opt/agw/skills/artifacts") || !strings.Contains(s, "--skill /opt/agw/skills/internet") || !strings.Contains(s, "--skill /opt/agw/skills/writing-typst") || !strings.Contains(s, "--skill /opt/agw/skills/charts") || strings.Contains(s, "mcp.ts") {
 		t.Fatalf("cli: %s", s)
 	}
-	beide, _ := PiArgs("beide", "deepseek", "deepseek-flash")
-	s = strings.Join(beide, " ")
+	both, _ := PiArgs("both", "deepseek", "deepseek-flash")
+	s = strings.Join(both, " ")
 	if !strings.Contains(s, "pi-subagents") || !strings.Contains(s, "mcp.ts") || !strings.Contains(s, "--skill /opt/agw/skills/charts") {
-		t.Fatalf("beide: %s", s)
+		t.Fatalf("both: %s", s)
 	}
 	if _, err := PiArgs("shell", "p", "m"); err == nil {
 		t.Fatal("unknown variant accepted")
@@ -56,7 +56,7 @@ func TestSystemNoteWorkspace(t *testing.T) {
 // All three variants have the task list (rpiv-todo, tool todo); in the MCP variant todo is
 // listed explicitly in the tool list, otherwise it would be switched off there.
 func TestPiArgsTodo(t *testing.T) {
-	for _, v := range []string{"cli", "mcp", "beide"} {
+	for _, v := range []string{"cli", "mcp", "both"} {
 		args, err := PiArgs(v, "deepseek", "deepseek-flash")
 		if err != nil {
 			t.Fatal(err)
@@ -76,7 +76,7 @@ func TestPiArgsTodo(t *testing.T) {
 // E9: the redirection is loaded in all variants and registered for subagents in
 // settings.json; the main agent keeps its set of tools.
 func TestBridgeLoadedEverywhere(t *testing.T) {
-	for _, v := range []string{"cli", "mcp", "beide"} {
+	for _, v := range []string{"cli", "mcp", "both"} {
 		args, _ := PiArgs(v, "deepseek", "deepseek-flash")
 		if !strings.Contains(strings.Join(args, " "), "-e /opt/agw/ext/exec-bridge.ts") {
 			t.Errorf("%s without exec-bridge", v)
@@ -96,7 +96,7 @@ func TestBridgeLoadedEverywhere(t *testing.T) {
 	if strings.Join(s.Subagents.Only, ",") != "/opt/agw/ext/exec-bridge.ts,/opt/agw/pihome/npm/node_modules/pi-searxng-suite/index.ts,/opt/agw/ext/web-gate.ts,/opt/agw/pihome/npm/node_modules/pi-intercom/index.ts" || s.Compaction.Reserve != 123 {
 		t.Fatalf("settings.json: %+v", s)
 	}
-	if BridgeHide("cli") != "grep,find,ls" || BridgeHide("beide") != "grep,find,ls" || BridgeHide("mcp") != "" {
+	if BridgeHide("cli") != "grep,find,ls" || BridgeHide("both") != "grep,find,ls" || BridgeHide("mcp") != "" {
 		t.Fatal("AGW_BRIDGE_HIDE")
 	}
 	if !strings.Contains(SystemNote, "workflowScript") || strings.Contains(SystemNote, "next to pi") {
@@ -107,7 +107,7 @@ func TestBridgeLoadedEverywhere(t *testing.T) {
 // The tool subagent is active from the start: pi-subagents' switch subagents_enable would
 // change the tool list in the middle of the chat (prefix cache invalidated, one more model call).
 func TestSubagentToolActiveFromStart(t *testing.T) {
-	for _, v := range []string{"cli", "beide"} {
+	for _, v := range []string{"cli", "both"} {
 		args, _ := PiArgs(v, "deepseek", "deepseek-flash")
 		found := false
 		for i, a := range args {
@@ -134,9 +134,9 @@ func TestSystemNoteTodoDiscipline(t *testing.T) {
 	}
 }
 
-// Skill mermaid: cli and beide load it, the MCP variant deliberately has no skills.
+// Skill mermaid: cli and both load it, the MCP variant deliberately has no skills.
 func TestPiArgsMermaidSkill(t *testing.T) {
-	for v, want := range map[string]bool{"cli": true, "beide": true, "mcp": false} {
+	for v, want := range map[string]bool{"cli": true, "both": true, "mcp": false} {
 		args, _ := PiArgs(v, "deepseek", "deepseek-flash")
 		if got := strings.Contains(strings.Join(args, " "), "--skill /opt/agw/skills/mermaid"); got != want {
 			t.Errorf("%s: skill mermaid loaded = %v", v, got)
@@ -147,7 +147,7 @@ func TestPiArgsMermaidSkill(t *testing.T) {
 	}
 }
 
-// Background tasks: system note with the configured limit, tools in cli and beide,
+// Background tasks: system note with the configured limit, tools in cli and both,
 // subagents with bash get bg_output and bg_stop via agentOverrides.
 func TestBackgroundTasksConfigured(t *testing.T) {
 	for _, want := range []string{"run_in_background: true", "notified", "do not poll bg_output repeatedly", "bg_output", "bg_stop", "At most 5 run at the same time", "when the chat goes idle, they end",
@@ -156,7 +156,7 @@ func TestBackgroundTasksConfigured(t *testing.T) {
 			t.Errorf("system note without %q", want)
 		}
 	}
-	if n := SystemNoteFor("beide", 3); !strings.Contains(n, "At most 3 run") || strings.Contains(n, "{{") {
+	if n := SystemNoteFor("both", 3); !strings.Contains(n, "At most 3 run") || strings.Contains(n, "{{") {
 		t.Errorf("limit in the system note: %q", n)
 	}
 	for _, v := range []string{"mcp", "api"} {
@@ -169,7 +169,7 @@ func TestBackgroundTasksConfigured(t *testing.T) {
 	}
 	for _, v := range Variants {
 		has := strings.Contains(strings.Join(v.Tools, ","), "bg_output,bg_stop")
-		if has != (v.ID == "cli" || v.ID == "beide") { // only variants with bash
+		if has != (v.ID == "cli" || v.ID == "both") { // only variants with bash
 			t.Errorf("%s: tools %v", v.ID, v.Tools)
 		}
 	}
@@ -202,7 +202,7 @@ func TestBackgroundTasksConfigured(t *testing.T) {
 
 // mmdc is only in the note of the variants with bash.
 func TestSystemNoteMmdc(t *testing.T) {
-	for v, want := range map[string]bool{"cli": true, "beide": true, "mcp": false} {
+	for v, want := range map[string]bool{"cli": true, "both": true, "mcp": false} {
 		if got := strings.Contains(SystemNoteFor(v, 4), "mmdc -i diagram.mmd"); got != want {
 			t.Errorf("%s: mmdc in the note = %v", v, got)
 		}
@@ -215,7 +215,7 @@ func TestSystemNoteMmdc(t *testing.T) {
 // The language rule: language of the latest user message, browser setting only as a fallback; no
 // fixed German anymore. It is in all variants.
 func TestSystemNoteLanguageRule(t *testing.T) {
-	for _, v := range []string{"cli", "mcp", "api", "beide"} {
+	for _, v := range []string{"cli", "mcp", "api", "both"} {
 		n := SystemNoteFor(v, 2)
 		for _, want := range []string{"language of the user's latest message", "If the user switches language", "preferred language from an orchestrator note", chat.SystemHeader, "code and identifiers stay"} {
 			if !strings.Contains(n, want) {

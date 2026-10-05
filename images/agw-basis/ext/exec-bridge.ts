@@ -1023,7 +1023,7 @@ function isChildSession(ctx: any): boolean {
 
 export default function (pi: ExtensionAPI) {
 	// An extension that registers grep, find and ls also enables them in pi. Before E9 the main
-	// agent of the variants cli and beide had only read, bash, edit and write; to keep the scope of
+	// agent of the variants cli and both had only read, bash, edit and write; to keep the scope of
 	// action the same, the orchestrator hides the others via AGW_BRIDGE_HIDE.
 	// Subagents keep the tools of their agent definition.
 	const hide = new Set((process.env.AGW_BRIDGE_HIDE ?? "").split(",").map((s) => s.trim()).filter(Boolean));

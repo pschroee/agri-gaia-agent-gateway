@@ -86,10 +86,10 @@ func newTestPool(t *testing.T, f *fakeFactory, targets map[string]int) *Pool[*fa
 
 func TestFillsToTargetPerVariant(t *testing.T) {
 	f := &fakeFactory{}
-	p := newTestPool(t, f, map[string]int{"cli": 2, "mcp": 1, "beide": 0})
+	p := newTestPool(t, f, map[string]int{"cli": 2, "mcp": 1, "both": 0})
 	waitFor(t, "pool filled", func() bool { return idle(p, "cli") == 2 && idle(p, "mcp") == 1 })
-	if n := idle(p, "beide"); n != 0 {
-		t.Fatalf("beide: %d", n)
+	if n := idle(p, "both"); n != 0 {
+		t.Fatalf("both: %d", n)
 	}
 }
 

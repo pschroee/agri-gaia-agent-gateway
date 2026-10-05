@@ -406,7 +406,7 @@ func setup(t *testing.T) *env {
 			close(fa.events) // like a torn-down container: pi's stream ends
 		}
 	}
-	p := pool.New[Agent](create, destroy, map[string]int{"cli": 1, "mcp": 0, "beide": 0})
+	p := pool.New[Agent](create, destroy, map[string]int{"cli": 1, "mcp": 0, "both": 0})
 	pctx, cancel := context.WithCancel(ctx)
 	p.Start(pctx)
 	t.Cleanup(func() { cancel(); p.Shutdown(context.Background()) })

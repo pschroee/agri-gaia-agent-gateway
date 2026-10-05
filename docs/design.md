@@ -119,7 +119,7 @@ code. What is only installed at build time is not in the repository.
 | E4 | implemented for artifacts and MCP: one socket per slot in the volume `agwpoc_sockets`, only the slot's own directory mounted via subpath; the chat follows from the socket alone; unassigned slots answer “not assigned” |
 | E5 | implemented: orchestrator in Go, holds keys, sessions and log |
 | E6 | `agw-basis` implemented, by tag instead of digest (sufficient for stage 1); `agw-ml` is still missing |
-| E7 | implemented: target size per variant (`AGW_POOL_SIZE_CLI/MCP/BEIDE`), single-use assignment, refilling |
+| E7 | implemented: target size per variant (`AGW_POOL_SIZE_CLI/MCP/BOTH`), single-use assignment, refilling |
 | E8 | implemented via Postgres instead of a host directory (as the later integration intends): the session file is saved after every turn, placed into the fresh sandbox via `exec` on resume and loaded with `switch_session`; in addition `/workspace` as an archive in RustFS (*Workspace per chat*) |
 | E9 | **implemented** (2026-09-29): a slot consists of two containers. pi runs without a shell; `exec-bridge.ts` routes all tools (`bash`, `read`, `write`, `edit`, `grep`, `find`, `ls`) of the main agent and the subagents over the socket to the orchestrator, which executes them in the execution sandbox and logs them in `tool_executions`; the proxy records the requested `toolCallId`s, and the two are reconciled. A guard blocks custom agents and foreign runtimes (bypasses found with the prototype); the scripts of `workflowScript` run in the execution sandbox instead of in the pi process, which makes chains and parallel subagents possible again. The findings of the code and security reviews have been incorporated. Details, measurements, reviews and deviations: [`e9-execution-sandbox.md`](e9-execution-sandbox.md) |
 
@@ -137,7 +137,7 @@ code. What is only installed at build time is not in the repository.
   are downloaded into `/opt/typst/packages` at build time (`TYPST_PACKAGE_CACHE_PATH`); the location is
   read-only at runtime. Other packages therefore cannot be loaded even with internet
   (checked in the integration test). New packages belong in the list and in the image.
-- **Charts with matplotlib** (skill `charts`, variants `cli` and `beide`): numpy, pandas and
+- **Charts with matplotlib** (skill `charts`, variants `cli` and `both`): numpy, pandas and
   matplotlib are baked into the image, `MPLBACKEND=Agg` is set; the font cache is created on the
   first import in the writable home (about 0.5 s). The skill prescribes defaults (size,
   axes with units, decimal comma via a formatter because there is no German locale, `tab10`
@@ -146,7 +146,7 @@ code. What is only installed at build time is not in the repository.
   nevertheless prefers matplotlib. **Mermaid as a file** (since 2026-09-30): `mmdc` (Mermaid CLI 12, like
   the web UI) with Chromium from Debian, as a wrapper with `--no-sandbox` and `--disable-dev-shm-usage`
   (`/opt/agw/mmdc/puppeteer.json`); about 1 s per diagram, checked without internet, as uid 10001 with a
-  read-only file system. The system note mentions it for `cli` and `beide` as a fallback,
+  read-only file system. The system note mentions it for `cli` and `both` as a fallback,
   the skill `mermaid` describes the invocation. Chromium and mermaid-cli make the image about 1.1 GB
   larger (810 MB → 1.9 GB). For diagrams in Typst it points to cetz/cetz-plot and lilaq. The
   Docker integration test creates a matplotlib PNG without internet and checks the magic bytes.
@@ -158,7 +158,7 @@ code. What is only installed at build time is not in the repository.
 | `cli` | pi's standard tools, `pi-subagents`, task list `todo`, skills `artifacts` (`agw-artifact`), `internet` (`agw-internet`), `platform` (`agw-platform`), `writing-typst` and `charts` |
 | `mcp` | `--tools read,write,ls,mcp_ping,mcp_list_artifacts,mcp_upload_artifact,mcp_request_internet,mcp_platform_*,todo`: **no** `bash`, **no** subagents |
 | `api` | only `platform_http` (the platform's REST API over the socket), plus `todo`, `web_search`, `web_extract`: **no** `bash`, **no** file tools |
-| `beide` | both |
+| `both` | the tools of `cli` and `mcp` together |
 
 The MCP variant gets no subagents, because the subagent `worker` would otherwise bring `bash`
 back and circumvent the variant's scope of action.
@@ -736,7 +736,7 @@ only go up to pi 0.84 (the PoC uses 0.87.1), and it starts the processes in pi's
 there is deliberately no shell. The implementation therefore follows the E9 route: the orchestrator also runs
 background tasks in the execution sandbox and logs them.
 
-**Tools** (variants `cli` and `beide`; the MCP variant has no `bash`):
+**Tools** (variants `cli` and `both`; the MCP variant has no `bash`):
 
 | Tool | Parameters | Result |
 |---|---|---|
@@ -1080,7 +1080,7 @@ login, and the token exchange per chat uses the token **of this user** instead o
   such attacks therefore run them themselves with the rights of `bash` instead of relying on the
   model.
 - **An extension that registers `grep`, `find` and `ls` switches them on in pi** (E9). Without a
-  countermeasure, the main agent of the variants `cli` and `beide` would have three more tools than
+  countermeasure, the main agent of the variants `cli` and `both` would have three more tools than
   before; `exec-bridge.ts` hides them again via `AGW_BRIDGE_HIDE`.
 - **pi-subagents runs workflow scripts hard-wired in a worker thread inside the pi process** (0.73.1,
   `src/workflows/scripted-workflow.js`), without a hook. To move them into the execution sandbox,
@@ -1118,7 +1118,7 @@ login, and the token exchange per chat uses the token **of this user** instead o
 - **Crash when tearing down a slot (fixed):** after idling or ending, pi's stream ends because the
   container is torn down. If the pump goroutine took this for a sandbox crash, the slot was torn down
   a second time, and closing a channel twice brought the orchestrator down. `dev.sh e2e` therefore
-  writes the orchestrator log to `e2e/letzter-lauf.log` and fails if it contains a `panic`.
+  writes the orchestrator log to `e2e/last-run.log` and fails if it contains a `panic`.
 - **A model takes shortcuts around what a test is meant to fill:** DeepSeek answered "Print 120 lines
   and state the count" with `… | wc -l`, the context stayed small, and auto-compaction never kicked
   in. Only an uploaded file that the agent reads with `read` fills the context reliably.

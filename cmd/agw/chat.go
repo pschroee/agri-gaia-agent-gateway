@@ -45,7 +45,7 @@ func (a *app) cmdChatList(args []string) error {
 
 func (a *app) chatFlags(fs *flag.FlagSet, req *agwclient.CreateChatRequest, inet *triBool, maxSub *optInt) {
 	fs.StringVar(&req.Model, "model", "", "model (ID from agw models)")
-	fs.StringVar(&req.Variant, "variant", "", "binding: cli, mcp, api or beide")
+	fs.StringVar(&req.Variant, "variant", "", "binding: cli, mcp, api or both")
 	fs.StringVar(&req.Title, "title", "", "title of the chat")
 	fs.Var(inet, "internet", "internet access of the sandbox (true|false)")
 	fs.Var(maxSub, "max-subagents", "at most this many subagents (default: server default)")
@@ -74,7 +74,7 @@ func (a *app) cmdChatNew(args []string) error {
 	var inet triBool
 	var maxSub optInt
 	a.chatFlags(fs, &req, &inet, &maxSub)
-	pos, err := a.parse(fs, args, 0, -1, "agw chat new [--model M] [--variant cli|mcp|api|beide] [--title T] [--internet=true|false] [--max-subagents N] [--delegation file.json] [message]")
+	pos, err := a.parse(fs, args, 0, -1, "agw chat new [--model M] [--variant cli|mcp|api|both] [--title T] [--internet=true|false] [--max-subagents N] [--delegation file.json] [message]")
 	if err != nil {
 		return err
 	}
@@ -808,7 +808,7 @@ func (a *app) cmdRun(args []string) error {
 	var maxSub optInt
 	a.chatFlags(fs, &req, &inet, &maxSub)
 	o := approvalFlags(fs)
-	pos, err := a.parse(fs, args, 1, -1, "agw run [--model M] [--variant cli|mcp|api|beide] [--internet=true|false] [--max-subagents N] [--delegation file.json] [--auto-approve|--auto-reject] [--thinking] [--verbose] \"<task>\"")
+	pos, err := a.parse(fs, args, 1, -1, "agw run [--model M] [--variant cli|mcp|api|both] [--internet=true|false] [--max-subagents N] [--delegation file.json] [--auto-approve|--auto-reject] [--thinking] [--verbose] \"<task>\"")
 	if err != nil {
 		return err
 	}

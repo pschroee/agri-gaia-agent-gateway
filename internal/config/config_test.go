@@ -106,7 +106,7 @@ func TestEnvDefaults(t *testing.T) {
 	if e.HTTPAddr != ":18480" || e.ProxyAddr != ":18481" {
 		t.Fatalf("addresses: %q %q", e.HTTPAddr, e.ProxyAddr)
 	}
-	if e.PoolSizes["cli"] != 1 || e.PoolSizes["mcp"] != 3 || e.PoolSizes["beide"] != 0 {
+	if e.PoolSizes["cli"] != 1 || e.PoolSizes["mcp"] != 3 || e.PoolSizes["both"] != 0 {
 		t.Fatalf("pool sizes: %v", e.PoolSizes)
 	}
 	if e.IdleTimeout.Seconds() != 90 || e.ApprovalTimeout.Minutes() != 10 || e.ArtifactMaxBytes != 50<<20 || e.ImageMaxBytes != 10<<20 {

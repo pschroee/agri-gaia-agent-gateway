@@ -1381,9 +1381,9 @@ func (m *Manager) RunCommand(ctx context.Context, chatID, line string) (SendResu
 	case "autocompact":
 		var on bool
 		switch strings.ToLower(args) {
-		case "on", "an", "ein", "true":
+		case "on", "true":
 			on = true
-		case "off", "aus", "false":
+		case "off", "false":
 		default:
 			return SendResult{}, fmt.Errorf("/autocompact expects on or off")
 		}

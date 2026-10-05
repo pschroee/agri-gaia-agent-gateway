@@ -562,9 +562,9 @@ func (s *streamer) ask(prompt string) (approve, ok bool) {
 		line, err := s.in.ReadString('\n')
 		ans := strings.ToLower(strings.TrimSpace(line))
 		switch ans {
-		case "j", "ja", "y", "yes":
+		case "y", "yes":
 			return true, true
-		case "n", "nein", "no":
+		case "n", "no":
 			return false, true
 		}
 		if err != nil {

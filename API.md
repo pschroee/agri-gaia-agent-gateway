@@ -54,7 +54,7 @@ type Pricing = { input: number; output: number; cache_read: number; cache_write:
 type Tariff = { peak_windows_utc: { days: string /* "mon-fri" */; from: string /* "01:00" */; to: string }[]; offpeak_factor: number; note?: string; source?: string /* URL */; retrieved?: string };
 // pricing comes from pi's model registry (note names the pi version) or from our own catalogue.
 type Model = { id: string /* "deepseek/deepseek-flash" */; provider: string; model: string; name: string; default: boolean; pricing?: Pricing; tariff?: Tariff; peak_now?: boolean };
-type Variant = { id: "cli" | "mcp" | "beide"; label: string; tools: string[] };
+type Variant = { id: "cli" | "mcp" | "both"; label: string; tools: string[] };
 
 type Activity = {
   kind: "idle" | "thinking" | "writing" | "tool" | "preparing" | "compacting" | "waiting_approval" | "starting";
@@ -368,7 +368,7 @@ could no longer be taken back.
 
 ## Background tasks
 
-The agent starts a command with `bash` and `run_in_background: true` (variants `cli` and `beide`, also in
+The agent starts a command with `bash` and `run_in_background: true` (variants `cli` and `both`, also in
 subagents). The orchestrator runs it in the execution sandbox and returns immediately; the tool reports the ID
 (`bg-<n>`) and the output file. `bg_output {id, tail_lines?}` returns the state and the end of the output,
 `bg_stop {id}` ends the task including its process group. At most `AGW_BG_MAX` (default 5) run at the same time

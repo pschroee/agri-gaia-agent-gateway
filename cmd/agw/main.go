@@ -31,7 +31,7 @@ Commands:
   config                        server defaults
   pool                          slots in the pool, target/free/assigned, totals
   chat list                     all chats, newest first
-  chat new [--model M] [--variant cli|mcp|beide] [--title T] [--internet=true|false] [--max-subagents N] [message]
+  chat new [--model M] [--variant cli|mcp|both] [--title T] [--internet=true|false] [--max-subagents N] [message]
   chat show <id> [--thinking]   header and history
   chat send <id> <text> [--wait] [--auto-approve|--auto-reject] [--thinking] [--verbose]
                                 if the agent is working, the message is queued
@@ -309,9 +309,9 @@ func (t *triBool) String() string {
 
 func (t *triBool) Set(s string) error {
 	switch strings.ToLower(s) {
-	case "true", "1", "on", "an", "ja", "j", "yes":
+	case "true", "1", "on", "yes", "y":
 		t.val = true
-	case "false", "0", "off", "aus", "nein", "n", "no":
+	case "false", "0", "off", "no", "n":
 		t.val = false
 	default:
 		return fmt.Errorf("expected true or false, not %q", s)

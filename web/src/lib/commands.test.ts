@@ -59,11 +59,11 @@ describe("isSlashCommand", () => {
 })
 
 describe("autoCompactSwitch", () => {
-  // the German words (aus, ein) are accepted like in the orchestrator
   it.each([
     ["/autocompact on", true],
-    ["  /autocompact AUS ", false],
-    ["/autocompact ein", true],
+    ["  /autocompact OFF ", false],
+    ["/autocompact true", true],
+    ["/autocompact aus", undefined],
     ["/autocompact off", false],
     ["/autocompact", undefined],
     ["/autocompact maybe", undefined],

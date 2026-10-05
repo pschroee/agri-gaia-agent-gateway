@@ -97,7 +97,7 @@ export function ChatPanel({ chatId, runId, config, modelName, onChanged, onRunSi
   const [uploading, setUploading] = useState(false)
   const [staged, setStaged] = useState<Artifact[]>([])
   const [sheetOpen, setSheetOpen] = useState(false)
-  const [sideOpen, setSideOpen] = useFlag("seitenleiste", true)
+  const [sideOpen, setSideOpen] = useFlag("sidebar", true)
   // The counter in the chat header and cards in the history open the "Background" tab (n changes with each
   // click, id: task in focus, fresh: until the side sheet is closed again, see ChatSidePanel).
   const [bgFocus, setBgFocus] = useState<{ n: number; id?: string; fresh: boolean }>({ n: 0, fresh: false })

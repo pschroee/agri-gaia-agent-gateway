@@ -85,7 +85,7 @@ const mmdcNote = " If you need the diagram as a file as a fallback (for example 
 // is preserved.
 func SystemNoteFor(variant string, bgMax int) string {
 	bg, mmdc := "", ""
-	if variant == "cli" || variant == "beide" { // only variants with bash
+	if variant == "cli" || variant == "both" { // only variants with bash
 		bg, mmdc = fmt.Sprintf(bgNote, bgMax), mmdcNote
 	}
 	return strings.NewReplacer("{{bg}}", bg, "{{mmdc}}", mmdc).Replace(systemNote)
@@ -113,7 +113,7 @@ var Variants = []VariantInfo{
 	{ID: "cli", Label: "Command line (bash + agw-artifact, subagents)", Tools: []string{"read", "bash", "edit", "write", "subagent", "todo", "bg_output", "bg_stop", "web_search", "web_extract", "intercom"}},
 	{ID: "mcp", Label: "MCP (MCP tools only, read/write/ls, no bash)", Tools: append([]string{"read", "write", "ls", "mcp_ping", "mcp_list_artifacts", "mcp_upload_artifact", "mcp_request_internet"}, append(platformMCPTools(), "todo", "web_search", "web_extract")...)},
 	{ID: "api", Label: "REST API (platform_http only, no bash, no file tools)", Tools: []string{"platform_http", "todo", "web_search", "web_extract"}},
-	{ID: "beide", Label: "MCP and command line", Tools: append([]string{"read", "bash", "edit", "write", "subagent", "mcp_ping", "mcp_list_artifacts", "mcp_upload_artifact", "mcp_request_internet"}, append(platformMCPTools(), "todo", "bg_output", "bg_stop", "web_search", "web_extract", "intercom")...)},
+	{ID: "both", Label: "MCP and command line", Tools: append([]string{"read", "bash", "edit", "write", "subagent", "mcp_ping", "mcp_list_artifacts", "mcp_upload_artifact", "mcp_request_internet"}, append(platformMCPTools(), "todo", "bg_output", "bg_stop", "web_search", "web_extract", "intercom")...)},
 }
 
 // platformMCPTools are the tools of the platform binding as pi sees them via mcp.ts.
@@ -151,7 +151,7 @@ func piArgs(variant, provider, model, note string) ([]string, error) {
 		// REST endpoint. The same web and task tools as MCP, so that the variants differ only in how
 		// the platform is bound.
 		args = append(args, "-e", apiExt, "--tools", "platform_http,todo,web_search,web_extract")
-	case "beide":
+	case "both":
 		args = append(args, "-e", subagentsExt, "-e", intercomExt, "--exclude-tools", noLazySubagent, "-e", mcpExt, "--skill", artifactSkil, "--skill", internetSkil, "--skill", platformSkil, "--skill", typstSkill, "--skill", diagramSkill, "--skill", mermaidSkill)
 	default:
 		return nil, fmt.Errorf("unknown variant %q", variant)
@@ -444,7 +444,7 @@ func WebEnv(env config.Env) []string {
 }
 
 // BridgeHide names the tools that exec-bridge.ts hides again in the main
-// agent: in cli and beide, grep, find and ls were not active before E9.
+// agent: in cli and both, grep, find and ls were not active before E9.
 // The MCP variant sets its tools with --tools.
 func BridgeHide(variant string) string {
 	if variant == "mcp" {

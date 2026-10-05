@@ -32,13 +32,13 @@ export function isSlashCommand(text: string): boolean {
   return /^\/[\p{L}\p{N}]/u.test(text.trim())
 }
 
-/** Switch value of "/autocompact on|off" (like the orchestrator: on/an/ein/true, off/aus/false; the German words are accepted too); otherwise undefined. */
+/** Switch value of "/autocompact on|off" (like the orchestrator: on/true, off/false); otherwise undefined. */
 export function autoCompactSwitch(text: string): boolean | undefined {
   const m = /^\/autocompact\s+(\S+)$/i.exec(text.trim())
   if (!m) return undefined
   const v = m[1].toLowerCase()
-  if (["on", "an", "ein", "true"].includes(v)) return true
-  if (["off", "aus", "false"].includes(v)) return false
+  if (["on", "true"].includes(v)) return true
+  if (["off", "false"].includes(v)) return false
   return undefined
 }
 

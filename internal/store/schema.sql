@@ -362,3 +362,6 @@ CREATE INDEX IF NOT EXISTS chats_owner ON chats (owner);
 -- The user's preferred language according to the browser (BCP 47, e.g. en-US); NULL: unknown. Goes to the
 -- agent with the chat's first request as an orchestrator note (internal/chat, languageNote).
 ALTER TABLE chats ADD COLUMN IF NOT EXISTS language text;
+
+-- The variant id "beide" was renamed to "both" (2026-10-05); chats created before keep resuming.
+UPDATE chats SET variant = 'both' WHERE variant = 'beide';
