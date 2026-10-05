@@ -14,6 +14,7 @@ import { type Evidence, evidenceSummary } from "@/lib/evidence"
 import { formatBytes, formatTime, shortHash, socketOpLabel, socketResultLabel } from "@/lib/format"
 import type { SubagentRun } from "@/lib/subagents"
 import { type Task, visibleTasks } from "@/lib/tasks"
+import { isViolation } from "@/lib/delegationTemplates"
 import { cn } from "@/lib/utils"
 import { workspaceSummary } from "@/lib/workspace"
 
@@ -257,8 +258,7 @@ function SocketLog({ calls, chatId, runs }: { calls: SocketCall[]; chatId: strin
           className={cn(
             "rounded-md border p-2 font-mono text-xs",
             (c.op === "agent_limit" || c.op === "subagent_limit") && "border-amber-300 bg-amber-50/60",
-            // "violation" in current socket results, "übergriff" in results logged before the English translation
-            /violation|übergriff/i.test(c.result ?? "") && "border-red-300 bg-red-50/60",
+            isViolation(c.result) && "border-red-300 bg-red-50/60",
           )}
         >
           <div className="flex items-center gap-1.5">
@@ -274,8 +274,7 @@ function SocketLog({ calls, chatId, runs }: { calls: SocketCall[]; chatId: strin
           {c.result && (
             <div
               className={
-                // English results (refused, violation, error, …) plus the legacy German ones of older chats
-                /fail|error|denied|reject|refused|abort|expired|violation|fehl|abgelehnt|abgewiesen|abgebrochen|übergriff/i.test(
+                /fail|error|denied|reject|refused|abort|expired|violation/i.test(
                   c.result,
                 )
                   ? "text-red-700"

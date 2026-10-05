@@ -416,8 +416,8 @@ function CompactionDivider({ item }: { item: CompactionItem }) {
   const cost = item.cost ?? item.usage?.cost?.total
   const hasDetails = !item.running && (!!item.summary || cost !== undefined)
   // "not possible"/"not needed" is a notice, not an error: subtle instead of red. The label comes from
-  // compactionNotice (lib/stream); the German alternatives cover its wording before the English translation.
-  const benign = failed && !item.aborted && /not (possible|needed|necessary)|nicht (möglich|nötig)/i.test(label)
+  // compactionNotice (lib/stream).
+  const benign = failed && !item.aborted && /not (possible|needed|necessary)/i.test(label)
 
   return (
     <Collapsible open={open} onOpenChange={setOpen} className="text-xs">

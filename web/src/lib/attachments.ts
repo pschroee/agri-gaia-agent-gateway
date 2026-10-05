@@ -3,23 +3,14 @@
 
 export const ATTACHMENTS_HEADER = "[Attachments in /workspace/inputs/]"
 const ONLY_ATTACHMENTS = "See attachments."
-// German forms used before the translation; chats stored earlier still carry them.
-export const LEGACY_ATTACHMENTS_HEADER = "[Anhänge unter /workspace/inputs/]"
-export const LEGACY_ONLY_ATTACHMENTS = "Siehe Anhänge."
 
 export function splitAttachments(message: string): { text: string; files: string[] } {
-  let at = message.lastIndexOf(ATTACHMENTS_HEADER)
-  let header = ATTACHMENTS_HEADER
-  const legacyAt = message.lastIndexOf(LEGACY_ATTACHMENTS_HEADER)
-  if (legacyAt > at) {
-    at = legacyAt
-    header = LEGACY_ATTACHMENTS_HEADER
-  }
+  const at = message.lastIndexOf(ATTACHMENTS_HEADER)
   if (at < 0) return { text: message, files: [] }
-  const lines = message.slice(at + header.length).split("\n").slice(1)
+  const lines = message.slice(at + ATTACHMENTS_HEADER.length).split("\n").slice(1)
   if (lines.length === 0 || !lines.every((l) => l.startsWith("- ") && l.length > 2)) return { text: message, files: [] }
   let text = message.slice(0, at).replace(/\s+$/, "")
-  if (text === ONLY_ATTACHMENTS || text === LEGACY_ONLY_ATTACHMENTS) text = ""
+  if (text === ONLY_ATTACHMENTS) text = ""
   return { text, files: lines.map((l) => l.slice(2)) }
 }
 

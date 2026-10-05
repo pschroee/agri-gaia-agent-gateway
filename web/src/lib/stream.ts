@@ -386,8 +386,8 @@ function compactionFields(r: Obj): Partial<CompactionItem> {
   }
 }
 
-// The orchestrator's error text (internal/chat/manager.go); the German form is the one used before the translation.
-const compactPrefix = /^(Compaction failed|Kompaktierung fehlgeschlagen):\s*/i
+// The orchestrator's error text (internal/chat/manager.go).
+const compactPrefix = /^Compaction failed:\s*/i
 
 /**
  * Notice text for a failed compaction. pi's messages "Nothing to compact" and

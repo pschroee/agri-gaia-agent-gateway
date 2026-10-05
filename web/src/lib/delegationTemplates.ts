@@ -51,13 +51,10 @@ export function delegationFrom(t: DelegationTemplate | undefined, hours: number,
 
 // Matches violations in socket log results ("violation blocked: …" or "… · violation, logged only: …").
 const VIOLATION = /violation/i
-// German form used before the translation ("übergriff abgewiesen: …"); stored logs still carry it.
-const LEGACY_VIOLATION = /übergriff/i
 
-/** Whether a socket log result records a violation (current or legacy German form). */
+/** Whether a socket log result records a violation. */
 export function isViolation(result: string | undefined): boolean {
-  const r = result ?? ""
-  return VIOLATION.test(r) || LEGACY_VIOLATION.test(r)
+  return VIOLATION.test(result ?? "")
 }
 
 /** Violations in the socket log. */

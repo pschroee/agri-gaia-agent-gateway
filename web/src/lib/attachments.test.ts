@@ -18,12 +18,6 @@ describe("splitAttachments", () => {
   it("does not show \"See attachments.\" as text when only attachments were sent", () => {
     expect(splitAttachments("See attachments.\n\n[Attachments in /workspace/inputs/]\n- a.csv")).toEqual({ text: "", files: ["a.csv"] })
   })
-  it("recognises the legacy German block of stored chats", () => {
-    expect(splitAttachments("Schau mal\n\n[Anhänge unter /workspace/inputs/]\n- daten.csv")).toEqual({ text: "Schau mal", files: ["daten.csv"] })
-    expect(splitAttachments("Siehe Anhänge.\n\n[Anhänge unter /workspace/inputs/]\n- a.csv")).toEqual({ text: "", files: ["a.csv"] })
-    const t = "[Anhänge unter /workspace/inputs/]\n- a.csv\n\nund danach noch Text"
-    expect(splitAttachments(t)).toEqual({ text: t, files: [] })
-  })
 })
 
 import { composerButtons, isPreviewImage } from "./attachments"

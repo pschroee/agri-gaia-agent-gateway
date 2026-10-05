@@ -11,8 +11,6 @@
 import type { MessageMeta, MessageSource, QueueEntry } from "@/api/types"
 
 export const SYSTEM_HEADER = "[Note from the orchestrator, not from the user]"
-// German header used before the translation; chats stored earlier still carry it.
-export const LEGACY_SYSTEM_HEADER = "[Meldung des Orchestrators, nicht vom Nutzer]"
 
 /** Readable form of a note; command, lines and error come from the sandbox (display only). */
 export type ParsedNote = {
@@ -41,28 +39,25 @@ export function noteLabel(type: string | undefined, summary: string, refs: strin
   if (type === "language") return `Note to the agent: preferred language according to the browser ${refs[0] ?? ""}`.trim()
   let s = summary.trim()
   let runtime = ""
-  // "Laufzeit", "gestartet von Subagent": German forms used before the translation (stored chats)
-  const rm = /, (?:runtime|Laufzeit) (\d+:\d{2}(?::\d{2})?)$/.exec(s)
+  const rm = /, runtime (\d+:\d{2}(?::\d{2})?)$/.exec(s)
   if (rm) {
     runtime = ` · ${rm[1]}`
     s = s.slice(0, rm.index)
   }
-  s = s.replace(/ \((?:started by subagent|gestartet von Subagent) ([^)]*)\)/, " (subagent $1)").replace(": ", " · ")
+  s = s.replace(/ \(started by subagent ([^)]*)\)/, " (subagent $1)").replace(": ", " · ")
   return s + runtime
 }
 
-// Body lines of a background note (internal/chat/background.go); each with its German form from before the
-// translation, so chats stored earlier still render.
-const COMMAND = ["Command: ", "Befehl: "]
-const ERROR = ["Error: ", "Fehler: "]
-const FULL_OUTPUT = ["Full output: ", "Ganze Ausgabe: "]
-const NO_OUTPUT = ["No output.", "Keine Ausgabe."]
-const LAST_LINES = /^(?:Last lines \(of|Letzte Zeilen \(von) (\d+)\):$/
+// Body lines of a background note (internal/chat/background.go).
+const COMMAND = "Command: "
+const ERROR = "Error: "
+const FULL_OUTPUT = "Full output: "
+const NO_OUTPUT = "No output."
+const LAST_LINES = /^Last lines \(of (\d+)\):$/
 
-/** The rest of `line` after one of the prefixes, or undefined. */
-function after(line: string | undefined, prefixes: string[]): string | undefined {
-  const p = line === undefined ? undefined : prefixes.find((x) => line.startsWith(x))
-  return p === undefined ? undefined : line!.slice(p.length)
+/** The rest of `line` after the prefix, or undefined. */
+function after(line: string | undefined, prefix: string): string | undefined {
+  return line?.startsWith(prefix) ? line.slice(prefix.length) : undefined
 }
 
 /** Reads the data of a note (command, error, last lines, path) for display. */
@@ -90,7 +85,7 @@ function parseNote(type: string, refs: string[], summary: string, body: string):
     note.logPath = logPath
     end--
   }
-  if (NO_OUTPUT.includes(lines[i])) {
+  if (lines[i] === NO_OUTPUT) {
     note.noOutput = true
   } else {
     const lm = LAST_LINES.exec(lines[i] ?? "")
@@ -103,33 +98,12 @@ function parseNote(type: string, refs: string[], summary: string, body: string):
   return note
 }
 
+const HEAD = SYSTEM_HEADER + "\n"
+
 /**
  * Splits a user message by origin according to the server. Notes are found by their marker
  * (fence `<<<marker` … `marker>>>`), in the order of the sources; whatever lies in between is user text.
- * Both the current and the legacy German header are recognised.
  */
-const HEADS = [SYSTEM_HEADER + "\n", LEGACY_SYSTEM_HEADER + "\n"]
-
-/** Last header (current or legacy) starting at or before `before`; start -1 if none. */
-function lastHeader(text: string, before: number): { start: number; len: number } {
-  let best = { start: -1, len: 0 }
-  for (const h of HEADS) {
-    const i = text.lastIndexOf(h, before)
-    if (i > best.start) best = { start: i, len: h.length }
-  }
-  return best
-}
-
-/** First header (current or legacy) starting at or after `from`; start -1 if none. */
-function firstHeader(text: string, from: number): { start: number; len: number } {
-  let best = { start: -1, len: 0 }
-  for (const h of HEADS) {
-    const i = text.indexOf(h, from)
-    if (i >= 0 && (best.start < 0 || i < best.start)) best = { start: i, len: h.length }
-  }
-  return best
-}
-
 export function splitMessage(text: string, meta: MessageMeta | undefined): MessagePart[] {
   const whole: MessagePart[] = text ? [{ kind: "user", text }] : []
   if (!meta?.origin || meta.origin === "user" || !meta.sources?.length) return whole
@@ -150,20 +124,18 @@ export function splitMessage(text: string, meta: MessageMeta | undefined): Messa
       const close = `\n${src.marker}>>>`
       const oi = text.indexOf(open, cursor)
       if (oi < 0) continue
-      const h = lastHeader(text, oi)
-      start = h.start
+      start = text.lastIndexOf(HEAD, oi)
       const ci = text.indexOf(close, oi + open.length - 1)
       if (start < cursor || ci < 0) continue
-      summary = text.slice(start + h.len, oi).split("\n")[0] ?? ""
+      summary = text.slice(start + HEAD.length, oi).split("\n")[0] ?? ""
       body = text.slice(oi + open.length, ci)
       end = ci + close.length
     } else {
-      const h = firstHeader(text, cursor)
-      start = h.start
+      start = text.indexOf(HEAD, cursor)
       if (start < 0) continue
-      const nl = text.indexOf("\n", start + h.len)
+      const nl = text.indexOf("\n", start + HEAD.length)
       end = nl < 0 ? text.length : nl
-      summary = text.slice(start + h.len, end)
+      summary = text.slice(start + HEAD.length, end)
     }
     pushUser(text.slice(cursor, start))
     parts.push({ kind: "system", text: text.slice(start, end), note: parseNote(src.type ?? "", src.refs ?? [], summary, body), source: src })

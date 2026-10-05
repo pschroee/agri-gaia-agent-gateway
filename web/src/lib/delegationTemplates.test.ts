@@ -40,10 +40,8 @@ describe("countViolations", () => {
       ]),
     ).toBe(2)
   })
-  it("still counts the legacy German form of stored logs", () => {
-    expect(
-      countViolations([{ result: "übergriff abgewiesen: dataset 7" }, { result: "ok 200 · Übergriff, nur protokolliert: x" }, { result: "refused: x" }]),
-    ).toBe(2)
+  it("isViolation", () => {
+    expect(isViolation("violation blocked: x")).toBe(true)
     expect(isViolation("refused: no rule")).toBe(false)
     expect(isViolation(undefined)).toBe(false)
   })

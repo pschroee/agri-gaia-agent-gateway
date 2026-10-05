@@ -376,7 +376,7 @@ describe("compaction", () => {
 })
 
 describe("compaction: failed", () => {
-  // the orchestrator's prefix "Compaction failed:" (internal/chat/manager.go); the German one is from before the translation
+  // the orchestrator's prefix "Compaction failed:" (internal/chat/manager.go)
   it("rephrases known messages from pi", () => {
     expect(compactionNotice("Nothing to compact (session too small)")).toBe(
       "Compaction not possible: not enough history to summarize yet",
@@ -385,7 +385,6 @@ describe("compaction: failed", () => {
       "Compaction not needed: already summarized",
     )
     expect(compactionNotice("Compaction failed: timeout")).toBe("Compaction failed: timeout")
-    expect(compactionNotice("Kompaktierung fehlgeschlagen: timeout")).toBe("Compaction failed: timeout")
     expect(compactionNotice("boom")).toBe("Compaction failed: boom")
     expect(compactionNotice(undefined)).toBe("Compaction failed")
   })
