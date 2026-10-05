@@ -1315,8 +1315,8 @@ type CommandOption struct {
 }
 
 // compactLanguageHint precedes the instructions of every manual compaction;
-// without it pi writes the summary in English.
-const compactLanguageHint = "Write the summary in German."
+// without it pi writes the summary in English, whatever language the chat is in.
+const compactLanguageHint = "Write the summary in the language of the conversation."
 
 var builtinCommands = []Command{
 	{Name: "compact", Description: "Summarize the context now; optionally with instructions on what the summary should focus on", Source: "builtin", Args: "[instructions]"},

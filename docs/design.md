@@ -200,7 +200,7 @@ variant is the same as before.
 - **Compaction** (manual and automatic, switch per chat): each one is stored as its own entry
   and **billed** (the summary is a separate model call that does not appear in any
   answer). Threshold via `AGW_COMPACT_RESERVE_TOKENS` (pi: `compaction.reserveTokens`).
-  Manual summaries get the instruction “in German”; pi writes the automatic one
+  Manual summaries get the instruction “in the language of the conversation”; pi writes the automatic one
   in English, because its prompt cannot be influenced over RPC.
 
 ### Subagents: visible, billed, limited
