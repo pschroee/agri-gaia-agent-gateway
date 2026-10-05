@@ -2,10 +2,11 @@
 # Legt auf der eigenen Instanz (ssh hs) im Realm test-realm den Keycloak-Client agw-agent an, über
 # den der Orchestrator das Nutzertoken je Chat tauscht (RFC 8693), und trägt das Client-Secret in
 # poc/.env ein. Das Secret erscheint nie in der Ausgabe. Mehrfach aufrufbar: Ein vorhandener Client
-# bleibt, nur das Secret wird neu gelesen. Einzelheiten: docs/keycloak-token-austausch.md,
+# bleibt, nur das Secret wird neu gelesen. Einzelheiten: docs/keycloak-token-austausch.md im Masterarbeits-Repo,
 # Abschnitt „Client agw-agent für den PoC“.
 #
-#   poc/dev/keycloak-agw-agent.sh            anlegen (falls nötig) und .env setzen
+#   poc/dev/keycloak-agw-agent.sh            anlegen (falls nötig), Standard-Flow und Redirect-URI
+#                                            des Gateways (app.<Basis-URL>/agent/) setzen, .env setzen
 #   poc/dev/keycloak-agw-agent.sh --delete   Client wieder löschen
 set -euo pipefail
 
@@ -13,6 +14,7 @@ HOST=${AGW_KC_SSH_HOST:-hs}
 CONTAINER=${AGW_KC_CONTAINER:-agri_gaia-keycloak-1}
 REALM=${AGW_KC_REALM:-test-realm}
 CLIENT=agw-agent
+BASE=${AGW_KC_BASE_URL:?AGW_KC_BASE_URL setzen (PROJECT_BASE_URL der Instanz)}
 ENV_FILE="$(cd "$(dirname "$0")/.." && pwd)/.env"
 
 # Läuft im Keycloak-Container: Admin-Anmeldung aus KC_BOOTSTRAP_ADMIN_* (Werte nie ausgegeben),
@@ -36,7 +38,8 @@ if [[ "${1:-}" == "--delete" ]]; then
   exit 0
 fi
 
-SECRET=$(remote '
+SECRET=$(remote "BASE=$BASE
+"'
 ID=$($K get clients $C -q clientId='"$CLIENT"' --fields id --format csv --noquotes | head -1)
 if [ -z "$ID" ]; then
   ID=$($K create clients $C -s clientId='"$CLIENT"' -s "name=Agent-Orchestrator (PoC Masterarbeit)" \
@@ -58,6 +61,14 @@ if [ -z "$ID" ]; then
 else
   echo "vorhanden" >&2
 fi
+# Anmeldung über die Plattform (Gateway als Plattform-Dienst, seit 05.10.2026): Standard-Flow mit PKCE und
+# Redirect-URI des Gateways. Läuft auch für einen vorhandenen Client; Passwort-Grant bleibt für die lokale
+# Entwicklung erlaubt.
+$K update clients/$ID $C -s standardFlowEnabled=true -s directAccessGrantsEnabled=true \
+  -s "redirectUris=[\"https://app.$BASE/agent/oidc/callback\"]" -s "webOrigins=[\"https://app.$BASE\"]" \
+  -s "attributes.\"pkce.code.challenge.method\"=S256" \
+  -s "attributes.\"post.logout.redirect.uris\"=https://app.$BASE/agent/*" >/dev/null
+echo "Standard-Flow und Redirect-URI gesetzt" >&2
 $K get clients/$ID/client-secret $C --fields value --format csv --noquotes
 ')
 
