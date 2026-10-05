@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -103,6 +104,54 @@ func TestOIDCMeAndUnauthorized(t *testing.T) {
 	if resp, _ := nb.Get(srv.URL + "/login?token=" + testToken); resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/oidc/login" ||
 		len(resp.Cookies()) != 0 {
 		t.Fatalf("/login im oidc-Modus: %d %v", resp.StatusCode, resp.Header)
+	}
+}
+
+// prefixedOIDCServer: die API hinter einem Proxy, der /agent abschneidet (Traefik mit stripprefix), auf
+// demselben Host wie die Plattform; frame-ancestors 'self' erlaubt die Einbettung in die Plattform.
+func prefixedOIDCServer(t *testing.T) (*httptest.Server, *oidctest.Issuer) {
+	t.Helper()
+	is := oidctest.New(t)
+	outer := http.NewServeMux()
+	srv := httptest.NewServer(outer)
+	t.Cleanup(srv.Close)
+	auth, err := oidc.New(oidc.Config{Issuer: is.IssuerURL(), ClientID: is.ClientID, ClientSecret: is.ClientSecret, PublicURL: srv.URL + "/agent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := (&Server{OIDC: auth, FrameAncestors: []string{"'self'", srv.URL}}).Handler()
+	outer.Handle("/agent/", http.StripPrefix("/agent", h))
+	outer.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "Plattform") })
+	return srv, is
+}
+
+func TestOIDCUnderPrefix(t *testing.T) {
+	srv, is := prefixedOIDCServer(t)
+	anon := oidctest.NewBrowser(t)
+	code, body := call(t, anon, "GET", srv.URL+"/agent/api/me", "")
+	if code != 401 || !strings.Contains(body, `"login":"/agent/oidc/login"`) {
+		t.Fatalf("ohne Sitzung: %d %s", code, body)
+	}
+	nb := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	if resp, _ := nb.Get(srv.URL + "/agent/login?token=x"); resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/agent/oidc/login" {
+		t.Fatalf("/login unter /agent: %d %v", resp.StatusCode, resp.Header)
+	}
+	b := oidctest.NewBrowser(t)
+	is.Login(&anna)
+	resp, err := b.Get(srv.URL + "/agent/oidc/login?return=" + url.QueryEscape("/agent/?embed=1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.Request.URL.Path != "/agent/" || resp.Request.URL.RawQuery != "embed=1" {
+		t.Fatalf("Rücksprung: %s", resp.Request.URL)
+	}
+	if csp := resp.Header.Get("Content-Security-Policy"); !strings.Contains(csp, "frame-ancestors 'self' "+srv.URL) {
+		t.Fatalf("CSP: %q", csp)
+	}
+	code, body = call(t, b, "GET", srv.URL+"/agent/api/me", "")
+	if code != 200 || !strings.Contains(body, `"sub":"sub-anna"`) {
+		t.Fatalf("me unter /agent: %d %s", code, body)
 	}
 }
 

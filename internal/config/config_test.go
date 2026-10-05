@@ -317,3 +317,48 @@ func TestOIDCEnvDefaults(t *testing.T) {
 		t.Fatalf("frame ancestors: %v", e.FrameAncestors)
 	}
 }
+
+func TestBasePath(t *testing.T) {
+	for in, want := range map[string]string{
+		"":                          "",
+		"https://agent.x":           "",
+		"https://agent.x/":          "",
+		"https://app.x/agent":       "/agent",
+		"https://app.x/agent/":      "/agent",
+		"http://localhost:8080/a/b": "/a/b",
+	} {
+		if got, err := BasePath(in); err != nil || got != want {
+			t.Errorf("BasePath(%q) = %q, %v; erwartet %q", in, got, err, want)
+		}
+	}
+	for _, in := range []string{"https://app.x/a/../b", "https://app.x//agent", "https://app.x/a%20b", "https://app.x/a%2Fb", "https://app.x/./a"} {
+		if got, err := BasePath(in); err == nil {
+			t.Errorf("BasePath(%q) angenommen: %q", in, got)
+		}
+	}
+}
+
+func TestEnvPublicURLWithPath(t *testing.T) {
+	t.Setenv("AGW_PUBLIC_URL", "https://app.agri-gaia.localhost/agent/")
+	e := FromEnv()
+	if e.PublicURL != "https://app.agri-gaia.localhost/agent" || e.BasePath != "/agent" {
+		t.Fatalf("PublicURL/BasePath: %q %q", e.PublicURL, e.BasePath)
+	}
+	// Der Host gilt als erlaubt, auch wenn die Adresse einen Pfad trägt.
+	if h := e.PublicHost(); h != "app.agri-gaia.localhost" {
+		t.Fatalf("PublicHost: %q", h)
+	}
+	e.AuthMode, e.OIDCIssuer, e.OIDCClientID, e.OIDCClientSecret = AuthOIDC, "https://kc/realms/r", "agw-agent", "s"
+	e.FrameAncestors = []string{"'self'", "https://app.agri-gaia.localhost"}
+	if err := e.CheckAuth(); err != nil {
+		t.Fatalf("CheckAuth: %v", err)
+	}
+	e.PublicURL = "https://app.agri-gaia.localhost/a/../b"
+	if err := e.CheckAuth(); err == nil {
+		t.Fatal("ungültiger Pfad angenommen")
+	}
+	t.Setenv("AGW_PUBLIC_URL", "")
+	if e := FromEnv(); e.BasePath != "" || e.PublicHost() != "" {
+		t.Fatalf("ohne AGW_PUBLIC_URL: %q %q", e.BasePath, e.PublicHost())
+	}
+}

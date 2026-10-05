@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
+	"path"
 	"sort"
 	"strconv"
 	"strings"
@@ -347,7 +349,10 @@ type Env struct {
 	OIDCIssuer       string // https://keycloak.<basis>/realms/<realm>
 	OIDCClientID     string // Standard agw-agent
 	OIDCClientSecret string // Standard: AGW_PLATFORM_CLIENT_SECRET
-	PublicURL        string // https://agent.<basis>; Redirect-URI = PublicURL + "/oidc/callback"
+	PublicURL        string // https://app.<basis>/agent oder https://agent.<basis>; Redirect-URI = PublicURL + "/oidc/callback"
+	// BasePath: Pfad von PublicURL ("" oder etwa "/agent"); die UI liegt unter BasePath + "/". Der Proxy
+	// schneidet ihn ab, Adressen für den Browser brauchen ihn trotzdem.
+	BasePath string
 	// FrameAncestors: Herkünfte, die die UI einbetten dürfen (leer: frame-ancestors 'none').
 	FrameAncestors []string
 }
@@ -426,12 +431,60 @@ func FromEnv() Env {
 		OIDCClientID:         str("AGW_OIDC_CLIENT_ID", "agw-agent"),
 		OIDCClientSecret:     str("AGW_OIDC_CLIENT_SECRET", str("AGW_PLATFORM_CLIENT_SECRET", "")),
 		PublicURL:            strings.TrimRight(str("AGW_PUBLIC_URL", ""), "/"),
+		BasePath:             orEmpty(BasePath(strings.TrimRight(str("AGW_PUBLIC_URL", ""), "/"))),
 		FrameAncestors:       strings.Fields(str("AGW_FRAME_ANCESTORS", "")),
 	}
 }
 
+// orEmpty: ein ungültiger Wert fällt auf "" zurück; CheckAuth meldet den Fehler.
+func orEmpty(s string, err error) string {
+	if err != nil {
+		return ""
+	}
+	return s
+}
+
+// BasePath liefert den Pfad von AGW_PUBLIC_URL ohne Schrägstrich am Ende: "" für https://host,
+// "/agent" für https://host/agent/. Ein Proxy schneidet ihn vor dem Orchestrator ab; Adressen für den
+// Browser (Weiterleitungen, Cookies, Anmeldelinks) brauchen ihn trotzdem.
+func BasePath(publicURL string) (string, error) {
+	if publicURL == "" {
+		return "", nil
+	}
+	u, err := url.Parse(publicURL)
+	if err != nil {
+		return "", fmt.Errorf("AGW_PUBLIC_URL ungültig: %q", publicURL)
+	}
+	p := strings.TrimRight(u.Path, "/")
+	if p == "" {
+		return "", nil
+	}
+	ok := path.Clean(p) == p && u.RawPath == ""
+	for _, c := range p {
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || strings.ContainsRune("/-._~", c)) {
+			ok = false
+		}
+	}
+	if !ok {
+		return "", fmt.Errorf("AGW_PUBLIC_URL: Pfad %q ungültig (erlaubt etwa /agent)", u.Path)
+	}
+	return p, nil
+}
+
+// PublicHost liefert den Host von AGW_PUBLIC_URL (mit Port, ohne Pfad), "" ohne Angabe. Die UI wird
+// unter dieser Adresse aufgerufen; der Host gehört deshalb zu den erlaubten Host-Kopfzeilen.
+func (e Env) PublicHost() string {
+	if u, err := url.Parse(e.PublicURL); err == nil {
+		return u.Host
+	}
+	return ""
+}
+
 // CheckAuth prüft die Einstellungen der gewählten Anmeldeart.
 func (e Env) CheckAuth() error {
+	if _, err := BasePath(e.PublicURL); err != nil {
+		return err
+	}
 	switch e.AuthMode {
 	case AuthToken:
 		if len(e.APIToken) < 32 {

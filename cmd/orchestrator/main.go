@@ -66,10 +66,10 @@ func run() error {
 			return err
 		}
 		// Die UI wird unter der öffentlichen Adresse aufgerufen; ihr Host gilt damit als erlaubt.
-		if u, err := url.Parse(env.PublicURL); err == nil && !slices.Contains(env.AllowedHosts, u.Host) {
-			env.AllowedHosts = append(env.AllowedHosts, u.Host)
+		if h := env.PublicHost(); h != "" && !slices.Contains(env.AllowedHosts, h) {
+			env.AllowedHosts = append(env.AllowedHosts, h)
 		}
-		slog.Info("Anmeldung über die Plattform (OIDC)", "issuer", env.OIDCIssuer, "client", env.OIDCClientID, "redirect", env.PublicURL+oidc.CallbackPath, "einbettung", env.FrameAncestors)
+		slog.Info("Anmeldung über die Plattform (OIDC)", "issuer", env.OIDCIssuer, "client", env.OIDCClientID, "redirect", env.PublicURL+oidc.CallbackPath, "basis", env.BasePath+"/", "einbettung", env.FrameAncestors)
 	}
 	blocked, err := api.ParseSubnets(env.BlockedSubnets)
 	if err != nil {
