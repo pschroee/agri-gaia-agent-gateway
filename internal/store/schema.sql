@@ -353,3 +353,8 @@ CREATE TABLE IF NOT EXISTS delegation_objects (
     created_at timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (chat_id, resource, object_id)
 );
+
+-- Besitzer des Chats (sub des Nutzers bei Anmeldung über die Plattform, AGW_AUTH_MODE=oidc).
+-- NULL: angelegt mit dem API-Token (token-Modus), ohne Besitzer.
+ALTER TABLE chats ADD COLUMN IF NOT EXISTS owner text;
+CREATE INDEX IF NOT EXISTS chats_owner ON chats (owner);
