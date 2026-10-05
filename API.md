@@ -12,7 +12,7 @@ Zwei Arten (`AGW_AUTH_MODE`):
 - **`oidc`**: Anmeldung über den Keycloak der Plattform. Die API nimmt nur das Sitzungs-Cookie `agw_session` an
   (HttpOnly, Secure, SameSite=Lax); `/login?token=` leitet nach `/oidc/login`. Ohne gültige Sitzung antwortet jede
   Route unter `/api/` mit **401** `{"error": "nicht angemeldet", "login": "/oidc/login"}`; die UI navigiert dann
-  einmal still nach `/oidc/login?prompt=none&return=<Pfad>`.
+  einmal still nach `/oidc/login?prompt=none&return=<Pfad>` (unter einem Pfadpräfix siehe unten).
 
 | Methode und Pfad | Zweck |
 |---|---|
@@ -33,6 +33,16 @@ per `refresh_token` erneuert) als `subject_token` des Token-Austauschs. Ohne leb
 
 **Einbettung:** `frame-ancestors` der CSP aus `AGW_FRAME_ANCESTORS` (sonst `'none'`). `/?embed=1` zeigt die
 schmale Ansicht für das Seitenpanel.
+
+**Unter einem Pfadpräfix:** Mit `AGW_PUBLIC_URL=https://app.<basis>/agent` liegt die UI unter
+`https://app.<basis>/agent/`. Der Proxy (Traefik, `PathPrefix(`/agent`)` mit `stripprefix`) schneidet `/agent` ab;
+der Orchestrator sieht weiter `/api/…`, `/oidc/…` und `/`. Alle Pfade dieses Abschnitts gelten dann für den
+Browser mit dem Präfix: `login` in der 401-Antwort ist `/agent/oidc/login`, `/login?token=` und der Rücksprung
+nach der Anmeldung führen nach `/agent/`, `return` muss unter `/agent/` liegen (sonst `/agent/`), die Cookies
+haben den Pfad `/agent/` (`agw_session`, `agw_token`) bzw. `/agent/oidc/` (Anmeldung), Redirect-URI ist
+`https://app.<basis>/agent/oidc/callback`. Die UI baut alle Adressen relativ (`api/…`, `oidc/login`), sie läuft
+deshalb unter `/` und unter jedem Präfix. Die Adresse ohne Schrägstrich (`/agent`) braucht eine Weiterleitung
+am Proxy nach `/agent/`, sonst lösen sich die relativen Adressen gegen `/` auf.
 
 ## Typen
 
