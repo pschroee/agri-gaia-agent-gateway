@@ -1,0 +1,6 @@
+e2e/letzter-lauf.log
+.dev/
+third_party/pi-subagents/node_modules/
+.env
+node_modules/
+web/dist/

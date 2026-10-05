@@ -1,0 +1,84 @@
+package chat
+
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+)
+
+const childSession = `{"type":"session","id":"s1"}
+{"type":"model_change","id":"a1"}
+{"type":"message","id":"u1","message":{"role":"user","content":[{"type":"text","text":"Task: Ermittle die Python-Version."}]}}
+{"type":"message","id":"m1","message":{"role":"assistant","responseId":"resp-9","content":[{"type":"thinking","thinking":"ok"},{"type":"toolCall","id":"call_1","name":"bash","arguments":{"command":"python3 --version"}}]}}
+{"type":"message","id":"r1","message":{"role":"toolResult","toolCallId":"call_1","toolName":"bash","content":[{"type":"text","text":"Python 3.11.2\n"}],"isError":false}}
+{"type":"message","id":"m2","message":{"role":"assistant","responseId":"resp-10","content":[{"type":"text","text":"Python 3.11.2"}]}}
+kaputte zeile
+`
+
+func TestParseChildSession(t *testing.T) {
+	es := parseChildSession("chat", "run1", "scout", childSession)
+	var kinds []string
+	for _, e := range es {
+		kinds = append(kinds, e.Kind)
+	}
+	if strings.Join(kinds, ",") != "task,tool_call,tool_result,text" {
+		t.Fatalf("Arten: %v", kinds)
+	}
+	call := es[1]
+	var p struct{ Name, Arguments string }
+	_ = json.Unmarshal(call.Payload, &p)
+	var ids struct {
+		ID         string `json:"id"`
+		ToolCallID string `json:"tool_call_id"`
+	}
+	_ = json.Unmarshal(call.Payload, &ids)
+	var rid struct {
+		ToolCallID string `json:"tool_call_id"`
+	}
+	_ = json.Unmarshal(es[2].Payload, &rid)
+	if ids.ID != "call_1" || rid.ToolCallID != "call_1" {
+		t.Fatalf("Aufruf-ID fehlt: Aufruf %q, Ergebnis %q", ids.ID, rid.ToolCallID)
+	}
+	if call.ResponseID != "resp-9" || p.Name != "bash" || !strings.Contains(p.Arguments, "python3 --version") || call.Agent != "scout" || call.RunID != "run1" {
+		t.Fatalf("Werkzeugaufruf: %+v %+v", call, p)
+	}
+	var r struct {
+		Name    string `json:"name"`
+		Text    string `json:"text"`
+		IsError bool   `json:"is_error"`
+	}
+	_ = json.Unmarshal(es[2].Payload, &r)
+	if r.Name != "bash" || !strings.Contains(r.Text, "3.11.2") {
+		t.Fatalf("Ergebnis: %+v", r)
+	}
+	// Eindeutige Kennungen je Eintrag und Inhaltsteil
+	seen := map[string]bool{}
+	for _, e := range es {
+		if seen[e.EntryID] {
+			t.Fatalf("doppelte Kennung %s", e.EntryID)
+		}
+		seen[e.EntryID] = true
+	}
+}
+
+func TestParseChildSessionTruncates(t *testing.T) {
+	long := strings.Repeat("x", 20000)
+	line := `{"type":"message","id":"r","message":{"role":"toolResult","toolName":"bash","content":[{"type":"text","text":"` + long + `"}]}}` + "\n"
+	es := parseChildSession("c", "r", "", line)
+	if len(es) != 1 || len(es[0].Payload) > 6000 {
+		t.Fatalf("nicht gekürzt: %d Bytes", len(es[0].Payload))
+	}
+}
+
+func TestRunKeyFromPath(t *testing.T) {
+	cases := map[string]string{
+		"/agent/sessions/2026_x/4fe6edef-159e-41a3-aedc-47b85916de47/run-0/session.jsonl": "4fe6edef-159e-41a3-aedc-47b85916de47",
+		"/agent/sessions/2026_x/4fe6edef-159e-41a3-aedc-47b85916de47/run-2/session.jsonl": "4fe6edef-159e-41a3-aedc-47b85916de47#2",
+		"/etc/passwd": "",
+	}
+	for in, want := range cases {
+		if got := runKey(in); got != want {
+			t.Errorf("runKey(%q) = %q, erwartet %q", in, got, want)
+		}
+	}
+}

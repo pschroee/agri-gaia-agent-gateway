@@ -1,0 +1,11 @@
+{
+  "name": "agw-pi-subagents-deps",
+  "private": true,
+  "description": "Laufzeitabhängigkeiten der Kopie von pi-subagents (third_party/pi-subagents) mit fester Integrität; muss mit deren package.json übereinstimmen (Prüfung im Dockerfile).",
+  "dependencies": {
+    "acorn": "8.18.0",
+    "jiti": "2.7.0",
+    "undici": "8.10.0",
+    "yaml": "2.8.3"
+  }
+}

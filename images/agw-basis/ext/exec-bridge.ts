@@ -1,0 +1,1170 @@
+// pi-Extension (E9): leitet die Werkzeuge bash, read, write, edit, grep, find und ls in die
+// Ausführungs-Sandbox um. Jede Operation geht über den Socket des Platzes an den Orchestrator;
+// er führt sie in der Ausführungs-Sandbox aus und protokolliert sie (tool_executions) mit der
+// toolCallId des Modells und der Sitzungsdatei (Hauptagent oder Lauf eines Subagenten).
+//
+// Dazu ein Wächter für das Werkzeug subagent: Er lässt nur Parameter durch, die keinen Code und
+// keine Agentendefinition in den Container von pi bringen (Prüfpunkte P4/P4b in
+// poc/e9-ausfuehrungs-sandbox.md). Der Wächter ist ein Kontrollpunkt, weil nach E9 kein Code des
+// Agenten im pi-Prozess läuft: Der Agent erreicht pi nur über die Parameter seiner Aufrufe.
+//
+// Hintergrundaufgaben: bash mit run_in_background startet den Befehl über den Orchestrator in der
+// Ausführungs-Sandbox und kehrt sofort zurück; bg_output und bg_stop fragen ab bzw. beenden. Das
+// Ende meldet der Orchestrator dem Agenten selbst (poc/README.md, „Hintergrundaufgaben“).
+//
+// Geladen im Hauptagenten per -e und in jedem Subagenten über
+// settings.json → subagents.defaultSubagentOnlyExtensions.
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import {
+	createBashTool,
+	createEditTool,
+	createFindTool,
+	createGrepTool,
+	createLsTool,
+	createReadTool,
+	createWriteTool,
+	DEFAULT_MAX_BYTES,
+	DEFAULT_MAX_LINES,
+	type EditOperations,
+	formatSize,
+	type LsOperations,
+	type ReadOperations,
+	truncateHead,
+	truncateLine,
+	truncateTail,
+	type WriteOperations,
+} from "@earendil-works/pi-coding-agent";
+import { createHash } from "node:crypto";
+import { request } from "node:http";
+import { homedir } from "node:os";
+import path, { isAbsolute, join, resolve as resolvePath } from "node:path";
+
+const SOCKET = process.env.AGW_SOCKET || "/run/agw/agw.sock";
+const CWD = "/workspace";
+// Grenzen der Ausführungs-Sandbox (internal/execproto): darüber kürzt sie still.
+const MAX_GREP_LIMIT = 1000;
+const MAX_FIND_LIMIT = 100000;
+// wie pi (bash.js): setTimeout nimmt höchstens 2^31-1 ms
+const MAX_TIMEOUT_MS = 2_147_483_647;
+const BASH_UPDATE_THROTTLE_MS = 100;
+
+type Meta = { toolCallId: string; tool: string; sessionFile: string };
+type Frame = {
+	result?: any;
+	error?: string;
+	code?: string;
+	exit?: number;
+	data?: string;
+	done?: boolean;
+	fullOutputPath?: string;
+	spillError?: string;
+	background?: string;
+};
+
+class ToolError extends Error {
+	code?: string;
+	constructor(message: string, code?: string) {
+		super(message);
+		this.code = code;
+	}
+}
+
+// Fehlermeldungen wie Node (pi arbeitet sonst mit fs/promises): Das Modell sieht dieselben
+// Meldungen wie ohne Umleitung (Code-Review L4).
+const NODE_ERRORS: Record<string, string> = {
+	ENOENT: "no such file or directory",
+	EACCES: "permission denied",
+	EISDIR: "illegal operation on a directory",
+	ENOTDIR: "not a directory",
+	EROFS: "read-only file system",
+	ENOSPC: "no space left on device",
+	EEXIST: "file already exists",
+	ELOOP: "too many symbolic links encountered",
+	ENAMETOOLONG: "name too long",
+	EPERM: "operation not permitted",
+};
+
+function nodeError(e: unknown, syscall: string, p: string): unknown {
+	const code = (e as ToolError)?.code;
+	if (!code || !NODE_ERRORS[code]) return e;
+	const err = new ToolError(`${code}: ${NODE_ERRORS[code]}, ${syscall} '${p}'`, code);
+	return err;
+}
+
+function post(path: string, body: unknown, signal?: AbortSignal, onLine?: (line: string) => void): Promise<{ status: number; body: string }> {
+	const payload = JSON.stringify(body);
+	return new Promise((resolve, reject) => {
+		if (signal?.aborted) {
+			reject(new Error("aborted"));
+			return;
+		}
+		const req = request(
+			{
+				socketPath: SOCKET,
+				path,
+				method: "POST",
+				headers: { "content-type": "application/json", "content-length": Buffer.byteLength(payload) },
+				signal,
+				timeout: 0,
+			},
+			(res) => {
+				let buf = "";
+				let all = "";
+				res.setEncoding("utf8");
+				res.on("data", (c: string) => {
+					if (!onLine) {
+						all += c;
+						return;
+					}
+					buf += c;
+					let i: number;
+					while ((i = buf.indexOf("\n")) >= 0) {
+						const line = buf.slice(0, i);
+						buf = buf.slice(i + 1);
+						if (line.trim()) onLine(line);
+					}
+				});
+				res.on("end", () => {
+					if (onLine && buf.trim()) onLine(buf);
+					resolve({ status: res.statusCode ?? 0, body: all });
+				});
+				res.on("error", reject);
+			},
+		);
+		req.on("error", (e) => reject(signal?.aborted ? new Error("aborted") : e));
+		req.end(payload);
+	});
+}
+
+// op führt eine Operation aus und liefert das Ergebnis; Fehler der Sandbox werden zu Ausnahmen
+// (wie bei den Node-Operationen, die pi sonst benutzt).
+async function op(meta: Meta, req: Record<string, unknown>, signal?: AbortSignal): Promise<any> {
+	const res = await post("/tool/op", { ...meta, req }, signal);
+	let f: Frame;
+	try {
+		f = JSON.parse(res.body);
+	} catch {
+		throw new ToolError(`orchestrator: unreadable response (${res.status})`);
+	}
+	if (res.status !== 200) throw new ToolError(`orchestrator rejected the operation: ${(f as any).error ?? res.status}`);
+	if (f.error) throw new ToolError(f.error, f.code);
+	return f.result ?? {};
+}
+
+function metaOf(tool: string, id: string, ctx: any): Meta {
+	let sessionFile = "";
+	try {
+		sessionFile = ctx?.sessionManager?.getSessionFile?.() ?? "";
+	} catch {
+		// ohne Sitzung (etwa beim Start): Hauptsitzung
+	}
+	return { toolCallId: id, tool, sessionFile };
+}
+
+// Pfade wie pi (utils/paths.js, resolveToCwd): Unicode-Leerzeichen, „@“ davor, „~“.
+const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
+function resolveToCwd(input: string, cwd: string): string {
+	let p = input.replace(UNICODE_SPACES, " ");
+	if (p.startsWith("@")) p = p.slice(1);
+	if (p === "~") p = homedir();
+	else if (p.startsWith("~/")) p = join(homedir(), p.slice(2));
+	return isAbsolute(p) ? resolvePath(p) : resolvePath(cwd, p);
+}
+
+// Bildtyp wie pi (utils/mime.js, detectSupportedImageMimeType).
+function readU32BE(b: Buffer, o: number) {
+	return (b[o] ?? 0) * 0x1000000 + ((b[o + 1] ?? 0) << 16) + ((b[o + 2] ?? 0) << 8) + (b[o + 3] ?? 0);
+}
+function readU32LE(b: Buffer, o: number) {
+	return (b[o] ?? 0) + ((b[o + 1] ?? 0) << 8) + ((b[o + 2] ?? 0) << 16) + (b[o + 3] ?? 0) * 0x1000000;
+}
+function readU16LE(b: Buffer, o: number) {
+	return (b[o] ?? 0) + ((b[o + 1] ?? 0) << 8);
+}
+function asciiAt(b: Buffer, o: number, t: string) {
+	if (b.length < o + t.length) return false;
+	for (let i = 0; i < t.length; i++) if (b[o + i] !== t.charCodeAt(i)) return false;
+	return true;
+}
+const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+export function sniffImage(buf: Buffer): string | null {
+	const b = buf.subarray(0, 4100);
+	const startsWith = (bytes: number[]) => b.length >= bytes.length && bytes.every((x, i) => b[i] === x);
+	if (startsWith([0xff, 0xd8, 0xff])) return b[3] === 0xf7 ? null : "image/jpeg";
+	if (startsWith(PNG_SIGNATURE)) {
+		const isPng = b.length >= 16 && readU32BE(b, 8) === 13 && asciiAt(b, 12, "IHDR");
+		let animated = false;
+		let o = PNG_SIGNATURE.length;
+		while (o + 8 <= b.length) {
+			const len = readU32BE(b, o);
+			if (asciiAt(b, o + 4, "acTL")) {
+				animated = true;
+				break;
+			}
+			if (asciiAt(b, o + 4, "IDAT")) break;
+			const next = o + 8 + len + 4;
+			if (next <= o || next > b.length) break;
+			o = next;
+		}
+		return isPng && !animated ? "image/png" : null;
+	}
+	if (asciiAt(b, 0, "GIF87a") || asciiAt(b, 0, "GIF89a")) return "image/gif";
+	if (asciiAt(b, 0, "RIFF") && asciiAt(b, 8, "WEBP")) return "image/webp";
+	if (asciiAt(b, 0, "BM") && b.length >= 26) {
+		const size = readU32LE(b, 2);
+		const pix = readU32LE(b, 10);
+		const dib = readU32LE(b, 14);
+		if (size !== 0 && size < 26) return null;
+		if (pix < 14 + dib) return null;
+		if (size !== 0 && pix >= size) return null;
+		let planes: number;
+		let bpp: number;
+		if (dib === 12) {
+			planes = readU16LE(b, 22);
+			bpp = readU16LE(b, 24);
+		} else if (dib >= 40 && dib <= 124) {
+			if (b.length < 30) return null;
+			planes = readU16LE(b, 26);
+			bpp = readU16LE(b, 28);
+		} else return null;
+		return planes === 1 && [1, 4, 8, 16, 24, 32].includes(bpp) ? "image/bmp" : null;
+	}
+	return null;
+}
+
+// read und edit lesen die Datei einmal (Operation read) und beantworten access, Bildtyp und
+// Inhalt daraus. Über MaxFileBytes (64 MiB) liefert die Sandbox EFBIG; read liest dann einen
+// Ausschnitt (readLarge).
+function fileCache(meta: Meta, signal?: AbortSignal) {
+	const cache = new Map<string, Buffer>();
+	return async (p: string): Promise<Buffer> => {
+		const hit = cache.get(p);
+		if (hit) return hit;
+		const r = await op(meta, { op: "read", path: p }, signal);
+		const b = Buffer.from(r.data ?? "", "base64");
+		cache.set(p, b);
+		return b;
+	};
+}
+
+function readOps(meta: Meta, signal?: AbortSignal): ReadOperations {
+	const get = fileCache(meta, signal);
+	return {
+		readFile: (p) => get(p),
+		access: async (p) => {
+			try {
+				await get(p);
+			} catch (e) {
+				const code = (e as ToolError)?.code;
+				// Ein Verzeichnis und eine große Datei sind lesbar; das Weitere klärt read.
+				if (code === "EISDIR" || code === "EFBIG") return;
+				throw nodeError(e, "access", p);
+			}
+		},
+		detectImageMimeType: async (p) => {
+			try {
+				return sniffImage(await get(p));
+			} catch (e) {
+				if ((e as ToolError)?.code !== "EFBIG") throw e;
+				const r = await op(meta, { op: "image_type", path: p }, signal);
+				if (r.mime) throw new ToolError(`File too large to read as image (over 64 MiB): ${p}`, "EFBIG");
+				return null;
+			}
+		},
+	};
+}
+
+function writeOps(meta: Meta, signal?: AbortSignal): WriteOperations {
+	return {
+		writeFile: async (p, content) => {
+			try {
+				await op(meta, { op: "write", path: p, data: Buffer.from(content, "utf8").toString("base64") }, signal);
+			} catch (e) {
+				throw nodeError(e, "open", p);
+			}
+		},
+		mkdir: async (dir) => {
+			try {
+				await op(meta, { op: "mkdir", path: dir }, signal);
+			} catch (e) {
+				throw nodeError(e, "mkdir", dir);
+			}
+		},
+	};
+}
+
+function editOps(meta: Meta, signal?: AbortSignal): EditOperations {
+	const get = fileCache(meta, signal);
+	const w = writeOps(meta, signal);
+	return {
+		readFile: async (p) => {
+			try {
+				return await get(p);
+			} catch (e) {
+				throw nodeError(e, "open", p);
+			}
+		},
+		// wie pi: lesbar und schreibbar (R_OK | W_OK)
+		access: async (p) => {
+			try {
+				await op(meta, { op: "access", path: p, mode: "rw" }, signal);
+			} catch (e) {
+				throw nodeError(e, "access", p);
+			}
+		},
+		writeFile: w.writeFile,
+	};
+}
+
+type Stat = { exists: boolean; isDir: boolean };
+
+function lsOps(meta: Meta, signal?: AbortSignal): LsOperations {
+	const stats = new Map<string, Stat>();
+	const stat = async (p: string): Promise<Stat> => {
+		const hit = stats.get(p);
+		if (hit) return hit;
+		const r = await op(meta, { op: "stat", path: p }, signal);
+		const s = { exists: !!r.exists, isDir: !!r.isDir };
+		stats.set(p, s);
+		return s;
+	};
+	return {
+		exists: async (p) => (await stat(p)).exists,
+		stat: async (p) => {
+			const s = await stat(p);
+			if (!s.exists) throw new ToolError(`ENOENT: no such file or directory, stat '${p}'`, "ENOENT");
+			return { isDirectory: () => s.isDir };
+		},
+		readdir: async (p) => {
+			let r: any;
+			try {
+				r = await op(meta, { op: "readdir", path: p }, signal);
+			} catch (e) {
+				throw nodeError(e, "scandir", p);
+			}
+			// Die Sandbox lässt Einträge weg, die sich nicht stat'en lassen (wie pi, L3).
+			const entries: { name: string; isDir: boolean }[] = r.entries ?? [];
+			for (const e of entries) stats.set(resolvePath(p, e.name), { exists: true, isDir: e.isDir });
+			return entries.map((e) => e.name);
+		},
+	};
+}
+
+// --- bash ---
+
+// Pfad der ganzen Ausgabe in der Ausführungs-Sandbox; der Orchestrator bildet ihn gleich
+// (execproto.SpillPath).
+export function spillPath(toolCallId: string): string {
+	return `/tmp/pi-bash-${createHash("sha256").update(toolCallId).digest("hex").slice(0, 16)}.log`;
+}
+
+// TailOutput ist pis OutputAccumulator ohne Datei (H1): Er behält nur ein begrenztes Ende
+// (2 × 50 KiB) im Speicher. Die ganze Ausgabe schreibt die Ausführungs-Sandbox selbst.
+export class TailOutput {
+	private decoder = new TextDecoder();
+	private tailText = "";
+	private tailBytes = 0;
+	private tailStartsAtLineBoundary = true;
+	totalRawBytes = 0;
+	totalDecodedBytes = 0;
+	private completedLines = 0;
+	totalLines = 0;
+	currentLineBytes = 0;
+	private hasOpenLine = false;
+	private finished = false;
+	private readonly maxRollingBytes = Math.max(DEFAULT_MAX_BYTES * 2, 1);
+
+	append(data: Buffer) {
+		if (this.finished) return;
+		this.totalRawBytes += data.length;
+		this.appendDecoded(this.decoder.decode(data, { stream: true }));
+	}
+	finish() {
+		if (this.finished) return;
+		this.finished = true;
+		this.appendDecoded(this.decoder.decode());
+	}
+	isTruncated() {
+		return this.totalLines > DEFAULT_MAX_LINES || this.totalDecodedBytes > DEFAULT_MAX_BYTES;
+	}
+	snapshot(fullOutputPath: string | undefined) {
+		const tail = truncateTail(this.snapshotText(), { maxLines: DEFAULT_MAX_LINES, maxBytes: DEFAULT_MAX_BYTES });
+		const truncated = this.isTruncated();
+		const truncatedBy = truncated ? (tail.truncatedBy ?? (this.totalDecodedBytes > DEFAULT_MAX_BYTES ? "bytes" : "lines")) : null;
+		const truncation = {
+			...tail,
+			truncated,
+			truncatedBy,
+			totalLines: this.totalLines,
+			totalBytes: this.totalDecodedBytes,
+			maxLines: DEFAULT_MAX_LINES,
+			maxBytes: DEFAULT_MAX_BYTES,
+		};
+		return { content: truncation.content, truncation, fullOutputPath: truncated ? fullOutputPath : undefined };
+	}
+	private appendDecoded(text: string) {
+		if (text.length === 0) return;
+		const bytes = Buffer.byteLength(text, "utf-8");
+		this.totalDecodedBytes += bytes;
+		this.tailText += text;
+		this.tailBytes += bytes;
+		if (this.tailBytes > this.maxRollingBytes * 2) this.trimTail();
+		let newlines = 0;
+		let lastNewline = -1;
+		for (let i = text.indexOf("\n"); i !== -1; i = text.indexOf("\n", i + 1)) {
+			newlines++;
+			lastNewline = i;
+		}
+		if (newlines === 0) {
+			this.currentLineBytes += bytes;
+			this.hasOpenLine = true;
+		} else {
+			this.completedLines += newlines;
+			const tail = text.slice(lastNewline + 1);
+			this.currentLineBytes = Buffer.byteLength(tail, "utf-8");
+			this.hasOpenLine = tail.length > 0;
+		}
+		this.totalLines = this.completedLines + (this.hasOpenLine ? 1 : 0);
+	}
+	private trimTail() {
+		const buffer = Buffer.from(this.tailText, "utf-8");
+		if (buffer.length <= this.maxRollingBytes) {
+			this.tailBytes = buffer.length;
+			return;
+		}
+		let start = buffer.length - this.maxRollingBytes;
+		while (start < buffer.length && (buffer[start] & 0xc0) === 0x80) start++;
+		this.tailStartsAtLineBoundary = start === 0 ? this.tailStartsAtLineBoundary : buffer[start - 1] === 0x0a;
+		this.tailText = buffer.subarray(start).toString("utf-8");
+		this.tailBytes = Buffer.byteLength(this.tailText, "utf-8");
+	}
+	private snapshotText() {
+		if (this.tailStartsAtLineBoundary) return this.tailText;
+		const i = this.tailText.indexOf("\n");
+		return i === -1 ? this.tailText : this.tailText.slice(i + 1);
+	}
+}
+
+// Umgebung wie pi (resolveSpawnContext): nur die PI_*-Angaben der Sitzung gehen in die Sandbox.
+function piEnv(ctx: any): Record<string, string> {
+	const env: Record<string, string> = {};
+	try {
+		const id = ctx?.sessionManager?.getSessionId?.();
+		if (id) env.PI_SESSION_ID = id;
+		const file = ctx?.sessionManager?.getSessionFile?.();
+		if (file) env.PI_SESSION_FILE = file;
+	} catch {
+		// ohne Sitzung
+	}
+	if (ctx?.model) {
+		env.PI_PROVIDER = ctx.model.provider;
+		env.PI_MODEL = ctx.model.id;
+	}
+	if (ctx?.thinkingLevel) env.PI_REASONING_LEVEL = ctx.thinkingLevel;
+	return env;
+}
+
+// wie pi (bash.js, resolveTimeoutMs); L1
+function checkTimeout(timeout: unknown) {
+	if (timeout === undefined) return;
+	if (typeof timeout !== "number" || !Number.isFinite(timeout) || timeout <= 0) {
+		throw new Error("Invalid timeout: must be a finite number of seconds");
+	}
+	if (timeout * 1000 > MAX_TIMEOUT_MS) throw new Error(`Invalid timeout: maximum is ${MAX_TIMEOUT_MS / 1000} seconds`);
+}
+
+// bashCall schickt den Befehl an die Sandbox und liefert den letzten Rahmen; Daten gehen an onData.
+async function bashCall(meta: Meta, command: string, cwd: string, env: Record<string, string>, timeout: number | undefined, signal: AbortSignal | undefined, onData: (b: Buffer) => void): Promise<Frame> {
+	let last: Frame | undefined;
+	let rejected: string | undefined;
+	try {
+		const res = await post("/tool/bash", { ...meta, req: { op: "bash", command, cwd, env, timeout: timeout ?? 0 } }, signal, (line) => {
+			let f: Frame;
+			try {
+				f = JSON.parse(line);
+			} catch {
+				return;
+			}
+			if (f.data) onData(Buffer.from(f.data, "base64"));
+			if (f.done) last = f;
+			else if (!f.data && f.error) rejected = f.error;
+		});
+		if (res.status !== 200) rejected = rejected ?? `HTTP ${res.status}`;
+	} catch (e) {
+		if (signal?.aborted) throw new Error("aborted");
+		throw e;
+	}
+	if (signal?.aborted) throw new Error("aborted");
+	if (rejected) throw new Error(`orchestrator rejected the command: ${rejected}`);
+	if (!last) throw new Error("execution sandbox: no response");
+	return last;
+}
+
+// --- Hintergrundaufgaben ---
+
+type BgTask = {
+	id: string;
+	state: string;
+	command: string;
+	exit_code?: number;
+	error?: string;
+	stopped_by?: string;
+	started_at: string;
+	ended_at?: string;
+	log_path: string;
+	output_bytes: number;
+	output_lines: number;
+	session?: string;
+};
+type BgResponse = { task?: BgTask; output?: string; max?: number; error?: string };
+
+async function bgPost(path: string, body: unknown, signal?: AbortSignal): Promise<BgResponse> {
+	const res = await post(path, body, signal);
+	let r: BgResponse & { error?: string };
+	try {
+		r = JSON.parse(res.body);
+	} catch {
+		throw new ToolError(`orchestrator: unreadable response (${res.status})`);
+	}
+	if (res.status !== 200) throw new ToolError(`orchestrator rejected the request: ${r.error ?? res.status}`);
+	if (r.error) throw new ToolError(r.error);
+	return r;
+}
+
+export function formatDuration(ms: number): string {
+	const s = Math.max(0, Math.round(ms / 1000));
+	if (s < 60) return `${s}s`;
+	const m = Math.floor(s / 60);
+	if (m < 60) return `${m}m ${s % 60}s`;
+	return `${Math.floor(m / 60)}h ${m % 60}m`;
+}
+
+// bgStatus: eine Zeile zum Stand, englisch wie pis Meldungen (L4).
+export function bgStatus(t: BgTask, now = Date.now()): string {
+	const start = Date.parse(t.started_at);
+	const end = t.ended_at ? Date.parse(t.ended_at) : now;
+	const took = Number.isFinite(start) ? formatDuration(end - start) : "?";
+	switch (t.state) {
+		case "running":
+			return `${t.id} is running (for ${took})`;
+		case "exited":
+			return `${t.id} exited with code ${t.exit_code} after ${took}`;
+		case "timeout":
+			return `${t.id} timed out after ${took}`;
+		case "stopped":
+			return `${t.id} was stopped${t.stopped_by === "user" ? " by the user" : ""} after ${took}`;
+		case "suspended":
+			return `${t.id} ended when the chat was suspended (its sandbox is gone)`;
+		case "closed":
+			return `${t.id} ended when the chat was closed`;
+		case "lost":
+			return `${t.id} ended with its sandbox${t.error ? ` (${t.error})` : ""}`;
+		default:
+			return `${t.id} failed${t.error ? `: ${t.error}` : ""}`;
+	}
+}
+
+async function runBashBackground(toolCallId: string, params: any, signal: AbortSignal | undefined, ctx: any) {
+	const { command, timeout } = params;
+	checkTimeout(timeout);
+	const meta = metaOf("bash", toolCallId, ctx);
+	const r = await bgPost("/tool/bg/start", { ...meta, req: { op: "bg", command, cwd: ctx?.cwd || CWD, env: piEnv(ctx), timeout: timeout ?? 0 } }, signal);
+	const t = r.task!;
+	const who = isChildSession(ctx) ? "The main agent is notified when it ends" : "You will be notified when it ends; do not poll or sleep";
+	const text = `Background task ${t.id} started. ${who}. Output so far: bg_output ${t.id} (full log ${t.log_path}); stop it with bg_stop ${t.id}.`;
+	return { content: [{ type: "text", text }], details: { background: { id: t.id, logPath: t.log_path } } };
+}
+
+/** tail_lines von bg_output: Zahl (auch als Text) zwischen 1 und DEFAULT_MAX_LINES, sonst die Vorgabe (Review 3, N5: vorher NaN). */
+export function bgTailLines(v: unknown): number {
+	const n = typeof v === "number" ? v : typeof v === "string" && v.trim() !== "" ? Number(v) : Number.NaN;
+	if (!Number.isFinite(n)) return DEFAULT_MAX_LINES;
+	return Math.max(1, Math.min(Math.floor(n), DEFAULT_MAX_LINES));
+}
+
+async function runBgOutput(toolCallId: string, params: any, signal: AbortSignal | undefined, ctx: any) {
+	const meta = metaOf("bg_output", toolCallId, ctx);
+	const lines = bgTailLines(params?.tail_lines);
+	const r = await bgPost("/tool/bg/output", { ...meta, id: String(params.id ?? ""), tailLines: lines }, signal);
+	const t = r.task!;
+	const out = r.output ?? "";
+	const tail = truncateTail(out, { maxLines: lines, maxBytes: DEFAULT_MAX_BYTES });
+	let text = bgStatus(t);
+	if (!out) {
+		text += "\n(no output yet)";
+	} else {
+		text += `\n\n${tail.content}`;
+		const shownFrom = t.output_lines - tail.outputLines + 1;
+		if (tail.outputLines < t.output_lines || t.output_bytes > Buffer.byteLength(out)) {
+			text += `\n\n[Showing last ${tail.outputLines} lines${shownFrom > 0 ? ` (from line ${shownFrom})` : ""} of ${t.output_lines}. Full output: ${t.log_path}]`;
+		}
+	}
+	return { content: [{ type: "text", text }], details: { background: t } };
+}
+
+async function runBgStop(toolCallId: string, params: any, signal: AbortSignal | undefined, ctx: any) {
+	const meta = metaOf("bg_stop", toolCallId, ctx);
+	const r = await bgPost("/tool/bg/stop", { ...meta, id: String(params.id ?? "") }, signal);
+	const t = r.task!;
+	return { content: [{ type: "text", text: bgStatus(t) }], details: { background: t } };
+}
+
+// runBash ist pis bash-Werkzeug (createShellToolDefinition.execute) mit der Ausführung in der
+// Sandbox und ohne Datei im Container von pi (H1). Meldungen wortgleich wie pi.
+async function runBash(toolCallId: string, params: any, signal: AbortSignal | undefined, onUpdate: any, ctx: any) {
+	if (params?.run_in_background === true) return runBashBackground(toolCallId, params, signal, ctx);
+	const { command, timeout } = params;
+	const meta = metaOf("bash", toolCallId, ctx);
+	const cwd = ctx?.cwd || CWD;
+	const env = piEnv(ctx);
+	const computedPath = spillPath(toolCallId);
+	let fullPath: string | undefined = computedPath;
+	let spillError: string | undefined;
+	const output = new TailOutput();
+	let acceptingOutput = true;
+	let updateTimer: ReturnType<typeof setTimeout> | undefined;
+	let updateDirty = false;
+	let lastUpdateAt = 0;
+	const emitOutputUpdate = () => {
+		if (!onUpdate || !updateDirty) return;
+		updateDirty = false;
+		lastUpdateAt = Date.now();
+		const snapshot = output.snapshot(fullPath);
+		onUpdate({
+			content: [{ type: "text", text: snapshot.content || "" }],
+			details: { truncation: snapshot.truncation.truncated ? snapshot.truncation : undefined, fullOutputPath: snapshot.fullOutputPath },
+		});
+	};
+	const clearUpdateTimer = () => {
+		if (updateTimer) {
+			clearTimeout(updateTimer);
+			updateTimer = undefined;
+		}
+	};
+	const scheduleOutputUpdate = () => {
+		if (!onUpdate) return;
+		updateDirty = true;
+		const delay = BASH_UPDATE_THROTTLE_MS - (Date.now() - lastUpdateAt);
+		if (delay <= 0) {
+			clearUpdateTimer();
+			emitOutputUpdate();
+			return;
+		}
+		updateTimer ??= setTimeout(() => {
+			updateTimer = undefined;
+			emitOutputUpdate();
+		}, delay);
+	};
+	if (onUpdate) onUpdate({ content: [], details: undefined });
+	const handleData = (data: Buffer) => {
+		if (!acceptingOutput) return;
+		output.append(data);
+		scheduleOutputUpdate();
+	};
+	const finishOutput = () => {
+		acceptingOutput = false;
+		output.finish();
+		clearUpdateTimer();
+		emitOutputUpdate();
+		return output.snapshot(fullPath);
+	};
+	const formatOutput = (snapshot: ReturnType<TailOutput["snapshot"]>, emptyText = "(no output)") => {
+		const truncation = snapshot.truncation;
+		let text = snapshot.content || emptyText;
+		let details: any;
+		if (truncation.truncated) {
+			const where = snapshot.fullOutputPath ?? `(not saved${spillError ? `: ${spillError}` : ""})`;
+			details = { truncation, fullOutputPath: snapshot.fullOutputPath };
+			const startLine = truncation.totalLines - truncation.outputLines + 1;
+			const endLine = truncation.totalLines;
+			if (truncation.lastLinePartial) {
+				const lastLineSize = formatSize(output.currentLineBytes);
+				text += `\n\n[Showing last ${formatSize(truncation.outputBytes)} of line ${endLine} (line is ${lastLineSize}). Full output: ${where}]`;
+			} else if (truncation.truncatedBy === "lines") {
+				text += `\n\n[Showing lines ${startLine}-${endLine} of ${truncation.totalLines}. Full output: ${where}]`;
+			} else {
+				text += `\n\n[Showing lines ${startLine}-${endLine} of ${truncation.totalLines} (${formatSize(DEFAULT_MAX_BYTES)} limit). Full output: ${where}]`;
+			}
+		}
+		return { text, details };
+	};
+	const appendStatus = (text: string, status: string) => `${text ? `${text}\n\n` : ""}${status}`;
+	const takePath = (f: Frame | undefined) => {
+		fullPath = f?.fullOutputPath || undefined;
+		spillError = f?.spillError || undefined;
+	};
+	try {
+		let exitCode: number | null;
+		let last: Frame | undefined;
+		try {
+			checkTimeout(timeout);
+			if (signal?.aborted) throw new Error("aborted");
+			last = await bashCall(meta, command, cwd, env, timeout, signal, handleData);
+			takePath(last);
+			if (last.code === "backgrounded" && last.background) {
+				// Der Nutzer hat den Befehl in eine Hintergrundaufgabe umgewandelt; er läuft weiter.
+				const snapshot = finishOutput();
+				const { text } = formatOutput(snapshot, "");
+				const who = isChildSession(ctx) ? "The main agent is notified when it ends" : "You will be notified when it ends; do not poll or sleep";
+				const note = `The user moved this command to the background as ${last.background}; it keeps running. ${who}. Later output: bg_output ${last.background}; stop it with bg_stop ${last.background}.`;
+				return { content: [{ type: "text", text: appendStatus(text, note) }], details: { background: { id: last.background } } };
+			}
+			if (last.code === "stopped") throw new Error("stopped");
+			if (last.code === "timeout") throw new Error(`timeout:${timeout}`);
+			if (last.code === "aborted") throw new Error("aborted");
+			if (last.error) throw new Error(last.error);
+			exitCode = typeof last.exit === "number" ? last.exit : null;
+		} catch (err) {
+			if (!last) {
+				// Abbruch oder Fehler vor dem letzten Rahmen: Die Datei gibt es nur, wenn die Sandbox
+				// sie behalten hat; nennen, was sich berechnen lässt.
+				fullPath = output.isTruncated() ? computedPath : undefined;
+			}
+			const snapshot = finishOutput();
+			const { text } = formatOutput(snapshot, "");
+			if (err instanceof Error && err.message === "aborted") throw new Error(appendStatus(text, "Command aborted"));
+			if (err instanceof Error && err.message === "stopped") throw new Error(appendStatus(text, "Command stopped by the user"));
+			if (err instanceof Error && err.message.startsWith("timeout:")) {
+				throw new Error(appendStatus(text, `Command timed out after ${err.message.split(":")[1]} seconds`));
+			}
+			throw err;
+		}
+		const snapshot = finishOutput();
+		const { text: outputText, details } = formatOutput(snapshot);
+		if (exitCode === null) throw new Error(appendStatus(outputText, "Command terminated without an exit code"));
+		if (exitCode !== 0) throw new Error(appendStatus(outputText, `Command exited with code ${exitCode}`));
+		return { content: [{ type: "text", text: outputText }], details };
+	} finally {
+		clearUpdateTimer();
+	}
+}
+
+// --- grep, find, großes read ---
+
+// grep wie pis eingebautes Werkzeug (Format, Grenzen, Hinweise), aber ripgrep läuft in der
+// Ausführungs-Sandbox. Die Sandbox liefert höchstens MAX_GREP_LIMIT Treffer; der Hinweis nennt
+// das, statt zu einem größeren limit zu raten (M3).
+async function runGrep(meta: Meta, params: any, signal?: AbortSignal, ctxCwd?: string) {
+	const searchPath = resolveToCwd(params.path || ".", ctxCwd || CWD);
+	const limit = Math.max(1, params.limit ?? 100);
+	const effective = Math.min(limit, MAX_GREP_LIMIT);
+	let r: any;
+	try {
+		r = await op(
+			meta,
+			{
+				op: "grep",
+				path: searchPath,
+				grep: { pattern: params.pattern, glob: params.glob, ignoreCase: !!params.ignoreCase, literal: !!params.literal, context: params.context > 0 ? params.context : 0, limit: effective },
+			},
+			signal,
+		);
+	} catch (e) {
+		if (signal?.aborted) throw new Error("Operation aborted");
+		throw e;
+	}
+	if (!r.matches) return { content: [{ type: "text", text: "No matches found" }], details: undefined };
+	let linesTruncated = false;
+	const out = (r.lines ?? []).map((l: any) => {
+		const t = truncateLine(String(l.text ?? ""));
+		if (t.wasTruncated) linesTruncated = true;
+		const sep = l.match ? ":" : "-";
+		return `${l.path}${sep}${l.line}${sep} ${t.text}`;
+	});
+	const truncation = truncateHead(out.join("\n"), { maxLines: Number.MAX_SAFE_INTEGER });
+	let output = truncation.content;
+	const details: any = {};
+	const notices: string[] = [];
+	if (r.limitReached) {
+		notices.push(limitNotice("matches", effective, MAX_GREP_LIMIT, ", or refine pattern"));
+		details.matchLimitReached = effective;
+	}
+	if (truncation.truncated) {
+		notices.push(`${formatSize(DEFAULT_MAX_BYTES)} limit reached`);
+		details.truncation = truncation;
+	}
+	if (linesTruncated) {
+		notices.push("Some lines truncated to 500 chars. Use read tool to see full lines");
+		details.linesTruncated = true;
+	}
+	if (notices.length > 0) output += `\n\n[${notices.join(". ")}]`;
+	return { content: [{ type: "text", text: output }], details: Object.keys(details).length > 0 ? details : undefined };
+}
+
+// Hinweis bei erreichtem limit wie pi („N matches limit reached. Use limit=2N for more, or
+// refine pattern“), aber ohne ein limit vorzuschlagen, das die Sandbox nicht liefert (M3).
+function limitNotice(what: string, effective: number, max: number, tail: string): string {
+	if (effective * 2 <= max) return `${effective} ${what} limit reached. Use limit=${effective * 2} for more${tail}`;
+	if (effective < max) return `${effective} ${what} limit reached. Use limit=${max} for more (maximum per call)${tail}`;
+	return `${max} ${what} limit reached (maximum per call). Refine pattern or narrow the path`;
+}
+
+// wie pi (find.js)
+function relativizeFindResultPath(resultPath: string, searchPath: string): string {
+	const trailing = resultPath.endsWith("/");
+	const rel = isAbsolute(resultPath) ? path.relative(searchPath, resultPath) : resultPath;
+	return trailing && !rel.endsWith("/") ? `${rel}/` : rel;
+}
+
+// find wie pis eingebautes Werkzeug mit fd (M2): Die Sandbox ruft fd mit denselben Argumenten
+// auf; Ausgabe, Hinweise und Fehler wie im fd-Zweig von pi.
+async function runFind(meta: Meta, params: any, signal?: AbortSignal, ctxCwd?: string) {
+	if (signal?.aborted) throw new Error("Operation aborted");
+	const searchPath = resolveToCwd(params.path || ".", ctxCwd || CWD);
+	const effectiveLimit = params.limit ?? 1000;
+	const cap = Math.min(effectiveLimit, MAX_FIND_LIMIT);
+	let r: any;
+	try {
+		r = await op(meta, { op: "glob", path: searchPath, glob: { pattern: params.pattern, limit: cap } }, signal);
+	} catch (e) {
+		if (signal?.aborted) throw new Error("Operation aborted");
+		throw e;
+	}
+	const relativized: string[] = [];
+	for (const raw of (r.paths ?? []) as string[]) {
+		const line = raw.replace(/\r$/, "").trim();
+		if (line) relativized.push(relativizeFindResultPath(line, searchPath));
+	}
+	if (relativized.length === 0) return { content: [{ type: "text", text: "No files found matching pattern" }], details: undefined };
+	const resultLimitReached = relativized.length >= cap;
+	const truncation = truncateHead(relativized.join("\n"), { maxLines: Number.MAX_SAFE_INTEGER });
+	let resultOutput = truncation.content;
+	const details: any = {};
+	const notices: string[] = [];
+	if (resultLimitReached) {
+		notices.push(limitNotice("results", cap, MAX_FIND_LIMIT, ", or refine pattern"));
+		details.resultLimitReached = cap;
+	}
+	if (truncation.truncated) {
+		notices.push(`${formatSize(DEFAULT_MAX_BYTES)} limit reached`);
+		details.truncation = truncation;
+	}
+	if (notices.length > 0) resultOutput += `\n\n[${notices.join(". ")}]`;
+	return { content: [{ type: "text", text: resultOutput }], details: Object.keys(details).length > 0 ? details : undefined };
+}
+
+// readLarge: Textbereich einer Datei über MaxFileBytes, wie pis read (Text-Zweig), aus einem
+// Ausschnitt statt aus der ganzen Datei (L4). pi läse die Datei ganz in den Speicher.
+async function readLarge(meta: Meta, absolutePath: string, params: any, signal?: AbortSignal) {
+	const { path: displayPath, offset, limit } = params;
+	const startLine = offset ? Math.max(0, offset - 1) : 0;
+	const startLineDisplay = startLine + 1;
+	const window = limit !== undefined ? Math.max(1, Math.min(limit, DEFAULT_MAX_LINES + 1)) : DEFAULT_MAX_LINES + 1;
+	const r = await op(
+		meta,
+		{ op: "read_lines", path: absolutePath, lines: { start: startLine, count: window, maxBytes: DEFAULT_MAX_BYTES + 1, select: limit !== undefined ? Math.max(0, limit) : 0 } },
+		signal,
+	);
+	const total: number = r.totalLines;
+	if (startLine >= total) throw new Error(`Offset ${offset} is beyond end of file (${total} lines total)`);
+	const lines: string[] = (r.lines ?? []).map((b: string) => Buffer.from(b, "base64").toString("utf-8"));
+	let selectedContent: string;
+	let userLimitedLines: number | undefined;
+	if (limit !== undefined) {
+		const endLine = Math.min(startLine + limit, total);
+		userLimitedLines = endLine - startLine;
+		selectedContent = lines.slice(0, userLimitedLines).join("\n");
+	} else {
+		selectedContent = lines.join("\n");
+	}
+	// Umfang der ganzen Auswahl, wie truncateHead ihn bei pi über der ganzen Datei zählt.
+	const truncation = { ...truncateHead(selectedContent), totalLines: r.selLines - (r.selLastEmpty ? 1 : 0), totalBytes: r.selBytes };
+	let outputText: string;
+	let details: any;
+	if (truncation.firstLineExceedsLimit) {
+		outputText = `[Line ${startLineDisplay} is ${formatSize(r.startLineBytes)}, exceeds ${formatSize(DEFAULT_MAX_BYTES)} limit. Use bash: sed -n '${startLineDisplay}p' ${displayPath} | head -c ${DEFAULT_MAX_BYTES}]`;
+		details = { truncation };
+	} else if (truncation.truncated) {
+		const endLineDisplay = startLineDisplay + truncation.outputLines - 1;
+		const nextOffset = endLineDisplay + 1;
+		outputText = truncation.content;
+		if (truncation.truncatedBy === "lines") outputText += `\n\n[Showing lines ${startLineDisplay}-${endLineDisplay} of ${total}. Use offset=${nextOffset} to continue.]`;
+		else outputText += `\n\n[Showing lines ${startLineDisplay}-${endLineDisplay} of ${total} (${formatSize(DEFAULT_MAX_BYTES)} limit). Use offset=${nextOffset} to continue.]`;
+		details = { truncation };
+	} else if (userLimitedLines !== undefined && startLine + userLimitedLines < total) {
+		const remaining = total - (startLine + userLimitedLines);
+		const nextOffset = startLine + userLimitedLines + 1;
+		outputText = `${truncation.content}\n\n[${remaining} more lines in file. Use offset=${nextOffset} to continue.]`;
+	} else {
+		outputText = truncation.content;
+	}
+	return { content: [{ type: "text", text: outputText }], details };
+}
+
+// --- Wächter für subagent ---
+
+// Erlaubt sind einzelne Subagenten (agent + task), lesende Verwaltungsaktionen und Workflows
+// über workflowScript, deren Skript in der Ausführungs-Sandbox läuft (remote-worker.mjs).
+const SUBAGENT_KEYS = new Set([
+	"agent", "task", "action", "topic", "context", "model", "async", "timeoutMs", "maxRuntimeMs", "toolTimeoutMs",
+	"maxOutput", "id", "index", "view", "lines", "message", "mode", "agentScope", "capabilities", "includeProgress", "artifacts",
+]);
+const SUBAGENT_ACTIONS = new Set(["list", "get", "models", "guide", "status", "interrupt", "steer", "resume", "children.list"]);
+// Eingebaute Agenten ohne externe Laufzeit (claude-code, codex-exec, cursor-agent starten fremde Programme).
+const SUBAGENT_AGENTS = new Set(["worker", "scout", "reviewer", "oracle", "researcher", "delegate", "evidence-auditor"]);
+// Mit workflowScript: nur das Skript, seine Argumente und Angaben zu Laufzeit und Modell. Gesperrt
+// bleiben workflowScriptPath (Datei im Container von pi), workflow (benannte Workflows), gate und
+// acceptance (Befehle im Container von pi), output (Pfade), cwd, worktree und Missionen.
+const WORKFLOW_KEYS = new Set([
+	"workflowScript", "args", "async", "timeoutMs", "maxRuntimeMs", "context", "model", "globalConcurrencyLimit",
+	"maxSubagentSpawnsPerRun", "includeProgress", "artifacts",
+]);
+// Parameter eines Laufs aus dem Skript (runs.run, runs.all): wie ein einzelner Subagent.
+const RUN_KEYS = new Set(["agent", "task", "model", "context", "timeoutMs", "maxRuntimeMs", "toolTimeoutMs", "maxOutput", "async", "phase", "label"]);
+
+// Die Kopie von pi-subagents im Abbild (third_party/pi-subagents) nimmt den Worker für workflowScript
+// aus dem Modul in PI_SUBAGENTS_WORKFLOW_WORKER (im pi-Abbild fest auf remote-worker.mjs gesetzt)
+// und meldet es als workflowWorkerModule. Nur wenn das remote-worker.mjs ist, läuft das Skript
+// nicht im pi-Prozess. Fail-closed: Fehlt der Export, lässt sich das Modul nicht laden oder meldet
+// es etwas anderes (etwa node:worker_threads ohne die Variable), bleibt workflowScript gesperrt.
+const SCRIPTED_WORKFLOW = "/opt/agw/pihome/npm/node_modules/pi-subagents/src/workflows/scripted-workflow.js";
+export const REMOTE_WORKER = "/opt/agw/ext/remote-worker.mjs";
+export async function workflowRuntimeRedirected(modulePath = SCRIPTED_WORKFLOW): Promise<boolean> {
+	try {
+		const m = await import(modulePath);
+		return m?.workflowWorkerModule === REMOTE_WORKER;
+	} catch {
+		return false;
+	}
+}
+
+// Meldungen englisch wie pi (L4); sie gehen als Werkzeugergebnis an das Modell.
+export function checkSubagentCall(input: any, opts: { workflowReady?: boolean } = {}): string | undefined {
+	if (!input || typeof input !== "object" || Array.isArray(input)) return "invalid parameters";
+	if (input.workflowScript !== undefined) {
+		if (!opts.workflowReady) return "workflowScript is unavailable here (the workflow runtime is not redirected to the execution sandbox)";
+		if (typeof input.workflowScript !== "string" || !input.workflowScript.trim()) return "workflowScript must be a non-empty string";
+		for (const k of Object.keys(input)) {
+			if (!WORKFLOW_KEYS.has(k)) return `parameter ${k} is blocked with workflowScript`;
+		}
+		if (input.context === "profile") return "context profile is blocked";
+		return undefined;
+	}
+	for (const k of Object.keys(input)) {
+		if (!SUBAGENT_KEYS.has(k)) return `parameter ${k} is blocked`;
+	}
+	if (input.action !== undefined && !SUBAGENT_ACTIONS.has(input.action)) return `action ${String(input.action)} is blocked`;
+	// L2: agent wird immer geprüft, sobald gesetzt, auch neben einer Aktion.
+	if (input.agent !== undefined && !SUBAGENT_AGENTS.has(input.agent)) return `agent ${String(input.agent)} is not allowed`;
+	if (input.context === "profile") return "context profile is blocked";
+	return undefined;
+}
+
+// checkWorkflowMessage prüft eine Nachricht des Workers (Code des Agenten in der
+// Ausführungs-Sandbox), bevor pi-subagents sie sieht. Anfragen an den Host: runs.run (auch
+// runs.all und runs.lanes) wie ein einzelner Subagent, status und steer; runs.host (Befehl im
+// Container von pi) ist gesperrt, ebenso alles Unbekannte.
+export function checkWorkflowMessage(msg: any): string | undefined {
+	if (!msg || typeof msg !== "object") return "invalid message";
+	if (msg.type !== "call") return undefined;
+	switch (msg.method) {
+		case "run": {
+			const p = msg.args?.params;
+			if (!p || typeof p !== "object" || Array.isArray(p)) return "runs.run requires a params object";
+			for (const k of Object.keys(p)) {
+				if (!RUN_KEYS.has(k)) return `runs.run parameter ${k} is blocked (execution sandbox, E9)`;
+			}
+			if (!SUBAGENT_AGENTS.has(p.agent)) return `runs.run agent ${String(p.agent)} is not allowed (execution sandbox, E9)`;
+			if (p.context === "profile") return "runs.run context profile is blocked";
+			return undefined;
+		}
+		case "status":
+		case "steer":
+		case "state.get":
+		case "state.set":
+			return undefined;
+		case "host":
+			return "runs.host is blocked (it would run a command in the pi container; execution sandbox, E9)";
+	}
+	return `runs.${String(msg.method)} is blocked (execution sandbox, E9)`;
+}
+
+// Freigaben für remote-worker.mjs: je freigegebenem Skript die toolCallId des Aufrufs. Der
+// Speicher liegt global, weil pi die Extension für Kind-Sitzungen im selben Prozess erneut lädt.
+type WorkflowRegistry = {
+	approved: Map<string, { toolCallId: string; sessionFile: string }[]>;
+	claim: (script: string) => { toolCallId: string; sessionFile: string } | undefined;
+	checkMessage: (msg: any) => string | undefined;
+};
+const REGISTRY = Symbol.for("agw.exec-bridge.workflow");
+function registry(): WorkflowRegistry {
+	const g = globalThis as any;
+	if (!g[REGISTRY]) {
+		const approved = new Map<string, { toolCallId: string; sessionFile: string }[]>();
+		g[REGISTRY] = {
+			approved,
+			claim: (script: string) => {
+				const l = approved.get(script);
+				const m = l?.shift();
+				if (l && l.length === 0) approved.delete(script);
+				return m;
+			},
+			checkMessage: checkWorkflowMessage,
+		} satisfies WorkflowRegistry;
+	}
+	return g[REGISTRY];
+}
+
+// watchdog_diff (Agent reviewer) ruft git im Container von pi auf (spawnSync). Dort gibt es kein
+// git und keine Shell (Sicherheitsentscheidung, Security-Review N2); gesperrt wird es trotzdem,
+// damit ein Abbild mit git daran nichts ändert.
+const BLOCKED_TOOLS: Record<string, string> = {
+	watchdog_diff: "watchdog_diff is blocked (it would run git in the pi container; execution sandbox, E9)",
+};
+
+// Kind-Sitzungen von pi-subagents liegen unter <Hauptsitzung>/<Lauf>/run-N/session.jsonl.
+function isChildSession(ctx: any): boolean {
+	try {
+		return /\/run-\d+\/session\.jsonl$/.test(ctx?.sessionManager?.getSessionFile?.() ?? "");
+	} catch {
+		return false;
+	}
+}
+
+export default function (pi: ExtensionAPI) {
+	// Eine Extension, die grep, find und ls registriert, schaltet sie in pi auch ein. Der
+	// Hauptagent der Varianten cli und beide hatte vor E9 nur read, bash, edit und write; damit der
+	// Handlungsraum gleich bleibt, blendet der Orchestrator die übrigen über AGW_BRIDGE_HIDE aus.
+	// Subagenten behalten die Werkzeuge ihrer Agentendefinition.
+	const hide = new Set((process.env.AGW_BRIDGE_HIDE ?? "").split(",").map((s) => s.trim()).filter(Boolean));
+	pi.on("session_start", async (_event: any, ctx: any) => {
+		if (hide.size === 0 || isChildSession(ctx)) return;
+		const active = pi.getActiveTools();
+		if (active.some((n) => hide.has(n))) pi.setActiveTools(active.filter((n) => !hide.has(n)));
+	});
+
+	// Erst beim ersten workflowScript geprüft (Kind-Sitzungen laden die Extension erneut und
+	// brauchen die Prüfung nicht), danach aus dem Zwischenspeicher.
+	let workflowReady: Promise<boolean> | undefined;
+	const reg = registry();
+	pi.on("tool_call", async (event: any, ctx: any) => {
+		if (BLOCKED_TOOLS[event.toolName]) return { block: true, reason: `Blocked (execution sandbox, E9): ${BLOCKED_TOOLS[event.toolName]}.` };
+		if (event.toolName !== "subagent") return;
+		const ready = event.input?.workflowScript !== undefined ? await (workflowReady ??= workflowRuntimeRedirected()) : false;
+		const reason = checkSubagentCall(event.input, { workflowReady: ready });
+		if (reason) {
+			return {
+				block: true,
+				reason: `Blocked (execution sandbox, E9): ${reason}. Allowed are single subagents with agent and task (worker, scout, reviewer, oracle, researcher, delegate, evidence-auditor), workflowScript with runs.run/runs.all over these agents, and the actions list, get, status, interrupt, steer and resume.`,
+			};
+		}
+		if (typeof event.input?.workflowScript === "string") {
+			const script = event.input.workflowScript;
+			const l = reg.approved.get(script) ?? [];
+			l.push({ toolCallId: String(event.toolCallId ?? ""), sessionFile: metaOf("subagent", "", ctx).sessionFile });
+			reg.approved.set(script, l);
+		}
+	});
+
+	const localRead = createReadTool(CWD);
+	const localWrite = createWriteTool(CWD);
+	const localEdit = createEditTool(CWD);
+	const localBash = createBashTool(CWD);
+	const localGrep = createGrepTool(CWD);
+	const localFind = createFindTool(CWD);
+	const localLs = createLsTool(CWD);
+
+	pi.registerTool({
+		...localRead,
+		async execute(id: string, params: any, signal: any, onUpdate: any, ctx: any) {
+			const meta = metaOf("read", id, ctx);
+			try {
+				return await createReadTool(CWD, { operations: readOps(meta, signal) }).execute(id, params, signal, onUpdate, ctx);
+			} catch (e) {
+				// Textdatei über 64 MiB: Ausschnitt statt ganzer Datei (L4).
+				if ((e as ToolError)?.code !== "EFBIG" || (e as Error).message.startsWith("File too large to read as image")) throw e;
+				if (signal?.aborted) throw new Error("Operation aborted");
+				return readLarge(meta, resolveToCwd(params.path, ctx?.cwd || CWD), params, signal);
+			}
+		},
+	} as any);
+	pi.registerTool({
+		...localWrite,
+		async execute(id: string, params: any, signal: any, onUpdate: any, ctx: any) {
+			return createWriteTool(CWD, { operations: writeOps(metaOf("write", id, ctx), signal) }).execute(id, params, signal, onUpdate, ctx);
+		},
+	} as any);
+	pi.registerTool({
+		...localEdit,
+		async execute(id: string, params: any, signal: any, onUpdate: any, ctx: any) {
+			return createEditTool(CWD, { operations: editOps(metaOf("edit", id, ctx), signal) }).execute(id, params, signal, onUpdate, ctx);
+		},
+	} as any);
+	// bash, find und grep bildet die Bridge selbst nach (keine Datei im Container von pi, fd statt
+	// eigener Glob-Suche); Schema und Beschreibung bleiben die von pi.
+	// bash mit dem zusätzlichen Parameter run_in_background (Schema wie pi, TypeBox 1 ist JSON-Schema).
+	const bashParams: any = localBash.parameters;
+	pi.registerTool({
+		...localBash,
+		parameters: {
+			...bashParams,
+			properties: {
+				...bashParams.properties,
+				run_in_background: { type: "boolean", description: "Start in background, return at once; you are notified when it ends. For servers, long builds, training." },
+			},
+		},
+		async execute(id: string, params: any, signal: any, onUpdate: any, ctx: any) {
+			return runBash(id, params, signal, onUpdate, ctx);
+		},
+	} as any);
+	pi.registerTool({
+		name: "bg_output",
+		label: "bg_output",
+		description: "Status and recent output of a background task (bash with run_in_background).",
+		parameters: {
+			type: "object",
+			required: ["id"],
+			properties: {
+				id: { type: "string", description: "Task id, e.g. bg-1" },
+				tail_lines: { type: "number", description: `Last lines to show (default ${DEFAULT_MAX_LINES})` },
+			},
+		},
+		async execute(id: string, params: any, signal: any, _onUpdate: any, ctx: any) {
+			return runBgOutput(id, params, signal, ctx);
+		},
+	} as any);
+	pi.registerTool({
+		name: "bg_stop",
+		label: "bg_stop",
+		description: "Stop a background task and all its processes.",
+		parameters: { type: "object", required: ["id"], properties: { id: { type: "string", description: "Task id, e.g. bg-1" } } },
+		async execute(id: string, params: any, signal: any, _onUpdate: any, ctx: any) {
+			return runBgStop(id, params, signal, ctx);
+		},
+	} as any);
+	pi.registerTool({
+		...localLs,
+		async execute(id: string, params: any, signal: any, onUpdate: any, ctx: any) {
+			return createLsTool(CWD, { operations: lsOps(metaOf("ls", id, ctx), signal) }).execute(id, params, signal, onUpdate, ctx);
+		},
+	} as any);
+	pi.registerTool({
+		...localFind,
+		async execute(id: string, params: any, signal: any, _onUpdate: any, ctx: any) {
+			return runFind(metaOf("find", id, ctx), params, signal, ctx?.cwd);
+		},
+	} as any);
+	pi.registerTool({
+		...localGrep,
+		async execute(id: string, params: any, signal: any, _onUpdate: any, ctx: any) {
+			return runGrep(metaOf("grep", id, ctx), params, signal, ctx?.cwd);
+		},
+	} as any);
+
+	// Befehle des Nutzers mit "!" (user_bash) gibt es im RPC-Betrieb nicht; falls doch, laufen auch
+	// sie in der Ausführungs-Sandbox.
+	pi.on("user_bash", async (_event: any, ctx: any) => ({
+		operations: {
+			exec: async (command: string, cwd: string, { onData, signal, timeout, env }: any) => {
+				checkTimeout(timeout);
+				const pe: Record<string, string> = {};
+				for (const [k, v] of Object.entries(env ?? {})) if (k.startsWith("PI_") && typeof v === "string") pe[k] = v;
+				const last = await bashCall(metaOf("bash", "user_bash", ctx), command, cwd, pe, timeout, signal, onData);
+				if (last.code === "timeout") throw new Error(`timeout:${timeout}`);
+				if (last.code === "aborted") throw new Error("aborted");
+				if (last.error) throw new Error(last.error);
+				return { exitCode: typeof last.exit === "number" ? last.exit : null };
+			},
+		},
+	}));
+}

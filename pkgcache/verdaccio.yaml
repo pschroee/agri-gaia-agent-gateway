@@ -1,0 +1,50 @@
+# Verdaccio als reiner Zwischenspeicher für npm (Dienst npm-cache in compose.yaml).
+# Die Sandboxen erreichen ihn nur, solange ihr Chat Internet hat (siehe README,
+# „Paket-Zwischenspeicher“). Er liest nur: Niemand kann sich anmelden oder
+# veröffentlichen, sonst könnte ein Agent Pakete für andere Chats unterschieben.
+storage: /verdaccio/storage/data
+plugins: /verdaccio/plugins
+
+# Keine Web-Oberfläche: weniger Angriffsfläche, nachsehen geht über die API.
+web:
+  enable: false
+
+auth:
+  htpasswd:
+    file: /verdaccio/storage/htpasswd
+    # -1 schaltet die Anmeldung neuer Nutzer ab (npm adduser schlägt fehl).
+    max_users: -1
+
+uplinks:
+  npmjs:
+    url: https://registry.npmjs.org/
+    timeout: 30s
+    maxage: 10m
+    cache: true
+
+# „agwpoc-niemand“ ist eine Gruppe, die es nicht gibt: Veröffentlichen und
+# Zurückziehen sind damit für alle gesperrt, auch für angemeldete Nutzer.
+packages:
+  '@*/*':
+    access: $all
+    publish: agwpoc-niemand
+    unpublish: agwpoc-niemand
+    proxy: npmjs
+  '**':
+    access: $all
+    publish: agwpoc-niemand
+    unpublish: agwpoc-niemand
+    proxy: npmjs
+
+server:
+  keepAliveTimeout: 60
+
+# npm install fragt nach Sicherheitsmeldungen; Verdaccio reicht das an npmjs weiter.
+middlewares:
+  audit:
+    enabled: true
+
+log:
+  type: stdout
+  format: pretty
+  level: http

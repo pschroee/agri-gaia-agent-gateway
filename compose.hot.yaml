@@ -1,0 +1,19 @@
+# Hot-Reload-Ergänzung zu compose.yaml, genutzt von ./dev.sh start.
+# Der Orchestrator läuft aus dem Quelltext (golang-Abbild), dev/go-hot.sh baut
+# ihn bei Änderungen neu und startet ihn neu. Die Web-UI mit Hot Reload liefert
+# der Vite-Entwicklungsserver auf dem Host (Port 18484), der /api und /login
+# an den Orchestrator weiterreicht.
+services:
+  orchestrator:
+    build: !reset null
+    image: golang:1.26-bookworm
+    working_dir: /src
+    entrypoint: ["/src/dev/go-hot.sh"]
+    volumes:
+      - ./:/src:ro
+      - gomod:/go/pkg/mod
+      - gocache:/root/.cache/go-build
+
+volumes:
+  gomod: { name: agwpoc_gomod }
+  gocache: { name: agwpoc_gocache }
