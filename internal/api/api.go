@@ -63,6 +63,15 @@ type ImageOpener interface {
 	OpenImage(ctx context.Context, chatID, msg, path string) (store.ChatImage, io.ReadCloser, error)
 }
 
+// base ist der Pfad der UI für den Browser ("" oder etwa "/agent", aus AGW_PUBLIC_URL). Ein Proxy
+// schneidet ihn vor dem Orchestrator ab; Weiterleitungen, Cookies und Anmeldelinks brauchen ihn.
+func (s *Server) base() string {
+	if s.OIDC != nil {
+		return s.OIDC.Base()
+	}
+	return s.Env.BasePath
+}
+
 // CookieName ist das Anmelde-Cookie der Web-UI.
 const CookieName = "agw_token"
 
@@ -100,7 +109,7 @@ func (s *Server) auth(next http.Handler) http.Handler {
 			u, ok := s.OIDC.SessionUser(r)
 			if !ok {
 				// login sagt der UI, wohin sie zur stillen Anmeldung (prompt=none) navigiert.
-				writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "nicht angemeldet", "login": oidc.LoginPath})
+				writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "nicht angemeldet", "login": s.base() + oidc.LoginPath})
 				return
 			}
 			r = r.WithContext(context.WithValue(r.Context(), userKey{}, u))
@@ -133,7 +142,7 @@ func (s *Server) tokenOK(r *http.Request) bool {
 // login setzt das Anmelde-Cookie und leitet auf die UI weiter.
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	if s.OIDC != nil {
-		http.Redirect(w, r, oidc.LoginPath, http.StatusSeeOther) // /login?token= gilt nur im token-Modus
+		http.Redirect(w, r, s.base()+oidc.LoginPath, http.StatusSeeOther) // /login?token= gilt nur im token-Modus
 		return
 	}
 	given := r.URL.Query().Get("token")
@@ -141,8 +150,8 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Anmeldung fehlgeschlagen: Token falsch", http.StatusUnauthorized)
 		return
 	}
-	http.SetCookie(w, &http.Cookie{Name: CookieName, Value: s.Token, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode, MaxAge: 30 * 24 * 3600})
-	http.Redirect(w, r, "/", http.StatusSeeOther)
+	http.SetCookie(w, &http.Cookie{Name: CookieName, Value: s.Token, Path: s.base() + "/", HttpOnly: true, SameSite: http.SameSiteStrictMode, MaxAge: 30 * 24 * 3600})
+	http.Redirect(w, r, s.base()+"/", http.StatusSeeOther)
 }
 
 func (s *Server) Handler() http.Handler {

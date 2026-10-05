@@ -25,9 +25,12 @@ import (
 	"math/big"
 	"net/http"
 	"net/url"
+	"path"
 	"strings"
 	"sync"
 	"time"
+
+	"agw/internal/config"
 )
 
 // Config sind die Einstellungen aus der Umgebung (AGW_OIDC_*, AGW_PUBLIC_URL).
@@ -35,9 +38,11 @@ type Config struct {
 	Issuer       string // https://keycloak.<basis>/realms/<realm>
 	ClientID     string
 	ClientSecret string
-	PublicURL    string // https://agent.<basis>; Redirect-URI = PublicURL + CallbackPath
-	HTTP         *http.Client
-	Now          func() time.Time // für Tests
+	// PublicURL: öffentliche Adresse der UI, auch mit Pfad (https://app.<basis>/agent), wenn ein Proxy
+	// den Pfad vorher abschneidet. Redirect-URI = PublicURL + CallbackPath.
+	PublicURL string
+	HTTP      *http.Client
+	Now       func() time.Time // für Tests
 }
 
 const (
@@ -79,6 +84,7 @@ type session struct {
 // Service hält Sitzungen, Discovery und Schlüssel des Issuers.
 type Service struct {
 	cfg      Config
+	base     string // Pfad von PublicURL ("" oder /agent)
 	redirect string
 	secure   bool
 
@@ -107,8 +113,12 @@ func New(cfg Config) (*Service, error) {
 		return nil, fmt.Errorf("AGW_OIDC_ISSUER ungültig: %q", cfg.Issuer)
 	}
 	pu, err := url.Parse(cfg.PublicURL)
-	if err != nil || (pu.Scheme != "https" && pu.Scheme != "http") || pu.Host == "" || (pu.Path != "" && pu.Path != "/") {
-		return nil, fmt.Errorf("AGW_PUBLIC_URL ungültig (https://host ohne Pfad): %q", cfg.PublicURL)
+	if err != nil || (pu.Scheme != "https" && pu.Scheme != "http") || pu.Host == "" || pu.RawQuery != "" || pu.Fragment != "" || pu.User != nil {
+		return nil, fmt.Errorf("AGW_PUBLIC_URL ungültig (https://host oder https://host/pfad): %q", cfg.PublicURL)
+	}
+	base, err := config.BasePath(cfg.PublicURL)
+	if err != nil {
+		return nil, err
 	}
 	if cfg.ClientID == "" || cfg.ClientSecret == "" {
 		return nil, errors.New("OIDC: Client-Kennung und Secret müssen gesetzt sein")
@@ -129,7 +139,7 @@ func New(cfg Config) (*Service, error) {
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
-	return &Service{cfg: cfg, redirect: cfg.PublicURL + CallbackPath, secure: !(pu.Scheme == "http" && local),
+	return &Service{cfg: cfg, base: base, redirect: cfg.PublicURL + CallbackPath, secure: !(pu.Scheme == "http" && local),
 		sessions: map[string]*session{}, keys: map[string]*rsa.PublicKey{}}, nil
 }
 
@@ -276,12 +286,12 @@ func (s *Service) login(w http.ResponseWriter, r *http.Request) {
 	d, err := s.discovery(r.Context())
 	if err != nil {
 		slog.Error("OIDC: Discovery gescheitert", "fehler", err)
-		page(w, http.StatusBadGateway, "Anmeldung nicht möglich: Keycloak ist nicht erreichbar.", "")
+		s.page(w, http.StatusBadGateway, "Anmeldung nicht möglich: Keycloak ist nicht erreichbar.", "")
 		return
 	}
-	st := loginState{State: randomString(16), Verifier: randomString(32), Nonce: randomString(16), Return: safeReturn(r.URL.Query().Get("return"))}
+	st := loginState{State: randomString(16), Verifier: randomString(32), Nonce: randomString(16), Return: s.safeReturn(r.URL.Query().Get("return"))}
 	raw, _ := json.Marshal(st)
-	http.SetCookie(w, &http.Cookie{Name: statePrefix + st.State, Value: base64.RawURLEncoding.EncodeToString(raw), Path: "/oidc/",
+	http.SetCookie(w, &http.Cookie{Name: statePrefix + st.State, Value: base64.RawURLEncoding.EncodeToString(raw), Path: s.base + "/oidc/",
 		MaxAge: int(stateTTL.Seconds()), HttpOnly: true, Secure: s.secure, SameSite: http.SameSiteLaxMode})
 	sum := sha256.Sum256([]byte(st.Verifier))
 	q := url.Values{
@@ -313,38 +323,38 @@ func (s *Service) callback(w http.ResponseWriter, r *http.Request) {
 	stateParam := q.Get("state")
 	st, ok := s.takeState(w, r, stateParam)
 	if e := q.Get("error"); e != "" {
-		ret := "/"
+		ret := s.base + "/"
 		if ok {
 			ret = st.Return
 		}
 		if silentErrors[e] {
-			page(w, http.StatusUnauthorized, "Nicht angemeldet. Bitte in der Plattform anmelden.", ret)
+			s.page(w, http.StatusUnauthorized, "Nicht angemeldet. Bitte in der Plattform anmelden.", ret)
 			return
 		}
 		slog.Warn("OIDC: Keycloak meldet einen Fehler", "fehler", e, "beschreibung", q.Get("error_description"))
-		page(w, http.StatusUnauthorized, "Anmeldung fehlgeschlagen: "+e, ret)
+		s.page(w, http.StatusUnauthorized, "Anmeldung fehlgeschlagen: "+e, ret)
 		return
 	}
 	if !ok {
-		page(w, http.StatusBadRequest, "Anmeldung abgelaufen oder ungültig. Bitte erneut anmelden.", "/")
+		s.page(w, http.StatusBadRequest, "Anmeldung abgelaufen oder ungültig. Bitte erneut anmelden.", s.base+"/")
 		return
 	}
 	code := q.Get("code")
 	if code == "" {
-		page(w, http.StatusBadRequest, "Anmeldung fehlgeschlagen: kein Code.", st.Return)
+		s.page(w, http.StatusBadRequest, "Anmeldung fehlgeschlagen: kein Code.", st.Return)
 		return
 	}
 	ctx := r.Context()
 	t, _, err := s.token(ctx, url.Values{"grant_type": {"authorization_code"}, "code": {code}, "redirect_uri": {s.redirect}, "code_verifier": {st.Verifier}})
 	if err != nil {
 		slog.Warn("OIDC: Code-Tausch gescheitert", "fehler", err)
-		page(w, http.StatusBadGateway, "Anmeldung fehlgeschlagen: Keycloak hat den Code nicht angenommen.", st.Return)
+		s.page(w, http.StatusBadGateway, "Anmeldung fehlgeschlagen: Keycloak hat den Code nicht angenommen.", st.Return)
 		return
 	}
 	user, access, err := s.checkLogin(ctx, t, st.Nonce)
 	if err != nil {
 		slog.Warn("OIDC: Token abgewiesen", "fehler", err)
-		page(w, http.StatusUnauthorized, "Anmeldung fehlgeschlagen: Token ungültig.", st.Return)
+		s.page(w, http.StatusUnauthorized, "Anmeldung fehlgeschlagen: Token ungültig.", st.Return)
 		return
 	}
 	id := randomString(32)
@@ -358,7 +368,7 @@ func (s *Service) callback(w http.ResponseWriter, r *http.Request) {
 	s.sessions[id] = &session{user: user, access: t.Access, refresh: t.Refresh, expiresAt: s.expiry(t, access), created: now}
 	s.mu.Unlock()
 	slog.Info("Nutzer angemeldet", "nutzer", user.Username, "sub", user.Sub)
-	http.SetCookie(w, &http.Cookie{Name: SessionCookie, Value: id, Path: "/", MaxAge: int(MaxSession.Seconds()),
+	http.SetCookie(w, &http.Cookie{Name: SessionCookie, Value: id, Path: s.base + "/", MaxAge: int(MaxSession.Seconds()),
 		HttpOnly: true, Secure: s.secure, SameSite: http.SameSiteLaxMode})
 	w.Header().Set("Cache-Control", "no-store")
 	http.Redirect(w, r, st.Return, http.StatusSeeOther)
@@ -373,7 +383,7 @@ func (s *Service) takeState(w http.ResponseWriter, r *http.Request, state string
 	if err != nil {
 		return loginState{}, false
 	}
-	http.SetCookie(w, &http.Cookie{Name: statePrefix + state, Value: "", Path: "/oidc/", MaxAge: -1, HttpOnly: true, Secure: s.secure, SameSite: http.SameSiteLaxMode})
+	http.SetCookie(w, &http.Cookie{Name: statePrefix + state, Value: "", Path: s.base + "/oidc/", MaxAge: -1, HttpOnly: true, Secure: s.secure, SameSite: http.SameSiteLaxMode})
 	raw, err := base64.RawURLEncoding.DecodeString(c.Value)
 	if err != nil {
 		return loginState{}, false
@@ -382,7 +392,7 @@ func (s *Service) takeState(w http.ResponseWriter, r *http.Request, state string
 	if json.Unmarshal(raw, &st) != nil || st.Verifier == "" || subtle.ConstantTimeCompare([]byte(st.State), []byte(state)) != 1 {
 		return loginState{}, false
 	}
-	st.Return = safeReturn(st.Return)
+	st.Return = s.safeReturn(st.Return)
 	return st, true
 }
 
@@ -390,27 +400,36 @@ func (s *Service) logout(w http.ResponseWriter, r *http.Request) {
 	if c, err := r.Cookie(SessionCookie); err == nil {
 		s.drop(c.Value)
 	}
-	http.SetCookie(w, &http.Cookie{Name: SessionCookie, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, Secure: s.secure, SameSite: http.SameSiteLaxMode})
+	http.SetCookie(w, &http.Cookie{Name: SessionCookie, Value: "", Path: s.base + "/", MaxAge: -1, HttpOnly: true, Secure: s.secure, SameSite: http.SameSiteLaxMode})
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// safeReturn lässt nur Pfade auf diesem Host zu (kein //host, kein Schema, nicht /oidc/…).
-func safeReturn(p string) string {
-	if p == "" || len(p) > 512 || !strings.HasPrefix(p, "/") || strings.HasPrefix(p, "//") || strings.HasPrefix(p, "/oidc/") ||
+// Base ist der Pfad von AGW_PUBLIC_URL ("" oder etwa "/agent").
+func (s *Service) Base() string { return s.base }
+
+// safeReturn lässt nur Pfade unter der eigenen Basis auf diesem Host zu (kein //host, kein Schema,
+// nicht …/oidc/…, kein Ausbruch per ..). Sonst geht es zur Startseite der UI.
+func (s *Service) safeReturn(p string) string {
+	home := s.base + "/"
+	if p == "" || len(p) > 512 || !strings.HasPrefix(p, home) || strings.HasPrefix(p, "//") || strings.HasPrefix(p, s.base+"/oidc/") ||
 		strings.ContainsAny(p, "\\\r\n\t") {
-		return "/"
+		return home
 	}
 	u, err := url.Parse(p)
 	if err != nil || u.Scheme != "" || u.Host != "" {
-		return "/"
+		return home
+	}
+	// Der Browser löst ./ und ../ (auch %2e%2e) auf; das Ziel muss danach noch unter der Basis liegen.
+	if c := path.Clean(u.Path); c != s.base && !strings.HasPrefix(c, home) || strings.HasPrefix(c, s.base+"/oidc/") || c == s.base+"/oidc" {
+		return home
 	}
 	return p
 }
 
 // page zeigt eine kleine Seite statt der UI (abgewiesene oder gescheiterte Anmeldung).
-func page(w http.ResponseWriter, code int, msg, ret string) {
-	link := LoginPath
-	if ret != "" && ret != "/" {
+func (s *Service) page(w http.ResponseWriter, code int, msg, ret string) {
+	link := s.base + LoginPath
+	if ret != "" && ret != s.base+"/" {
 		link += "?return=" + url.QueryEscape(ret)
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")

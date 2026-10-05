@@ -1035,6 +1035,22 @@ Anmeldung, und der Token-Austausch je Chat nimmt das Token **dieses Nutzers** st
   Origins `https://agent.<basis>`, Token-Austausch und die Audience-Mapper wie bisher.
 - **Grenze:** Discovery und Token-Endpunkt ruft der Orchestrator unter der Issuer-Adresse auf; sie muss also aus
   dem Container erreichbar sein (im Compose-Stack der Plattform gegebenenfalls über `extra_hosts`).
+- **Unter einem Pfadpräfix statt eigener Subdomain** (05.10.2026, weil die CA für eine neue Subdomain nicht
+  rechtzeitig ein Zertifikat ausstellt): `AGW_PUBLIC_URL=https://app.<basis>/agent`. Traefik leitet
+  `Host(app.<basis>) && PathPrefix(/agent)` an den Orchestrator und schneidet das Präfix mit der Middleware
+  `stripprefix` ab; der Orchestrator sieht also weiter `/api/…`, `/oidc/…` und `/`. Den Pfad leitet er aus
+  `AGW_PUBLIC_URL` ab (`config.BasePath`, `Env.BasePath`) und setzt ihn überall ein, wo er dem Browser eine
+  Adresse gibt: Weiterleitungen nach der Anmeldung und von `/login`, `login` in der 401-Antwort, Link der Seite
+  „Nicht angemeldet“, Pfad der Cookies (`/agent/` bzw. `/agent/oidc/`, damit die Plattform auf demselben Host
+  sie nicht sieht). `return` muss nach dem Auflösen von `..` unter `/agent/` liegen. Die UI baut alle Adressen
+  relativ (Vite `base: "./"`, `api/…` statt `/api/…`); dank Hash-Routing ist der Dokumentpfad immer der
+  Einstiegspunkt. Die Adresse ohne Schrägstrich (`/agent`) braucht am Proxy eine Weiterleitung nach `/agent/`
+  (`redirectregex`), weil sich relative Adressen sonst gegen `/` auflösen. Für die Einbettung genügt
+  `AGW_FRAME_ANCESTORS='self'` (gleiche Herkunft), `https://app.<basis>` geht ebenso. Keycloak-Client:
+  Redirect-URI `https://app.<basis>/agent/oidc/callback`, Web Origins `https://app.<basis>`.
+  **Folge der gemeinsamen Herkunft:** Skript im Plattform-Frontend (etwa nach einer XSS-Lücke dort) kann die API
+  des Agenten mit der Sitzung des Nutzers aufrufen; der Cookie-Pfad schützt davor nicht, er hält das Cookie nur
+  aus Anfragen an die Plattform heraus. Mit eigener Subdomain trennte die Same-Origin-Policy beide.
 
 ### Was beim Bau aufgefallen ist
 

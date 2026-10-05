@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"agw/internal/chat"
+	"agw/internal/config"
 	"agw/internal/store"
 )
 
@@ -90,14 +91,28 @@ func TestLoginSetsStrictCookie(t *testing.T) {
 	w := httptest.NewRecorder()
 	s.login(w, r)
 	c := w.Result().Cookies()
-	if w.Code != http.StatusSeeOther || len(c) != 1 || c[0].Value != testToken || !c[0].HttpOnly || c[0].SameSite != http.SameSiteStrictMode {
-		t.Fatalf("Login: %d %+v", w.Code, c)
+	if w.Code != http.StatusSeeOther || len(c) != 1 || c[0].Value != testToken || !c[0].HttpOnly || c[0].SameSite != http.SameSiteStrictMode ||
+		c[0].Path != "/" || w.Header().Get("Location") != "/" {
+		t.Fatalf("Login: %d %+v %v", w.Code, c, w.Header())
 	}
 	r = httptest.NewRequest("GET", "http://127.0.0.1:18480/login?token=falsch", nil)
 	w = httptest.NewRecorder()
 	s.login(w, r)
 	if w.Code != 401 || len(w.Result().Cookies()) != 0 {
 		t.Fatalf("falsches Token: %d", w.Code)
+	}
+}
+
+// Unter einem Pfadpräfix (AGW_PUBLIC_URL=https://app.<basis>/agent) führt /login?token= zur UI unter
+// /agent/, und das Cookie gilt nur dort.
+func TestLoginUnderBasePath(t *testing.T) {
+	s := &Server{Token: testToken, Env: config.Env{BasePath: "/agent"}}
+	r := httptest.NewRequest("GET", "http://app.example/login?token="+testToken, nil)
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, r)
+	c := w.Result().Cookies()
+	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/agent/" || len(c) != 1 || c[0].Path != "/agent/" {
+		t.Fatalf("Login unter /agent: %d %v %+v", w.Code, w.Header(), c)
 	}
 }
 

@@ -1,4 +1,4 @@
-import { claimSilentLogin, silentLoginUrl } from "@/lib/auth"
+import { claimSilentLogin, isLoginPath, silentLoginUrl } from "@/lib/auth"
 import type {
   Approval,
   Artifact,
@@ -23,7 +23,7 @@ export class ApiError extends Error {
   /** Maschinenlesbarer Grund, etwa „context_too_large“ beim Modellwechsel. */
   readonly code?: string
   readonly details?: unknown
-  /** Bei 401 im oidc-Modus: Pfad der Anmeldung (/oidc/login). */
+  /** Bei 401 im oidc-Modus: Pfad der Anmeldung (/oidc/login, unter einem Präfix etwa /agent/oidc/login). */
   readonly login?: string
   constructor(status: number, message: string, code?: string, details?: unknown, login?: string) {
     super(message)
@@ -37,7 +37,7 @@ export class ApiError extends Error {
 
 /** Anmeldung über die Plattform: einmal still anmelden (prompt=none), danach „nicht angemeldet“ zeigen. */
 function silentLogin(loginPath: string) {
-  if (!loginPath.startsWith("/oidc/")) return
+  if (!isLoginPath(loginPath)) return
   let store: Storage | undefined
   try {
     store = window.sessionStorage
@@ -85,64 +85,64 @@ const post = <T>(path: string, body?: unknown) =>
 const enc = encodeURIComponent
 
 export const api = {
-  me: () => request<Me>("/api/me"),
+  me: () => request<Me>("api/me"),
   /** Sitzung am Orchestrator beenden (nur oidc-Modus). */
   logout: async () => {
-    await fetch("/oidc/logout", { method: "POST" })
+    await fetch("oidc/logout", { method: "POST" })
   },
-  config: () => request<Config>("/api/config"),
-  models: () => request<Model[]>("/api/models"),
-  variants: () => request<Variant[]>("/api/variants"),
-  pool: () => request<Pool>("/api/pool"),
-  chats: () => request<Chat[]>("/api/chats"),
-  chat: (id: string) => request<ChatDetail>(`/api/chats/${enc(id)}`),
-  createChat: (req: CreateChatRequest) => post<Chat>("/api/chats", req),
+  config: () => request<Config>("api/config"),
+  models: () => request<Model[]>("api/models"),
+  variants: () => request<Variant[]>("api/variants"),
+  pool: () => request<Pool>("api/pool"),
+  chats: () => request<Chat[]>("api/chats"),
+  chat: (id: string) => request<ChatDetail>(`api/chats/${enc(id)}`),
+  createChat: (req: CreateChatRequest) => post<Chat>("api/chats", req),
   /** Modell wechseln; 409 „context_too_large“, wenn der Kontext nicht passt (dann compactFirst). */
   setModel: (id: string, model: string, compactFirst = false) =>
-    post<Chat>(`/api/chats/${enc(id)}/model`, { model, compact_first: compactFirst }),
-  setEffort: (id: string, level: string) => post<Chat>(`/api/chats/${enc(id)}/effort`, { level }),
+    post<Chat>(`api/chats/${enc(id)}/model`, { model, compact_first: compactFirst }),
+  setEffort: (id: string, level: string) => post<Chat>(`api/chats/${enc(id)}/effort`, { level }),
   /** Laufenden bash-Befehl stoppen; der Agent bekommt „Command stopped by the user“. */
-  stopTool: (id: string, toolCallId: string) => post<{ ok: boolean }>(`/api/chats/${enc(id)}/tools/${enc(toolCallId)}/stop`),
+  stopTool: (id: string, toolCallId: string) => post<{ ok: boolean }>(`api/chats/${enc(id)}/tools/${enc(toolCallId)}/stop`),
   /** Laufenden bash-Befehl in eine Hintergrundaufgabe umwandeln; er läuft weiter. */
   backgroundTool: (id: string, toolCallId: string) =>
-    post<BackgroundTask>(`/api/chats/${enc(id)}/tools/${enc(toolCallId)}/background`),
+    post<BackgroundTask>(`api/chats/${enc(id)}/tools/${enc(toolCallId)}/background`),
   sendMessage: (id: string, text: string, attachments?: string[]) =>
     post<SendResult>(
-      `/api/chats/${enc(id)}/messages`,
+      `api/chats/${enc(id)}/messages`,
       attachments && attachments.length > 0 ? { text, attachments } : { text },
     ),
   /** Eingereihte Nachricht entfernen; 409, wenn schon übergeben. */
   unqueue: (id: string, entry: string) =>
-    request<{ ok: boolean }>(`/api/chats/${enc(id)}/queue/${enc(entry)}`, { method: "DELETE" }),
+    request<{ ok: boolean }>(`api/chats/${enc(id)}/queue/${enc(entry)}`, { method: "DELETE" }),
   /** Zurückgehaltene Nachrichten jetzt übergeben; 409, wenn der Agent arbeitet. */
-  flushQueue: (id: string) => post<SendResult>(`/api/chats/${enc(id)}/queue/send`),
-  abort: (id: string) => post<Chat>(`/api/chats/${enc(id)}/abort`),
-  suspend: (id: string) => post<Chat>(`/api/chats/${enc(id)}/suspend`),
-  setInternet: (id: string, enabled: boolean) => post<Chat>(`/api/chats/${enc(id)}/internet`, { enabled }),
-  setMaxSubagents: (id: string, max: number) => post<Chat>(`/api/chats/${enc(id)}/subagents`, { max }),
-  llmCalls: (id: string) => request<LLMCall[]>(`/api/chats/${enc(id)}/llm_calls`),
-  toolExecutions: (id: string) => request<ToolExecutionsResponse>(`/api/chats/${enc(id)}/tool_executions`),
-  background: (id: string) => request<BackgroundTask[]>(`/api/chats/${enc(id)}/background`),
+  flushQueue: (id: string) => post<SendResult>(`api/chats/${enc(id)}/queue/send`),
+  abort: (id: string) => post<Chat>(`api/chats/${enc(id)}/abort`),
+  suspend: (id: string) => post<Chat>(`api/chats/${enc(id)}/suspend`),
+  setInternet: (id: string, enabled: boolean) => post<Chat>(`api/chats/${enc(id)}/internet`, { enabled }),
+  setMaxSubagents: (id: string, max: number) => post<Chat>(`api/chats/${enc(id)}/subagents`, { max }),
+  llmCalls: (id: string) => request<LLMCall[]>(`api/chats/${enc(id)}/llm_calls`),
+  toolExecutions: (id: string) => request<ToolExecutionsResponse>(`api/chats/${enc(id)}/tool_executions`),
+  background: (id: string) => request<BackgroundTask[]>(`api/chats/${enc(id)}/background`),
   /** Laufende Hintergrundaufgabe beenden; 409, wenn sie nicht (mehr) läuft. */
-  stopBackground: (id: string, bg: string) => post<BackgroundTask>(`/api/chats/${enc(id)}/background/${enc(bg)}/stop`),
-  setAutoCompact: (id: string, enabled: boolean) => post<Chat>(`/api/chats/${enc(id)}/autocompact`, { enabled }),
-  commands: (id: string) => request<Command[]>(`/api/chats/${enc(id)}/commands`),
+  stopBackground: (id: string, bg: string) => post<BackgroundTask>(`api/chats/${enc(id)}/background/${enc(bg)}/stop`),
+  setAutoCompact: (id: string, enabled: boolean) => post<Chat>(`api/chats/${enc(id)}/autocompact`, { enabled }),
+  commands: (id: string) => request<Command[]>(`api/chats/${enc(id)}/commands`),
   runCommand: (id: string, command: string) =>
-    post<SendResult>(`/api/chats/${enc(id)}/commands`, { command }),
+    post<SendResult>(`api/chats/${enc(id)}/commands`, { command }),
   uploadFiles: (id: string, files: File[]) => {
     const form = new FormData()
     for (const f of files) form.append("file", f, f.name)
-    return request<Artifact[]>(`/api/chats/${enc(id)}/files`, { method: "POST", body: form })
+    return request<Artifact[]>(`api/chats/${enc(id)}/files`, { method: "POST", body: form })
   },
-  pendingApprovals: () => request<Approval[]>("/api/approvals?state=pending"),
-  decide: (id: string, approve: boolean) => post<Approval>(`/api/approvals/${enc(id)}`, { approve }),
+  pendingApprovals: () => request<Approval[]>("api/approvals?state=pending"),
+  decide: (id: string, approve: boolean) => post<Approval>(`api/approvals/${enc(id)}`, { approve }),
 }
 
 export const urls = {
-  session: (id: string) => `/api/chats/${enc(id)}/session`,
-  events: (id: string) => `/api/chats/${enc(id)}/events`,
+  session: (id: string) => `api/chats/${enc(id)}/session`,
+  events: (id: string) => `api/chats/${enc(id)}/events`,
   artifact: (id: string, name: string, kind: ArtifactKind) =>
-    `/api/chats/${enc(id)}/artifacts/${enc(name)}?kind=${kind}`,
+    `api/chats/${enc(id)}/artifacts/${enc(name)}?kind=${kind}`,
   /** Anzeige-Bild einer Antwort (Pfad in der Sandbox, Kennung der Antwort), siehe lib/images. */
-  image: (id: string, path: string, msg: string) => `/api/chats/${enc(id)}/images?path=${enc(path)}&msg=${enc(msg)}`,
+  image: (id: string, path: string, msg: string) => `api/chats/${enc(id)}/images?path=${enc(path)}&msg=${enc(msg)}`,
 }

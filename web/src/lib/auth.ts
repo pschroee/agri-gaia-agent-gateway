@@ -1,6 +1,6 @@
 /**
  * Stille Anmeldung über die Plattform (AGW_AUTH_MODE=oidc): Meldet die API 401 mit `login`, navigiert
- * die UI einmal zu `/oidc/login?prompt=none`. Ein Merker in sessionStorage verhindert eine Schleife,
+ * die UI einmal zu `oidc/login?prompt=none` (unter einem Pfadpräfix etwa `/agent/oidc/login`). Ein Merker in sessionStorage verhindert eine Schleife,
  * wenn Keycloak niemanden kennt; dann zeigt die UI „nicht angemeldet“.
  */
 export const LOGIN_FLAG = "agw_oidc_tried"
@@ -8,6 +8,15 @@ export const LOGIN_FLAG = "agw_oidc_tried"
 export const LOGIN_RETRY_MS = 60_000
 
 type Store = Pick<Storage, "getItem" | "setItem" | "removeItem">
+
+/**
+ * Sagt, ob `login` aus einer 401-Antwort auf die eigene Anmeldung zeigt: relativ (`oidc/login`) oder als
+ * Pfad auf diesem Host, auch unter einem Präfix (`/oidc/login`, `/agent/oidc/login`). Fremde Adressen
+ * (`//host/…`, `https://…`) nicht.
+ */
+export function isLoginPath(login: string): boolean {
+  return /^(?:(?:\/[A-Za-z0-9_~-][A-Za-z0-9._~-]*)*\/)?oidc\/login$/.test(login)
+}
 
 /** Ziel der stillen Anmeldung; danach geht es zur aktuellen Seite zurück (Pfad, Abfrage, Anker). */
 export function silentLoginUrl(loginPath: string, loc: { pathname: string; search: string; hash: string }): string {

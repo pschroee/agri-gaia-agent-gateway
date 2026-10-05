@@ -177,10 +177,101 @@ func TestNewValidates(t *testing.T) {
 	for _, c := range []oidc.Config{
 		{Issuer: "", ClientID: "a", ClientSecret: "s", PublicURL: "https://x"},
 		{Issuer: "https://kc/realms/r", ClientID: "a", ClientSecret: "", PublicURL: "https://x"},
-		{Issuer: "https://kc/realms/r", ClientID: "a", ClientSecret: "s", PublicURL: "https://x/pfad"},
+		{Issuer: "https://kc/realms/r", ClientID: "a", ClientSecret: "s", PublicURL: "https://x/a/../b"},
+		{Issuer: "https://kc/realms/r", ClientID: "a", ClientSecret: "s", PublicURL: "https://x/agent?x=1"},
+		{Issuer: "https://kc/realms/r", ClientID: "a", ClientSecret: "s", PublicURL: "https://x/a%20b"},
+		{Issuer: "https://kc/realms/r", ClientID: "a", ClientSecret: "s", PublicURL: "https://x//agent"},
 	} {
 		if _, err := oidc.New(c); err == nil {
 			t.Errorf("angenommen: %+v", c)
 		}
+	}
+}
+
+// prefixed startet den Orchestrator-Ersatz hinter einem Proxy, der /agent abschneidet (wie Traefik mit
+// stripprefix). Außerhalb von /agent antwortet die „Plattform“.
+func prefixed(t *testing.T, is *oidctest.Issuer) (*oidc.Service, *httptest.Server) {
+	t.Helper()
+	inner := http.NewServeMux()
+	outer := http.NewServeMux()
+	srv := httptest.NewServer(outer)
+	t.Cleanup(srv.Close)
+	svc, err := oidc.New(oidc.Config{Issuer: is.IssuerURL(), ClientID: is.ClientID, ClientSecret: is.ClientSecret, PublicURL: srv.URL + "/agent/"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if svc.Base() != "/agent" {
+		t.Fatalf("Base: %q", svc.Base())
+	}
+	inner.Handle("/oidc/", svc.Handler())
+	inner.HandleFunc("/whoami", func(w http.ResponseWriter, r *http.Request) {
+		if u, ok := svc.SessionUser(r); ok {
+			io.WriteString(w, u.Sub)
+			return
+		}
+		w.WriteHeader(401)
+	})
+	inner.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "UI "+r.URL.RequestURI()) })
+	outer.Handle("/agent/", http.StripPrefix("/agent", inner))
+	outer.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "Plattform "+r.URL.RequestURI()) })
+	return svc, srv
+}
+
+func TestLoginFlowUnderPrefix(t *testing.T) {
+	is := oidctest.New(t)
+	_, srv := prefixed(t, is)
+	b := oidctest.NewBrowser(t)
+	is.Login(&anna)
+	code, body := get(t, b, srv.URL+"/agent/oidc/login?return="+url.QueryEscape("/agent/?embed=1#/chats/x"))
+	if code != 200 || body != "UI /?embed=1" {
+		t.Fatalf("nach der Anmeldung: %d %q", code, body)
+	}
+	if code, body := get(t, b, srv.URL+"/agent/whoami"); code != 200 || body != "sub-anna" {
+		t.Fatalf("whoami: %d %q", code, body)
+	}
+	// Das Sitzungs-Cookie gilt nur unter /agent/, die Plattform auf demselben Host sieht es nicht.
+	pu, _ := url.Parse(srv.URL + "/")
+	for _, c := range b.Jar.Cookies(pu) {
+		t.Errorf("Cookie außerhalb von /agent sichtbar: %s", c.Name)
+	}
+	// Ohne return geht es zur Startseite der UI unter /agent/.
+	b2 := oidctest.NewBrowser(t)
+	if code, body := get(t, b2, srv.URL+"/agent/oidc/login"); code != 200 || body != "UI /" {
+		t.Fatalf("ohne return: %d %q", code, body)
+	}
+}
+
+func TestReturnPathUnderPrefix(t *testing.T) {
+	is := oidctest.New(t)
+	_, srv := prefixed(t, is)
+	is.Login(&anna)
+	for ret, want := range map[string]string{
+		"/agent/":                     "UI /",
+		"/agent/?embed=1":             "UI /?embed=1",
+		"/":                           "UI /", // Plattform-Startseite: nicht unser Pfad
+		"/agentx/":                    "UI /",
+		"/agent/../evil":              "UI /",
+		"/agent/%2e%2e/evil":          "UI /",
+		"/agent/oidc/login":           "UI /",
+		"//evil.example/agent/":       "UI /",
+		"https://evil.example/":       "UI /",
+		"https://evil.example/agent/": "UI /",
+		"/agent/\\evil":               "UI /",
+	} {
+		b := oidctest.NewBrowser(t)
+		code, body := get(t, b, srv.URL+"/agent/oidc/login?return="+url.QueryEscape(ret))
+		if code != 200 || body != want {
+			t.Errorf("return %q: %d %q, erwartet %q", ret, code, body, want)
+		}
+	}
+}
+
+func TestPromptNoneUnderPrefixLinksToPrefixedLogin(t *testing.T) {
+	is := oidctest.New(t)
+	_, srv := prefixed(t, is)
+	b := oidctest.NewBrowser(t)
+	code, body := get(t, b, srv.URL+"/agent/oidc/login?prompt=none&return="+url.QueryEscape("/agent/?embed=1"))
+	if code != 401 || !strings.Contains(body, `href="/agent/oidc/login?return=%2Fagent%2F%3Fembed%3D1" target="_blank"`) {
+		t.Fatalf("prompt=none unter /agent: %d %s", code, body)
 	}
 }

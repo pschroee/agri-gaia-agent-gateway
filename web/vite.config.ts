@@ -4,6 +4,9 @@ import react from "@vitejs/plugin-react"
 import { defineConfig } from "vite"
 
 export default defineConfig({
+  // Relative Adressen: Die UI läuft unter / (lokal) und hinter einem Proxy unter einem Pfadpräfix
+  // (https://app.<basis>/agent/). Dank Hash-Routing ist der Dokumentpfad immer der Einstiegspunkt.
+  base: "./",
   plugins: [react(), tailwindcss()],
   resolve: {
     alias: {
@@ -16,6 +19,7 @@ export default defineConfig({
     proxy: {
       "/api": { target: "http://127.0.0.1:18480", changeOrigin: true },
       "/login": { target: "http://127.0.0.1:18480", changeOrigin: true },
+      "/oidc": { target: "http://127.0.0.1:18480", changeOrigin: true },
     },
   },
   build: {

@@ -47,7 +47,7 @@ describe("imageSource", () => {
     expect(imageSource("plot.png", ctx)).toEqual({
       kind: "sandbox",
       path: "/workspace/plot.png",
-      url: "/api/chats/c%201/images?path=%2Fworkspace%2Fplot.png&msg=resp-1",
+      url: "api/chats/c%201/images?path=%2Fworkspace%2Fplot.png&msg=resp-1",
     })
   })
   it("wartet mit lokalen Bildern, bis die Antwort fertig ist (Kennung fehlt)", () => {
