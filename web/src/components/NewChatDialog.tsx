@@ -22,6 +22,7 @@ import { Textarea } from "@/components/ui/textarea"
 import type { Meta } from "@/hooks/useMeta"
 import { DEFAULT_DELEGATION_HOURS, DELEGATION_TEMPLATES, delegationFrom } from "@/lib/delegationTemplates"
 import { formatPrice, modelPriceSource, sourceLabel } from "@/lib/format"
+import { browserLanguage } from "@/lib/language"
 import { formatPeakWindows } from "@/lib/tariff"
 import { cn } from "@/lib/utils"
 
@@ -78,6 +79,7 @@ export function NewChatDialog({ meta, onCreated, compact }: Props) {
         auto_compact: autoCompactChoice ?? meta.config?.auto_compact_default,
         max_subagents: maxSubChoice ?? meta.config?.max_subagents_default,
         delegation: delegationFrom(template, hours),
+        language: browserLanguage(),
       })
       setOpen(false)
       setTitle("")

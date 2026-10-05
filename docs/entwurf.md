@@ -997,6 +997,18 @@ der Agent Datensätze, Modelle und Trainings; in der CLI-Variante erkundet er di
 eine `train_config` und ruft `create-training` auf, die Bestätigung wird abgelehnt, und auf der Plattform
 entsteht keine Aufgabe.
 
+### Sprache des Nutzers
+
+Seit dem 05.10.2026 antwortet der Agent in der Sprache der letzten Nachricht des Nutzers, nicht mehr fest auf
+Deutsch; Systemhinweis und Skills sind deutsch, und das Modell folgte ihnen. Die Regel steht im Systemhinweis
+(`internal/worker`, alle Varianten). Lässt eine Nachricht keine Sprache erkennen, gilt die bevorzugte Sprache
+des Browsers: Die Oberflächen geben `navigator.language` beim Anlegen mit (`language`, Spalte `chats.language`),
+und der Orchestrator stellt sie dem **ersten Auftrag** als Meldung in der üblichen Hülle voran
+(`internal/chat/language.go`, Herkunft `mixed`, Quelle `type: "language"`). In den Systemhinweis gehört sie
+nicht, weil Plätze vorab starten, bevor der Chat feststeht, und der Präfix-Cache sonst je Chat verfiele. Beim
+Fortsetzen steht die Meldung noch in der Sitzung von pi. Die Angabe ist geprüft (BCP 47, höchstens 35 Zeichen)
+und kann die Zeile der Meldung nicht verlassen. Format in [`API.md`](../API.md), *Sprache des Nutzers*.
+
 ### Anmeldung über die Plattform (OIDC)
 
 Seit dem 05.10.2026 kann der Orchestrator als Dienst der Plattform laufen (`https://agent.<basis>`) und als

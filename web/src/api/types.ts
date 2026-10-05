@@ -117,6 +117,8 @@ export type Chat = {
   delegation?: Delegation
   /** sub des Besitzers (Anmeldung über die Plattform); fehlt im token-Modus. */
   owner?: string
+  /** Bevorzugte Sprache des Nutzers laut Browser (BCP 47); fehlt ohne Angabe. */
+  language?: string
   /** Bisher gestartete Subagenten-Läufe. */
   subagents?: number
   /** Am LLM-Proxy erfasste Modellaufrufe. */
@@ -154,7 +156,7 @@ export type MessageOrigin = "user" | "system" | "mixed"
 /** Teil eines Auftrags an pi, in Reihenfolge (Review 3, H1). */
 export type MessageSource = {
   kind: "user" | "system"
-  /** bei system: background (Ende einer Hintergrundaufgabe) oder sandbox (mit der Sandbox beendet) */
+  /** bei system: background (Ende einer Hintergrundaufgabe), sandbox (mit der Sandbox beendet) oder language (bevorzugte Sprache laut Browser) */
   type?: string
   refs?: string[]
   queue_id?: string
@@ -488,6 +490,8 @@ export type CreateChatRequest = {
   max_subagents?: number
   /** Übertragene Rechte (fehlt: ohne Delegation). */
   delegation?: Delegation
+  /** Bevorzugte Sprache laut Browser (BCP 47, navigator.language); der Agent nutzt sie nur, wenn die Nachricht keine Sprache erkennen lässt. */
+  language?: string
 }
 
 /** Angemeldeter Nutzer (GET /api/me); im token-Modus nur mode. */

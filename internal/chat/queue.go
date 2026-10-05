@@ -256,9 +256,12 @@ var errAbortedBeforePrompt = errors.New("vor der Übergabe abgebrochen")
 // gen: Stand der Abbrüche beim Entschluss zu senden. Der Aufrufer hat sending gesetzt; deliver nimmt
 // es zurück.
 func (m *Manager) deliver(ctx context.Context, chatID string, entries []store.QueueEntry, claimed []string, trigger string, gen uint64) (SendResult, error) {
-	// Einmaliger Hinweis auf Hintergrundaufgaben, die mit einer früheren Sandbox endeten.
+	// Einmalige Hinweise: bevorzugte Sprache (nur beim ersten Durchgang des Chats; scheitert er, wird
+	// er zurückgenommen und der nächste Auftrag ist wieder der erste) und Hintergrundaufgaben, die mit
+	// einer früheren Sandbox endeten.
+	lang := m.firstTurnLanguage(ctx, chatID)
 	notice, noticed := m.backgroundNotice(ctx, chatID)
-	c := composeMessage(entries, notice)
+	c := composeMessage(entries, lang, notice)
 	tm := &turnMeta{trigger: trigger, origin: c.Origin, sources: c.Sources, text: c.Text, claimed: claimed}
 	var err error
 	if tm.id, err = m.st.CreateTurn(ctx, chatID, trigger, c.Origin, c.Sources, claimed); err != nil {

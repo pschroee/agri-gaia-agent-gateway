@@ -211,3 +211,19 @@ func TestSystemNoteMmdc(t *testing.T) {
 		}
 	}
 }
+
+// Die Sprachregel: Sprache der letzten Nutzernachricht, Browser-Angabe nur als Rückfall; kein
+// festes Deutsch mehr. Sie steht in allen Varianten.
+func TestSystemNoteLanguageRule(t *testing.T) {
+	for _, v := range []string{"cli", "mcp", "api", "beide"} {
+		n := SystemNoteFor(v, 2)
+		for _, want := range []string{"Sprache der letzten Nachricht des Nutzers", "Wechselt der Nutzer die Sprache", "bevorzugte Sprache aus einer Meldung des Orchestrators", chat.SystemHeader, "Code und Bezeichner bleiben"} {
+			if !strings.Contains(n, want) {
+				t.Errorf("%s: Systemhinweis ohne %q", v, want)
+			}
+		}
+		if strings.Contains(n, "Antworte auf Deutsch") {
+			t.Errorf("%s: Systemhinweis verlangt noch Deutsch", v)
+		}
+	}
+}

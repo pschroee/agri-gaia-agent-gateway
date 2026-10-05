@@ -43,7 +43,7 @@ var newMarker = func() string {
 // systemNote ist eine Meldung des Orchestrators: Summary bildet er selbst (eine Zeile), Body stammt
 // ganz oder teilweise aus der Sandbox und kommt in den Zaun.
 type systemNote struct {
-	Type    string // store.NoteBackground, store.NoteSandbox
+	Type    string // store.NoteBackground, store.NoteSandbox, store.NoteLanguage
 	Refs    []string
 	Summary string
 	Body    string
@@ -78,10 +78,10 @@ type composed struct {
 // safeSession: Kennung eines Subagenten in der Kopfzeile nur, wenn sie harmlos aussieht.
 var safeSession = regexp.MustCompile(`^[A-Za-z0-9#._:-]{1,64}$`)
 
-// composeMessage fasst Einträge (und den einmaligen Hinweis auf beendete Aufgaben) zu einem Auftrag
-// zusammen: erst der Hinweis, dann die Einträge in Reihenfolge, Meldungen in ihrer Hülle, Texte des
+// composeMessage fasst Einträge (und einmalige Hinweise des Orchestrators: Sprache des Nutzers, beendete
+// Aufgaben; nil wird übergangen) zu einem Auftrag zusammen: erst die Hinweise, dann die Einträge in Reihenfolge, Meldungen in ihrer Hülle, Texte des
 // Nutzers als Absätze, alle Anhänge in einem Block am Ende.
-func composeMessage(entries []store.QueueEntry, notice *systemNote) composed {
+func composeMessage(entries []store.QueueEntry, notices ...*systemNote) composed {
 	type part struct {
 		note *systemNote
 		src  store.Source
@@ -91,7 +91,10 @@ func composeMessage(entries []store.QueueEntry, notice *systemNote) composed {
 	var files []string
 	seen := map[string]bool{}
 	var all strings.Builder // alles, worin eine Marke nicht vorkommen darf
-	if notice != nil {
+	for _, notice := range notices {
+		if notice == nil {
+			continue
+		}
 		n := *notice
 		parts = append(parts, part{note: &n, src: store.Source{Kind: store.QueueSystem, Type: n.Type, Refs: n.Refs}})
 		all.WriteString(n.Text())

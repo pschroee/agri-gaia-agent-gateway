@@ -85,6 +85,20 @@ describe("splitMessage (Herkunft laut Server)", () => {
   })
 })
 
+describe("Meldung zur Sprache (erster Auftrag)", () => {
+  it("einzeilig ohne Zaun: Meldung und Nutzertext getrennt", () => {
+    const summary = "Bevorzugte Sprache des Nutzers laut Browser: en-US. Antworte in der Sprache, in der der Nutzer schreibt; diese Angabe gilt nur, wenn das nicht erkennbar ist."
+    const text = `${SYSTEM_HEADER}\n${summary}\n\nok`
+    const parts = splitMessage(text, { origin: "mixed", sources: [{ kind: "system", type: "language", refs: ["en-US"] }, { kind: "user" }] })
+    expect(parts).toHaveLength(2)
+    const [n, u] = parts
+    if (n.kind !== "system") throw new Error("keine Meldung")
+    expect(n.note.summary).toBe(summary)
+    expect(n.note.label).toBe("Hinweis an den Agenten: bevorzugte Sprache laut Browser en-US")
+    expect(u).toEqual({ kind: "user", text: "ok" })
+  })
+})
+
 describe("Kurzzeilen", () => {
   it("noteLabel", () => {
     expect(noteLabel("background", "Hintergrundaufgabe bg-4 (gestartet von Subagent r1) vom Nutzer gestoppt, Laufzeit 0:03", ["bg-4"])).toBe(
@@ -94,6 +108,9 @@ describe("Kurzzeilen", () => {
       "Hintergrundaufgabe bg-3 beendet · Exit 1 · 1:02:03",
     )
     expect(noteLabel("sandbox", "…", ["bg-1", "bg-2"])).toBe("Hinweis an den Agenten: bg-1, bg-2 mit der vorigen Sandbox beendet")
+    expect(noteLabel("language", "Bevorzugte Sprache des Nutzers laut Browser: en-US. …", ["en-US"])).toBe(
+      "Hinweis an den Agenten: bevorzugte Sprache laut Browser en-US",
+    )
   })
 
   it("systemEntryLabel nur für Systemeinträge", () => {

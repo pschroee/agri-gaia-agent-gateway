@@ -1,5 +1,5 @@
 // Meldungen des Orchestrators in Nutzernachrichten (Ende einer Hintergrundaufgabe, Hinweis auf mit der
-// Sandbox beendete Aufgaben). Der Orchestrator gibt sie pi als Nutzernachricht, allein (Weckruf) oder
+// Sandbox beendete Aufgaben, bevorzugte Sprache des Nutzers beim ersten Auftrag). Der Orchestrator gibt sie pi als Nutzernachricht, allein (Weckruf) oder
 // zusammen mit eingereihten Nachrichten des Nutzers (internal/chat/origin.go). Jede Meldung steht in
 // einer Hülle: fester Kopf SYSTEM_HEADER, Kopfzeile des Orchestrators, darunter die Daten aus der Sandbox
 // in einem Zaun mit zufälliger Marke.
@@ -36,6 +36,7 @@ export type MessagePart = { kind: "user"; text: string } | { kind: "system"; tex
 /** Kurzzeile: „Hintergrundaufgabe bg-3 beendet · Exit 0 · 0:08“ bzw. der Hinweis auf beendete Aufgaben. */
 export function noteLabel(type: string | undefined, summary: string, refs: string[] = []): string {
   if (type === "sandbox") return `Hinweis an den Agenten: ${refs.join(", ")} mit der vorigen Sandbox beendet`
+  if (type === "language") return `Hinweis an den Agenten: bevorzugte Sprache laut Browser ${refs[0] ?? ""}`.trim()
   let s = summary.trim()
   let runtime = ""
   const rm = /, Laufzeit (\d+:\d{2}(?::\d{2})?)$/.exec(s)

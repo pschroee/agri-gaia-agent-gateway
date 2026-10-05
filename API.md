@@ -113,6 +113,7 @@ type Chat = {
   background_running: number; // laufende Hintergrundaufgaben
   delegation?: object;        // übertragene Rechte, Aufbau in docs/plan-delegation-rest-plattform.md (fehlt: ohne Delegation)
   owner?: string;             // sub des Besitzers (oidc-Modus); fehlt im token-Modus
+  language?: string;          // bevorzugte Sprache laut Browser (BCP 47, etwa "en-US"); fehlt ohne Angabe
 };
 
 // Eingereihte Nachricht (Warteschlange, siehe unten). attachments: Namen hochgeladener Eingaben.
@@ -281,7 +282,7 @@ type SocketCall = { id: number; chat_id?: string; slot_id: string; via: "cli" | 
 | `GET /api/config` | `{internet_default: boolean, approval_timeout_s: number, artifact_max_mb: number, idle_timeout_s: number, auto_compact_default: boolean, compact_reserve_tokens: number, compact_keep_recent_tokens: number, max_subagents_default: number, max_subagents_limit: number, workspace_max_mb: number /* 0 = Arbeitsbereich wird nicht gesichert */, bg_wakes_per_hour: number /* 0 = nie wecken */, bg_keepalive_s: number, auto_turns_max: number /* Durchgänge ohne Nutzer in Folge, 0 = keiner */, executed_tools: string[] /* Werkzeuge, deren Ausführung am Socket belegt wird, sortiert */}` | Voreinstellungen für die UI |
 | `GET /api/pool` | `Pool` | Pool-Status (UI fragt jede Sekunde ab) |
 | `GET /api/chats` | `Chat[]` | neueste zuerst |
-| `POST /api/chats` `{model?, variant?, title?, message?, internet?, auto_compact?, max_subagents?, delegation?}` | `Chat` (201) | holt einen Platz aus dem Pool; mit `message` wird sie sofort gesendet. 503, wenn kein Platz frei ist |
+| `POST /api/chats` `{model?, variant?, title?, message?, internet?, auto_compact?, max_subagents?, delegation?, language?}` | `Chat` (201) | holt einen Platz aus dem Pool; mit `message` wird sie sofort gesendet. `language`: bevorzugte Sprache laut Browser (BCP 47, nur Buchstaben, Ziffern, Bindestrich, höchstens 35 Zeichen, sonst 400), siehe *Sprache des Nutzers*. 503, wenn kein Platz frei ist |
 | `GET /api/chats/{id}` | `{chat, messages: StoredMessage[], artifacts: Artifact[], approvals: Approval[], socket_calls: SocketCall[], subagent_entries: SubagentEntry[], queue: QueueEntry[], background: BackgroundTask[]}` | vollständiger Chat |
 | `GET /api/chats/{id}/background` | `BackgroundTask[]` | Hintergrundaufgaben des Chats nach `seq`; laufende mit dem aktuellen Stand des Platzes |
 | `GET /api/chats/{id}/web_requests` | `WebRequest[]` | Anfragen von `web_search`/`web_extract` über den Web-Proxy, auch abgewiesene (`denied`); bei HTTPS nur Ziel und Bytes |
@@ -428,6 +429,22 @@ Antworten und Werkzeugergebnisse des Durchgangs `turn_id` und `trigger`. So läs
 trennen, was der Nutzer beauftragt hat und was der Agent von sich aus tat. Meldungen stehen im Auftrag vor dem
 Text des Nutzers, jede in ihrer Hülle (siehe *Hintergrundaufgaben*); die UI zerlegt nur entlang der Marken aus
 `sources`, nie nach dem Aussehen des Textes.
+
+## Sprache des Nutzers
+
+Der Agent antwortet in der Sprache der letzten Nachricht des Nutzers (Regel im Systemhinweis). Lässt sie keine
+Sprache erkennen („ok“, ein Dateiname, nur Code), gilt die bevorzugte Sprache, die die Oberfläche beim Anlegen
+als `language` mitgibt (`navigator.language`). Der Orchestrator stellt sie **nur dem ersten Auftrag** des Chats
+als Meldung voran, einzeilig ohne Zaun; der Durchgang ist damit `origin: "mixed"`, die Quelle
+`{kind: "system", type: "language", refs: ["en-US"]}`:
+
+```
+[Meldung des Orchestrators, nicht vom Nutzer]
+Bevorzugte Sprache des Nutzers laut Browser: en-US. Antworte in der Sprache, in der der Nutzer schreibt; diese Angabe gilt nur, wenn das nicht erkennbar ist.
+```
+
+Scheitert die Übergabe, wird der Durchgang zurückgenommen und die Meldung geht mit dem nächsten Versuch. Beim
+Fortsetzen bleibt die Sitzung von pi und damit die Meldung im Kontext; sie wird nicht wiederholt.
 
 ## Grenze für Subagenten
 
