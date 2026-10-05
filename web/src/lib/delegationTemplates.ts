@@ -1,9 +1,9 @@
 import type { Delegation, DelegationRule } from "@/api/types"
 
-/** Vorlage für die übertragenen Rechte eines neuen Chats (internal/delegation). */
+/** Template for the delegated rights of a new chat (internal/delegation). */
 export type DelegationTemplate = { id: string; label: string; description: string; rules?: DelegationRule[] }
 
-/** Ressourcen, die „Nur lesen“ umfasst (alle außer api). */
+/** Resources covered by "Read only" (all except api). */
 export const READ_RESOURCES = ["dataset", "model", "training", "task", "train_template", "edge_device", "container_image"]
 
 const readAll: DelegationRule[] = READ_RESOURCES.map((resource) => ({ action: "read", resource, ids: ["*"] }))
@@ -11,21 +11,21 @@ const readAll: DelegationRule[] = READ_RESOURCES.map((resource) => ({ action: "r
 export const DELEGATION_TEMPLATES: DelegationTemplate[] = [
   {
     id: "none",
-    label: "Ohne Delegation",
-    description: "Lesen geht ohne Rückfrage, Schreiben braucht eine Bestätigung.",
+    label: "No delegation",
+    description: "Reading needs no confirmation, writing needs an approval.",
   },
   {
     id: "read",
-    label: "Nur lesen",
-    description: "Der Agent darf Datensätze, Modelle, Trainings, Aufgaben, Vorlagen, Edge-Geräte und Abbilder lesen, sonst nichts.",
+    label: "Read only",
+    description: "The agent may read datasets, models, trainings, tasks, templates, edge devices and images, nothing else.",
     rules: readAll,
   },
   {
     id: "train-own",
-    label: "Training auf eigenem Datensatz",
+    label: "Training on own dataset",
     description:
-      "Alles lesen wie bei „Nur lesen“; Datensätze anlegen und nur selbst angelegte ändern oder löschen; Training anlegen und starten. " +
-      "Trainingscontainer entstehen asynchron und lassen sich keinem Chat zuordnen; Start und Stopp gelten deshalb für alle Container.",
+      "Read everything as with \"Read only\"; create datasets and change or delete only those it created; create and start trainings. " +
+      "Training containers are created asynchronously and cannot be attributed to a chat; start and stop therefore apply to all containers.",
     rules: [
       ...readAll,
       { action: "create", resource: "dataset" },
@@ -39,7 +39,7 @@ export const DELEGATION_TEMPLATES: DelegationTemplate[] = [
 
 export const DEFAULT_DELEGATION_HOURS = 8
 
-/** Delegation aus einer Vorlage, gültig `hours` Stunden ab `now`; undefined bei „Ohne Delegation“. */
+/** Delegation from a template, valid for `hours` hours from `now`; undefined for "No delegation". */
 export function delegationFrom(t: DelegationTemplate | undefined, hours: number, now: Date = new Date()): Delegation | undefined {
   if (!t?.rules) return undefined
   return {
@@ -49,7 +49,18 @@ export function delegationFrom(t: DelegationTemplate | undefined, hours: number,
   }
 }
 
-/** Übergriffe im Socket-Protokoll (Ergebnis „übergriff abgewiesen: …“ bzw. „… übergriff, nur protokolliert“). */
+// Matches violations in socket log results ("violation blocked: …" or "… · violation, logged only: …").
+const VIOLATION = /violation/i
+// German form used before the translation ("übergriff abgewiesen: …"); stored logs still carry it.
+const LEGACY_VIOLATION = /übergriff/i
+
+/** Whether a socket log result records a violation (current or legacy German form). */
+export function isViolation(result: string | undefined): boolean {
+  const r = result ?? ""
+  return VIOLATION.test(r) || LEGACY_VIOLATION.test(r)
+}
+
+/** Violations in the socket log. */
 export function countViolations(calls: { result?: string }[]): number {
-  return calls.filter((c) => /übergriff/i.test(c.result ?? "")).length
+  return calls.filter((c) => isViolation(c.result)).length
 }

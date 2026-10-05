@@ -1,23 +1,23 @@
-// Wird nur per dynamischem Import geladen (lib/mermaid.ts): mermaid und DOMPurify landen so in einem eigenen
-// Chunk und nicht im Hauptbundle.
+// Loaded only via dynamic import (lib/mermaid.ts): this way mermaid and DOMPurify end up in a separate
+// chunk and not in the main bundle.
 import DOMPurify from "dompurify"
 import mermaid from "mermaid"
 import type { MermaidModule } from "./mermaid"
 
-/** Nur Verweise innerhalb des SVG (`#id`, etwa Pfeilspitzen und Verläufe) bleiben stehen. */
+/** Only references within the SVG (`#id`, e.g. arrowheads and gradients) are kept. */
 const localRef = (v: string) => v.trim().startsWith("#")
-/** url(...) in CSS nur auf `#id`; @import nie. */
+/** url(...) in CSS only to `#id`; @import never. */
 const cleanCss = (css: string) =>
   css.replace(/@import[^;]*;?/gi, "").replace(/url\(\s*(['"]?)(?!#)[^)]*\)/gi, "none")
 
 /**
- * Säubert das SVG von mermaid ein zweites Mal (mermaid säubert Labels bei `strict` bereits mit DOMPurify):
- * kein Skript, keine Ereignis-Attribute, keine Verweise nach draußen (href/xlink:href nur auf `#id`,
- * url() in Stilen nur auf `#id`, kein @import, <use> nur auf `#id`). HTML-Labels sind abgeschaltet; ein
- * <foreignObject> bleibt nur als leere Hülle, DOMPurify entfernt HTML darin (mit jsdom geprüft). Das Ergebnis
- * wird zusätzlich nur als <img> eingebunden, wo der Browser kein Skript ausführt und nichts nachlädt; die
- * Säuberung schützt auch die heruntergeladene Datei.
- * Breite und Höhe kommen aus der viewBox, damit das Bild eine eigene Größe hat (mermaid setzt 100 %).
+ * Sanitizes mermaid's SVG a second time (with `strict`, mermaid already sanitizes labels with DOMPurify):
+ * no script, no event attributes, no references to the outside (href/xlink:href only to `#id`,
+ * url() in styles only to `#id`, no @import, <use> only to `#id`). HTML labels are switched off; a
+ * <foreignObject> remains only as an empty shell, DOMPurify removes HTML inside it (checked with jsdom). The result
+ * is additionally embedded only as <img>, where the browser runs no script and loads nothing; the
+ * sanitizing also protects the downloaded file.
+ * Width and height come from the viewBox so that the image has its own size (mermaid sets 100 %).
  */
 function sanitize(svg: string): string {
   const purify = DOMPurify(window)
@@ -36,7 +36,7 @@ function sanitize(svg: string): string {
     RETURN_DOM_FRAGMENT: true,
   })
   const el = frag.querySelector("svg")
-  if (!el) throw new Error("mermaid lieferte kein SVG")
+  if (!el) throw new Error("mermaid returned no SVG")
   el.setAttribute("xmlns", "http://www.w3.org/2000/svg")
   const vb = el.getAttribute("viewBox")?.split(/[\s,]+/).map(Number)
   if (vb && vb.length === 4 && vb.every(Number.isFinite)) {

@@ -1,4 +1,4 @@
-// Typen nach poc/API.md (verbindlicher Vertrag).
+// Types following poc/API.md (binding contract).
 
 export type VariantId = "cli" | "mcp" | "api" | "beide"
 
@@ -9,22 +9,22 @@ export type Pricing = {
   cache_write: number
   currency: "USD"
   note?: string
-  /** URL der Preisquelle */
+  /** URL of the price source */
   source?: string
-  /** Abrufdatum der Preise, ISO */
+  /** Retrieval date of the prices, ISO */
   retrieved?: string
 }
 
 export type PeakWindow = { days: string; from: string; to: string }
 
-/** Tarif mit Spitzenzeiten (UTC). `pricing` ist der Spitzentarif; außerhalb gilt `offpeak_factor`. */
+/** Tariff with peak hours (UTC). `pricing` is the peak tariff; outside them `offpeak_factor` applies. */
 export type Tariff = {
   peak_windows_utc: PeakWindow[]
   offpeak_factor: number
   note?: string
-  /** URL der Tarifquelle */
+  /** URL of the tariff source */
   source?: string
-  /** Abrufdatum, ISO */
+  /** Retrieval date, ISO */
   retrieved?: string
 }
 
@@ -37,7 +37,7 @@ export type Model = {
   pricing?: Pricing
   tariff?: Tariff
   peak_now?: boolean
-  /** Kontextfenster in Tokens (0/fehlt: unbekannt). */
+  /** Context window in tokens (0/missing: unknown). */
   context_window?: number
 }
 
@@ -79,8 +79,8 @@ export type Pool = {
 export type ChatState = "active" | "dormant"
 
 /**
- * Kontextauslastung laut pi. tokens/percent sind null direkt nach einer Kompaktierung.
- * percent liegt zwischen 0 und 100; threshold_tokens: ab hier kompaktiert pi automatisch.
+ * Context usage according to pi. tokens/percent are null right after a compaction.
+ * percent is between 0 and 100; threshold_tokens: from here on pi compacts automatically.
  */
 export type ContextUsage = {
   tokens: number | null
@@ -99,71 +99,71 @@ export type Chat = {
   variant: VariantId
   state: ChatState
   running: boolean
-  /** Beginn des laufenden Durchgangs (ISO), nur solange der Agent arbeitet. */
+  /** Start of the current turn (ISO), only while the agent is working. */
   running_since?: string
   internet: boolean
   auto_compact?: boolean
   compactions?: number
   context?: ContextUsage
-  /** Denkstufe von pi (/effort); fehlt, solange sie noch nicht gelesen ist. */
+  /** pi's thinking level (/effort); missing until it has been read. */
   thinking_level?: string
-  /** Denkstufen, die das Modell des Chats kennt (von pi gemeldet). */
+  /** Thinking levels the chat's model supports (reported by pi). */
   thinking_levels?: string[]
-  /** Modell, zu dem nach der laufenden Kompaktierung gewechselt wird. */
+  /** Model to switch to after the running compaction. */
   pending_model?: string
-  /** Höchstzahl Subagenten (hart am Proxy und durch Überwachung). */
+  /** Maximum number of subagents (enforced at the proxy and by monitoring). */
   max_subagents?: number
-  /** Übertragene Rechte des Chats; fehlt: ohne Delegation (lesen frei, schreiben mit Bestätigung). */
+  /** Delegated rights of the chat; missing: no delegation (reading free, writing with approval). */
   delegation?: Delegation
-  /** sub des Besitzers (Anmeldung über die Plattform); fehlt im token-Modus. */
+  /** sub of the owner (login through the platform); missing in token mode. */
   owner?: string
-  /** Bevorzugte Sprache des Nutzers laut Browser (BCP 47); fehlt ohne Angabe. */
+  /** The user's preferred language according to the browser (BCP 47); missing if not given. */
   language?: string
-  /** Bisher gestartete Subagenten-Läufe. */
+  /** Subagent runs started so far. */
   subagents?: number
-  /** Am LLM-Proxy erfasste Modellaufrufe. */
+  /** Model calls recorded at the LLM proxy. */
   llm_calls?: number
-  /** Kostenanteil außerhalb der Antworten der Hauptsitzung (Subagenten, Kompaktierung, direkte Aufrufe). */
+  /** Share of the cost outside the main session's responses (subagents, compaction, direct calls). */
   cost_other?: number
   slot_id?: string
   created_at: string
   updated_at: string
   tokens: Tokens
-  /** US-Dollar nach Tarif; maßgeblich die am Proxy erfassten Aufrufe (inkl. Subagenten). */
+  /** US dollars by tariff; authoritative are the calls recorded at the proxy (incl. subagents). */
   cost: number
   artifact_count: number
   pending_approvals: number
-  /** Letzte Sicherung von /workspace (übersteht das Ruhen); fehlt, solange nichts gesichert ist. */
+  /** Last backup of /workspace (survives idling); missing while nothing has been backed up. */
   workspace?: WorkspaceBackup
-  /** Der Chat wird gerade in einer frischen Sandbox fortgesetzt. */
+  /** The chat is currently being resumed in a fresh sandbox. */
   resuming?: boolean
-  /** Eingereihte, noch nicht übergebene Nachrichten. */
+  /** Queued messages not yet handed over. */
   queued?: number
-  /** Eingereihtes geht nicht von selbst (nach Abbruch, bei ruhendem Chat), sondern mit der nächsten Nachricht. */
+  /** Queued entries are not sent on their own (after an abort, while the chat is idle) but with the next message. */
   queue_held?: boolean
-  /** Warum Eingereihtes zurückgehalten ist: Abbruch, Weckgrenze je Stunde, zu viele Durchgänge ohne Nutzer. */
+  /** Why queued entries are held back: abort, wake-up limit per hour, too many turns without the user. */
   hold_reason?: HoldReason
-  /** Laufende Hintergrundaufgaben (bash mit run_in_background). */
+  /** Running background tasks (bash with run_in_background). */
   background_running?: number
 }
 
 export type HoldReason = "abort" | "wake_limit" | "auto_turns"
 
-/** Auslöser eines Durchgangs: der Nutzer, beim Laufende mit Nachricht des Nutzers, ohne Nutzer (Weckruf). */
+/** Trigger of a turn: the user, at the end of a run with a message of the user, without the user (wake-up). */
 export type TurnTrigger = "user" | "queue" | "wake"
-/** Herkunft eines Auftrags an pi (Nutzernachricht). */
+/** Origin of a request to pi (user message). */
 export type MessageOrigin = "user" | "system" | "mixed"
-/** Teil eines Auftrags an pi, in Reihenfolge (Review 3, H1). */
+/** Part of a request to pi, in order (Review 3, H1). */
 export type MessageSource = {
   kind: "user" | "system"
-  /** bei system: background (Ende einer Hintergrundaufgabe), sandbox (mit der Sandbox beendet) oder language (bevorzugte Sprache laut Browser) */
+  /** for system: background (end of a background task), sandbox (ended with the sandbox) or language (preferred language according to the browser) */
   type?: string
   refs?: string[]
   queue_id?: string
-  /** Marke des Zauns um die Daten aus der Sandbox */
+  /** Marker of the fence around the data from the sandbox */
   marker?: string
 }
-/** Herkunft einer Nutzernachricht (gespeichert oder live über SSE „user_meta“). */
+/** Origin of a user message (stored or live via SSE "user_meta"). */
 export type MessageMeta = {
   turn_id?: number
   trigger?: TurnTrigger
@@ -171,18 +171,18 @@ export type MessageMeta = {
   sources?: MessageSource[]
 }
 
-/** SSE „auto_held“: Meldungen bleiben eingereiht, weil eine Grenze für Durchgänge ohne Nutzer erreicht ist. */
+/** SSE "auto_held": notes stay queued because a limit for turns without the user has been reached. */
 export type AutoHeldEvent = { reason: "wake_limit" | "auto_turns"; limit: number; count: number }
 
-/** Zustand einer Hintergrundaufgabe (poc/API.md, „Hintergrundaufgaben“). */
+/** State of a background task (poc/API.md, "Background tasks"). */
 export type BackgroundState = "running" | "exited" | "failed" | "timeout" | "stopped" | "lost" | "suspended" | "closed"
 
-/** Hintergrundaufgabe: Befehl, den der Agent mit bash und run_in_background gestartet hat. */
+/** Background task: a command the agent started with bash and run_in_background. */
 export type BackgroundTask = {
   id: string
   seq: number
   chat_id: string
-  /** "main" oder Lauf des Subagenten, der sie gestartet hat. */
+  /** "main" or the run of the subagent that started it. */
   session: string
   tool_call_id: string
   command: string
@@ -190,57 +190,57 @@ export type BackgroundTask = {
   state: BackgroundState
   exit_code?: number
   error?: string
-  /** agent (bg_stop) oder user (Stopp in UI oder CLI). */
+  /** agent (bg_stop) or user (stop in UI or CLI). */
   stopped_by?: string
   started_at: string
   ended_at?: string
   output_bytes: number
   output_lines: number
   output_sha256?: string
-  /** Letzte Ausgabe (einige KiB). */
+  /** Last output (a few KiB). */
   tail?: string
-  /** Meldung an den Agenten erzeugt (eingereiht oder als Weckruf übergeben). */
+  /** Note to the agent created (queued or handed over as a wake-up). */
   notified_at?: string
-  /** Das Ende hat einen neuen Durchgang gestartet (Weckruf). */
+  /** The end started a new turn (wake-up). */
   woke?: boolean
-  /** Mit der Sandbox beendet, dem Agenten noch nicht gesagt. */
+  /** Ended with the sandbox, not yet told to the agent. */
   notice_pending?: boolean
 }
 
-/** SSE „background“: started, output (gedrosselt), ended, wake_limited (Meldung nur eingereiht). */
+/** SSE "background": started, output (throttled), ended, wake_limited (note only queued). */
 export type BackgroundEvent = {
   change: "started" | "output" | "ended"
   task: BackgroundTask
 }
 
-/** Eingereihte Nachricht (Warteschlange des Chats). */
+/** Queued message (the chat's queue). */
 export type QueueEntry = {
   id: string
   chat_id: string
   text: string
   attachments: string[]
   created_at: string
-  /** user oder system (Meldung des Orchestrators, etwa das Ende einer Hintergrundaufgabe). */
+  /** user or system (orchestrator note, e.g. the end of a background task). */
   kind?: "user" | "system"
-  /** nur system: Art der Meldung (background, sandbox) und betroffene Aufgaben; text: erste Zeile Kopf, darunter Daten */
+  /** system only: kind of note (background, sandbox) and affected tasks; text: first line header, data below */
   note?: string
   refs?: string[]
 }
 
-/** SSE „queue“: neuer Stand der Warteschlange. Bei „delivered“ ist text der Auftrag an pi. */
+/** SSE "queue": new state of the queue. For "delivered", text is the request to pi. */
 export type QueueEvent = {
   entries: QueueEntry[]
   change: "queued" | "removed" | "delivered" | "restored"
   ids?: string[]
   text?: string
-  /** bei delivered: Herkunft und Teile des Auftrags */
+  /** for delivered: origin and parts of the request */
   origin?: MessageOrigin
   sources?: MessageSource[]
 }
 
 export type ResumePhase = "acquire" | "session" | "settings" | "workspace" | "inputs" | "ready" | "failed"
 
-/** SSE „resume“: ein Schritt beim Fortsetzen eines ruhenden Chats. */
+/** SSE "resume": a step while resuming an idle chat. */
 export type ResumeStep = {
   id: string
   phase: ResumePhase
@@ -249,16 +249,16 @@ export type ResumeStep = {
   size?: number
   files?: number
   at: string
-  /** Dauer des Schritts; bei ready und failed die Gesamtdauer. */
+  /** Duration of the step; for ready and failed the total duration. */
   ms?: number
 }
 
-/** Antwort auf POST /messages, /commands und /queue/send. */
+/** Response to POST /messages, /commands and /queue/send. */
 export type SendResult = { ok: boolean; resumed: boolean; queued?: boolean; queue_id?: string; result?: unknown }
 
-/** Sicherung des Arbeitsbereichs. saved_at fehlt: noch nie gesichert; skipped_*: zuletzt ausgelassen. */
+/** Backup of the workspace. saved_at missing: never backed up; skipped_*: last one skipped. */
 export type WorkspaceBackup = {
-  /** Summe der Dateigrößen (unkomprimiert). */
+  /** Sum of the file sizes (uncompressed). */
   size: number
   archive_size: number
   files: number
@@ -309,12 +309,12 @@ export type StoredMessage = {
   seq: number
   role: string
   message: PiMessage
-  /** Kosten nach Tarif zum Zeitpunkt der Antwort (maßgeblich; nur Antworten). */
+  /** Cost by tariff at the time of the response (authoritative; responses only). */
   cost?: number
-  /** Antwort fiel in die Spitzenzeit. */
+  /** Response fell into peak hours. */
   peak?: boolean
   created_at: string
-  /** Durchgang und Auslöser (alle Nachrichten eines Durchgangs), Herkunft und Teile (nur die Nutzernachricht). Fehlt bei alten Zeilen. */
+  /** Turn and trigger (all messages of a turn), origin and parts (only the user message). Missing on old rows. */
   turn_id?: number
   trigger?: TurnTrigger
   origin?: MessageOrigin
@@ -332,7 +332,7 @@ export type Artifact = {
   content_type: string
   created_at: string
   via: "cli" | "mcp" | "ui"
-  /** Werkzeugaufruf, der das Ergebnis hochgeladen hat (nur Ausgaben, fehlt bei älteren). */
+  /** Tool call that uploaded the result (outputs only, missing on older ones). */
   tool_call_id?: string
 }
 
@@ -342,8 +342,8 @@ export type Approval = {
   id: string
   chat_id: string
   /**
-   * artifact_upload: Datei hochladen; internet_access: Bitte um Internetzugang, `name` ist die Begründung;
-   * platform_write: schreibender Aufruf der Agri-Gaia-Plattform, `name` ist „METHODE pfad“, `preview` samt Körper.
+   * artifact_upload: upload a file; internet_access: request for internet access, `name` is the reason;
+   * platform_write: writing call to the Agri-Gaia platform, `name` is "METHOD path", `preview` including the body.
    */
   kind: "artifact_upload" | "internet_access" | "platform_write"
   via: "cli" | "mcp"
@@ -355,7 +355,7 @@ export type Approval = {
   created_at: string
   decided_at?: string
   preview?: string
-  /** Wer gefragt hat: „main“ oder ein Subagenten-Lauf (leer bei älteren Einträgen). */
+  /** Who asked: "main" or a subagent run (empty on older entries). */
   session?: string
   tool_call_id?: string
 }
@@ -364,13 +364,13 @@ export type SocketCall = {
   id: number
   chat_id?: string
   slot_id: string
-  /** cli/mcp für Aufrufe aus der Sandbox; proxy, orchestrator oder pi für Einträge der Überwachung. */
+  /** cli/mcp for calls from the sandbox; proxy, orchestrator or pi for monitoring entries. */
   via: "cli" | "mcp" | "proxy" | "orchestrator" | "pi" | (string & {})
   op: string
   detail: string
   result: string
   created_at: string
-  /** „main“ oder ein Subagenten-Lauf, der den Aufruf machte (leer: unbekannt). */
+  /** "main" or a subagent run that made the call (empty: unknown). */
   session?: string
   tool_call_id?: string
 }
@@ -387,7 +387,7 @@ export type ChatDetail = {
   background?: BackgroundTask[]
 }
 
-/** Am LLM-Proxy erfasster Modellaufruf (außerhalb der Sandbox gemessen, fälschungssicher). */
+/** Model call recorded at the LLM proxy (measured outside the sandbox, tamper-proof). */
 export type LLMCall = {
   id: number
   slot_id: string
@@ -401,27 +401,27 @@ export type LLMCall = {
   cache_write: number
   cost: number
   peak: boolean
-  /** id: Kennung des Anbieters (tool_calls[].id); daran hängt der Abgleich mit den Ausführungen (E9). */
+  /** id: the provider's ID (tool_calls[].id); the reconciliation with the executions relies on it (E9). */
   tool_calls: { id?: string; name: string; arguments: string }[] | null
   started_at: string
   duration_ms: number
-  /** Antwort gehört zur Hauptsitzung; sonst Subagent, Kompaktierung o. Ä. */
+  /** Response belongs to the main session; otherwise subagent, compaction or similar. */
   main: boolean
-  /** finish_reason des Anbieters (M1) */
+  /** finish_reason of the provider (M1) */
   finish_reason?: string
-  /** Antwort kam vollständig an (am Proxy mit finish_reason); fehlt bei älteren Einträgen */
+  /** Response arrived completely (at the proxy with finish_reason); missing on older entries */
   complete?: boolean
 }
 
 /**
- * Operation, die der Orchestrator für ein Werkzeug in der Ausführungs-Sandbox ausgeführt hat (E9).
- * Belegt, weil der Orchestrator sie selbst ausgeführt und eingetragen hat.
+ * Operation the orchestrator executed for a tool in the execution sandbox (E9).
+ * Verified, because the orchestrator executed and recorded it itself.
  */
 export type ToolExecutionRecord = {
   id: number
   chat_id: string
   slot_id: string
-  /** "main" oder Kennung des Subagenten-Laufs */
+  /** "main" or ID of the subagent run */
   session: string
   tool_call_id: string
   tool: string
@@ -436,7 +436,7 @@ export type ToolExecutionRecord = {
   duration_ms: number
 }
 
-/** Antwort von GET /api/chats/{id}/tool_executions (Abgleich auf dem Server). */
+/** Response of GET /api/chats/{id}/tool_executions (reconciliation on the server). */
 export type ToolExecutionsResponse = {
   calls: unknown[]
   summary: Record<string, number>
@@ -447,8 +447,8 @@ export type ToolExecutionsResponse = {
 export type SubagentEntryKind = "task" | "tool_call" | "tool_result" | "text"
 
 /**
- * Eintrag aus der Sitzungsdatei eines Subagenten. Quelle ist die Sandbox, also nicht
- * fälschungssicher; `confirmed`: die zugehörige Antwort ist am Proxy belegt.
+ * Entry from a subagent's session file. The source is the sandbox, so not
+ * tamper-proof; `confirmed`: the corresponding response is verified at the proxy.
  */
 export type SubagentEntry = {
   chat_id: string
@@ -463,15 +463,15 @@ export type SubagentEntry = {
 }
 
 /**
- * Name und Zustand eines Subagenten-Laufs aus den Statusdateien von pi-subagents (Sandbox, nicht
- * fälschungssicher). `label` ist der Name im Workflow (Schlüssel bei runs.run/runs.all).
+ * Name and state of a subagent run from the status files of pi-subagents (sandbox, not
+ * tamper-proof). `label` is the name in the workflow (key for runs.run/runs.all).
  */
 export type SubagentRunMeta = {
   chat_id: string
   run_id: string
   agent: string
   label?: string
-  /** Zustand laut pi-subagents, etwa running, complete, completed, failed, cancelled. */
+  /** State according to pi-subagents, e.g. running, complete, completed, failed, cancelled. */
   state?: string
   pi_run_id?: string
   parent_run_id?: string
@@ -488,13 +488,13 @@ export type CreateChatRequest = {
   internet?: boolean
   auto_compact?: boolean
   max_subagents?: number
-  /** Übertragene Rechte (fehlt: ohne Delegation). */
+  /** Delegated rights (missing: no delegation). */
   delegation?: Delegation
-  /** Bevorzugte Sprache laut Browser (BCP 47, navigator.language); der Agent nutzt sie nur, wenn die Nachricht keine Sprache erkennen lässt. */
+  /** Preferred language according to the browser (BCP 47, navigator.language); the agent uses it only if the message reveals no language. */
   language?: string
 }
 
-/** Angemeldeter Nutzer (GET /api/me); im token-Modus nur mode. */
+/** Logged-in user (GET /api/me); in token mode only mode. */
 export type Me = { mode: "token" | "oidc"; sub?: string; username?: string; name?: string }
 
 export type Config = {
@@ -507,23 +507,23 @@ export type Config = {
   compact_keep_recent_tokens?: number
   max_subagents_default?: number
   max_subagents_limit?: number
-  /** Werkzeuge, deren Ausführung am Socket belegt wird (E9) */
+  /** Tools whose execution is verified at the socket (E9) */
   executed_tools?: string[]
 }
 
-/** Slash-Befehl; `name` ohne führenden Schrägstrich. */
+/** Slash command; `name` without the leading slash. */
 export type Command = {
   name: string
   description?: string
   source: "builtin" | "extension" | "prompt" | "skill"
   args?: string
-  /** Mögliche Argumente zur Vervollständigung (/model, /effort). */
+  /** Possible arguments for completion (/model, /effort). */
   options?: CommandOption[]
 }
 
 export type CommandOption = { value: string; label?: string; current?: boolean }
 
-/** Ein pi-RPC-Ereignis; nur die Felder, die die UI auswertet, sind typisiert. */
+/** A pi RPC event; only the fields the UI evaluates are typed. */
 export type PiEvent = { type: string; [key: string]: unknown }
 
 export type ServerEvent =
@@ -543,14 +543,14 @@ export type ServerEvent =
   | { kind: "user_meta"; data: MessageMeta }
   | { kind: "auto_held"; data: AutoHeldEvent }
 
-/** Regel einer Delegation: Aktion auf Ressource, ohne ids nur für Aufrufe ohne Objekt. */
+/** Rule of a delegation: action on a resource, without ids only for calls without an object. */
 export type DelegationRule = { action: string; resource: string; ids?: string[] }
 
-/** Übertragene Rechte eines Chats (docs/plan-delegation-rest-plattform.md, Schritt 1). */
+/** Delegated rights of a chat (docs/plan-delegation-rest-platform.md, step 1). */
 export type Delegation = {
   rules: DelegationRule[]
   expires_at?: string
-  /** false: Übergriffe werden nur protokolliert (Stufe ohne Schutzmaßnahme). */
+  /** false: violations are only logged (stage without protection). */
   enforce?: boolean
   confirm?: "writes" | "none"
 }

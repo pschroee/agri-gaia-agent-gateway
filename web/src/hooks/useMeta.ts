@@ -4,7 +4,7 @@ import type { Config, Model, Variant } from "@/api/types"
 
 export type Meta = { models: Model[]; variants: Variant[]; config?: Config; error?: string }
 
-/** Modelle, Varianten und Voreinstellungen – ändern sich zur Laufzeit nicht. */
+/** Models, variants and defaults – they do not change at runtime. */
 export function useMeta() {
   const [meta, setMeta] = useState<Meta>({ models: [], variants: [] })
   const reload = useCallback(async () => {

@@ -1,9 +1,9 @@
-// Hintergrundaufgaben (bash mit run_in_background): Stand aus der API und den SSE-Ereignissen
-// „background“, Beschriftungen und Laufzeiten für Seitenreiter und Chatkopf.
+// Background tasks (bash with run_in_background): state from the API and the SSE events
+// "background", labels and durations for the side tab and the chat header.
 import type { BackgroundEvent, BackgroundState, BackgroundTask } from "@/api/types"
 import { formatElapsed } from "@/lib/runtime"
 
-/** Übernimmt ein Ereignis. Ein gedrosseltes „output“ überschreibt ein schon beendetes Ende nicht. */
+/** Applies an event. A throttled "output" does not overwrite an end that has already happened. */
 export function applyBackgroundEvent(list: BackgroundTask[], ev: BackgroundEvent): BackgroundTask[] {
   const t = ev.task
   if (!t?.id) return list
@@ -15,7 +15,7 @@ export function applyBackgroundEvent(list: BackgroundTask[], ev: BackgroundEvent
   return next
 }
 
-/** Laufende zuerst (älteste oben), danach beendete (neueste oben). */
+/** Running ones first (oldest on top), then ended ones (newest on top). */
 export function sortBackground(list: BackgroundTask[]): BackgroundTask[] {
   return [...list].sort((a, b) => {
     const ra = a.state === "running" ? 0 : 1
@@ -29,25 +29,25 @@ export const runningCount = (list: BackgroundTask[]) => list.filter((t) => t.sta
 
 export type Tone = "running" | "ok" | "error" | "muted"
 
-/** Deutsche Beschriftung und Farbton eines Zustands. */
+/** Label and colour tone of a state. */
 export function backgroundStatus(t: Pick<BackgroundTask, "state" | "exit_code" | "stopped_by" | "error">): { label: string; tone: Tone } {
   const labels: Record<BackgroundState, string> = {
-    running: "läuft",
-    exited: "beendet",
-    failed: "fehlgeschlagen",
-    timeout: "Zeitgrenze",
-    stopped: t.stopped_by === "user" ? "vom Nutzer gestoppt" : "vom Agenten gestoppt",
-    lost: "mit der Sandbox verloren",
-    suspended: "beim Ruhen beendet",
-    closed: "mit dem Chat beendet",
+    running: "running",
+    exited: "ended",
+    failed: "failed",
+    timeout: "time limit",
+    stopped: t.stopped_by === "user" ? "stopped by the user" : "stopped by the agent",
+    lost: "lost with the sandbox",
+    suspended: "ended when idling",
+    closed: "ended with the chat",
   }
   switch (t.state) {
     case "running":
       return { label: labels.running, tone: "running" }
     case "exited":
       return t.exit_code === 0
-        ? { label: "beendet (Exit 0)", tone: "ok" }
-        : { label: `beendet (Exit ${t.exit_code ?? "?"})`, tone: "error" }
+        ? { label: "ended (exit 0)", tone: "ok" }
+        : { label: `ended (exit ${t.exit_code ?? "?"})`, tone: "error" }
     case "failed":
     case "timeout":
       return { label: labels[t.state], tone: "error" }
@@ -56,7 +56,7 @@ export function backgroundStatus(t: Pick<BackgroundTask, "state" | "exit_code" |
   }
 }
 
-/** Laufzeit: bis `now`, solange die Aufgabe läuft; sonst bis zum Ende; ohne Zeiten nichts. */
+/** Runtime: until `now` while the task is running; otherwise until the end; nothing without times. */
 export function backgroundRuntimeMs(t: Pick<BackgroundTask, "state" | "started_at" | "ended_at">, now: number): number | undefined {
   const start = Date.parse(t.started_at)
   if (Number.isNaN(start)) return undefined
@@ -70,7 +70,7 @@ export function formatBackgroundRuntime(t: Pick<BackgroundTask, "state" | "start
   return ms === undefined ? "" : formatElapsed(ms)
 }
 
-/** Die letzten n Zeilen der Ausgabe (ohne abschließenden Zeilenumbruch). */
+/** The last n lines of the output (without the trailing line break). */
 export function tailLines(tail: string | undefined, n: number): string[] {
   const s = (tail ?? "").replace(/\n+$/, "")
   if (!s) return []
@@ -78,25 +78,25 @@ export function tailLines(tail: string | undefined, n: number): string[] {
   return lines.slice(Math.max(0, lines.length - n))
 }
 
-/** Kurzform des Befehls für eine Zeile. */
+/** Short form of the command for one line. */
 export function commandPreview(cmd: string, max = 120): string {
   const one = cmd.split(/\s+/).filter(Boolean).join(" ")
   return one.length > max ? `${one.slice(0, max).trimEnd()} …` : one
 }
 
-/** Beschriftung des Zählers im Chatkopf. */
+/** Label of the counter in the chat header. */
 export function backgroundCountLabel(n: number): string {
-  return n === 1 ? "1 Hintergrundaufgabe läuft" : `${n} Hintergrundaufgaben laufen`
+  return n === 1 ? "1 background task running" : `${n} background tasks running`
 }
 
-/** Werkzeugaufruf, der eine Hintergrundaufgabe startet, abfragt oder stoppt. */
+/** Tool call that starts, queries or stops a background task. */
 export type BackgroundCall = { kind: "start" | "output" | "stop"; id?: string; task?: BackgroundTask }
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v)
 
 /**
- * Erkennt bash mit run_in_background (Aufgabe über tool_call_id, sonst Kennung aus dem Ergebnis
- * „Background task bg-3 started …“) sowie bg_output und bg_stop; sonst undefined.
+ * Recognises bash with run_in_background (task via tool_call_id, otherwise the ID from the result
+ * "Background task bg-3 started …") as well as bg_output and bg_stop; otherwise undefined.
  */
 export function backgroundCall(
   name: string,
@@ -127,11 +127,11 @@ export function backgroundCall(
   return undefined
 }
 
-/** Kompakte Zeile für bg_output und bg_stop. */
+/** Compact line for bg_output and bg_stop. */
 export function backgroundCallLabel(c: Pick<BackgroundCall, "kind" | "id">, phase: "running" | "done" | "error"): string {
-  const id = c.id ?? "Hintergrundaufgabe"
+  const id = c.id ?? "background task"
   if (c.kind === "output") {
-    return phase === "running" ? `Ausgabe von ${id} wird abgerufen …` : phase === "error" ? `Ausgabe von ${id} nicht abgerufen` : `Ausgabe von ${id} abgerufen`
+    return phase === "running" ? `Fetching output of ${id} …` : phase === "error" ? `Output of ${id} not fetched` : `Fetched output of ${id}`
   }
-  return phase === "running" ? `${id} wird gestoppt …` : phase === "error" ? `${id} nicht gestoppt` : `${id} gestoppt`
+  return phase === "running" ? `Stopping ${id} …` : phase === "error" ? `${id} not stopped` : `${id} stopped`
 }

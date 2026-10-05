@@ -51,55 +51,55 @@ const call = (p: Partial<LLMCall>): LLMCall => ({
 })
 
 describe("runTitle", () => {
-  it("lässt die Vorsilbe „Task:“ von pi-subagents weg", () => {
-    expect(runTitle({ task: "Task: Führe `node --version` aus", agent: "", runId: "a" })).toBe("Führe `node --version` aus")
-    expect(runTitle({ task: "task:   Zähle Dateien", agent: "", runId: "a" })).toBe("Zähle Dateien")
-    expect(runTitle({ task: "Tasks: bleibt", agent: "", runId: "a" })).toBe("Tasks: bleibt")
+  it("leaves out the \"Task:\" prefix of pi-subagents", () => {
+    expect(runTitle({ task: "Task: Run `node --version`", agent: "", runId: "a" })).toBe("Run `node --version`")
+    expect(runTitle({ task: "task:   Count files", agent: "", runId: "a" })).toBe("Count files")
+    expect(runTitle({ task: "Tasks: stays", agent: "", runId: "a" })).toBe("Tasks: stays")
   })
-  it("nimmt die erste nicht leere Zeile des Auftrags", () => {
-    expect(runTitle({ task: "\n  Suche die Datensätze\nund fasse zusammen", agent: "scout", runId: "abc" })).toBe(
-      "Suche die Datensätze",
+  it("takes the first non-empty line of the task", () => {
+    expect(runTitle({ task: "\n  Find the datasets\nand summarize", agent: "scout", runId: "abc" })).toBe(
+      "Find the datasets",
     )
   })
 
-  it("kürzt lange Zeilen mit Auslassungszeichen", () => {
+  it("shortens long lines with an ellipsis", () => {
     const title = runTitle({ task: "x".repeat(200), agent: "scout", runId: "abc" }, 20)
     expect(title).toBe(`${"x".repeat(19)}…`)
     expect(title.length).toBe(20)
   })
 
-  it("fällt ohne Auftrag auf den Agentennamen zurück", () => {
+  it("falls back to the agent name without a task", () => {
     expect(runTitle({ task: undefined, agent: "scout", runId: "abc" })).toBe("Subagent scout")
     expect(runTitle({ task: "  ", agent: "", runId: "abc" })).toBe("Subagent")
   })
 })
 
 describe("runSubtitle", () => {
-  it("nennt Agent und kurze Laufkennung", () => {
-    expect(runSubtitle({ agent: "scout", runId: "abcdef123#2" })).toBe("scout · Lauf abcdef#2")
-    expect(runSubtitle({ agent: "", runId: "abc" })).toBe("Subagent · Lauf abc")
+  it("names agent and short run ID", () => {
+    expect(runSubtitle({ agent: "scout", runId: "abcdef123#2" })).toBe("scout · run abcdef#2")
+    expect(runSubtitle({ agent: "", runId: "abc" })).toBe("Subagent · run abc")
   })
 })
 
 describe("runDuration", () => {
   const run = { start: t("10:00:00"), end: t("10:00:30") }
-  it("misst bei beendeten Läufen vom ersten bis zum letzten Eintrag", () => {
+  it("measures ended runs from the first to the last entry", () => {
     expect(runDuration(run, "done", t("10:05:00"))).toBe(30_000)
     expect(runDuration(run, "stopped", t("10:05:00"))).toBe(30_000)
   })
 
-  it("zählt bei laufenden oder stillen Läufen bis jetzt", () => {
+  it("counts running or quiet runs until now", () => {
     expect(runDuration(run, "running", t("10:01:00"))).toBe(60_000)
     expect(runDuration(run, "idle", t("10:02:00"))).toBe(120_000)
   })
 
-  it("wird nie negativ", () => {
+  it("never becomes negative", () => {
     expect(runDuration(run, "running", t("09:00:00"))).toBe(30_000)
   })
 })
 
 describe("formatSpan", () => {
-  it("formatiert Sekunden, Minuten und Stunden", () => {
+  it("formats seconds, minutes and hours", () => {
     expect(formatSpan(0)).toBe("0 s")
     expect(formatSpan(42_400)).toBe("42 s")
     expect(formatSpan(125_000)).toBe("2 min 5 s")
@@ -109,11 +109,11 @@ describe("formatSpan", () => {
 })
 
 describe("formatTokensShort", () => {
-  it("kürzt Tausender und Millionen", () => {
+  it("shortens thousands and millions", () => {
     expect(formatTokensShort(999)).toBe("999")
-    expect(formatTokensShort(1234)).toBe("1,2k")
+    expect(formatTokensShort(1234)).toBe("1.2k")
     expect(formatTokensShort(12_345)).toBe("12k")
-    expect(formatTokensShort(2_500_000)).toBe("2,5M")
+    expect(formatTokensShort(2_500_000)).toBe("2.5M")
   })
 })
 
@@ -126,7 +126,7 @@ describe("runMetrics", () => {
     entry({ run_id: "a", entry_id: "5", kind: "text", response_id: "r2" }),
   ])
 
-  it("summiert die am Proxy erfassten Aufrufe, deren Antwort im Lauf vorkommt", () => {
+  it("sums the calls recorded at the proxy whose response occurs in the run", () => {
     const m = runMetrics(runs[0], [
       call({ id: 1, response_id: "r1", input: 100, output: 20, cache_read: 50, cost: 0.001 }),
       call({ id: 2, response_id: "r2", input: 200, output: 30, cost: 0.002 }),
@@ -144,7 +144,7 @@ describe("runMetrics", () => {
     })
   })
 
-  it("lässt Tokens und Kosten weg, wenn kein Aufruf zugeordnet ist", () => {
+  it("leaves out tokens and cost if no call is assigned", () => {
     const m = runMetrics(runs[0], [])
     expect(m.llmCalls).toBe(0)
     expect(m.tokens).toBeUndefined()
@@ -154,48 +154,48 @@ describe("runMetrics", () => {
 })
 
 describe("statusCounts", () => {
-  it("zählt je Status und beschriftet in fester Reihenfolge", () => {
+  it("counts per status and labels in a fixed order", () => {
     const c = statusCounts(["done", "running", "done", "done", "done", "stopped"])
     expect(c).toEqual({ running: 1, idle: 0, done: 4, stopped: 1 })
-    expect(statusCountsLabel(c)).toBe("1 läuft · 4 fertig · 1 ohne Antwort")
+    expect(statusCountsLabel(c)).toBe("1 running · 4 done · 1 without response")
   })
 
-  it("lässt leere Zähler weg", () => {
-    expect(statusCountsLabel(statusCounts(["done", "done"]))).toBe("2 fertig")
+  it("leaves out empty counters", () => {
+    expect(statusCountsLabel(statusCounts(["done", "done"]))).toBe("2 done")
     expect(statusCountsLabel(statusCounts([]))).toBe("")
   })
 })
 
 describe("subagentCountLabel", () => {
-  it("unterscheidet Einzahl und Mehrzahl", () => {
-    expect(subagentCountLabel(1)).toBe("1 Subagent")
-    expect(subagentCountLabel(3)).toBe("3 Subagenten")
+  it("distinguishes singular and plural", () => {
+    expect(subagentCountLabel(1)).toBe("1 subagent")
+    expect(subagentCountLabel(3)).toBe("3 subagents")
   })
 })
 
 describe("buildAgentTree", () => {
   const entries = [
-    entry({ run_id: "a", entry_id: "1", kind: "task", payload: { text: "Erster Auftrag" }, created_at: iso("10:00:00") }),
+    entry({ run_id: "a", entry_id: "1", kind: "task", payload: { text: "First task" }, created_at: iso("10:00:00") }),
     entry({ run_id: "a", entry_id: "2", kind: "text", created_at: iso("10:00:20") }),
-    entry({ run_id: "p#1", entry_id: "1", agent: "w", kind: "task", payload: { text: "Teil 1" }, created_at: iso("10:01:00") }),
+    entry({ run_id: "p#1", entry_id: "1", agent: "w", kind: "task", payload: { text: "Part 1" }, created_at: iso("10:01:00") }),
     entry({ run_id: "p#1", entry_id: "2", agent: "w", kind: "tool_call", created_at: iso("10:01:05") }),
-    entry({ run_id: "p#0", entry_id: "1", agent: "w", kind: "task", payload: { text: "Teil 0" }, created_at: iso("10:01:01") }),
+    entry({ run_id: "p#0", entry_id: "1", agent: "w", kind: "task", payload: { text: "Part 0" }, created_at: iso("10:01:01") }),
     entry({ run_id: "p#0", entry_id: "2", agent: "w", kind: "text", created_at: iso("10:01:10") }),
   ]
   const runs = groupRuns(entries)
 
-  it("setzt den Hauptagenten als Wurzel mit Chattitel und Status", () => {
-    const root = buildAgentTree({ chatTitle: "Mein Chat", chatRunning: true, runs, llmCalls: [], now: t("10:01:10") })
+  it("sets the main agent as root with chat title and status", () => {
+    const root = buildAgentTree({ chatTitle: "My chat", chatRunning: true, runs, llmCalls: [], now: t("10:01:10") })
     expect(root.kind).toBe("main")
-    expect(root.title).toBe("Mein Chat")
+    expect(root.title).toBe("My chat")
     expect(root.status).toBe("running")
     const idle = buildAgentTree({ chatTitle: "", chatRunning: false, runs: [], llmCalls: [], now: 0 })
-    expect(idle.title).toBe("Ohne Titel")
+    expect(idle.title).toBe("Untitled")
     expect(idle.status).toBe("done")
     expect(idle.children).toEqual([])
   })
 
-  it("hängt Einzelläufe direkt an und fasst parallele Läufe ohne Basis-Lauf zu einem Knoten", () => {
+  it("attaches single runs directly and combines parallel runs without a base run into one node", () => {
     const root = buildAgentTree({ chatTitle: "c", chatRunning: true, runs, llmCalls: [], now: t("10:01:10") })
     expect(root.children.map((n) => [n.kind, n.id])).toEqual([
       ["run", "a"],
@@ -203,19 +203,19 @@ describe("buildAgentTree", () => {
     ])
     const a = root.children[0]
     expect(a.runId).toBe("a")
-    expect(a.title).toBe("Erster Auftrag")
+    expect(a.title).toBe("First task")
     expect(a.status).toBe("done")
     expect(a.durationMs).toBe(20_000)
     const p = root.children[1]
     expect(p.runId).toBeUndefined()
-    expect(p.title).toBe("Parallele Läufe (2)")
+    expect(p.title).toBe("Parallel runs (2)")
     expect(p.children.map((c) => c.runId)).toEqual(["p#0", "p#1"])
-    // Ein Kind läuft noch, also läuft die Gruppe.
+    // One child is still running, so the group is running.
     expect(p.children.map((c) => c.status)).toEqual(["done", "running"])
     expect(p.status).toBe("running")
   })
 
-  it("summiert Kennzahlen eines Gruppenknotens aus den Kindern", () => {
+  it("sums the metrics of a group node from the children", () => {
     const withCalls = groupRuns([
       entry({ run_id: "q#0", entry_id: "1", response_id: "x", created_at: iso("10:00:00") }),
       entry({ run_id: "q#1", entry_id: "1", response_id: "y", created_at: iso("10:00:05") }),
@@ -237,7 +237,7 @@ describe("buildAgentTree", () => {
     expect(q.status).toBe("done")
   })
 
-  it("hängt parallele Läufe unter einen vorhandenen Basis-Lauf", () => {
+  it("attaches parallel runs below an existing base run", () => {
     const r = groupRuns([
       entry({ run_id: "b", entry_id: "1", kind: "text", created_at: iso("10:00:00") }),
       entry({ run_id: "b#0", entry_id: "1", kind: "text", created_at: iso("10:00:01") }),
@@ -250,7 +250,7 @@ describe("buildAgentTree", () => {
 })
 
 describe("flattenAgentTree", () => {
-  it("liefert die Läufe in Baumreihenfolge mit Tiefe, ohne Wurzel und Gruppenknoten", () => {
+  it("returns the runs in tree order with depth, without root and group nodes", () => {
     const leaf = (id: string, children: AgentNode[] = []): AgentNode => ({
       kind: "run",
       id,
@@ -294,12 +294,12 @@ describe("groupAgentNodes", () => {
     children: [],
   })
 
-  it("lässt bis zur Grenze alle Knoten einzeln stehen", () => {
+  it("keeps all nodes individual up to the limit", () => {
     const list = [n("a"), n("b"), n("c")]
     expect(groupAgentNodes(list, 3)).toEqual({ type: "nodes", nodes: list })
   })
 
-  it("fasst oberhalb der Grenze alle Knoten zu einer Gruppe mit Zählern zusammen", () => {
+  it("combines all nodes above the limit into a group with counters", () => {
     const list = [n("a"), n("b"), n("c", "running"), n("d"), n("e")]
     const g = groupAgentNodes(list, 3)
     expect(g).toEqual({ type: "group", nodes: list, counts: { running: 1, idle: 0, done: 4, stopped: 0 } })
@@ -307,7 +307,7 @@ describe("groupAgentNodes", () => {
 })
 
 describe("containsRun", () => {
-  it("sucht einen Lauf auch in tieferen Ebenen", () => {
+  it("finds a run in deeper levels too", () => {
     const root = buildAgentTree({
       chatTitle: "c",
       chatRunning: false,

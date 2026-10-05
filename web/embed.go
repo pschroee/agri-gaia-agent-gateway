@@ -2,7 +2,7 @@ package web
 
 import "embed"
 
-// Dist enthält die gebaute Web-UI (npm run build erzeugt dist/).
+// Dist contains the built web UI (npm run build creates dist/).
 //
 //go:embed all:dist
 var Dist embed.FS

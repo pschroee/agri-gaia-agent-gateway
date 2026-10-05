@@ -7,15 +7,15 @@ import { cn } from "@/lib/utils"
 
 type Props = {
   code: string
-  /** Der Block ist vollständig (Antwort fertig oder Codeblock geschlossen); vorher wird nichts gezeichnet. */
+  /** The block is complete (response finished or code block closed); nothing is rendered before that. */
   ready: boolean
-  /** Position in der Nachricht (ab 0); ab MERMAID_AUTO_MAX wird erst auf Klick gezeichnet. */
+  /** Position in the message (from 0); from MERMAID_AUTO_MAX on, rendering waits for a click. */
   index?: number
 }
 
 /**
- * Mermaid-Codeblock einer Antwort als Diagramm. Die Bibliothek lädt erst beim ersten Diagramm (lib/mermaid);
- * das SVG erscheint als <img> in der Bild-Großansicht (ImagePreview), also ohne Skript und ohne Nachladen.
+ * Mermaid code block of a response as a diagram. The library loads only with the first diagram (lib/mermaid);
+ * the SVG appears as an <img> in the large image view (ImagePreview), so without scripts and without fetching.
  */
 export function MermaidDiagram({ code, ready, index = 0 }: Props) {
   const dark = useDarkMode()
@@ -24,7 +24,7 @@ export function MermaidDiagram({ code, ready, index = 0 }: Props) {
   const [showSource, setShowSource] = useState(false)
   const [clicked, setClicked] = useState(false)
   const key = `${theme}\n${code}`
-  // Große Diagramme und alle ab dem sechsten einer Nachricht erst auf Klick (Review 3, N4).
+  // Large diagrams and all from the sixth in a message on only after a click (Review 3, N4).
   const large = useMemo(() => isLargeDiagram(code), [code])
   const deferred = !clicked && !autoRender({ index, large })
 
@@ -47,9 +47,9 @@ export function MermaidDiagram({ code, ready, index = 0 }: Props) {
       {view === "diagram" && outcome?.ok ? (
         <ImagePreview
           src={svgDataUrl(outcome.svg)}
-          alt="Mermaid-Diagramm"
-          label="Mermaid-Diagramm"
-          filename="diagramm.svg"
+          alt="Mermaid diagram"
+          label="Mermaid diagram"
+          filename="diagram.svg"
           thumbClassName="max-h-[28rem] bg-background p-2"
         />
       ) : (
@@ -63,21 +63,21 @@ export function MermaidDiagram({ code, ready, index = 0 }: Props) {
             type="button"
             onClick={() => setClicked(true)}
             className="inline-flex items-center gap-1 rounded px-1 hover:bg-muted hover:text-foreground"
-            title="Das Zeichnen großer oder vieler Diagramme hält den Browser auf; deshalb erst auf Klick."
+            title="Rendering large or many diagrams stalls the browser, so only on click."
           >
             <NetworkIcon className="size-3" />
-            {large ? "Großes Diagramm, zum Zeichnen klicken" : "Weiteres Diagramm, zum Zeichnen klicken"}
+            {large ? "Large diagram, click to render" : "Another diagram, click to render"}
           </button>
         )}
         {view === "loading" && (
           <span className="inline-flex items-center gap-1">
-            <Loader2Icon className="size-3 animate-spin" /> Diagramm wird gezeichnet …
+            <Loader2Icon className="size-3 animate-spin" /> Rendering diagram …
           </span>
         )}
         {view === "error" && outcome && !outcome.ok && (
           <span className="inline-flex min-w-0 items-center gap-1 text-amber-700 dark:text-amber-400" title={outcome.error}>
             <TriangleAlertIcon className="size-3 shrink-0" />
-            <span className="truncate">Diagramm konnte nicht gerendert werden</span>
+            <span className="truncate">Diagram could not be rendered</span>
           </span>
         )}
         {outcome?.ok && (
@@ -88,7 +88,7 @@ export function MermaidDiagram({ code, ready, index = 0 }: Props) {
             aria-pressed={showSource}
           >
             {showSource ? <NetworkIcon className="size-3" /> : <CodeIcon className="size-3" />}
-            {showSource ? "Diagramm" : "Quelltext"}
+            {showSource ? "Diagram" : "Source"}
           </button>
         )}
       </div>

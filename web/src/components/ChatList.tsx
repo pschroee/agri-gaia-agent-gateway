@@ -10,12 +10,12 @@ type Props = {
   chats: Chat[]
   selectedId?: string
   modelName: (id: string) => string
-  /** Beginn des laufenden Durchgangs je Chat (ms), sofern bekannt; sonst „Läuft“ ohne Zeit. */
+  /** Start of the running turn per chat (ms), if known; otherwise "Running" without a time. */
   runSince?: (c: Chat) => number | undefined
 }
 
 export function ChatList({ chats, selectedId, modelName, runSince }: Props) {
-  if (chats.length === 0) return <p className="p-3 text-sm text-muted-foreground">Noch keine Chats.</p>
+  if (chats.length === 0) return <p className="p-3 text-sm text-muted-foreground">No chats yet.</p>
   return (
     <ul className="flex flex-col gap-1 p-2">
       {chats.map((c) => (
@@ -28,10 +28,10 @@ export function ChatList({ chats, selectedId, modelName, runSince }: Props) {
             )}
           >
             <div className="flex items-center gap-1.5">
-              <span className="truncate font-medium">{c.title || "Ohne Titel"}</span>
-              {c.internet && <GlobeIcon className="size-3.5 shrink-0 text-sky-600" aria-label="Internetzugang an" />}
+              <span className="truncate font-medium">{c.title || "Untitled"}</span>
+              {c.internet && <GlobeIcon className="size-3.5 shrink-0 text-sky-600" aria-label="Internet access on" />}
               {c.pending_approvals > 0 && (
-                <ShieldAlertIcon className="size-3.5 shrink-0 text-amber-600" aria-label="offene Bestätigung" />
+                <ShieldAlertIcon className="size-3.5 shrink-0 text-amber-600" aria-label="pending approval" />
               )}
             </div>
             <div className="mt-1 flex flex-wrap items-center gap-1.5">
@@ -45,7 +45,7 @@ export function ChatList({ chats, selectedId, modelName, runSince }: Props) {
               {c.max_subagents !== undefined && (
                 <span
                   className={cn("ml-auto shrink-0 tabular-nums", (c.subagents ?? 0) > c.max_subagents && "text-red-700")}
-                  title="gestartete / erlaubte Subagenten"
+                  title="started / allowed subagents"
                 >
                   {subagentLimitLabel(c)}
                 </span>

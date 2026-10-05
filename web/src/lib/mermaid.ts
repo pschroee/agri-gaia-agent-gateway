@@ -1,18 +1,18 @@
-// Mermaid-Diagramme in Antworten: Erkennung der Codeblöcke, Streaming-Zustand und ein Renderer, der die
-// Bibliothek erst beim ersten Diagramm lädt (eigener Chunk, siehe mermaid-load.ts). Ohne React.
+// Mermaid diagrams in responses: detection of the code blocks, streaming state and a renderer that loads the
+// library only at the first diagram (separate chunk, see mermaid-load.ts). Without React.
 import type { MermaidConfig } from "mermaid"
 
 export type MermaidTheme = "light" | "dark"
 export type MermaidOutcome = { ok: true; svg: string } | { ok: false; error: string }
 
-/** Der Ausschnitt der mermaid-API, den die UI nutzt (in Tests attrappiert). */
+/** The part of the mermaid API the UI uses (mocked in tests). */
 export type MermaidApi = {
   initialize: (config: MermaidConfig) => void
   render: (id: string, code: string) => Promise<{ svg: string }>
 }
 export type MermaidModule = { api: MermaidApi; sanitize: (svg: string) => string }
 
-/** Ob ein Codeblock (Klasse von react-markdown, etwa `language-mermaid`) ein Mermaid-Diagramm ist. */
+/** Whether a code block (class from react-markdown, e.g. `language-mermaid`) is a Mermaid diagram. */
 export function isMermaidClass(className: unknown): boolean {
   const list = Array.isArray(className) ? className : typeof className === "string" ? className.split(/\s+/) : []
   return list.some((c) => typeof c === "string" && c.toLowerCase() === "language-mermaid")
@@ -21,10 +21,10 @@ export function isMermaidClass(className: unknown): boolean {
 const fenceRe = /^( {0,3})(`{3,}|~{3,})(.*)$/
 
 /**
- * Anfang (Zeichenposition der Zeile) eines noch offenen Codeblocks am Ende des Textes, sonst undefined. Beim Streamen
- * schließt der Markdown-Parser offene Blöcke selbst; ein Diagramm soll aber erst gezeichnet werden, wenn
- * sein Block wirklich zu ist. Regeln wie CommonMark: Zaun aus mindestens drei ` oder ~, höchstens drei
- * Leerzeichen eingerückt; geschlossen wird mit demselben Zeichen in mindestens gleicher Länge.
+ * Start (character position of the line) of a still open code block at the end of the text, otherwise undefined. While streaming,
+ * the Markdown parser closes open blocks itself; a diagram should only be drawn once
+ * its block is really closed. Rules as in CommonMark: fence of at least three ` or ~, indented by at most three
+ * spaces; closed with the same character in at least the same length.
  */
 export function openFenceStart(text: string): number | undefined {
   let open: { start: number; char: string; len: number } | undefined
@@ -34,7 +34,7 @@ export function openFenceStart(text: string): number | undefined {
     if (m) {
       const fence = m[2]
       if (!open) {
-        // Bei Backtick-Zäunen darf die Info-Zeile keine Backticks enthalten
+        // for backtick fences the info string must not contain backticks
         if (!(fence[0] === "`" && m[3].includes("`"))) open = { start: pos, char: fence[0], len: fence.length }
       } else if (fence[0] === open.char && fence.length >= open.len && m[3].trim() === "") {
         open = undefined
@@ -46,8 +46,8 @@ export function openFenceStart(text: string): number | undefined {
 }
 
 /**
- * Anfänge (Zeichenposition der Zeile) aller Mermaid-Codeblöcke eines Textes in Reihenfolge; die UI zählt
- * damit die Diagramme einer Nachricht (MERMAID_AUTO_MAX).
+ * Starts (character position of the line) of all Mermaid code blocks of a text in order; the UI uses
+ * them to count the diagrams of a message (MERMAID_AUTO_MAX).
  */
 export function mermaidFenceStarts(text: string): number[] {
   const out: number[] = []
@@ -72,18 +72,18 @@ export function mermaidFenceStarts(text: string): number[] {
 }
 
 /**
- * Grenzen gegen blockierende Diagramme (Review 3, N4: rund 3,4 s je großem Diagramm im Hauptfaden): Ab
- * MERMAID_LARGE_CHARS Zeichen oder MERMAID_LARGE_EDGES Kanten wird erst auf Klick gezeichnet, und je
- * Nachricht höchstens MERMAID_AUTO_MAX Diagramme von selbst.
+ * Limits against blocking diagrams (Review 3, N4: about 3.4 s per large diagram on the main thread): from
+ * MERMAID_LARGE_CHARS characters or MERMAID_LARGE_EDGES edges, drawing happens only on click, and per
+ * message at most MERMAID_AUTO_MAX diagrams are drawn on their own.
  */
 export const MERMAID_AUTO_MAX = 5
 export const MERMAID_LARGE_CHARS = 4000
 export const MERMAID_LARGE_EDGES = 150
 
-// Kanten: Pfeile und Linien der gängigen Diagrammarten (flowchart, sequence, class, state, er).
+// Edges: arrows and lines of the common diagram types (flowchart, sequence, class, state, er).
 const edgeRe = /<?(?:-{2,}|={2,}|-\.+-?|~{3})[->xo)|]*|->>?|-[x)]|\|\|--|\}o--/g
 
-/** Größe eines Diagramms: Zeichen und (geschätzte) Kanten. */
+/** Size of a diagram: characters and (estimated) edges. */
 export function mermaidSize(code: string): { chars: number; edges: number } {
   let edges = 0
   for (const line of code.split("\n")) {
@@ -100,7 +100,7 @@ export function isLargeDiagram(code: string): boolean {
   return s.chars > MERMAID_LARGE_CHARS || s.edges > MERMAID_LARGE_EDGES
 }
 
-/** Wird ein Diagramm ohne Klick gezeichnet? index: Position in der Nachricht (ab 0). */
+/** Is a diagram drawn without a click? index: position in the message (from 0). */
 export function autoRender(p: { index: number; large: boolean }): boolean {
   return !p.large && p.index < MERMAID_AUTO_MAX
 }
@@ -108,9 +108,9 @@ export function autoRender(p: { index: number; large: boolean }): boolean {
 export type DiagramView = "source" | "deferred" | "loading" | "diagram" | "error"
 
 /**
- * Was ein Mermaid-Block zeigt: den Quelltext, solange der Block beim Streamen noch offen ist oder der
- * Nutzer ihn sehen will; ein zurückgestelltes Diagramm (groß oder zu viele) als Quelltext mit Knopf;
- * sonst das Diagramm, bis dahin „wird gezeichnet“, bei Fehlern den Quelltext mit Hinweis.
+ * What a Mermaid block shows: the source while the block is still open during streaming or the
+ * user wants to see it; a deferred diagram (large or too many) as source with a button;
+ * otherwise the diagram, "drawing" until then, and on errors the source with a notice.
  */
 export function diagramView(p: { ready: boolean; outcome?: MermaidOutcome; showSource?: boolean; deferred?: boolean }): DiagramView {
   if (!p.ready) return "source"
@@ -121,17 +121,17 @@ export function diagramView(p: { ready: boolean; outcome?: MermaidOutcome; showS
 }
 
 /**
- * SVG als data:-Adresse für <img>. Als Bild eingebunden führt der Browser kein Skript im SVG aus und lädt
- * keine externen Ressourcen (Bild-Kontext); die CSP erlaubt `img-src data:`.
+ * SVG as a data: address for <img>. Embedded as an image, the browser runs no script in the SVG and loads
+ * no external resources (image context); the CSP allows `img-src data:`.
  */
 export function svgDataUrl(svg: string): string {
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`
 }
 
 /**
- * Konfiguration: `securityLevel: "strict"` (Labels werden gesäubert, keine click-Direktiven, kein JS),
- * keine HTML-Labels (sonst <foreignObject> mit HTML), keine eigenen Schriften aus dem Netz. `secure`
- * verbietet dem Diagramm, diese Schlüssel per `%%{init: …}%%` zu überschreiben.
+ * Configuration: `securityLevel: "strict"` (labels are sanitized, no click directives, no JS),
+ * no HTML labels (otherwise <foreignObject> with HTML), no custom fonts from the network. `secure`
+ * forbids the diagram to override these keys via `%%{init: …}%%`.
  */
 export function mermaidConfig(theme: MermaidTheme): MermaidConfig {
   return {
@@ -162,8 +162,8 @@ export function mermaidConfig(theme: MermaidTheme): MermaidConfig {
 }
 
 /**
- * Renderer mit Cache (je Theme und Quelltext). `load` holt die Bibliothek beim ersten Aufruf; gezeichnet
- * wird nacheinander, weil mermaid globalen Zustand hat (initialize, temporäre Knoten im Dokument).
+ * Renderer with cache (per theme and source). `load` fetches the library on the first call; drawing
+ * happens one after another because mermaid has global state (initialize, temporary nodes in the document).
  */
 export function createMermaidRenderer(load: () => Promise<MermaidModule>) {
   let mod: Promise<MermaidModule> | undefined
@@ -183,7 +183,7 @@ export function createMermaidRenderer(load: () => Promise<MermaidModule>) {
       const { svg } = await api.render(`agw-mermaid-${++seq}`, code)
       return { ok: true, svg: sanitize(svg) }
     } catch (e) {
-      // Ein gescheitertes Laden beim nächsten Diagramm erneut versuchen
+      // retry a failed load at the next diagram
       if (mod && (await mod.then(() => false, () => true))) mod = undefined
       return { ok: false, error: e instanceof Error ? e.message : String(e) }
     }
@@ -203,5 +203,5 @@ export function createMermaidRenderer(load: () => Promise<MermaidModule>) {
   }
 }
 
-/** Gemeinsamer Renderer der UI; die Bibliothek kommt als eigener Chunk (dynamischer Import). */
+/** Shared renderer of the UI; the library comes as a separate chunk (dynamic import). */
 export const mermaidRenderer = createMermaidRenderer(() => import("./mermaid-load").then((m) => m.loadMermaid()))

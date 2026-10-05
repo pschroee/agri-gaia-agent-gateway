@@ -8,21 +8,21 @@ const memory = () => {
 
 const locked = {
   getItem: () => {
-    throw new Error("gesperrt")
+    throw new Error("blocked")
   },
   setItem: () => {
-    throw new Error("gesperrt")
+    throw new Error("blocked")
   },
 }
 
 describe("readFlag/writeFlag", () => {
-  it("liefert den Standard, solange nichts gespeichert ist", () => {
+  it("returns the default while nothing is stored", () => {
     const s = memory()
     expect(readFlag("x", true, s)).toBe(true)
     expect(readFlag("x", false, s)).toBe(false)
   })
 
-  it("merkt sich den Wert", () => {
+  it("remembers the value", () => {
     const s = memory()
     writeFlag("x", false, s)
     expect(readFlag("x", true, s)).toBe(false)
@@ -30,7 +30,7 @@ describe("readFlag/writeFlag", () => {
     expect(readFlag("x", false, s)).toBe(true)
   })
 
-  it("übersteht einen gesperrten oder fehlenden Speicher", () => {
+  it("survives blocked or missing storage", () => {
     expect(() => writeFlag("x", false, locked)).not.toThrow()
     expect(readFlag("x", true, locked)).toBe(true)
     expect(readFlag("x", true, undefined)).toBe(true)

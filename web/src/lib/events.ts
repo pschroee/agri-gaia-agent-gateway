@@ -1,6 +1,6 @@
 import type { ServerEvent } from "@/api/types"
 
-/** Liest eine SSE-`data:`-Zeile des Orchestrators; liefert null bei Unlesbarem. */
+/** Reads an SSE `data:` line of the orchestrator; returns null if unreadable. */
 export function parseServerEvent(raw: string): ServerEvent | null {
   try {
     const v = JSON.parse(raw) as unknown
@@ -13,7 +13,7 @@ export function parseServerEvent(raw: string): ServerEvent | null {
   }
 }
 
-/** Ersetzt den Eintrag mit gleichem Schlüssel oder hängt ihn an. */
+/** Replaces the entry with the same key or appends it. */
 export function upsert<T, K>(list: T[], item: T, key: (x: T) => K): T[] {
   const k = key(item)
   const idx = list.findIndex((x) => key(x) === k)

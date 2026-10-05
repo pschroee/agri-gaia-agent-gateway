@@ -8,8 +8,8 @@ import { pendingMenuItems } from "@/lib/pending"
 import { cn } from "@/lib/utils"
 
 /**
- * Abzeichen „Offene Bestätigungen“ in der Kopfleiste. Ein Klick öffnet eine Liste; ein Eintrag
- * führt in den Chat, in dem bestätigt werden soll (dort steht die Bestätigungskarte).
+ * "Pending approvals" badge in the header. A click opens a list; an entry leads to the chat
+ * in which the approval is due (the approval card is shown there).
  */
 export function PendingApprovalsMenu({ approvals }: { approvals: Approval[] }) {
   const [open, setOpen] = useState(false)
@@ -17,7 +17,7 @@ export function PendingApprovalsMenu({ approvals }: { approvals: Approval[] }) {
   const pendingCount = approvals.length
   const internetCount = approvals.filter((a) => a.kind === "internet_access").length
 
-  // Chat-Titel erst beim Öffnen laden; die Liste der Bestätigungen kennt nur Kennungen.
+  // Load chat titles only when opening; the list of approvals only knows IDs.
   useEffect(() => {
     if (!open) return
     let cancelled = false
@@ -41,21 +41,21 @@ export function PendingApprovalsMenu({ approvals }: { approvals: Approval[] }) {
           "ml-auto inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring",
           pendingCount > 0 ? "border-amber-300 bg-amber-100 font-medium text-amber-900" : "text-muted-foreground",
         )}
-        aria-label={`Offene Bestätigungen: ${pendingCount}`}
+        aria-label={`Pending approvals: ${pendingCount}`}
         title={
           internetCount > 0
-            ? `Offene Bestätigungen aller Chats, davon ${internetCount} Bitte${internetCount === 1 ? "" : "n"} um Internetzugang`
-            : "Offene Bestätigungen aller Chats"
+            ? `Pending approvals of all chats, ${internetCount} of them request${internetCount === 1 ? "" : "s"} for internet access`
+            : "Pending approvals of all chats"
         }
       >
         {internetCount > 0 && <GlobeIcon className="size-3.5 text-sky-700" aria-hidden />}
-        <span className="hidden sm:inline">Offene Bestätigungen</span>
-        <span className="sm:hidden">Offen</span>
+        <span className="hidden sm:inline">Pending approvals</span>
+        <span className="sm:hidden">Pending</span>
         <span className="tabular-nums">{pendingCount}</span>
       </PopoverTrigger>
       <PopoverContent align="end" collisionPadding={12} className="w-[min(24rem,calc(100vw-1.5rem))] p-0">
         <div className="border-b px-3 py-2 text-sm font-medium">
-          {pendingCount === 0 ? "Keine offenen Bestätigungen" : `${pendingCount} offene Bestätigung${pendingCount === 1 ? "" : "en"}`}
+          {pendingCount === 0 ? "No pending approvals" : `${pendingCount} pending approval${pendingCount === 1 ? "" : "s"}`}
         </div>
         {items.length > 0 && (
           <ul className="max-h-[60vh] overflow-y-auto py-1" role="menu">
@@ -86,7 +86,7 @@ export function PendingApprovalsMenu({ approvals }: { approvals: Approval[] }) {
           </ul>
         )}
         <a href="#/status" onClick={() => setOpen(false)} className="block border-t px-3 py-2 text-xs text-muted-foreground hover:bg-muted">
-          Alle auf der Status-Seite
+          All on the status page
         </a>
       </PopoverContent>
     </Popover>

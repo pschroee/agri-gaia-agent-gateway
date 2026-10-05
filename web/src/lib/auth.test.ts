@@ -7,22 +7,22 @@ function memStore() {
 }
 
 describe("auth", () => {
-  it("baut das Ziel mit Rücksprung", () => {
+  it("builds the target with return address", () => {
     expect(silentLoginUrl("/oidc/login", { pathname: "/", search: "?embed=1", hash: "#/chats/x" })).toBe(
       "/oidc/login?prompt=none&return=%2F%3Fembed%3D1%23%2Fchats%2Fx",
     )
   })
-  it("behält unter einem Pfadpräfix den Pfad im Rücksprung", () => {
+  it("keeps the path in the return address under a path prefix", () => {
     expect(silentLoginUrl("/agent/oidc/login", { pathname: "/agent/", search: "?embed=1", hash: "#/chats/x" })).toBe(
       "/agent/oidc/login?prompt=none&return=%2Fagent%2F%3Fembed%3D1%23%2Fchats%2Fx",
     )
   })
-  it("erkennt die eigene Anmeldung, auch relativ und unter einem Präfix", () => {
+  it("recognises our own login, also relative and under a prefix", () => {
     for (const p of ["oidc/login", "/oidc/login", "/agent/oidc/login", "/a/b/oidc/login"]) expect(isLoginPath(p), p).toBe(true)
     for (const p of ["", "//evil.example/oidc/login", "https://evil.example/oidc/login", "javascript:oidc/login", "/oidc/login?x=1", "/../oidc/login", "/api/me"])
       expect(isLoginPath(p), p).toBe(false)
   })
-  it("versucht nur einmal je Frist", () => {
+  it("tries only once per period", () => {
     const s = memStore()
     expect(claimSilentLogin(s, 1000)).toBe(true)
     expect(claimSilentLogin(s, 2000)).toBe(false)
@@ -30,11 +30,11 @@ describe("auth", () => {
     clearSilentLogin(s)
     expect(claimSilentLogin(s, 1000 + LOGIN_RETRY_MS + 1)).toBe(true)
   })
-  it("ohne Speicher keine Navigation", () => {
+  it("no navigation without storage", () => {
     const broken = { getItem: () => { throw new Error("x") }, setItem: () => {}, removeItem: () => {} }
     expect(claimSilentLogin(broken, 1)).toBe(false)
   })
-  it("erkennt die eingebettete Ansicht", () => {
+  it("recognises the embedded view", () => {
     expect(isEmbed("?embed=1")).toBe(true)
     expect(isEmbed("?embed=0")).toBe(false)
     expect(isEmbed("")).toBe(false)

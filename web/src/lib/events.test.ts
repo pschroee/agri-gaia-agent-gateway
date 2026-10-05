@@ -2,20 +2,20 @@ import { describe, expect, it } from "vitest"
 import { parseServerEvent, upsert } from "./events"
 
 describe("parseServerEvent", () => {
-  it("liest kind und data", () => {
+  it("reads kind and data", () => {
     expect(parseServerEvent('{"kind":"pi","data":{"type":"agent_start"}}')).toEqual({
       kind: "pi",
       data: { type: "agent_start" },
     })
   })
-  it("verwirft Unlesbares", () => {
-    expect(parseServerEvent("kein json")).toBeNull()
+  it("discards unreadable input", () => {
+    expect(parseServerEvent("no json")).toBeNull()
     expect(parseServerEvent('{"data":1}')).toBeNull()
   })
 })
 
 describe("upsert", () => {
-  it("ersetzt vorhandene Einträge und hängt neue an", () => {
+  it("replaces existing entries and appends new ones", () => {
     const list = [
       { id: "a", v: 1 },
       { id: "b", v: 1 },

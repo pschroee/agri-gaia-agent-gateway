@@ -1,5 +1,5 @@
-// Subagenten: Einträge aus den Sitzungsdateien je Lauf gruppieren, den Werkzeugaufrufen des
-// Hauptagenten zuordnen und Grenzmeldungen aufbereiten. Reine Funktionen, ohne React.
+// Subagents: group entries from the session files per run, assign them to the main agent's
+// tool calls and prepare limit notices. Pure functions, without React.
 import type { Chat, SocketCall, SubagentEntry, SubagentRunMeta } from "@/api/types"
 import type { TranscriptItem } from "./stream"
 
@@ -7,16 +7,16 @@ export type SubagentRun = {
   runId: string
   agent: string
   entries: SubagentEntry[]
-  /** Zeitpunkt des ersten und letzten Eintrags in ms. */
+  /** Time of the first and last entry in ms. */
   start: number
   end: number
-  /** Auftrag (erster task-Eintrag). */
+  /** Task (first task entry). */
   task?: string
   toolCalls: number
   errors: number
-  /** Name im Workflow (Schlüssel bei runs.run/runs.all), laut pi-subagents. */
+  /** Name in the workflow (key for runs.run/runs.all), according to pi-subagents. */
   label?: string
-  /** Zustand laut pi-subagents; fehlt er, wird der Status aus den Einträgen geschätzt. */
+  /** State according to pi-subagents; if missing, the status is estimated from the entries. */
   state?: string
 }
 
@@ -27,7 +27,7 @@ const ms = (iso: string) => {
   return Number.isNaN(v) ? 0 : v
 }
 
-/** Ergänzt Einträge; gleiche (run_id, entry_id) werden ersetzt, die Reihenfolge bleibt erhalten. */
+/** Adds entries; equal (run_id, entry_id) are replaced, the order is kept. */
 export function mergeSubagentEntries(list: SubagentEntry[], add: SubagentEntry[]): SubagentEntry[] {
   if (add.length === 0) return list
   const next = list.slice()
@@ -44,8 +44,8 @@ export function mergeSubagentEntries(list: SubagentEntry[], add: SubagentEntry[]
 }
 
 /**
- * Gruppiert Einträge je Lauf (Reihenfolge innerhalb stabil nach created_at), Läufe nach Start.
- * `meta` ergänzt Agent, Namen und Zustand; ein Lauf ohne Einträge erscheint schon mit seinen Metadaten.
+ * Groups entries per run (order within stable by created_at), runs by start.
+ * `meta` adds agent, name and state; a run without entries already appears with its metadata.
  */
 export function groupRuns(entries: SubagentEntry[], meta: SubagentRunMeta[] = []): SubagentRun[] {
   const byRun = new Map<string, SubagentEntry[]>()
@@ -87,29 +87,29 @@ export function groupRuns(entries: SubagentEntry[], meta: SubagentRunMeta[] = []
   return runs.sort((a, b) => a.start - b.start)
 }
 
-/** Kurzform der Laufkennung: die ersten sechs Zeichen, bei parallelen Kindern mit „#n“. */
+/** Short form of the run ID: the first six characters, with "#n" for parallel children. */
 export function shortRunId(runId: string): string {
   const [base, idx] = runId.split("#")
   const short = base.length > 6 ? base.slice(0, 6) : base
   return idx !== undefined ? `${short}#${idx}` : short
 }
 
-/** Anzeigename: Name im Workflow, sonst Agent (etwa „reid“ bzw. „researcher“). */
+/** Display name: name in the workflow, otherwise agent (e.g. "reid" or "researcher"). */
 export function runName(run: Pick<SubagentRun, "agent" | "label">): string {
   return run.label || run.agent || "Subagent"
 }
 
 export function runLabel(run: Pick<SubagentRun, "agent" | "runId" | "label">): string {
   const who = run.label ? `${run.label}${run.agent ? ` (${run.agent})` : ""}` : run.agent
-  return `Subagent${who ? ` ${who}` : ""} · Lauf ${shortRunId(run.runId)}`
+  return `Subagent${who ? ` ${who}` : ""} · run ${shortRunId(run.runId)}`
 }
 
-/** Ob ein Eintrag am Proxy belegt ist: laut Server oder weil seine Antwort dort erfasst wurde. */
+/** Whether an entry is verified at the proxy: according to the server or because its response was recorded there. */
 export function isEntryConfirmed(e: SubagentEntry, proxyResponseIds: Set<string>): boolean {
   return e.confirmed || (!!e.response_id && proxyResponseIds.has(e.response_id))
 }
 
-/** Argumente eines Werkzeugaufrufs (JSON-Text) lesen; Unlesbares bleibt Text. */
+/** Read the arguments of a tool call (JSON text); anything unreadable stays text. */
 export function parseArguments(text: string | undefined): unknown {
   if (text === undefined || text === "") return undefined
   try {
@@ -126,7 +126,7 @@ export function clipText(text: string, max = 800): { text: string; clipped: bool
 type Obj = Record<string, unknown>
 const isObj = (v: unknown): v is Obj => typeof v === "object" && v !== null && !Array.isArray(v)
 
-/** Agentennamen in den Argumenten des subagent-Werkzeugs (einzeln, parallel oder als Kette). */
+/** Agent names in the arguments of the subagent tool (single, parallel or as a chain). */
 export function toolAgents(args: unknown): string[] {
   if (!isObj(args)) return []
   const out: string[] = []
@@ -138,7 +138,7 @@ export function toolAgents(args: unknown): string[] {
   return out
 }
 
-/** Zeiten der Einträge; fehlende erben die des Vorgängers (live noch ohne Zeitstempel). */
+/** Times of the entries; missing ones inherit the predecessor's (live, still without a timestamp). */
 export function effectiveTimes(items: TranscriptItem[]): number[] {
   let last = -Infinity
   return items.map((i) => {
@@ -147,7 +147,7 @@ export function effectiveTimes(items: TranscriptItem[]): number[] {
   })
 }
 
-/** Index des letzten Eintrags, dessen Zeit nicht nach `time` liegt (-1: vor allen). */
+/** Index of the last entry whose time is not after `time` (-1: before all). */
 export function placeAfter(items: TranscriptItem[], time: number): number {
   const times = effectiveTimes(items)
   let at = -1
@@ -158,9 +158,9 @@ export function placeAfter(items: TranscriptItem[], time: number): number {
 }
 
 export type RunAssignment = {
-  /** Läufe je toolCallId eines subagent-Aufrufs des Hauptagenten. */
+  /** Runs per toolCallId of a subagent call of the main agent. */
   byTool: Record<string, string[]>
-  /** Läufe ohne passenden Aufruf, je Index des Eintrags, hinter dem sie stehen (-1: vorne). */
+  /** Runs without a matching call, per index of the entry they follow (-1: at the front). */
   loose: Record<number, string[]>
 }
 
@@ -169,9 +169,9 @@ const push = <K extends string | number>(rec: Record<K, string[]>, k: K, v: stri
 }
 
 /**
- * Ordnet jeden Lauf dem letzten subagent-Aufruf des Hauptagenten zu, der vor dem Start des Laufs
- * lag (Läufe im Hintergrund laufen erst nach dem Aufruf). Innerhalb einer Nachricht gewinnt der
- * Aufruf, dessen Argumente den Agenten des Laufs nennen, sonst der erste.
+ * Assigns each run to the main agent's last subagent call before the start of the run
+ * (background runs only run after the call). Within one message, the call
+ * whose arguments name the run's agent wins, otherwise the first one.
  */
 export function assignRuns(
   items: TranscriptItem[],
@@ -201,11 +201,12 @@ export function assignRuns(
 
 export type LimitKind = "agent_limit" | "subagent_limit"
 
-/** Erkennt die Grenzmeldungen des Orchestrators (Ereignis `error`). */
+/** Recognises the orchestrator's limit messages (event `error`, from internal/chat/subagents.go). Live events only,
+ * so only the English form is matched. */
 export function limitErrorKind(message: string | undefined): LimitKind | undefined {
   if (!message) return undefined
-  if (/gleichzeitige Agenten/i.test(message)) return "agent_limit"
-  if (/^Grenze überschritten:.*Subagenten/i.test(message)) return "subagent_limit"
+  if (/concurrent agents/i.test(message)) return "agent_limit"
+  if (/^limit exceeded:.*subagents/i.test(message)) return "subagent_limit"
   return undefined
 }
 
@@ -214,11 +215,11 @@ export type LimitNotice = { id: number; op: LimitKind; time: number; count: numb
 function noticeText(op: LimitKind, detail: string): string {
   const d = detail ? ` (${detail})` : ""
   return op === "agent_limit"
-    ? `Grenze gleichzeitiger Agenten erreicht: Modellaufruf am Proxy abgewiesen${d}`
-    : `Subagenten-Grenze überschritten – abgebrochen${d}`
+    ? `Limit of concurrent agents reached: model call refused at the proxy${d}`
+    : `Subagent limit exceeded – aborted${d}`
 }
 
-/** Hinweise für den Verlauf aus dem Protokoll; direkt aufeinanderfolgende gleiche werden gezählt. */
+/** Notices for the history from the log; directly consecutive equal ones are counted. */
 export function limitNotices(calls: SocketCall[]): LimitNotice[] {
   const out: LimitNotice[] = []
   const sorted = [...calls].sort((a, b) => a.id - b.id)
@@ -236,21 +237,21 @@ export function limitNotices(calls: SocketCall[]): LimitNotice[] {
 }
 
 export function subagentLimitLabel(chat: Pick<Chat, "subagents" | "max_subagents">): string {
-  return `Subagenten ${chat.subagents ?? 0} / ${chat.max_subagents ?? "–"}`
+  return `Subagents ${chat.subagents ?? 0} / ${chat.max_subagents ?? "–"}`
 }
 
-/** Kennung des Basis-Laufs; parallele Kinder tragen „#n“. */
+/** ID of the base run; parallel children carry "#n". */
 export function baseRunId(runId: string): string {
   const i = runId.indexOf("#")
   return i < 0 ? runId : runId.slice(0, i)
 }
 
 export type RunTreeNode = {
-  /** Kennung des Basis-Laufs. */
+  /** ID of the base run. */
   id: string
-  /** Der Basis-Lauf selbst, falls er eigene Einträge hat. */
+  /** The base run itself, if it has entries of its own. */
   run?: SubagentRun
-  /** Parallele Läufe (`id#n`), nach n sortiert. */
+  /** Parallel runs (`id#n`), sorted by n. */
   children: SubagentRun[]
   start: number
   end: number
@@ -258,7 +259,7 @@ export type RunTreeNode = {
 
 const childIndex = (runId: string) => Number(runId.slice(runId.indexOf("#") + 1)) || 0
 
-/** Baum für die Übersicht: je Basis-Lauf ein Knoten, parallele Läufe darunter; Knoten nach Start. */
+/** Tree for the overview: one node per base run, parallel runs below it; nodes by start. */
 export function buildRunTree(runs: SubagentRun[]): RunTreeNode[] {
   const nodes = new Map<string, RunTreeNode>()
   for (const r of runs) {
@@ -279,16 +280,16 @@ export function buildRunTree(runs: SubagentRun[]): RunTreeNode[] {
 
 export type RunStatus = "running" | "idle" | "done" | "stopped"
 
-/** Nach so langer Ruhe gilt ein Lauf bei arbeitendem Chat als „still“. */
+/** After this long without activity, a run counts as "quiet" while the chat is working. */
 export const RUN_IDLE_MS = 90_000
 
 const RUNNING_STATES = new Set(["running", "queued", "pending", "starting", "active", "waiting", "paused"])
 const DONE_STATES = new Set(["complete", "completed", "done", "succeeded", "success"])
 
 /**
- * Status eines Laufs. Maßgeblich ist der Zustand laut pi-subagents (`state`); nur ohne ihn wird
- * geschätzt: Endet der Lauf mit einer Textantwort, ist er fertig; kam zuletzt etwas, läuft er (auch
- * wenn der Hauptagent ruht, denn Läufe im Hintergrund arbeiten weiter); sonst still bzw. beendet.
+ * Status of a run. Authoritative is the state according to pi-subagents (`state`); only without it is it
+ * estimated: if the run ends with a text response, it is done; if something came recently, it is running (even
+ * when the main agent is idle, because background runs keep working); otherwise quiet or ended.
  */
 export function runStatus(
   run: Pick<SubagentRun, "entries" | "end" | "state">,
@@ -307,15 +308,15 @@ export function runStatus(
 }
 
 const statusLabels: Record<RunStatus, string> = {
-  running: "läuft",
-  idle: "still",
-  done: "fertig",
-  stopped: "ohne Antwort beendet",
+  running: "running",
+  idle: "quiet",
+  done: "done",
+  stopped: "ended without response",
 }
 
 export const runStatusLabel = (s: RunStatus) => statusLabels[s]
 
-/** Wie viele Einträge eines Laufs am Proxy belegt sind. */
+/** How many entries of a run are verified at the proxy. */
 export function runConfirmation(run: Pick<SubagentRun, "entries">, proxyIds: Set<string>): { confirmed: number; total: number } {
   return { confirmed: run.entries.filter((e) => isEntryConfirmed(e, proxyIds)).length, total: run.entries.length }
 }
@@ -323,13 +324,13 @@ export function runConfirmation(run: Pick<SubagentRun, "entries">, proxyIds: Set
 export type RunItem =
   | { type: "task"; entry: SubagentEntry }
   | { type: "text"; entry: SubagentEntry }
-  /** Werkzeugaufruf mit Ergebnis; eines von beiden kann fehlen (offen bzw. ohne passenden Aufruf). */
+  /** Tool call with result; either can be missing (open, or without a matching call). */
   | { type: "tool"; call?: SubagentEntry; result?: SubagentEntry }
 
 /**
- * Setzt Werkzeugaufrufe und Ergebnisse zusammen, damit die Ansicht sie wie im Hauptverlauf als eine
- * Karte zeigt. Ein Ergebnis gehört zum ältesten offenen Aufruf gleichen Namens (ohne Namen: zum
- * ältesten offenen überhaupt). Die Einträge tragen keine Aufrufkennung; das ist die beste Näherung.
+ * Pairs tool calls and results so that the view shows them as one card, as in the main history.
+ * A result belongs to the oldest open call of the same name (without a name: to the
+ * oldest open one at all). The entries carry no call ID; this is the best approximation.
  */
 export function pairRunEntries(entries: SubagentEntry[]): RunItem[] {
   const items: RunItem[] = []
@@ -348,7 +349,7 @@ export function pairRunEntries(entries: SubagentEntry[]): RunItem[] {
       }
       case "tool_result": {
         const name = e.payload?.name
-        // Genau über die Aufruf-ID, sonst der älteste offene Aufruf gleichen Namens.
+        // exactly via the call ID, otherwise the oldest open call of the same name
         const callId = e.payload?.tool_call_id
         let i = callId ? open.findIndex((o) => o.item.call?.payload?.id === callId) : -1
         if (i < 0) i = open.findIndex((o) => !name || !o.name || o.name === name)
@@ -364,5 +365,5 @@ export function pairRunEntries(entries: SubagentEntry[]): RunItem[] {
   return items
 }
 
-/** true, wenn die Sitzung eines Socket-Aufrufs ein Subagenten-Lauf ist (nicht „main“, nicht leer). */
+/** true if the session of a socket call is a subagent run (not "main", not empty). */
 export const isSubagentSession = (session?: string): session is string => !!session && session !== "main"

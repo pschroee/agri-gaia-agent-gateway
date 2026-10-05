@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from "react"
 
-/** Ob die Oberfläche dunkel ist (Klasse `dark` am <html>, wie in index.css vorgesehen). */
+/** Whether the UI is dark (class `dark` on <html>, as intended in index.css). */
 const isDark = () => typeof document !== "undefined" && document.documentElement.classList.contains("dark")
 
 function subscribe(onChange: () => void) {

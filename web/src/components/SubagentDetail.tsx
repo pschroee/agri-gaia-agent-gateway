@@ -1,4 +1,4 @@
-// Eigene Ansicht eines Subagenten-Laufs: volle Breite des Chatbereichs, im Stil des Hauptverlaufs.
+// Own view of a subagent run: full width of the chat area, in the style of the main history.
 import { useLayoutEffect, useMemo, useRef, useState } from "react"
 import { BotIcon, ChevronRightIcon, ChevronsDownUpIcon, ChevronsUpDownIcon, WrenchIcon } from "lucide-react"
 import type { Artifact, LLMCall, SubagentEntry } from "@/api/types"
@@ -42,11 +42,11 @@ type Props = {
   runs: SubagentRun[]
   proxyIds: Set<string>
   llmCalls: LLMCall[]
-  /** Abgleich mit dem Protokoll des Orchestrators (E9). */
+  /** Matching against the orchestrator's log (E9). */
   evidence?: Map<string, Evidence>
-  /** Artefakte des Chats; angezeigt unter dem Werkzeugaufruf, der sie hochlud. */
+  /** Artifacts of the chat; shown below the tool call that uploaded them. */
   artifacts?: Artifact[]
-  /** Unter dem Verlauf, etwa offene Bestätigungen. */
+  /** Below the history, e.g. pending approvals. */
   footer?: React.ReactNode
 }
 
@@ -58,24 +58,24 @@ export function SubagentDetail({ chatId, chatTitle, chatRunning, runId, runs, pr
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-      <SubagentBar chatId={chatId} root={root} runId={runId} runTitle={run ? runTitle(run) : `Lauf ${shortRunId(runId)}`} />
+      <SubagentBar chatId={chatId} root={root} runId={runId} runTitle={run ? runTitle(run) : `Run ${shortRunId(runId)}`} />
       {run ? (
         <RunBody key={runId} run={run} runs={runs} chatId={chatId} chatRunning={chatRunning} proxyIds={proxyIds} llmCalls={llmCalls} evidence={evidence} artifacts={artifacts} />
       ) : (
         <div className="flex flex-1 flex-col items-center justify-center gap-2 p-6 text-center text-sm text-muted-foreground">
           <p>
-            Zu <span className="font-mono">{runId}</span> gibt es in diesem Chat (noch) keine Einträge.
+            There are no entries (yet) for <span className="font-mono">{runId}</span> in this chat.
           </p>
           <a href={chatHref(chatId)} className="text-sky-700 hover:underline">
-            Zurück zum Chat
+            Back to the chat
           </a>
         </div>
       )}
       {footer}
       <p className="border-t bg-muted/30 px-3 py-2.5 text-center text-xs text-muted-foreground">
-        Einmal-Auftrag eines Subagenten: nimmt keine Rückfragen an; hier steht der vollständige Verlauf.{" "}
+        One-off task of a subagent: it takes no follow-up questions; this is the full history.{" "}
         <a href={chatHref(chatId)} className="text-sky-700 hover:underline">
-          Zum Hauptagenten
+          To the main agent
         </a>
       </p>
     </div>
@@ -103,7 +103,7 @@ function RunBody({
 }) {
   const ref = useRef<HTMLDivElement>(null)
   const [stick, setStick] = useState(true)
-  // Zähler je Klick auf „alle auf-/zuklappen“; die Karten übernehmen ihn als Anfangszustand.
+  // Counter per click on "expand/collapse all"; the cards take it as their initial state.
   const [expand, setExpand] = useState<{ open: boolean; n: number }>({ open: false, n: 0 })
   const now = useNow(5000)
   const status = runStatus(run, { chatRunning, now })
@@ -113,7 +113,7 @@ function RunBody({
   const base = baseRunId(run.runId)
   const siblings = runs.filter((r) => baseRunId(r.runId) === base)
   const lastOpenTool = items.findLastIndex((i) => i.type === "tool" && !i.result)
-  // Eigene Aufgabenliste des Laufs, falls er das Werkzeug todo aufgerufen hat
+  // The run's own task list, if it called the tool todo
   const tasks = useMemo(() => tasksFromSubagentEntries(run.entries), [run.entries])
 
   const onScroll = () => {
@@ -136,36 +136,36 @@ function RunBody({
             <RunStatusBadge status={status} className="ml-auto" />
           </div>
           <dl className="mt-1.5 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-0.5 text-xs sm:grid-cols-[auto_minmax(0,1fr)_auto_minmax(0,1fr)]">
-            <dt className="text-muted-foreground">Beginn</dt>
+            <dt className="text-muted-foreground">Start</dt>
             <dd>{formatTime(iso(run.start))}</dd>
-            <dt className="text-muted-foreground">Letzte Aktivität</dt>
+            <dt className="text-muted-foreground">Last activity</dt>
             <dd>{formatTime(iso(run.end))}</dd>
-            <dt className="text-muted-foreground">Dauer</dt>
+            <dt className="text-muted-foreground">Duration</dt>
             <dd className="tabular-nums">{formatSpan(runDuration(run, status, now))}</dd>
-            <dt className="text-muted-foreground">Aufrufe</dt>
+            <dt className="text-muted-foreground">Calls</dt>
             <dd className="tabular-nums">
               {run.toolCalls}
-              {run.errors > 0 && <span className="text-red-700"> · {run.errors} Fehler</span>}
+              {run.errors > 0 && <span className="text-red-700"> · {run.errors} error{run.errors === 1 ? "" : "s"}</span>}
             </dd>
             <dt className="text-muted-foreground">Tokens</dt>
-            <dd className="tabular-nums" title="Am Proxy erfasste Modellaufrufe, deren Antwort in diesem Lauf vorkommt">
+            <dd className="tabular-nums" title="Model calls recorded at the proxy whose response appears in this run">
               {metrics.tokens === undefined
                 ? "–"
-                : `${formatTokens(metrics.input)} ein · ${formatTokens(metrics.output)} aus · ${formatUsd(metrics.cost)}`}
+                : `${formatTokens(metrics.input)} in · ${formatTokens(metrics.output)} out · ${formatUsd(metrics.cost)}`}
             </dd>
-            <dt className="text-muted-foreground">Am Proxy belegt</dt>
+            <dt className="text-muted-foreground">Confirmed at proxy</dt>
             <dd className="tabular-nums">
-              {conf.confirmed} von {conf.total} Einträgen
+              {conf.confirmed} of {conf.total} entries
             </dd>
           </dl>
           <p className="mt-1.5 text-[11px] text-muted-foreground">
-            Die Einträge stammen aus der Sitzungsdatei des Subagenten im Container von pi; „am Proxy belegt“ heißt,
-            die zugehörige Modellantwort ist außerhalb der Sandbox erfasst. Werkzeugaufrufe tragen „belegt“, wenn der
-            Orchestrator sie selbst ausgeführt hat. Der Status ist aus den Einträgen abgeleitet.
+            The entries come from the subagent's session file in the pi container; "confirmed at proxy" means the
+            corresponding model response is recorded outside the sandbox. Tool calls show "confirmed" when the
+            orchestrator executed them itself. The status is derived from the entries.
           </p>
           {siblings.length > 1 && (
             <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs">
-              <span className="text-muted-foreground">Parallele Läufe:</span>
+              <span className="text-muted-foreground">Parallel runs:</span>
               {siblings.map((r) => (
                 <a
                   key={r.runId}
@@ -186,8 +186,8 @@ function RunBody({
         </section>
 
         {tasks && taskCounts(tasks).total > 0 && (
-          <section className="rounded-md border px-3 py-2 text-xs" aria-label="Aufgaben des Subagenten">
-            <div className="mb-1 font-medium text-muted-foreground">Aufgaben des Subagenten · {taskCountLabel(taskCounts(tasks))}</div>
+          <section className="rounded-md border px-3 py-2 text-xs" aria-label="Subagent tasks">
+            <div className="mb-1 font-medium text-muted-foreground">Subagent tasks · {taskCountLabel(taskCounts(tasks))}</div>
             <TaskList tasks={tasks} />
           </section>
         )}
@@ -196,7 +196,7 @@ function RunBody({
           <div className="-mb-2 flex justify-end">
             <Button size="sm" variant="ghost" onClick={() => setExpand((e) => ({ open: !e.open, n: e.n + 1 }))}>
               {expand.open ? <ChevronsDownUpIcon /> : <ChevronsUpDownIcon />}
-              {expand.open ? "Alle zuklappen" : "Alle aufklappen"}
+              {expand.open ? "Collapse all" : "Expand all"}
             </Button>
           </div>
         )}
@@ -226,7 +226,7 @@ function RunBody({
               return null
           }
         })}
-        {items.length === 0 && <p className="py-8 text-center text-sm text-muted-foreground">Noch keine Einträge.</p>}
+        {items.length === 0 && <p className="py-8 text-center text-sm text-muted-foreground">No entries yet.</p>}
         <RunFooter status={status} />
       </div>
     </div>
@@ -237,7 +237,7 @@ function RunFooter({ status }: { status: RunStatus }) {
   if (status !== "stopped") return null
   return (
     <p className="text-center text-xs text-muted-foreground">
-      Der Lauf endet ohne Textantwort. Der Chat arbeitet nicht mehr; womöglich wurde er abgebrochen.
+      The run ends without a text response. The chat is no longer working; it may have been aborted.
     </p>
   )
 }
@@ -246,11 +246,11 @@ function TaskBubble({ entry, proxyIds }: { entry: SubagentEntry; proxyIds: Set<s
   return (
     <div className="ml-auto flex max-w-[90%] min-w-0 flex-col items-end gap-1 sm:max-w-[85%]">
       <div className="flex flex-wrap items-center justify-end gap-x-2 text-[11px] text-muted-foreground">
-        <span>Auftrag vom Hauptagenten</span>
+        <span>Task from the main agent</span>
         <Provenance confirmed={isEntryConfirmed(entry, proxyIds)} />
       </div>
       <div className="max-w-full rounded-lg bg-primary px-3 py-2 text-sm break-words whitespace-pre-wrap text-primary-foreground">
-        {entry.payload?.text || "(leer)"}
+        {entry.payload?.text || "(empty)"}
       </div>
     </div>
   )
@@ -268,7 +268,7 @@ function TextEntry({ entry, proxyIds }: { entry: SubagentEntry; proxyIds: Set<st
   )
 }
 
-/** Werkzeugaufruf eines Subagenten samt Ergebnis, im Stil von ToolCallCard. */
+/** Tool call of a subagent with its result, in the style of ToolCallCard. */
 function RunToolCard({
   call,
   result,
@@ -288,11 +288,11 @@ function RunToolCard({
   evidence?: Map<string, Evidence>
   settled: boolean
   defaultOpen: boolean
-  /** Aufruf ohne Ergebnis, der vermutlich gerade läuft. */
+  /** Call without a result that is probably running right now. */
   pending: boolean
 }) {
   const [open, setOpen] = useState(defaultOpen)
-  const name = call?.payload?.name || result?.payload?.name || "Werkzeug"
+  const name = call?.payload?.name || result?.payload?.name || "tool"
   const view = describeToolArgs(name, parseArguments(call?.payload?.arguments))
   const error = result?.payload?.is_error === true
   const callConfirmed = call ? isEntryConfirmed(call, proxyIds) : undefined
@@ -322,17 +322,17 @@ function RunToolCard({
               callConfirmed !== undefined && <Provenance confirmed={callConfirmed} className="hidden sm:inline-flex" />
             )}
             {error ? (
-              <Badge variant="destructive">Fehler</Badge>
+              <Badge variant="destructive">error</Badge>
             ) : result ? (
               <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-emerald-800">
-                fertig
+                done
               </Badge>
             ) : pending ? (
               <Badge variant="outline" className="border-sky-200 bg-sky-50 text-sky-800">
-                läuft
+                running
               </Badge>
             ) : (
-              <Badge variant="outline">ohne Ergebnis</Badge>
+              <Badge variant="outline">no result</Badge>
             )}
           </span>
         </CollapsibleTrigger>
@@ -340,7 +340,7 @@ function RunToolCard({
           {call ? (
             <>
               <div className="flex flex-wrap items-center gap-x-2 text-[11px] text-muted-foreground">
-                <span>Aufruf {formatTime(call.created_at)}</span>
+                <span>Call {formatTime(call.created_at)}</span>
                 <Provenance confirmed={callConfirmed!} />
               </div>
               {view.sections.map((s, i) => (
@@ -348,13 +348,13 @@ function RunToolCard({
               ))}
             </>
           ) : (
-            <p className="text-xs text-muted-foreground">Der zugehörige Aufruf fehlt in der Sitzungsdatei.</p>
+            <p className="text-xs text-muted-foreground">The corresponding call is missing from the session file.</p>
           )}
           {result ? (
             <Section
               title={
                 <span className="flex flex-wrap items-center gap-x-2">
-                  <span className={cn(error && "text-red-700")}>{error ? "Fehler" : "Ergebnis"}</span>
+                  <span className={cn(error && "text-red-700")}>{error ? "Error" : "Result"}</span>
                   <span className="font-normal">{formatTime(result.created_at)}</span>
                   <Provenance confirmed={resultConfirmed!} />
                 </span>
@@ -364,7 +364,7 @@ function RunToolCard({
               className="max-h-[28rem]"
             />
           ) : (
-            <p className="text-xs text-muted-foreground">{pending ? "Noch kein Ergebnis." : "Kein Ergebnis in der Sitzungsdatei."}</p>
+            <p className="text-xs text-muted-foreground">{pending ? "No result yet." : "No result in the session file."}</p>
           )}
           {ev && <EvidenceDetails evidence={ev} settled={settled} />}
         </CollapsibleContent>

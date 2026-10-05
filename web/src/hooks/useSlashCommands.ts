@@ -2,25 +2,25 @@ import { useState } from "react"
 import type { Command, CommandOption } from "@/api/types"
 import { filterCommands, filterOptions, slashArg, slashQuery } from "@/lib/commands"
 
-/** Ein Eintrag im Popover: ein Befehl oder ein Argument eines Befehls (/model, /effort). */
+/** An entry in the popover: a command or an argument of a command (/model, /effort). */
 export type SlashItem = { command: Command; option?: CommandOption }
 
 export type SlashState = {
   open: boolean
   items: SlashItem[]
-  /** Gesetzt, wenn Argumente eines Befehls vorgeschlagen werden. */
+  /** Set when arguments of a command are suggested. */
   argsOf?: Command
   active: number
   setActive: (i: number) => void
   pick: (item: SlashItem) => void
   close: () => void
-  /** Tastenbehandlung im Eingabefeld; true, wenn die Taste verbraucht wurde. */
+  /** Key handling in the input field; true if the key was consumed. */
   onKeyDown: (e: React.KeyboardEvent) => boolean
 }
 
-/** Einträge fürs Popover: bei „/name“ die Befehle, bei „/name arg“ die Argumente des Befehls.
- * Ist das Argument schon vollständig (ein Wert passt genau), gibt es nichts mehr vorzuschlagen,
- * damit Enter sendet. */
+/** Entries for the popover: for "/name" the commands, for "/name arg" the arguments of the command.
+ * If the argument is already complete (a value matches exactly), there is nothing left to suggest,
+ * so that Enter sends. */
 export function slashItems(commands: Command[], text: string): { items: SlashItem[]; argsOf?: Command } {
   const query = slashQuery(text)
   if (query !== undefined) return { items: filterCommands(commands, query).map((command) => ({ command })) }
@@ -31,7 +31,7 @@ export function slashItems(commands: Command[], text: string): { items: SlashIte
   return { items: filterOptions(command.options, arg.query).map((option) => ({ command, option })), argsOf: command }
 }
 
-/** Zustand des Befehls-Popovers: öffnet bei „/“ am Anfang, filtert beim Tippen. */
+/** State of the command popover: opens on "/" at the start, filters while typing. */
 export function useSlashCommands(commands: Command[], text: string, setText: (t: string) => void): SlashState {
   const [active, setActive] = useState(0)
   const [dismissed, setDismissed] = useState<string>()

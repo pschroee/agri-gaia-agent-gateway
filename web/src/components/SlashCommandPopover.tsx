@@ -4,13 +4,13 @@ import { Popover, PopoverAnchor, PopoverContent } from "@/components/ui/popover"
 import type { SlashState } from "@/hooks/useSlashCommands"
 
 const sourceLabel: Record<string, string> = {
-  builtin: "eingebaut",
-  extension: "Erweiterung",
-  prompt: "Vorlage",
-  skill: "Skill",
+  builtin: "built-in",
+  extension: "extension",
+  prompt: "template",
+  skill: "skill",
 }
 
-/** Befehlsliste über dem Eingabefeld; der Fokus bleibt im Eingabefeld. */
+/** Command list above the input field; focus stays in the input field. */
 export function SlashCommandPopover({ state, children }: { state: SlashState; children: React.ReactNode }) {
   const current = state.items[state.active]
   const key = (i: { command: { name: string }; option?: { value: string } }) =>
@@ -32,8 +32,8 @@ export function SlashCommandPopover({ state, children }: { state: SlashState; ch
             <CommandGroup
               heading={
                 state.argsOf
-                  ? `/${state.argsOf.name}: Wert wählen (↑↓, Enter/Tab übernehmen, Esc schließen)`
-                  : "Befehle (↑↓ wählen, Enter/Tab übernehmen, Esc schließen)"
+                  ? `/${state.argsOf.name}: choose a value (↑↓, Enter/Tab to accept, Esc to close)`
+                  : "Commands (↑↓ to choose, Enter/Tab to accept, Esc to close)"
               }
             >
               {state.items.map((item, i) =>
@@ -50,7 +50,7 @@ export function SlashCommandPopover({ state, children }: { state: SlashState; ch
                     </div>
                     {item.option.current && (
                       <Badge variant="outline" className="shrink-0 text-[10px]">
-                        aktuell
+                        current
                       </Badge>
                     )}
                   </CommandItem>

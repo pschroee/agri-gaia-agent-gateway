@@ -1,19 +1,19 @@
-// Warteschlange eines Chats: Nachrichten, die während eines Laufs (oder beim Fortsetzen) gesendet
-// wurden. Der Orchestrator hält sie (poc/API.md, „Warteschlange“); die UI zeigt sie über dem
-// Eingabefeld, bis sie übergeben sind.
+// Queue of a chat: messages sent during a run (or while resuming). The orchestrator
+// holds them (poc/API.md, "Queue"); the UI shows them above the
+// input field until they are handed over.
 import type { AutoHeldEvent, Chat, HoldReason, QueueEntry } from "@/api/types"
 import { systemEntryLabel } from "@/lib/systemnote"
 
-/** Eingereiht, aber die Antwort des Servers steht noch aus (optimistisch). */
+/** Queued, but the server's response is still pending (optimistic). */
 export type LocalQueued = { key: string; text: string; attachments: string[] }
 
 /**
- * `system`: Meldung des Orchestrators (kind "system", etwa das Ende einer Hintergrundaufgabe);
- * `label`: deren Kurzzeile, sofern lesbar. Nur das Serverkennzeichen zählt, nie der Text.
+ * `system`: orchestrator note (kind "system", e.g. the end of a background task);
+ * `label`: its short line, if readable. Only the server's mark counts, never the text.
  */
 export type QueueRow = { key: string; id?: string; text: string; attachments: string[]; sending: boolean; system: boolean; label?: string }
 
-/** Server-Einträge in Reihenfolge, danach die noch unbestätigten. */
+/** Server entries in order, followed by the not yet confirmed ones. */
 export function queueRows(server: QueueEntry[], local: LocalQueued[]): QueueRow[] {
   return [
     ...server.map((e) => {
@@ -27,37 +27,37 @@ export function queueRows(server: QueueEntry[], local: LocalQueued[]): QueueRow[
 }
 
 /**
- * Wird eine neue Nachricht voraussichtlich eingereiht? Dann zeigt die UI sie gleich in der
- * Warteschlange statt im Verlauf. Maßgeblich bleibt die Antwort des Servers (`queued`).
+ * Will a new message probably be queued? Then the UI shows it right away in the
+ * queue instead of the history. The server's response (`queued`) remains authoritative.
  */
 export function expectQueued(chat: Pick<Chat, "running" | "resuming">, inFlight: number): boolean {
   return chat.running || !!chat.resuming || inFlight > 0
 }
 
-/** Einzeilige Vorschau eines eingereihten Texts. */
+/** Single-line preview of a queued text. */
 export function queuePreview(text: string, max = 140): string {
   const one = text.split(/\s+/).filter(Boolean).join(" ")
   return one.length > max ? `${one.slice(0, max).trimEnd()} …` : one
 }
 
-/** Warum Eingereihtes zurückgehalten ist (hold_reason am Chat), für die Zeile über dem Eingabefeld. */
+/** Why queued entries are held back (hold_reason on the chat), for the line above the input field. */
 export function holdReasonText(r: HoldReason | undefined): string | undefined {
   switch (r) {
     case "abort":
-      return "angehalten nach Abbruch"
+      return "paused after abort"
     case "wake_limit":
-      return "Grenze der Weckrufe je Stunde erreicht"
+      return "limit of wake-ups per hour reached"
     case "auto_turns":
-      return "Grenze der Durchgänge ohne Nutzer erreicht"
+      return "limit of turns without the user reached"
   }
   return undefined
 }
 
-/** Hinweis bei SSE „auto_held“: Meldungen bleiben eingereiht, weil eine Grenze erreicht ist. */
+/** Notice for SSE "auto_held": notes stay queued because a limit has been reached. */
 export function autoHeldText(e: AutoHeldEvent): string {
   const why =
     e.reason === "auto_turns"
-      ? `${e.count} Durchgänge ohne Nutzer in Folge (Grenze ${e.limit})`
-      : `Grenze der Weckrufe je Stunde erreicht (${e.limit})`
-  return `Meldungen an den Agenten bleiben eingereiht: ${why}. Sie gehen mit der nächsten Nachricht oder über „Jetzt senden“.`
+      ? `${e.count} turns without the user in a row (limit ${e.limit})`
+      : `limit of wake-ups per hour reached (${e.limit})`
+  return `Notes to the agent stay queued: ${why}. They go out with the next message or via "Send now".`
 }

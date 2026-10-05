@@ -4,38 +4,38 @@ import { workspaceSummary } from "@/lib/workspace"
 const now = new Date("2026-09-29T18:00:00")
 
 describe("workspaceSummary", () => {
-  it("ohne Sicherung", () => {
-    expect(workspaceSummary(undefined, now)).toEqual({ text: "Noch nicht gesichert." })
+  it("without backup", () => {
+    expect(workspaceSummary(undefined, now)).toEqual({ text: "Not backed up yet." })
   })
 
-  it("gesichert, heute nur mit Uhrzeit", () => {
+  it("backed up, today only with the time", () => {
     const s = workspaceSummary(
       { size: 1258291, archive_size: 400000, files: 14, saved_at: new Date("2026-09-29T17:05:00").toISOString() },
       now,
     )
-    expect(s.text).toBe("Gesichert: 1,2 MiB, 14 Dateien, 17:05")
+    expect(s.text).toBe("Backed up: 1.2 MiB, 14 files, 17:05")
     expect(s.warning).toBeUndefined()
   })
 
-  it("ausgelassen über der Grenze: Warnung, frühere Sicherung gilt", () => {
+  it("skipped above the limit: warning, earlier backup applies", () => {
     const s = workspaceSummary(
       {
         size: 2048,
         archive_size: 900,
         files: 1,
         saved_at: new Date("2026-09-28T09:00:00").toISOString(),
-        skipped_reason: "312,0 MB in /workspace, Grenze 200,0 MB",
+        skipped_reason: "312.0 MB in /workspace, limit 200.0 MB",
         skipped_at: new Date("2026-09-29T17:30:00").toISOString(),
       },
       now,
     )
-    expect(s.text).toMatch(/^Gesichert: 2,0 KiB, 1 Datei, 28\.09\.26/)
-    expect(s.warning).toBe("Zuletzt nicht gesichert (17:30): 312,0 MB in /workspace, Grenze 200,0 MB. Beim Fortsetzen gilt die Sicherung oben.")
+    expect(s.text).toMatch(/^Backed up: 2\.0 KiB, 1 file, 9\/28\/26/)
+    expect(s.warning).toBe("Last backup skipped (17:30): 312.0 MB in /workspace, limit 200.0 MB. On resume, the backup above applies.")
   })
 
-  it("ausgelassen ohne frühere Sicherung", () => {
-    const s = workspaceSummary({ size: 0, archive_size: 0, files: 0, skipped_reason: "zu groß" }, now)
-    expect(s.text).toBe("Noch nicht gesichert.")
-    expect(s.warning).toContain("gehen die Dateien verloren")
+  it("skipped without an earlier backup", () => {
+    const s = workspaceSummary({ size: 0, archive_size: 0, files: 0, skipped_reason: "too large" }, now)
+    expect(s.text).toBe("Not backed up yet.")
+    expect(s.warning).toContain("the files are lost")
   })
 })

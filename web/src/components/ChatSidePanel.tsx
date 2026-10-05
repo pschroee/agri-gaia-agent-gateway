@@ -21,32 +21,32 @@ type Props = {
   chatId: string
   chatTitle: string
   chatRunning: boolean
-  /** Lauf der offenen Detailansicht; dann öffnet der Reiter „Subagenten“. */
+  /** Run of the open detail view; then the "Subagents" tab opens. */
   activeRunId?: string
-  /** Nach einem Klick auf einen Lauf, etwa um das Seitenblatt zu schließen. */
+  /** After a click on a run, e.g. to close the side sheet. */
   onNavigate?: () => void
   artifacts: Artifact[]
   socketCalls: SocketCall[]
-  /** Übertragene Rechte des Chats (fehlt: ohne Delegation). */
+  /** Delegated rights of the chat (missing: no delegation). */
   delegation?: Delegation
   runs: SubagentRun[]
   llmCalls: LLMCall[]
   modelName: (id: string) => string
-  /** Sicherung von /workspace (Chat-Feld workspace). */
+  /** Backup of /workspace (chat field workspace). */
   workspace?: WorkspaceBackup
-  /** Aufgabenliste des Agenten (aus den todo-Aufrufen). */
+  /** Task list of the agent (from the todo calls). */
   tasks?: Task[]
-  /** Abgleich der Werkzeugaufrufe mit dem Protokoll des Orchestrators (E9). */
+  /** Matching of the tool calls against the orchestrator's log (E9). */
   evidence?: Map<string, Evidence>
-  /** Hintergrundaufgaben (bash mit run_in_background). */
+  /** Background tasks (bash with run_in_background). */
   background?: BackgroundTask[]
-  /** Ändert sich der Wert, öffnet der Reiter „Hintergrund“ (Zähler im Chatkopf, Karten im Verlauf). */
+  /** When the value changes, the "Background" tab opens (counter in the chat header, cards in the history). */
   backgroundFocus?: number
-  /** Aufgabe, die dabei aufgeklappt und in den Blick gerückt wird. */
+  /** Task that is expanded and scrolled into view. */
   backgroundFocusId?: string
   /**
-   * Das Panel entsteht gerade wegen dieses Klicks (Seitenblatt auf schmalen Bildschirmen, das beim
-   * Öffnen neu eingehängt wird): gleich mit dem Reiter „Hintergrund“ beginnen.
+   * The panel is being created because of this click (side sheet on narrow screens, which is mounted
+   * anew when opened): start with the "Background" tab right away.
    */
   backgroundFocusFresh?: boolean
 }
@@ -75,13 +75,13 @@ export function ChatSidePanel({
   backgroundFocusId,
   backgroundFocusFresh = false,
 }: Props) {
-  // Werkzeuge ohne Ausführung in der Sandbox (todo, subagent, MCP) zählen hier nicht.
+  // Tools without execution in the sandbox (todo, subagent, MCP) do not count here.
   const executable = new Map([...evidence].filter(([, e]) => e.state !== "internal"))
   const execSummary = evidenceSummary(executable)
   const flagged = chatRunning ? 0 : execSummary.flagged
   const inputs = artifacts.filter((a) => a.kind === "input")
   const outputs = artifacts.filter((a) => a.kind !== "input")
-  // Beim Öffnen eines Laufs springt der Reiter auf „Subagenten“; sonst bleibt die Wahl des Nutzers.
+  // Opening a run switches the tab to "Subagents"; otherwise the user's choice stays.
   const [tab, setTab] = useState(activeRunId ? "subagents" : backgroundFocusFresh ? "background" : "artifacts")
   const [prevRun, setPrevRun] = useState(activeRunId)
   if (prevRun !== activeRunId) {
@@ -97,26 +97,26 @@ export function ChatSidePanel({
   return (
     <Tabs value={tab} onValueChange={setTab} className="flex h-full min-h-0 flex-col gap-0">
       <TabsList className="m-2 grid w-[calc(100%-1rem)] grid-cols-2 gap-0.5 group-data-horizontal/tabs:h-auto">
-        <TabsTrigger className={trigger} value="tasks">Aufgaben ({visibleTasks(tasks).length})</TabsTrigger>
-        <TabsTrigger className={trigger} value="subagents">Subagenten ({runs.length})</TabsTrigger>
-        <TabsTrigger className={trigger} value="artifacts">Artefakte ({artifacts.length})</TabsTrigger>
-        <TabsTrigger className={trigger} value="llm">Modellaufrufe ({llmCalls.length})</TabsTrigger>
+        <TabsTrigger className={trigger} value="tasks">Tasks ({visibleTasks(tasks).length})</TabsTrigger>
+        <TabsTrigger className={trigger} value="subagents">Subagents ({runs.length})</TabsTrigger>
+        <TabsTrigger className={trigger} value="artifacts">Artifacts ({artifacts.length})</TabsTrigger>
+        <TabsTrigger className={trigger} value="llm">Model calls ({llmCalls.length})</TabsTrigger>
         <TabsTrigger
           className={cn(trigger, flagged > 0 && "text-red-700")}
           value="exec"
-          title="Werkzeugausführungen durch den Orchestrator, abgeglichen mit den Anforderungen am Proxy"
+          title="Tool executions by the orchestrator, matched against the requests at the proxy"
         >
-          Ausführungen ({execSummary.total}){flagged > 0 ? ` · ${flagged}!` : ""}
+          Executions ({execSummary.total}){flagged > 0 ? ` · ${flagged}!` : ""}
         </TabsTrigger>
         <TabsTrigger className={trigger} value="socket">
-          Socket-Protokoll ({socketCalls.length})
+          Socket log ({socketCalls.length})
         </TabsTrigger>
         <TabsTrigger
           className={cn(trigger, bgRunning > 0 && "text-sky-700 dark:text-sky-400")}
           value="background"
-          title="Hintergrundaufgaben (bash mit run_in_background)"
+          title="Background tasks (bash with run_in_background)"
         >
-          Hintergrund ({bgRunning > 0 ? `${bgRunning}/${background.length}` : background.length})
+          Background ({bgRunning > 0 ? `${bgRunning}/${background.length}` : background.length})
         </TabsTrigger>
       </TabsList>
       <TabsContent value="background" className="min-h-0 flex-1 overflow-y-auto px-3 pb-3">
@@ -126,12 +126,12 @@ export function ChatSidePanel({
         <ExecutionsPanel evidence={executable} summary={execSummary} settled={!chatRunning} />
       </TabsContent>
       <TabsContent value="artifacts" className="min-h-0 flex-1 overflow-y-auto px-3 pb-3">
-        <ArtifactGroup title="Ergebnisse (vom Agenten)" chatId={chatId} list={outputs} empty="Noch keine Ergebnisse." />
+        <ArtifactGroup title="Results (from the agent)" chatId={chatId} list={outputs} empty="No results yet." />
         <ArtifactGroup
-          title="Eingaben (vom Nutzer)"
+          title="Inputs (from the user)"
           chatId={chatId}
           list={inputs}
-          empty="Keine Eingaben. Hochgeladene Dateien liegen in der Sandbox unter /workspace/inputs/."
+          empty="No inputs. Uploaded files are in the sandbox under /workspace/inputs/."
         />
         <WorkspaceNote workspace={workspace} />
       </TabsContent>
@@ -192,15 +192,15 @@ function ArtifactGroup({ title, chatId, list, empty }: { title: string; chatId: 
   )
 }
 
-/** Dezenter Hinweis, ob /workspace gesichert ist (übersteht das Ruhen des Chats). */
+/** Subtle note whether /workspace is backed up (survives the chat idling). */
 function WorkspaceNote({ workspace }: { workspace?: WorkspaceBackup }) {
   const { text, warning } = workspaceSummary(workspace)
   return (
     <section className="mb-4 text-xs text-muted-foreground">
-      <h3 className="mb-1.5 font-semibold tracking-wide uppercase">Arbeitsbereich</h3>
+      <h3 className="mb-1.5 font-semibold tracking-wide uppercase">Workspace</h3>
       <p
         className="flex items-center gap-1.5"
-        title="/workspace ohne inputs/, node_modules, .venv, __pycache__ und .cache; wird nach jeder Antwort und beim Ruhen gesichert und beim Fortsetzen wiederhergestellt"
+        title="/workspace without inputs/, node_modules, .venv, __pycache__ and .cache; backed up after every response and when idling, restored when resuming"
       >
         <HardDriveIcon className="size-3.5 shrink-0" />
         {text}
@@ -215,14 +215,14 @@ function WorkspaceNote({ workspace }: { workspace?: WorkspaceBackup }) {
   )
 }
 
-const idLabel = (id: string) => (id === "*" ? "alle" : id === "own" ? "selbst angelegte" : id)
+const idLabel = (id: string) => (id === "*" ? "all" : id === "own" ? "self-created" : id)
 
-/** Übertragene Rechte über dem Socket-Protokoll: gegen sie prüft der Autorisierungsdienst jeden Aufruf. */
+/** Delegated rights above the socket log: the authorization service checks every call against them. */
 function DelegationCard({ delegation }: { delegation?: Delegation }) {
   if (!delegation) {
     return (
       <p className="mb-2 rounded-md border border-dashed p-2 text-xs text-muted-foreground">
-        Ohne Delegation: Lesen geht ohne Rückfrage, Schreiben braucht eine Bestätigung.
+        No delegation: reading works without asking, writing needs approval.
       </p>
     )
   }
@@ -230,15 +230,15 @@ function DelegationCard({ delegation }: { delegation?: Delegation }) {
   return (
     <div className={cn("mb-2 rounded-md border p-2 text-xs", enforce ? "border-emerald-300 bg-emerald-50/60" : "border-amber-300 bg-amber-50/60")}>
       <div className="font-medium">
-        Übertragene Rechte · {enforce ? "Übergriffe werden abgewiesen" : "Übergriffe werden nur protokolliert"}
+        Delegated rights · {enforce ? "violations are refused" : "violations are only logged"}
       </div>
-      {delegation.expires_at && <div className="text-muted-foreground">gültig bis {formatTime(delegation.expires_at)}</div>}
+      {delegation.expires_at && <div className="text-muted-foreground">valid until {formatTime(delegation.expires_at)}</div>}
       <ul className="mt-1 font-mono">
-        {delegation.rules.length === 0 && <li>keine Rechte</li>}
+        {delegation.rules.length === 0 && <li>no rights</li>}
         {delegation.rules.map((r, i) => (
           <li key={i}>
             {r.action} {r.resource}
-            {r.ids && r.ids.length > 0 ? `: ${r.ids.map(idLabel).join(", ")}` : " (ohne Objekt)"}
+            {r.ids && r.ids.length > 0 ? `: ${r.ids.map(idLabel).join(", ")}` : " (no object)"}
           </li>
         ))}
       </ul>
@@ -247,7 +247,7 @@ function DelegationCard({ delegation }: { delegation?: Delegation }) {
 }
 
 function SocketLog({ calls, chatId, runs }: { calls: SocketCall[]; chatId: string; runs: SubagentRun[] }) {
-  if (calls.length === 0) return <p className="text-xs text-muted-foreground">Noch keine Aufrufe über den Socket.</p>
+  if (calls.length === 0) return <p className="text-xs text-muted-foreground">No calls over the socket yet.</p>
   const sorted = [...calls].sort((a, b) => b.id - a.id)
   return (
     <ul className="flex flex-col gap-1.5">
@@ -257,7 +257,8 @@ function SocketLog({ calls, chatId, runs }: { calls: SocketCall[]; chatId: strin
           className={cn(
             "rounded-md border p-2 font-mono text-xs",
             (c.op === "agent_limit" || c.op === "subagent_limit") && "border-amber-300 bg-amber-50/60",
-            /übergriff/i.test(c.result ?? "") && "border-red-300 bg-red-50/60",
+            // "violation" in current socket results, "übergriff" in results logged before the English translation
+            /violation|übergriff/i.test(c.result ?? "") && "border-red-300 bg-red-50/60",
           )}
         >
           <div className="flex items-center gap-1.5">
@@ -273,7 +274,10 @@ function SocketLog({ calls, chatId, runs }: { calls: SocketCall[]; chatId: strin
           {c.result && (
             <div
               className={
-                /fehl|error|denied|reject|abgelehnt|abgewiesen|abgebrochen|expired|übergriff/i.test(c.result)
+                // English results (refused, violation, error, …) plus the legacy German ones of older chats
+                /fail|error|denied|reject|refused|abort|expired|violation|fehl|abgelehnt|abgewiesen|abgebrochen|übergriff/i.test(
+                  c.result,
+                )
                   ? "text-red-700"
                   : "text-muted-foreground"
               }

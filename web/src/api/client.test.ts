@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { urls } from "./client"
 
-// Die UI läuft unter / und hinter einem Proxy unter /agent/; alle Adressen sind deshalb relativ zum Dokument.
+// The UI runs under / and behind a proxy under /agent/; all addresses are therefore relative to the document.
 describe("urls", () => {
   const all = [
     urls.session("c 1"),
@@ -9,10 +9,10 @@ describe("urls", () => {
     urls.artifact("c 1", "a b.csv", "output"),
     urls.image("c 1", "/workspace/plot.png", "resp-1"),
   ]
-  it("sind relativ", () => {
+  it("are relative", () => {
     for (const u of all) expect(u.startsWith("api/chats/c%201/"), u).toBe(true)
   })
-  it("bleiben unter dem Pfadpräfix", () => {
+  it("stay under the path prefix", () => {
     expect(new URL(urls.events("c1"), "https://app.example/agent/?embed=1#/chats/c1").href).toBe(
       "https://app.example/agent/api/chats/c1/events",
     )

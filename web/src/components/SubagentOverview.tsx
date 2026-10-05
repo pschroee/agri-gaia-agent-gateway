@@ -1,5 +1,5 @@
-// Übersicht der Subagenten: Klappmenü im Chatkopf, Umschalter in den Brotkrumen der Detailansicht und
-// Baum („Hauptagent“ mit den Läufen darunter) im Seitenreiter.
+// Overview of the subagents: dropdown in the chat header, switcher in the breadcrumbs of the detail view and
+// tree ("main agent" with the runs below it) in the side tab.
 import { useState } from "react"
 import { ArrowLeftIcon, BotIcon, ChevronDownIcon, ChevronRightIcon, ChevronsUpDownIcon } from "lucide-react"
 import {
@@ -46,20 +46,20 @@ export function StatusDot({ status, className }: { status: RunStatus; className?
 }
 
 function metricsTitle(m: RunMetrics): string {
-  const parts = [`${m.toolCalls} Werkzeugaufruf${m.toolCalls === 1 ? "" : "e"}`]
-  if (m.errors) parts.push(`${m.errors} Fehler`)
+  const parts = [`${m.toolCalls} tool call${m.toolCalls === 1 ? "" : "s"}`]
+  if (m.errors) parts.push(`${m.errors} error${m.errors === 1 ? "" : "s"}`)
   if (m.tokens !== undefined) {
-    const calls = `${m.llmCalls} Modellaufruf${m.llmCalls === 1 ? "" : "e"} am Proxy`
-    parts.push(`${m.input} ein · ${m.output} aus · ${m.cacheRead} aus dem Cache (${calls})`)
+    const calls = `${m.llmCalls} model call${m.llmCalls === 1 ? "" : "s"} at the proxy`
+    parts.push(`${m.input} in · ${m.output} out · ${m.cacheRead} from cache (${calls})`)
   }
   if (m.cost !== undefined) parts.push(formatUsd(m.cost))
   return parts.join(" · ")
 }
 
-/** Kurzform: Tokens, wenn am Proxy zugeordnet, sonst Anzahl Werkzeugaufrufe. */
+/** Short form: tokens if matched at the proxy, otherwise the number of tool calls. */
 function metricsShort(m: RunMetrics): string {
-  if (m.tokens !== undefined) return `${formatTokensShort(m.tokens)} Tokens`
-  return `${m.toolCalls} Aufruf${m.toolCalls === 1 ? "" : "e"}`
+  if (m.tokens !== undefined) return `${formatTokensShort(m.tokens)} tokens`
+  return `${m.toolCalls} call${m.toolCalls === 1 ? "" : "s"}`
 }
 
 function MenuRows({ chatId, root, activeRunId, withMain }: { chatId: string; root: AgentNode; activeRunId?: string; withMain?: boolean }) {
@@ -75,7 +75,7 @@ function MenuRows({ chatId, root, activeRunId, withMain }: { chatId: string; roo
             <BotIcon className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
             <span className="min-w-0 flex-1">
               <span className="block truncate font-medium" title={root.title}>
-                Hauptagent
+                Main agent
               </span>
               <span className="block truncate text-xs text-muted-foreground">
                 {root.title} · {runStatusLabel(root.status)}
@@ -100,7 +100,7 @@ function MenuRows({ chatId, root, activeRunId, withMain }: { chatId: string; roo
               </span>
               <span className="block truncate text-xs text-muted-foreground">
                 {n.subtitle} · {runStatusLabel(n.status)}
-                {n.metrics.errors > 0 && <span className="text-red-700"> · {n.metrics.errors} Fehler</span>}
+                {n.metrics.errors > 0 && <span className="text-red-700"> · {n.metrics.errors} error{n.metrics.errors === 1 ? "" : "s"}</span>}
               </span>
             </span>
             <span className="shrink-0 text-right text-[11px] leading-4 text-muted-foreground tabular-nums" title={metricsTitle(n.metrics)}>
@@ -117,7 +117,7 @@ function MenuRows({ chatId, root, activeRunId, withMain }: { chatId: string; roo
 
 const menuContent = "w-[26rem] max-w-[calc(100vw-1.5rem)]"
 
-/** Chatkopf: „2 Subagenten ⌄“ mit der Liste der Läufe; ohne Läufe nichts. */
+/** Chat header: "2 subagents ⌄" with the list of runs; nothing without runs. */
 type MenuProps = { chatId: string; tree: AgentTreeInput; activeRunId?: string }
 
 export function SubagentsMenu({ chatId, tree, activeRunId }: MenuProps) {
@@ -129,21 +129,21 @@ export function SubagentsMenu({ chatId, tree, activeRunId }: MenuProps) {
     <DropdownMenu>
       <DropdownMenuTrigger
         className="inline-flex shrink-0 items-center gap-1 rounded-md border border-violet-200 bg-violet-50/60 px-2 py-0.5 text-xs font-medium text-violet-900 hover:bg-violet-100 data-[state=open]:bg-violet-100"
-        aria-label={`${subagentCountLabel(count)}${running ? `, ${running} läuft` : ""}: Liste öffnen`}
+        aria-label={`${subagentCountLabel(count)}${running ? `, ${running} running` : ""}: open list`}
       >
         {running > 0 && <StatusDot status="running" />}
         {subagentCountLabel(count)}
         <ChevronDownIcon className="size-3.5" />
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" collisionPadding={12} className={menuContent}>
-        <DropdownMenuLabel className="text-xs text-muted-foreground">Subagenten dieses Chats</DropdownMenuLabel>
+        <DropdownMenuLabel className="text-xs text-muted-foreground">Subagents of this chat</DropdownMenuLabel>
         <MenuRows chatId={chatId} root={root} activeRunId={activeRunId} />
       </DropdownMenuContent>
     </DropdownMenu>
   )
 }
 
-/** Brotkrumen der Detailansicht: Titel des Laufs als Umschalter zu den anderen Läufen. */
+/** Breadcrumbs of the detail view: the run's title as a switcher to the other runs. */
 export function SubagentSwitcher({
   chatId,
   root,
@@ -152,7 +152,7 @@ export function SubagentSwitcher({
 }: {
   chatId: string
   root: AgentNode
-  /** Offener Subagent; ohne: der Hauptagent ist offen. */
+  /** Open subagent; without it, the main agent is open. */
   runId?: string
   title: string
 }) {
@@ -160,14 +160,14 @@ export function SubagentSwitcher({
     <DropdownMenu>
       <DropdownMenuTrigger
         className="inline-flex max-w-full min-w-0 items-center gap-1 rounded-md px-1.5 py-0.5 font-medium hover:bg-muted data-[state=open]:bg-muted"
-        aria-label={`${title}: zu einem anderen Subagenten wechseln`}
+        aria-label={`${title}: switch to another subagent`}
         title={title}
       >
         <span className="min-w-0 truncate">{title}</span>
         <ChevronsUpDownIcon className="size-3.5 shrink-0 text-muted-foreground" />
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" collisionPadding={12} className={menuContent}>
-        <DropdownMenuLabel className="text-xs text-muted-foreground">Zum Hauptagenten oder zu einem Subagenten wechseln</DropdownMenuLabel>
+        <DropdownMenuLabel className="text-xs text-muted-foreground">Switch to the main agent or a subagent</DropdownMenuLabel>
         <MenuRows chatId={chatId} root={root} activeRunId={runId} withMain />
       </DropdownMenuContent>
     </DropdownMenu>
@@ -177,29 +177,29 @@ export function SubagentSwitcher({
 type TreeProps = {
   chatId: string
   tree: AgentTreeInput
-  /** Lauf der gerade offenen Detailansicht. */
+  /** Run of the currently open detail view. */
   activeRunId?: string
-  /** Nach einem Klick auf einen Link, etwa um das Seitenblatt zu schließen. */
+  /** After a click on a link, e.g. to close the side sheet. */
   onNavigate?: () => void
 }
 
-/** Seitenreiter „Subagenten“: Karte des Hauptagenten, darunter gestrichelt verbunden die Läufe. */
+/** "Subagents" side tab: card of the main agent, below it the runs connected by dashed lines. */
 export function AgentTaskTree({ chatId, tree, activeRunId, onNavigate }: TreeProps) {
   const root = useAgentTree(tree)
   const count = flattenAgentTree(root).length
   return (
-    <nav aria-label="Subagenten-Läufe" className="flex min-w-0 flex-col text-sm">
+    <nav aria-label="Subagent runs" className="flex min-w-0 flex-col text-sm">
       <a
         href={chatHref(chatId)}
         onClick={onNavigate}
         aria-current={!activeRunId ? "page" : undefined}
-        title="Zum Verlauf des Hauptagenten"
+        title="To the main agent's history"
         className={cn(
           "block min-w-0 rounded-lg border bg-background px-2.5 py-1.5 hover:bg-muted/60",
           !activeRunId && "border-foreground/20 bg-muted/50",
         )}
       >
-        {/* Aufbau wie die Karten der Subagenten: Punkt und Titel, darunter wer und in welchem Zustand. */}
+        {/* Same layout as the subagent cards: dot and title, below it who and in which state. */}
         <div className="flex min-w-0 items-start gap-1.5">
           <StatusDot status={root.status} className="mt-1.5" />
           <span className="line-clamp-2 min-w-0 flex-1 text-xs font-medium break-words" title={root.title}>
@@ -208,24 +208,24 @@ export function AgentTaskTree({ chatId, tree, activeRunId, onNavigate }: TreePro
         </div>
         <div className="mt-0.5 flex items-center gap-1 pl-3.5 text-[11px] text-muted-foreground">
           <BotIcon className="size-3 shrink-0" />
-          <span>Hauptagent</span>
+          <span>Main agent</span>
           <span aria-hidden>·</span>
           <span className={cn(root.status === "running" && "text-sky-700")}>
-            {root.status === "running" ? "läuft" : "wartet auf dich"}
+            {root.status === "running" ? "running" : "waiting for you"}
           </span>
         </div>
       </a>
       {root.children.length === 0 ? (
         <p className="mt-2 pl-4 text-xs text-muted-foreground">
-          Noch keine Subagenten. Einträge erscheinen etwa alle 2 s, sobald ein Subagent arbeitet.
+          No subagents yet. Entries appear about every 2 s once a subagent is working.
         </p>
       ) : (
         <NodeList nodes={root.children} chatId={chatId} activeRunId={activeRunId} onNavigate={onNavigate} />
       )}
       {count > 0 && (
         <p className="mt-3 text-[11px] text-muted-foreground">
-          {count} Lauf{count === 1 ? "" : "e"}. Inhalte kommen aus der Sandbox; Tokens und Kosten stammen vom Proxy und
-          sind über die Antwortkennung zugeordnet. Name und Status meldet pi-subagents.
+          {count} run{count === 1 ? "" : "s"}. Contents come from the sandbox; tokens and cost come from the proxy and
+          are matched via the response ID. Name and status are reported by pi-subagents.
         </p>
       )}
     </nav>
@@ -234,7 +234,7 @@ export function AgentTaskTree({ chatId, tree, activeRunId, onNavigate }: TreePro
 
 type ListProps = { nodes: AgentNode[]; chatId: string; activeRunId?: string; onNavigate?: () => void }
 
-/** Eine Ebene des Baums: senkrechte gestrichelte Linie, je Karte ein waagerechter Anschluss. */
+/** One level of the tree: vertical dashed line, a horizontal connector per card. */
 function NodeList(props: ListProps) {
   const g = groupAgentNodes(props.nodes)
   return (
@@ -270,7 +270,7 @@ function GroupItem({ counts, ...props }: ListProps & { counts: StatusCounts }) {
   const status: RunStatus = counts.running ? "running" : counts.idle ? "idle" : counts.stopped ? "stopped" : "done"
   const hasActive = containsRun(props.nodes, props.activeRunId)
   const [open, setOpen] = useState(hasActive)
-  // Wird ein Lauf der Gruppe geöffnet (etwa über das Menü im Kopf), klappt sie auf.
+  // When a run of the group is opened (e.g. through the menu in the header), the group expands.
   const [prev, setPrev] = useState(props.activeRunId)
   if (prev !== props.activeRunId) {
     setPrev(props.activeRunId)
@@ -284,12 +284,12 @@ function GroupItem({ counts, ...props }: ListProps & { counts: StatusCounts }) {
             "flex w-full min-w-0 items-center gap-1.5 rounded-lg border border-violet-200 bg-violet-50/40 px-2.5 py-1.5 text-left text-xs hover:bg-violet-50",
             hasActive && !open && "ring-2 ring-violet-400",
           )}
-          aria-label={`${props.nodes.length} Läufe: ${label}. ${open ? "Zuklappen" : "Aufklappen"}`}
+          aria-label={`${props.nodes.length} runs: ${label}. ${open ? "Collapse" : "Expand"}`}
         >
           <ChevronRightIcon className={cn("size-3.5 shrink-0 transition-transform", open && "rotate-90")} />
           <StatusDot status={status} />
           <span className="min-w-0 flex-1 truncate font-medium">{label}</span>
-          <span className="shrink-0 text-muted-foreground tabular-nums">{props.nodes.length} Läufe</span>
+          <span className="shrink-0 text-muted-foreground tabular-nums">{props.nodes.length} runs</span>
         </CollapsibleTrigger>
         <CollapsibleContent>
           <ul className="ml-3 flex min-w-0 flex-col gap-2 border-l-2 border-dashed border-violet-300 pt-2 pl-3">
@@ -331,7 +331,7 @@ function NodeCard({
         <span>{metricsShort(m)}</span>
         {m.cost !== undefined && <span>{formatUsd(m.cost)}</span>}
         <span>{formatSpan(n.durationMs)}</span>
-        {m.errors > 0 && <span className="text-red-700">{m.errors} Fehler</span>}
+        {m.errors > 0 && <span className="text-red-700">{m.errors} error{m.errors === 1 ? "" : "s"}</span>}
       </div>
     </>
   )
@@ -354,16 +354,16 @@ function NodeCard({
 }
 
 /**
- * Leiste „Chat / Subagent ⌄“ über dem Verlauf, sobald es Subagenten gibt: im Hauptverlauf „Chat ⌄“, in der
- * Ansicht eines Subagenten „Chat / Subagent ⌄“. Der Umschalter führt zum Hauptagenten und zu jedem Lauf.
+ * Bar "Chat / Subagent ⌄" above the history once there are subagents: in the main history "Chat ⌄", in a
+ * subagent's view "Chat / Subagent ⌄". The switcher leads to the main agent and to every run.
  */
 export function SubagentBar({ chatId, root, runId, runTitle }: { chatId: string; root: AgentNode; runId?: string; runTitle?: string }) {
-  const title = root.title || "Ohne Titel"
+  const title = root.title || "Untitled"
   return (
-    <nav aria-label="Brotkrumen" className="flex min-w-0 items-center gap-1 border-b bg-muted/30 px-2 py-1.5 text-sm sm:px-3">
+    <nav aria-label="Breadcrumbs" className="flex min-w-0 items-center gap-1 border-b bg-muted/30 px-2 py-1.5 text-sm sm:px-3">
       {runId && (
         <Button size="icon-sm" variant="ghost" asChild>
-          <a href={chatHref(chatId)} title="Zurück zum Chat" aria-label="Zurück zum Chat">
+          <a href={chatHref(chatId)} title="Back to the chat" aria-label="Back to the chat">
             <ArrowLeftIcon />
           </a>
         </Button>
@@ -375,7 +375,7 @@ export function SubagentBar({ chatId, root, runId, runTitle }: { chatId: string;
               <a
                 href={chatHref(chatId)}
                 className="block truncate text-muted-foreground hover:text-foreground hover:underline"
-                title={`Zurück zum Chat „${title}“`}
+                title={`Back to the chat "${title}"`}
               >
                 {title}
               </a>

@@ -6,7 +6,7 @@ import type { SubagentRun } from "@/lib/subagents"
 
 export type AgentTreeInput = { chatTitle: string; chatRunning: boolean; runs: SubagentRun[]; llmCalls: LLMCall[] }
 
-/** Baum der Agenten; laufende Dauern werden alle 5 s fortgeschrieben. */
+/** Tree of the agents; running durations are updated every 5 s. */
 export function useAgentTree({ chatTitle, chatRunning, runs, llmCalls }: AgentTreeInput): AgentNode {
   const now = useNow(5000)
   return useMemo(

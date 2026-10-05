@@ -1,4 +1,4 @@
-// Hintergrundaufgaben (bash mit run_in_background): Liste im Seitenreiter und Zähler im Chatkopf.
+// Background tasks (bash with run_in_background): list in the side tab and counter in the chat header.
 import { useEffect, useRef, useState } from "react"
 import { ChevronDownIcon, ChevronRightIcon, CircleStopIcon, Loader2Icon, TerminalSquareIcon } from "lucide-react"
 import { toast } from "sonner"
@@ -27,7 +27,7 @@ const toneClass: Record<Tone, string> = {
   muted: "text-muted-foreground",
 }
 
-/** Seitenreiter „Hintergrund“: je Aufgabe Befehl, Zustand, Laufzeit, letzte Zeilen, Stopp. */
+/** "Background" side tab: per task command, state, run time, last lines, stop. */
 export function BackgroundTasksPanel({
   chatId,
   tasks,
@@ -35,7 +35,7 @@ export function BackgroundTasksPanel({
 }: {
   chatId: string
   tasks: BackgroundTask[]
-  /** Aufgabe im Blick (Klick auf eine Karte im Verlauf); n ändert sich je Klick. */
+  /** Task in focus (click on a card in the history); n changes with each click. */
   focus?: { n: number; id?: string }
 }) {
   const running = runningCount(tasks)
@@ -43,8 +43,8 @@ export function BackgroundTasksPanel({
   if (tasks.length === 0) {
     return (
       <p className="text-xs text-muted-foreground">
-        Keine Hintergrundaufgaben. Der Agent startet sie mit bash und run_in_background (Server, lange Builds,
-        Trainingsläufe) und wird benachrichtigt, wenn sie enden.
+        No background tasks. The agent starts them with bash and run_in_background (servers, long builds,
+        training runs) and is notified when they end.
       </p>
     )
   }
@@ -66,11 +66,11 @@ function BackgroundTaskItem({
   chatId: string
   task: BackgroundTask
   now: number
-  /** Gesetzt, solange diese Aufgabe im Blick ist; ändert sich je Klick. */
+  /** Set while this task is in focus; changes with each click. */
   focusN?: number
 }) {
   const [open, setOpen] = useState(t.state === "running" || focusN !== undefined)
-  // Neuer Klick auf diese Aufgabe: aufklappen und in den Blick rücken
+  // New click on this task: expand and scroll into view
   const [prevFocus, setPrevFocus] = useState(focusN)
   if (prevFocus !== focusN) {
     setPrevFocus(focusN)
@@ -90,7 +90,7 @@ function BackgroundTaskItem({
     try {
       await api.stopBackground(chatId, t.id)
     } catch (e) {
-      toast.error(`Stoppen fehlgeschlagen: ${e instanceof Error ? e.message : String(e)}`)
+      toast.error(`Stopping failed: ${e instanceof Error ? e.message : String(e)}`)
     } finally {
       setStopping(false)
     }
@@ -101,7 +101,7 @@ function BackgroundTaskItem({
         <div className="flex min-w-0 items-start gap-1.5">
           <CollapsibleTrigger
             className="mt-0.5 shrink-0 text-muted-foreground hover:text-foreground"
-            aria-label={open ? "Ausgabe zuklappen" : "Ausgabe aufklappen"}
+            aria-label={open ? "Collapse output" : "Expand output"}
           >
             {open ? <ChevronDownIcon className="size-3.5" /> : <ChevronRightIcon className="size-3.5" />}
           </CollapsibleTrigger>
@@ -112,7 +112,7 @@ function BackgroundTaskItem({
                 {t.state === "running" && <Loader2Icon className="size-3 animate-spin" />}
                 {status.label}
               </span>
-              <span className="ml-auto font-mono text-muted-foreground tabular-nums" title="Laufzeit">
+              <span className="ml-auto font-mono text-muted-foreground tabular-nums" title="Run time">
                 {formatBackgroundRuntime(t, now)}
               </span>
             </div>
@@ -121,8 +121,8 @@ function BackgroundTaskItem({
             </div>
             <div className="mt-0.5 text-muted-foreground">
               {t.session !== "main" ? `Subagent ${t.session} · ` : ""}
-              {t.output_lines} Zeilen · {formatBytes(t.output_bytes)}
-              {t.woke ? " · hat den Agenten geweckt" : ""}
+              {t.output_lines} lines · {formatBytes(t.output_bytes)}
+              {t.woke ? " · woke the agent" : ""}
               {t.error && t.state !== "running" ? ` · ${t.error}` : ""}
             </div>
           </div>
@@ -133,22 +133,22 @@ function BackgroundTaskItem({
               className="shrink-0"
               disabled={stopping}
               onClick={() => void stop()}
-              title="Beendet den Befehl samt seiner Prozesse; der Agent wird benachrichtigt"
+              title="Ends the command and its processes; the agent is notified"
             >
               <CircleStopIcon />
-              Stopp
+              Stop
             </Button>
           )}
         </div>
         <CollapsibleContent>
           {lines.length === 0 ? (
-            <p className="mt-1.5 text-muted-foreground">Noch keine Ausgabe.</p>
+            <p className="mt-1.5 text-muted-foreground">No output yet.</p>
           ) : (
             <pre className="mt-1.5 max-h-60 overflow-auto rounded bg-muted p-1.5 font-mono text-[11px] leading-snug whitespace-pre-wrap break-all">
               {lines.join("\n")}
             </pre>
           )}
-          <div className="mt-1 font-mono text-[11px] text-muted-foreground" title="Ganze Ausgabe in der Ausführungs-Sandbox">
+          <div className="mt-1 font-mono text-[11px] text-muted-foreground" title="Full output in the execution sandbox">
             {t.log_path}
           </div>
         </CollapsibleContent>
@@ -157,7 +157,7 @@ function BackgroundTaskItem({
   )
 }
 
-/** Kleiner Zähler für den Chatkopf, nur solange Aufgaben laufen; ein Klick öffnet den Reiter. */
+/** Small counter for the chat header, only while tasks are running; a click opens the tab. */
 export function BackgroundCounter({ count, onOpen }: { count: number; onOpen: () => void }) {
   if (count <= 0) return null
   return (
@@ -165,7 +165,7 @@ export function BackgroundCounter({ count, onOpen }: { count: number; onOpen: ()
       type="button"
       onClick={onOpen}
       className="inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-xs text-sky-700 hover:bg-muted dark:text-sky-400"
-      title={`${backgroundCountLabel(count)} – Reiter „Hintergrund“ öffnen`}
+      title={`${backgroundCountLabel(count)} – open the Background tab`}
     >
       <TerminalSquareIcon className="size-3.5" />
       <span className="tabular-nums">{count}</span>

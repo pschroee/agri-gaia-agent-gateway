@@ -41,42 +41,42 @@ describe("formatPercent", () => {
 })
 
 describe("describeContext", () => {
-  it("nennt genutzte Tokens, Fenster, Rest und Schwelle", () => {
+  it("names used tokens, window, remainder and threshold", () => {
     expect(describeContext(ctx())).toEqual({
       measured: true,
       percent: "5 %",
-      used: "48.210 / 1.000.000 Tokens",
-      remaining: "951.790 Tokens frei",
-      threshold: "983.616 Tokens",
+      used: "48,210 / 1,000,000 tokens",
+      remaining: "951,790 tokens free",
+      threshold: "983,616 tokens",
       level: "neutral",
       ratio: expect.closeTo(0.04821),
     })
   })
-  it("meldet nach einer Kompaktierung, dass neu gemessen wird", () => {
+  it("reports after a compaction that it will be measured again", () => {
     const d = describeContext(ctx({ tokens: null, percent: null }))
     expect(d.measured).toBe(false)
     expect(d.percent).toBe("–")
-    expect(d.used).toBe("wird nach der nächsten Antwort neu gemessen")
+    expect(d.used).toBe("measured again after the next response")
     expect(d.remaining).toBe("")
     expect(d.ratio).toBe(0)
   })
-  it("begrenzt Rest und Anteil bei Überlauf", () => {
+  it("caps remainder and share on overflow", () => {
     const d = describeContext(ctx({ tokens: 1_100_000, percent: 110 }))
-    expect(d.remaining).toBe("0 Tokens frei")
+    expect(d.remaining).toBe("0 tokens free")
     expect(d.ratio).toBe(1)
     expect(d.level).toBe("danger")
   })
 })
 
 describe("cacheHitRate", () => {
-  it("ist cacheRead / (input + cacheRead)", () => {
+  it("is cacheRead / (input + cacheRead)", () => {
     expect(cacheHitRate(100, 900)).toBeCloseTo(0.9)
   })
-  it("liefert undefined ohne Eingabe-Tokens", () => {
+  it("returns undefined without input tokens", () => {
     expect(cacheHitRate(0, 0)).toBeUndefined()
     expect(cacheHitRate(undefined, undefined)).toBeUndefined()
   })
-  it("zählt fehlendes cacheRead als 0", () => {
+  it("counts missing cacheRead as 0", () => {
     expect(cacheHitRate(50, undefined)).toBe(0)
   })
 })

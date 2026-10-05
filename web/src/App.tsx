@@ -16,8 +16,8 @@ export default function App() {
   const route = useHashRoute()
   const meta = useMeta()
   const approvals = usePolling(api.pendingApprovals, 2000)
-  // Der Server meldet 401 mit „nicht angemeldet …“ (siehe internal/api).
-  const unauthorized = approvals.error?.startsWith("nicht angemeldet") ?? false
+  // The server reports 401 with "not logged in …" (see internal/api).
+  const unauthorized = approvals.error?.startsWith("not logged in") ?? false
   const [me, setMe] = useState<Me>()
   const [embed] = useState(() => isEmbed(window.location.search))
   useEffect(() => {
@@ -29,13 +29,13 @@ export default function App() {
         try {
           clearSilentLogin(window.sessionStorage)
         } catch {
-          // ohne Speicher
+          // without storage
         }
       })
       .catch(() => setMe(undefined))
   }, [unauthorized])
-  // Ohne Antwort von /api/me gilt: oidc, wenn der Server einen Anmeldepfad nennt (siehe api/client).
-  const oidc = me?.mode === "oidc" || approvals.error === "nicht angemeldet"
+  // Without a response from /api/me: oidc if the server names a login path (see api/client).
+  const oidc = me?.mode === "oidc" || approvals.error === "not logged in"
 
   return (
     <TooltipProvider>
@@ -43,15 +43,15 @@ export default function App() {
         {unauthorized &&
           (oidc ? (
             <div role="alert" className="border-b border-amber-300 bg-amber-100 px-4 py-2 text-sm text-amber-950">
-              Nicht angemeldet. Bitte in der Plattform anmelden.{" "}
+              Not logged in. Please log in to the platform.{" "}
               <a className="underline underline-offset-2" href="oidc/login" target="_blank" rel="noopener">
-                Anmelden
+                Log in
               </a>
             </div>
           ) : (
             <div role="alert" className="border-b border-amber-300 bg-amber-100 px-4 py-2 text-sm text-amber-950">
-              Nicht angemeldet. Bitte den Anmeldelink öffnen, den <code className="font-mono">./dev.sh start</code>{" "}
-              ausgibt (<code className="font-mono">/login?token=…</code>).
+              Not logged in. Please open the login link printed by <code className="font-mono">./dev.sh start</code>{" "}
+              (<code className="font-mono">/login?token=…</code>).
             </div>
           ))}
         <header className={cn("flex shrink-0 items-center border-b", embed ? "h-9 gap-2 px-2" : "h-11 gap-3 px-3 sm:gap-6 sm:px-4")}>

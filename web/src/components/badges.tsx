@@ -25,26 +25,26 @@ function ToneBadge({ t, children, className }: { t: Tone; children: React.ReactN
   )
 }
 
-/** Zustand des Chats: „aktiv“ oder, beim Fortsetzen in einer frischen Sandbox, „wird fortgesetzt“.
- * Ein ruhender Chat bekommt kein Abzeichen; er setzt sich mit der nächsten Nachricht selbst fort. */
+/** State of the chat: "active" or, while resuming in a fresh sandbox, "resuming".
+ * An idle chat gets no badge; it resumes by itself with the next message. */
 export function ChatStateBadge({ state, resuming }: { state: ChatState; resuming?: boolean }) {
   if (resuming) {
     return (
       <ToneBadge t="blue">
         <Loader2Icon className="animate-spin" aria-hidden />
-        wird fortgesetzt
+        resuming
       </ToneBadge>
     )
   }
   if (state !== "active") return null
-  return <ToneBadge t="green">aktiv</ToneBadge>
+  return <ToneBadge t="green">active</ToneBadge>
 }
 
 const slotStates: Record<SlotState, [string, Tone]> = {
-  starting: ["startet", "blue"],
-  idle: ["frei", "green"],
-  assigned: ["vergeben", "violet"],
-  stopping: ["wird abgebaut", "gray"],
+  starting: ["starting", "blue"],
+  idle: ["idle", "green"],
+  assigned: ["assigned", "violet"],
+  stopping: ["stopping", "gray"],
 }
 export function SlotStateBadge({ state }: { state: SlotState }) {
   const [label, t] = slotStates[state] ?? [state, "gray"]
@@ -52,10 +52,10 @@ export function SlotStateBadge({ state }: { state: SlotState }) {
 }
 
 const approvalStates: Record<ApprovalState, [string, Tone]> = {
-  pending: ["offen", "amber"],
-  approved: ["bestätigt", "green"],
-  rejected: ["abgelehnt", "red"],
-  expired: ["abgelaufen", "gray"],
+  pending: ["pending", "amber"],
+  approved: ["approved", "green"],
+  rejected: ["rejected", "red"],
+  expired: ["expired", "gray"],
 }
 export function ApprovalStateBadge({ state }: { state: ApprovalState }) {
   const [label, t] = approvalStates[state] ?? [state, "gray"]
@@ -70,36 +70,36 @@ export function VariantBadge({ variant }: { variant: VariantId | string }) {
   )
 }
 
-/** „Läuft“; mit `since` (Beginn des Laufs, ms) zählt die Dauer live mit, sonst ohne Zeit. */
+/** "Running"; with `since` (start of the run, ms) the duration counts up live, otherwise no time. */
 export function RunningIndicator({ className, since }: { className?: string; since?: number }) {
   const now = useNow(1000, since !== undefined)
   return (
     <span
       className={cn("inline-flex items-center gap-1 text-xs whitespace-nowrap text-sky-700", className)}
-      title={since !== undefined ? "Dauer des laufenden Durchgangs" : undefined}
+      title={since !== undefined ? "Duration of the running turn" : undefined}
     >
       <span className="relative flex size-2">
         <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-sky-400 opacity-75" />
         <span className="relative inline-flex size-2 rounded-full bg-sky-500" />
       </span>
-      Läuft
+      Running
       {since !== undefined && <span className="tabular-nums"> · {formatElapsed(now - since)}</span>}
     </span>
   )
 }
 
 /**
- * Beleg einer Werkzeugausführung (E9): „belegt“ heißt vom Orchestrator ausgeführt und am Proxy
- * angefordert. Auffällige Fälle (nicht ausgeführt, nicht angefordert, abweichend) sind rot;
- * harmlose Ursachen (Antwort abgebrochen, von pi abgewiesen) grau. Werkzeuge ohne Ausführung in
- * der Sandbox und laufende Abgleiche zeigen nichts.
+ * Evidence of a tool execution (E9): "confirmed" means executed by the orchestrator and requested
+ * at the proxy. Suspicious cases (not executed, not requested, mismatching) are red; harmless
+ * causes (response aborted, refused by pi) grey. Tools without execution in the sandbox and
+ * matching still in progress show nothing.
  */
 export function EvidenceBadge({ evidence, settled, className }: { evidence?: Evidence; settled: boolean; className?: string }) {
   const state = displayState(evidence, { settled })
   if (!state || state === "internal" || state === "pending") return null
   const { label, tone: t, title } = evidenceLabel(state)
   const ops = evidence && evidence.ops.length > 0 ? ` (${evidence.ops.join(", ")}; ${sessionLabel(evidence.session)})` : ""
-  const reason = evidence?.reason ? ` – laut Sitzung: ${evidence.reason}` : ""
+  const reason = evidence?.reason ? ` – according to the session: ${evidence.reason}` : ""
   return (
     <Badge
       variant="outline"

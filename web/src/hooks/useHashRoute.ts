@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react"
 
-/** `runId`: Ansicht eines Subagenten-Laufs innerhalb des Chats. */
+/** `runId`: view of a subagent run within the chat. */
 export type Route = { view: "chats"; chatId?: string; runId?: string } | { view: "status" }
 
 const decode = (s: string) => {
@@ -16,7 +16,7 @@ export function parseHash(hash: string): Route {
   if (parts[0] === "status") return { view: "status" }
   if (parts[0] === "chats" && parts[1]) {
     const chatId = decode(parts[1])
-    // Die Laufkennung kann „#n“ tragen; unkodiert landet es ebenfalls in diesem Teil.
+    // The run ID can carry "#n"; unencoded, it also ends up in this part.
     if (parts[2] === "subagents" && parts.length > 3) return { view: "chats", chatId, runId: decode(parts.slice(3).join("/")) }
     return { view: "chats", chatId }
   }

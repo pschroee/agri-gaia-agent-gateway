@@ -23,7 +23,7 @@ const call = (p: Partial<LLMCall>): LLMCall => ({
 })
 
 describe("summarizeLlmCalls", () => {
-  it("summiert Tokens, Kosten und trennt Hauptsitzung von Übrigem", () => {
+  it("sums tokens and cost and separates the main session from the rest", () => {
     const s = summarizeLlmCalls([
       call({ id: 1, input: 100, output: 10, cache_read: 50, cache_write: 5, cost: 0.01, duration_ms: 1000 }),
       call({ id: 2, input: 200, output: 20, cost: 0.02, main: false, duration_ms: 500 }),
@@ -42,13 +42,13 @@ describe("summarizeLlmCalls", () => {
       other: { count: 2, cost: 0.02 },
     })
   })
-  it("verträgt eine leere Liste", () => {
+  it("tolerates an empty list", () => {
     expect(summarizeLlmCalls([]).count).toBe(0)
   })
 })
 
 describe("llmToolNames", () => {
-  it("liefert die Namen der angeforderten Werkzeuge", () => {
+  it("returns the names of the requested tools", () => {
     expect(llmToolNames(call({ tool_calls: [{ name: "bash", arguments: "{}" }, { name: "read", arguments: "{}" }] }))).toEqual([
       "bash",
       "read",
@@ -58,17 +58,17 @@ describe("llmToolNames", () => {
 })
 
 describe("costSplit", () => {
-  it("teilt die Gesamtkosten in Hauptantworten und Übriges", () => {
+  it("splits the total cost into main responses and the rest", () => {
     expect(costSplit({ cost: 0.05, cost_other: 0.02, llm_calls: 7 })).toEqual({ total: 0.05, other: 0.02, main: 0.03, calls: 7 })
   })
-  it("setzt fehlende Angaben auf 0 und nie unter 0", () => {
+  it("sets missing values to 0 and never below 0", () => {
     expect(costSplit({ cost: 0.01 })).toEqual({ total: 0.01, other: 0, main: 0.01, calls: 0 })
     expect(costSplit({ cost: 0.01, cost_other: 0.02 }).main).toBe(0)
   })
 })
 
 describe("answerCostSum", () => {
-  it("summiert die Tarifkosten der Antworten und Kompaktierungen im Verlauf", () => {
+  it("sums the tariff costs of the responses and compactions in the history", () => {
     expect(
       answerCostSum([
         { kind: "user", key: "u", text: "x" },

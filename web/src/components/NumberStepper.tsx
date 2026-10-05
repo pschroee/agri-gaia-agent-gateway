@@ -14,7 +14,7 @@ type Props = {
   "aria-label"?: string
 }
 
-/** Zahlfeld mit Minus/Plus; Eingaben werden auf [min, max] begrenzt, sobald das Feld verlassen wird. */
+/** Number field with minus/plus; input is clamped to [min, max] once the field loses focus. */
 export function NumberStepper({ id, value, min, max, disabled, onChange, "aria-label": ariaLabel }: Props) {
   const [draft, setDraft] = useState<string>()
   const commit = (v: number | string) => {
@@ -29,7 +29,7 @@ export function NumberStepper({ id, value, min, max, disabled, onChange, "aria-l
         size="icon-sm"
         variant="outline"
         disabled={disabled || value <= min}
-        aria-label="weniger"
+        aria-label="less"
         onClick={() => commit(value - 1)}
       >
         <MinusIcon />
@@ -59,7 +59,7 @@ export function NumberStepper({ id, value, min, max, disabled, onChange, "aria-l
         size="icon-sm"
         variant="outline"
         disabled={disabled || value >= max}
-        aria-label="mehr"
+        aria-label="more"
         onClick={() => commit(value + 1)}
       >
         <PlusIcon />

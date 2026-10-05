@@ -42,26 +42,26 @@ const result = (id: string, text: string, det?: unknown, name = "todo", isError 
   stored({ role: "toolResult", toolCallId: id, toolName: name, content: [{ type: "text", text }], details: det, isError })
 
 describe("tasksFromDetails", () => {
-  it("liest den vollständigen Stand aus details", () => {
-    const d = details([t(1, "A", "completed", { activeForm: "macht A" }), t(2, "B", "in_progress")])
-    expect(tasksFromDetails(d)).toEqual([t(1, "A", "completed", { activeForm: "macht A" }), t(2, "B", "in_progress")])
+  it("reads the complete state from details", () => {
+    const d = details([t(1, "A", "completed", { activeForm: "doing A" }), t(2, "B", "in_progress")])
+    expect(tasksFromDetails(d)).toEqual([t(1, "A", "completed", { activeForm: "doing A" }), t(2, "B", "in_progress")])
   })
-  it("verwirft unbrauchbare Angaben", () => {
+  it("discards unusable data", () => {
     expect(tasksFromDetails(undefined)).toBeUndefined()
     expect(tasksFromDetails({ tasks: "x" })).toBeUndefined()
     expect(tasksFromDetails({ tasks: [], nextId: "1" })).toBeUndefined()
-    // einzelne kaputte Einträge fallen heraus, der Rest bleibt
+    // single broken entries drop out, the rest stays
     expect(tasksFromDetails({ tasks: [{ id: 1 }, t(2, "B")], nextId: 3 })).toEqual([t(2, "B")])
   })
 })
 
-describe("applyTodoArgs (Rückfall ohne details)", () => {
-  it("legt an, ändert, löscht und leert", () => {
-    let s = applyTodoArgs({ tasks: [], nextId: 1 }, { action: "create", subject: "A", description: "lang" })
-    s = applyTodoArgs(s, { action: "create", subject: "B", activeForm: "macht B" })
-    expect(s.tasks).toEqual([t(1, "A", "pending", { description: "lang" }), t(2, "B", "pending", { activeForm: "macht B" })])
-    s = applyTodoArgs(s, { action: "update", id: 1, status: "in_progress", activeForm: "macht A" })
-    expect(s.tasks[0]).toMatchObject({ status: "in_progress", activeForm: "macht A" })
+describe("applyTodoArgs (fallback without details)", () => {
+  it("creates, updates, deletes and clears", () => {
+    let s = applyTodoArgs({ tasks: [], nextId: 1 }, { action: "create", subject: "A", description: "long" })
+    s = applyTodoArgs(s, { action: "create", subject: "B", activeForm: "doing B" })
+    expect(s.tasks).toEqual([t(1, "A", "pending", { description: "long" }), t(2, "B", "pending", { activeForm: "doing B" })])
+    s = applyTodoArgs(s, { action: "update", id: 1, status: "in_progress", activeForm: "doing A" })
+    expect(s.tasks[0]).toMatchObject({ status: "in_progress", activeForm: "doing A" })
     s = applyTodoArgs(s, { action: "delete", id: 2 })
     expect(s.tasks[1].status).toBe("deleted")
     s = applyTodoArgs(s, { action: "list" })
@@ -69,16 +69,16 @@ describe("applyTodoArgs (Rückfall ohne details)", () => {
     s = applyTodoArgs(s, { action: "clear" })
     expect(s).toEqual({ tasks: [], nextId: 1 })
   })
-  it("ignoriert unbekannte IDs und Unsinn", () => {
+  it("ignores unknown IDs and nonsense", () => {
     const s = { tasks: [t(1, "A")], nextId: 2 }
     expect(applyTodoArgs(s, { action: "update", id: 9, status: "completed" })).toEqual(s)
-    expect(applyTodoArgs(s, "kaputt")).toEqual(s)
+    expect(applyTodoArgs(s, "broken")).toEqual(s)
     expect(applyTodoArgs(s, { action: "create" })).toEqual(s)
   })
 })
 
 describe("todoTimeline", () => {
-  it("rekonstruiert aus der gespeicherten Historie; der neueste Stand gewinnt", () => {
+  it("reconstructs from the stored history; the newest state wins", () => {
     const hist = [
       stored({ role: "user", content: "los" }),
       assistant({ id: "c1", args: { action: "create", subject: "A" } }, { id: "c2", args: { action: "create", subject: "B" } }),
@@ -98,12 +98,12 @@ describe("todoTimeline", () => {
     expect(tl.tasks).toEqual([t(1, "A", "completed"), t(2, "B", "in_progress")])
     expect(Object.keys(tl.calls)).toEqual(["c1", "c2", "c3", "c4"])
     expect(tl.calls.c1.before).toEqual([])
-    expect(tl.calls.c3.change).toBe("#1 A: erledigt")
-    expect(tl.calls.c4.change).toBe("#2 B: in Arbeit")
-    expect(tl.calls.c2.change).toBe("Neu: #2 B")
+    expect(tl.calls.c3.change).toBe("#1 A: done")
+    expect(tl.calls.c4.change).toBe("#2 B: in progress")
+    expect(tl.calls.c2.change).toBe("New: #2 B")
   })
 
-  it("nimmt live den Stand aus tool_execution_end (result.details)", () => {
+  it("takes the live state from tool_execution_end (result.details)", () => {
     let s: TranscriptState = emptyTranscript()
     const ev = (e: Record<string, unknown>) => (s = applyPiEvent(s, e as never))
     ev({ type: "message_start", message: { role: "assistant", content: [] } })
@@ -112,7 +112,7 @@ describe("todoTimeline", () => {
       message: { role: "assistant", content: [{ type: "toolCall", id: "c1", name: "todo", arguments: { action: "create", subject: "A" } }] },
     })
     ev({ type: "tool_execution_start", toolCallId: "c1", toolName: "todo", args: { action: "create", subject: "A" } })
-    // noch kein Ergebnis: nichts erfinden
+    // no result yet: make nothing up
     expect(todoTimeline(s).tasks).toEqual([])
     expect(todoTimeline(s).calls.c1.running).toBe(true)
     ev({
@@ -125,7 +125,7 @@ describe("todoTimeline", () => {
     expect(todoTimeline(s).tasks).toEqual([t(1, "A")])
   })
 
-  it("fällt ohne details auf die Argumente zurück und überspringt Fehler", () => {
+  it("falls back to the arguments without details and skips errors", () => {
     const hist = [
       assistant({ id: "c1", args: { action: "create", subject: "A" } }),
       result("c1", "Created #1: A (pending)"),
@@ -140,30 +140,30 @@ describe("todoTimeline", () => {
     expect(tl.calls.c3.error).toBe("something")
   })
 
-  it("ohne Aufrufe: leer", () => {
+  it("without calls: empty", () => {
     expect(todoTimeline(emptyTranscript())).toEqual({ tasks: [], calls: {} })
   })
 })
 
-describe("Zählung und Beschriftung", () => {
+describe("counting and labels", () => {
   const list = [t(1, "A", "completed"), t(2, "B", "in_progress"), t(3, "C"), t(4, "D", "deleted")]
-  it("zählt ohne gelöschte", () => {
+  it("counts without deleted ones", () => {
     expect(taskCounts(list)).toEqual({ total: 3, completed: 1, inProgress: 1, pending: 1 })
-    expect(taskCountLabel(taskCounts(list))).toBe("1/3 Aufgaben")
-    expect(taskCountLabel(taskCounts([t(1, "A", "completed")]))).toBe("1/1 Aufgabe")
+    expect(taskCountLabel(taskCounts(list))).toBe("1/3 tasks")
+    expect(taskCountLabel(taskCounts([t(1, "A", "completed")]))).toBe("1/1 task")
   })
-  it("fasst eine Gruppe zusammen", () => {
-    expect(todoGroupSummary(["create", "create"], list)).toBe("Aufgaben angelegt: 1 erledigt, 1 in Arbeit, 1 offen")
+  it("summarizes a group", () => {
+    expect(todoGroupSummary(["create", "create"], list)).toBe("Tasks created: 1 done, 1 in progress, 1 pending")
     expect(todoGroupSummary(["update"], [t(1, "A", "completed"), t(2, "B", "completed")])).toBe(
-      "Aufgaben aktualisiert: 2 erledigt",
+      "Tasks updated: 2 done",
     )
-    expect(todoGroupSummary(["list"], list)).toBe("Aufgaben abgefragt: 1 erledigt, 1 in Arbeit, 1 offen")
-    expect(todoGroupSummary(["clear"], [])).toBe("Aufgabenliste geleert")
+    expect(todoGroupSummary(["list"], list)).toBe("Tasks queried: 1 done, 1 in progress, 1 pending")
+    expect(todoGroupSummary(["clear"], [])).toBe("Task list cleared")
   })
 })
 
 describe("groupTodoBlocks", () => {
-  it("fasst aufeinanderfolgende todo-Aufrufe zusammen", () => {
+  it("combines consecutive todo calls", () => {
     const b = (name: string, id: string) => ({ type: "toolCall" as const, id, name })
     const blocks = [{ type: "text" as const, text: "x" }, b("todo", "1"), b("todo", "2"), b("bash", "3"), b("todo", "4")]
     expect(groupTodoBlocks(blocks)).toEqual([
@@ -178,19 +178,19 @@ describe("groupTodoBlocks", () => {
 describe("tasksFromSubagentEntries", () => {
   const e = (kind: SubagentEntry["kind"], payload: SubagentEntry["payload"]): SubagentEntry =>
     ({ chat_id: "c", run_id: "r", entry_id: String(++seq), agent: "worker", kind, payload, created_at: "" }) as SubagentEntry
-  it("spielt die Argumente ab, überspringt fehlgeschlagene Aufrufe", () => {
+  it("replays the arguments, skips failed calls", () => {
     const list = [
       e("tool_call", { name: "todo", id: "a", arguments: JSON.stringify({ action: "create", subject: "A" }) }),
       e("tool_result", { name: "todo", tool_call_id: "a", text: "Created #1: A (pending)" }),
       e("tool_call", { name: "todo", id: "b", arguments: JSON.stringify({ action: "update", id: 1, status: "completed" }) }),
       e("tool_result", { name: "todo", tool_call_id: "b", text: "Updated #1" }),
       e("tool_call", { name: "todo", id: "c", arguments: JSON.stringify({ action: "create", subject: "B" }) }),
-      e("tool_result", { name: "todo", tool_call_id: "c", text: "Error: kaputt" }),
+      e("tool_result", { name: "todo", tool_call_id: "c", text: "Error: broken" }),
       e("tool_call", { name: "bash", id: "d", arguments: "{}" }),
     ]
     expect(tasksFromSubagentEntries(list)).toEqual([t(1, "A", "completed")])
   })
-  it("ohne todo-Aufrufe: undefined", () => {
+  it("without todo calls: undefined", () => {
     expect(tasksFromSubagentEntries([e("tool_call", { name: "bash", id: "x", arguments: "{}" })])).toBeUndefined()
   })
 })

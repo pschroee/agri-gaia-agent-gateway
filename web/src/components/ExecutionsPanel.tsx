@@ -5,8 +5,8 @@ import { formatTime } from "@/lib/format"
 import { cn } from "@/lib/utils"
 
 /**
- * Werkzeugausführungen des Chats (E9): je toolCallId, was am Proxy angefordert und was vom
- * Orchestrator in der Ausführungs-Sandbox ausgeführt wurde. Auffällige Fälle stehen oben.
+ * Tool executions of the chat (E9): per toolCallId, what was requested at the proxy and what the
+ * orchestrator executed in the execution sandbox. Suspicious cases are at the top.
  */
 export function ExecutionsPanel({
   evidence,
@@ -19,8 +19,8 @@ export function ExecutionsPanel({
 }) {
   const [onlyFlagged, setOnlyFlagged] = useState(false)
   const list = [...evidence.values()].filter((e) => e.state !== "internal")
-  // Auffällig ist nur, was auf eine Umgehung deuten kann; abgebrochene Antworten und von pi
-  // abgewiesene Aufrufe sind grau (M1).
+  // Only what may point to a bypass is suspicious; aborted responses and calls refused by pi
+  // are grey (M1).
   const flagged = (e: Evidence) => {
     const s = displayState(e, { settled })
     return s === "unexecuted" || s === "unrequested" || s === "mismatch"
@@ -32,12 +32,12 @@ export function ExecutionsPanel({
   return (
     <div className="flex flex-col gap-2">
       <p className="text-xs text-muted-foreground">
-        Jeder Aufruf von bash, read, write, edit, grep, find und ls läuft über den Orchestrator in der Ausführungs-Sandbox.
-        Abgeglichen wird je Kennung des Modells: angefordert (Proxy) und ausgeführt (Orchestrator).
+        Every call of bash, read, write, edit, grep, find and ls runs through the orchestrator in the execution sandbox.
+        Matched per model call ID: requested (proxy) and executed (orchestrator).
       </p>
       <div className="flex flex-wrap items-center gap-1.5 text-xs">
         <span className="rounded-md border border-emerald-200 bg-emerald-50/60 px-1.5 py-0.5 text-emerald-800">
-          {summary.confirmed} belegt
+          {summary.confirmed} confirmed
         </span>
         {(["unexecuted", "unrequested", "mismatch"] as const).map((k) =>
           summary[k] > 0 ? (
@@ -53,14 +53,14 @@ export function ExecutionsPanel({
             </span>
           ) : null,
         )}
-        {!settled && summary.flagged > 0 && <span className="text-muted-foreground">(Abgleich nach dem Lauf)</span>}
+        {!settled && summary.flagged > 0 && <span className="text-muted-foreground">(matched after the run)</span>}
         <label className="ml-auto flex items-center gap-1 text-muted-foreground">
           <input type="checkbox" checked={onlyFlagged} onChange={(e) => setOnlyFlagged(e.target.checked)} />
-          nur auffällige
+          suspicious only
         </label>
       </div>
       {shown.length === 0 ? (
-        <p className="text-xs text-muted-foreground">{onlyFlagged ? "Nichts Auffälliges." : "Noch keine Werkzeugausführungen."}</p>
+        <p className="text-xs text-muted-foreground">{onlyFlagged ? "Nothing suspicious." : "No tool executions yet."}</p>
       ) : (
         <ul className="flex flex-col gap-1.5">
           {shown.map((e) => (
@@ -77,14 +77,14 @@ export function ExecutionsPanel({
               {e.executions.length > 0 ? (
                 <div className="mt-0.5 text-muted-foreground">
                   {e.ops.join(", ")} · {e.durationMs} ms
-                  {e.exitCode !== undefined && ` · Exit ${e.exitCode}`} · {formatTime(e.executions[0].started_at)}
+                  {e.exitCode !== undefined && ` · exit ${e.exitCode}`} · {formatTime(e.executions[0].started_at)}
                   {e.error && <div className="break-all text-red-700">{e.error}</div>}
                   {summarizeArgs(e) && <div className="truncate font-mono" title={summarizeArgs(e)}>{summarizeArgs(e)}</div>}
                 </div>
               ) : (
                 <div className="mt-0.5 text-muted-foreground">
-                  keine Ausführung im Protokoll des Orchestrators
-                  {e.reason && <div className="break-all">laut Sitzung (nicht fälschungssicher): {e.reason}</div>}
+                  no execution in the orchestrator's log
+                  {e.reason && <div className="break-all">according to the session (not tamper-proof): {e.reason}</div>}
                 </div>
               )}
             </li>
