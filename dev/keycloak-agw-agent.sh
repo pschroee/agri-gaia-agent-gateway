@@ -1,24 +1,24 @@
 #!/usr/bin/env bash
-# Legt auf der eigenen Instanz (ssh hs) im Realm test-realm den Keycloak-Client agw-agent an, über
-# den der Orchestrator das Nutzertoken je Chat tauscht (RFC 8693), und trägt das Client-Secret in
-# poc/.env ein. Das Secret erscheint nie in der Ausgabe. Mehrfach aufrufbar: Ein vorhandener Client
-# bleibt, nur das Secret wird neu gelesen. Einzelheiten: docs/keycloak-token-austausch.md im Masterarbeits-Repo,
-# Abschnitt „Client agw-agent für den PoC“.
+# Creates, on our own instance (ssh hs) in the realm test-realm, the Keycloak client agw-agent through
+# which the orchestrator exchanges the user token per chat (RFC 8693), and writes the client secret into
+# .env. The secret never appears in the output. Can be run repeatedly: an existing client
+# stays, only the secret is read again. Details: docs/keycloak-token-austausch.md in the thesis repo,
+# section "Client agw-agent für den PoC".
 #
-#   poc/dev/keycloak-agw-agent.sh            anlegen (falls nötig), Standard-Flow und Redirect-URI
-#                                            des Gateways (app.<Basis-URL>/agent/) setzen, .env setzen
-#   poc/dev/keycloak-agw-agent.sh --delete   Client wieder löschen
+#   dev/keycloak-agw-agent.sh            create (if needed), set standard flow and redirect URI
+#                                        of the gateway (app.<base URL>/agent/), set .env
+#   dev/keycloak-agw-agent.sh --delete   delete the client again
 set -euo pipefail
 
 HOST=${AGW_KC_SSH_HOST:-hs}
 CONTAINER=${AGW_KC_CONTAINER:-agri_gaia-keycloak-1}
 REALM=${AGW_KC_REALM:-test-realm}
 CLIENT=agw-agent
-BASE=${AGW_KC_BASE_URL:?AGW_KC_BASE_URL setzen (PROJECT_BASE_URL der Instanz)}
+BASE=${AGW_KC_BASE_URL:?set AGW_KC_BASE_URL (PROJECT_BASE_URL of the instance)}
 ENV_FILE="$(cd "$(dirname "$0")/.." && pwd)/.env"
 
-# Läuft im Keycloak-Container: Admin-Anmeldung aus KC_BOOTSTRAP_ADMIN_* (Werte nie ausgegeben),
-# Konfiguration nur für diesen Lauf, danach gelöscht.
+# Runs in the Keycloak container: admin login from KC_BOOTSTRAP_ADMIN_* (values never printed),
+# configuration only for this run, deleted afterwards.
 remote() {
   ssh "$HOST" "sudo docker exec -i $CONTAINER sh -s" <<EOF
 set -e
@@ -34,7 +34,7 @@ EOF
 
 if [[ "${1:-}" == "--delete" ]]; then
   remote 'ID=$($K get clients $C -q clientId='"$CLIENT"' --fields id --format csv --noquotes | head -1)
-[ -n "$ID" ] && $K delete clients/$ID $C && echo "Client '"$CLIENT"' gelöscht" || echo "Client '"$CLIENT"' nicht vorhanden"'
+[ -n "$ID" ] && $K delete clients/$ID $C && echo "Client '"$CLIENT"' deleted" || echo "Client '"$CLIENT"' does not exist"'
   exit 0
 fi
 
@@ -42,8 +42,8 @@ SECRET=$(remote "BASE=$BASE
 "'
 ID=$($K get clients $C -q clientId='"$CLIENT"' --fields id --format csv --noquotes | head -1)
 if [ -z "$ID" ]; then
-  ID=$($K create clients $C -s clientId='"$CLIENT"' -s "name=Agent-Orchestrator (PoC Masterarbeit)" \
-    -s "description=Autorisierungsdienst des PoC: meldet den Nutzer an und tauscht sein Token je Chat (RFC 8693)." \
+  ID=$($K create clients $C -s clientId='"$CLIENT"' -s "name=Agent orchestrator (PoC master thesis)" \
+    -s "description=Authorization service of the PoC: logs the user in and exchanges their token per chat (RFC 8693)." \
     -s publicClient=false -s clientAuthenticatorType=client-secret -s standardFlowEnabled=false \
     -s implicitFlowEnabled=false -s directAccessGrantsEnabled=true -s serviceAccountsEnabled=false \
     -s "attributes.\"standard.token.exchange.enabled\"=true" -i)
@@ -52,32 +52,32 @@ if [ -z "$ID" ]; then
       -s protocolMapper=oidc-audience-mapper -s "config.\"included.client.audience\"=$a" \
       -s "config.\"access.token.claim\"=true" -s "config.\"id.token.claim\"=false" -s "config.\"userinfo.token.claim\"=false" >/dev/null
   done
-  # minio_policy wie beim Client frontend: MinIO leitet daraus die Rechte für Uploads ab.
+  # minio_policy as for the client frontend: MinIO derives the rights for uploads from it.
   $K create clients/$ID/protocol-mappers/models $C -s name=minio_policy -s protocol=openid-connect \
     -s protocolMapper=oidc-usermodel-attribute-mapper -s "config.\"user.attribute\"=minio_policy" \
     -s "config.\"claim.name\"=minio_policy" -s "config.\"jsonType.label\"=String" \
     -s "config.\"access.token.claim\"=true" -s "config.\"id.token.claim\"=true" -s "config.\"userinfo.token.claim\"=true" >/dev/null
-  echo "angelegt" >&2
+  echo "created" >&2
 else
-  echo "vorhanden" >&2
+  echo "exists" >&2
 fi
-# Anmeldung über die Plattform (Gateway als Plattform-Dienst, seit 05.10.2026): Standard-Flow mit PKCE und
-# Redirect-URI des Gateways. Läuft auch für einen vorhandenen Client; Passwort-Grant bleibt für die lokale
-# Entwicklung erlaubt.
+# Login through the platform (gateway as a platform service, since 2026-10-05): standard flow with PKCE and
+# the redirect URI of the gateway. Also runs for an existing client; the password grant stays allowed for local
+# development.
 $K update clients/$ID $C -s standardFlowEnabled=true -s directAccessGrantsEnabled=true \
   -s "redirectUris=[\"https://app.$BASE/agent/oidc/callback\"]" -s "webOrigins=[\"https://app.$BASE\"]" \
   -s "attributes.\"pkce.code.challenge.method\"=S256" \
   -s "attributes.\"post.logout.redirect.uris\"=https://app.$BASE/agent/*" >/dev/null
-echo "Standard-Flow und Redirect-URI gesetzt" >&2
+echo "standard flow and redirect URI set" >&2
 $K get clients/$ID/client-secret $C --fields value --format csv --noquotes
 ')
 
 if [[ -z "$SECRET" ]]; then
-  echo "Kein Secret erhalten" >&2
+  echo "no secret received" >&2
   exit 1
 fi
 
-# .env setzen: vorhandene Zeilen ersetzen, fehlende anhängen. Das Secret geht nur in die Datei.
+# Set .env: replace existing lines, append missing ones. The secret only goes into the file.
 set_env() {
   local key=$1 val=$2
   if grep -q "^$key=" "$ENV_FILE" 2>/dev/null; then
@@ -91,5 +91,5 @@ set_env AGW_PLATFORM_CLIENT_ID "$CLIENT"
 set_env AGW_PLATFORM_CLIENT_SECRET "$SECRET"
 set_env AGW_PLATFORM_TOKEN_EXCHANGE true
 chmod 600 "$ENV_FILE"
-echo "Client $CLIENT bereit; poc/.env gesetzt (AGW_PLATFORM_CLIENT_ID, …_CLIENT_SECRET, …_TOKEN_EXCHANGE=true)."
-echo "Danach: cd poc && ./dev.sh start && docker restart agwpoc-orchestrator-1"
+echo "client $CLIENT ready; .env set (AGW_PLATFORM_CLIENT_ID, …_CLIENT_SECRET, …_TOKEN_EXCHANGE=true)."
+echo "then: ./dev.sh start && docker restart agwpoc-orchestrator-1"

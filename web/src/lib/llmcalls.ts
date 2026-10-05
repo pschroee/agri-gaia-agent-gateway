@@ -1,10 +1,10 @@
-// Am LLM-Proxy erfasste Modellaufrufe zusammenfassen. Reine Funktionen, ohne React.
+// Summarize model calls recorded at the LLM proxy. Pure functions, without React.
 import type { Chat, LLMCall } from "@/api/types"
 import type { TranscriptItem } from "./stream"
 
 export type LlmCallSummary = {
   count: number
-  /** Aufrufe mit Status ≠ 200. */
+  /** Calls with status ≠ 200. */
   failed: number
   input: number
   output: number
@@ -49,19 +49,19 @@ export function summarizeLlmCalls(calls: LLMCall[]): LlmCallSummary {
   return s
 }
 
-/** Namen der Werkzeuge, die das Modell in diesem Aufruf angefordert hat. */
+/** Names of the tools the model requested in this call. */
 export function llmToolNames(c: LLMCall): string[] {
   return (c.tool_calls ?? []).map((t) => t.name).filter(Boolean)
 }
 
-/** Gesamtkosten des Chats, davon außerhalb der Hauptantworten, und Anzahl Modellaufrufe. */
+/** Total cost of the chat, the part outside the main responses, and number of model calls. */
 export function costSplit(chat: Pick<Chat, "cost" | "cost_other" | "llm_calls">) {
   const total = chat.cost ?? 0
   const other = chat.cost_other ?? 0
   return { total, other, main: Math.max(0, round(total - other)), calls: chat.llm_calls ?? 0 }
 }
 
-/** Summe der Tarifkosten, die der Verlauf je Antwort und Kompaktierung zeigt. */
+/** Sum of the tariff costs the history shows per response and compaction. */
 export function answerCostSum(items: TranscriptItem[]): number {
   let sum = 0
   for (const i of items) if ((i.kind === "assistant" || i.kind === "compaction") && typeof i.cost === "number") sum += i.cost

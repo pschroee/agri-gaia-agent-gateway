@@ -16,13 +16,13 @@ import (
 	"time"
 )
 
-// fakeKeycloak bildet den Token-Endpunkt mit Passwort-Grant und Token-Austausch nach (wie Keycloak
-// 26: kein act-Claim, azp = anfragender Client) und dahinter die API, die nur getauschte Tokens
-// mit Zielgruppe backend annimmt.
+// fakeKeycloak mimics the token endpoint with password grant and token exchange (like Keycloak
+// 26: no act claim, azp = requesting client) and behind it the API, which only accepts exchanged
+// tokens with audience backend.
 type fakeKeycloak struct {
 	mu        sync.Mutex
 	n         int
-	user      string // gültiges Nutzertoken
+	user      string // valid user token
 	exchanges []string
 	apiTokens []string
 	multipart []string
@@ -39,7 +39,7 @@ func (f *fakeKeycloak) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer f.mu.Unlock()
 	if r.URL.Path == "/token" {
 		_ = r.ParseForm()
-		if r.Form.Get("client_id") != "agw-agent" || r.Form.Get("client_secret") != "geheim" {
+		if r.Form.Get("client_id") != "agw-agent" || r.Form.Get("client_secret") != "secret" {
 			w.WriteHeader(http.StatusUnauthorized)
 			fmt.Fprint(w, `{"error":"unauthorized_client"}`)
 			return
@@ -67,7 +67,7 @@ func (f *fakeKeycloak) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	tok := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 	cl, err := ParseClaims(tok)
 	if err != nil || tok == f.user || cl.Azp != "agw-agent" || !strings.Contains(strings.Join(cl.Aud, ","), "backend") {
-		w.WriteHeader(http.StatusUnauthorized) // nur getauschte Tokens, nie das Nutzertoken selbst
+		w.WriteHeader(http.StatusUnauthorized) // only exchanged tokens, never the user token itself
 		return
 	}
 	f.apiTokens = append(f.apiTokens, cl.JTI)
@@ -96,7 +96,7 @@ func exchangeClient(t *testing.T, f *fakeKeycloak) (*Client, *[]string) {
 	t.Helper()
 	srv := httptest.NewServer(f)
 	t.Cleanup(srv.Close)
-	c, err := New(Config{APIURL: srv.URL, TokenURL: srv.URL + "/token", ClientID: "agw-agent", ClientSecret: "geheim", User: "test", Password: "pw", Exchange: true})
+	c, err := New(Config{APIURL: srv.URL, TokenURL: srv.URL + "/token", ClientID: "agw-agent", ClientSecret: "secret", User: "test", Password: "pw", Exchange: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,23 +121,23 @@ func TestExchangePerChat(t *testing.T) {
 		}
 	}
 	if len(f.exchanges) != 2 || f.exchanges[0] != "backend,minio" {
-		t.Fatalf("je Chat genau ein Austausch mit backend,minio: %v", f.exchanges)
+		t.Fatalf("exactly one exchange per chat with backend,minio: %v", f.exchanges)
 	}
 	if f.apiTokens[0] != f.apiTokens[1] || f.apiTokens[1] == f.apiTokens[2] {
-		t.Fatalf("Chat a nutzt sein Token weiter, Chat b ein eigenes: %v", f.apiTokens)
+		t.Fatalf("chat a keeps using its token, chat b gets its own: %v", f.apiTokens)
 	}
-	if len(*logged) != 2 || !strings.Contains((*logged)[0], "chat-a: Nutzer test, azp=agw-agent, aud=backend,minio") || !strings.Contains((*logged)[0], "ohne act (Impersonation)") {
-		t.Fatalf("Protokoll des Austauschs: %v", *logged)
+	if len(*logged) != 2 || !strings.Contains((*logged)[0], "chat-a: user test, azp=agw-agent, aud=backend,minio") || !strings.Contains((*logged)[0], "without act (impersonation)") {
+		t.Fatalf("exchange log: %v", *logged)
 	}
-	// Ruhen verwirft das Token, Fortsetzen tauscht neu.
+	// Idling discards the token, resuming exchanges again.
 	c.Forget("chat-a")
 	_, _ = c.Do(ctx, "chat-a", get)
 	if len(f.exchanges) != 3 {
-		t.Fatalf("nach Forget kein neuer Austausch: %v", f.exchanges)
+		t.Fatalf("no new exchange after Forget: %v", f.exchanges)
 	}
-	// Ohne Chat kein Aufruf: Das Nutzertoken selbst geht nie an die API.
+	// No call without a chat: the user token itself never goes to the API.
 	if _, err := c.Do(ctx, "", get); err == nil {
-		t.Fatal("Aufruf ohne Chat erwartet abgewiesen")
+		t.Fatal("call without chat expected refused")
 	}
 }
 
@@ -145,26 +145,26 @@ func TestExchangeMaxAgeAndUserRelogin(t *testing.T) {
 	f := &fakeKeycloak{}
 	srv := httptest.NewServer(f)
 	defer srv.Close()
-	c, _ := New(Config{APIURL: srv.URL, TokenURL: srv.URL + "/token", ClientID: "agw-agent", ClientSecret: "geheim", User: "test", Password: "pw", Exchange: true, ChatTokenMaxAge: 40 * time.Second})
+	c, _ := New(Config{APIURL: srv.URL, TokenURL: srv.URL + "/token", ClientID: "agw-agent", ClientSecret: "secret", User: "test", Password: "pw", Exchange: true, ChatTokenMaxAge: 40 * time.Second})
 	ctx := context.Background()
 	_, _ = c.Do(ctx, "c", Request{Method: "GET", Path: "/x"})
-	_, _ = c.Do(ctx, "c", Request{Method: "GET", Path: "/x"}) // 40 s Höchstalter, 30 s Puffer: noch gültig
+	_, _ = c.Do(ctx, "c", Request{Method: "GET", Path: "/x"}) // 40 s max age, 30 s buffer: still valid
 	if len(f.exchanges) != 1 {
-		t.Fatalf("Höchstalter: %v", f.exchanges)
+		t.Fatalf("max age: %v", f.exchanges)
 	}
-	// Nutzertoken serverseitig verfallen: Austausch scheitert, neue Anmeldung, dann gelingt er.
+	// User token expired on the server: the exchange fails, a new login follows, then it succeeds.
 	c.Forget("c")
 	f.mu.Lock()
-	f.user = "verfallen"
+	f.user = "expired"
 	f.mu.Unlock()
 	if res, err := c.Do(ctx, "c", Request{Method: "GET", Path: "/x"}); err != nil || res.HTTPStatus != 200 {
-		t.Fatalf("nach verfallenem Nutzertoken: %+v %v", res, err)
+		t.Fatalf("after expired user token: %+v %v", res, err)
 	}
 }
 
 func TestExchangeNeedsSecret(t *testing.T) {
 	if _, err := New(Config{APIURL: "https://x", TokenURL: "https://x/t", User: "u", Password: "p", Exchange: true}); err == nil {
-		t.Fatal("Austausch ohne Client-Secret erwartet abgewiesen")
+		t.Fatal("exchange without client secret expected refused")
 	}
 }
 
@@ -172,22 +172,22 @@ func TestMultipartUpload(t *testing.T) {
 	f := &fakeKeycloak{}
 	c, _ := exchangeClient(t, f)
 	tool, _ := Lookup("upload_dataset")
-	req, err := tool.Build(json.RawMessage(`{"name":"ferkel","description":"Bilder","files":["/workspace/a.png","/workspace/b.png"],"annotation_file":"/workspace/annotations.xml","annotation_labels":["0","1"]}`))
+	req, err := tool.Build(json.RawMessage(`{"name":"piglets","description":"images","files":["/workspace/a.png","/workspace/b.png"],"annotation_file":"/workspace/annotations.xml","annotation_labels":["0","1"]}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if req.String() != "POST /datasets (multipart, 3 Dateien)" || !req.Writes() {
-		t.Fatalf("Aufruf: %s", req)
+	if req.String() != "POST /datasets (multipart, 3 files)" || !req.Writes() {
+		t.Fatalf("call: %s", req)
 	}
 	if _, err := c.Do(context.Background(), "c", req); err == nil {
-		// ohne gelesene Dateien darf nichts hinausgehen
+		// without read files nothing may go out
 		if len(f.multipart) != 0 {
-			t.Fatal("Upload ohne gelesene Dateien gesendet")
+			t.Fatal("upload sent without read files")
 		}
 	}
 	for _, fl := range req.Files {
 		name := fl.Path[strings.LastIndex(fl.Path, "/")+1:]
-		req.Uploads = append(req.Uploads, Upload{Field: fl.Field, Name: name, Data: []byte("inhalt-" + name), SHA256: "x"})
+		req.Uploads = append(req.Uploads, Upload{Field: fl.Field, Name: name, Data: []byte("content-" + name), SHA256: "x"})
 	}
 	res, err := c.Do(context.Background(), "c", req)
 	if err != nil || res.HTTPStatus != 201 {
@@ -195,13 +195,13 @@ func TestMultipartUpload(t *testing.T) {
 	}
 	got := strings.Join(f.multipart, ";")
 	for _, want := range []string{"annotation_labels=0;annotation_labels=1", "includes_annotation_file=true", "is_classification_dataset=false", "metadata={}", "dataset_type=AgriImageDataResource",
-		"files=@a.png:inhalt-a.png;files=@b.png:inhalt-b.png;files=@annotations.xml:inhalt-annotations.xml"} {
+		"files=@a.png:content-a.png;files=@b.png:content-b.png;files=@annotations.xml:content-annotations.xml"} {
 		if !strings.Contains(got, want) {
-			t.Fatalf("multipart ohne %q: %s", want, got)
+			t.Fatalf("multipart without %q: %s", want, got)
 		}
 	}
-	if d := req.Describe(); !strings.Contains(d, "3 Dateien, zusammen") || !strings.Contains(d, "files: annotations.xml") || !strings.Contains(d, "name = ferkel") {
-		t.Fatalf("Beschreibung für die Bestätigung: %s", d)
+	if d := req.Describe(); !strings.Contains(d, "3 files, ") || !strings.Contains(d, "files: annotations.xml") || !strings.Contains(d, "name = piglets") {
+		t.Fatalf("description for the approval: %s", d)
 	}
 }
 
@@ -213,24 +213,24 @@ func TestUploadToolsValidate(t *testing.T) {
 		args string
 	}{
 		{ds, `{"name":"n","description":"d","files":[]}`},
-		{ds, `{"name":"n","description":"d","files":["relativ.png"]}`},
+		{ds, `{"name":"n","description":"d","files":["relative.png"]}`},
 		{ds, `{"name":"n","description":"d","files":["/workspace/../etc/passwd"]}`},
 		{ds, `{"name":"n","description":"d","files":[1]}`},
 		{md, `{"name":"n","description":"d","format":"exe","model_file":"/workspace/m.onnx"}`},
 		{md, `{"name":"n","description":"d","format":"onnx"}`},
-		{md, `{"name":"n","description":"d","format":"onnx","model_file":"/workspace/m.onnx","keywords":["schwein"]}`},
+		{md, `{"name":"n","description":"d","format":"onnx","model_file":"/workspace/m.onnx","keywords":["pig"]}`},
 	}
 	for _, b := range bad {
 		if r, err := b.tool.Build(json.RawMessage(b.args)); err == nil {
-			t.Errorf("%s %s: erwartet Fehler, gebaut %s", b.tool.Name, b.args, r)
+			t.Errorf("%s %s: expected error, built %s", b.tool.Name, b.args, r)
 		}
 	}
 	r, err := md.Build(json.RawMessage(`{"name":"m","description":"d","format":"onnx","model_file":"/workspace/m.onnx","keywords":["http://aims.fao.org/aos/agrovoc/c_5714"]}`))
 	if err != nil || r.Files[0].Field != "modelfile" || strings.Join(r.Form["labels"], ",") != "http://aims.fao.org/aos/agrovoc/c_5714" {
 		t.Fatalf("upload_model: %+v %v", r, err)
 	}
-	// Formular nur mit POST/PUT/PATCH und nicht zusammen mit JSON-Körper.
+	// Form only with POST/PUT/PATCH and not together with a JSON body.
 	if _, err := Normalize(Request{Method: "GET", Path: "/datasets", Form: map[string][]string{"a": {"b"}}}); err == nil {
-		t.Fatal("GET mit Formular erwartet abgewiesen")
+		t.Fatal("GET with form expected refused")
 	}
 }

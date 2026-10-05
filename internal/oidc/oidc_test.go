@@ -15,7 +15,7 @@ import (
 	"agw/internal/oidc/oidctest"
 )
 
-// gateway startet einen Orchestrator-Ersatz: /oidc/… vom Dienst, /whoami zeigt den Nutzer der Sitzung.
+// gateway starts an orchestrator stand-in: /oidc/… from the service, /whoami shows the session's user.
 func gateway(t *testing.T, is *oidctest.Issuer, mod func(*oidc.Config)) (*oidc.Service, *httptest.Server) {
 	t.Helper()
 	var svc *oidc.Service
@@ -61,12 +61,12 @@ func TestLoginFlow(t *testing.T) {
 	svc, srv := gateway(t, is, nil)
 	b := oidctest.NewBrowser(t)
 	if code, _ := get(t, b, srv.URL+"/whoami"); code != 401 {
-		t.Fatalf("ohne Anmeldung: %d", code)
+		t.Fatalf("without login: %d", code)
 	}
 	is.Login(&anna)
 	code, body := get(t, b, srv.URL+"/oidc/login?return="+url.QueryEscape("/?embed=1"))
 	if code != 200 || body != "UI /?embed=1" {
-		t.Fatalf("nach der Anmeldung: %d %q", code, body)
+		t.Fatalf("after login: %d %q", code, body)
 	}
 	if code, body := get(t, b, srv.URL+"/whoami"); code != 200 || body != "sub-anna anna" {
 		t.Fatalf("whoami: %d %q", code, body)
@@ -75,7 +75,7 @@ func TestLoginFlow(t *testing.T) {
 	if err != nil || tok == "" {
 		t.Fatalf("AccessToken: %q %v", tok, err)
 	}
-	// Abmelden: POST mit gleicher Herkunft.
+	// Log out: POST from the same origin.
 	req, _ := http.NewRequest("POST", srv.URL+"/oidc/logout", nil)
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	resp, err := b.Do(req)
@@ -83,10 +83,10 @@ func TestLoginFlow(t *testing.T) {
 		t.Fatalf("logout: %v %v", resp, err)
 	}
 	if code, _ := get(t, b, srv.URL+"/whoami"); code != 401 {
-		t.Fatalf("nach logout: %d", code)
+		t.Fatalf("after logout: %d", code)
 	}
 	if _, err := svc.AccessToken(context.Background(), "sub-anna"); !errors.Is(err, oidc.ErrNoSession) {
-		t.Fatalf("nach logout: %v", err)
+		t.Fatalf("after logout: %v", err)
 	}
 }
 
@@ -106,9 +106,9 @@ func TestPromptNoneWithoutKeycloakSession(t *testing.T) {
 	_, srv := gateway(t, is, nil)
 	b := oidctest.NewBrowser(t)
 	code, body := get(t, b, srv.URL+"/oidc/login?prompt=none")
-	if code != 401 || !strings.Contains(body, "Nicht angemeldet. Bitte in der Plattform anmelden.") ||
+	if code != 401 || !strings.Contains(body, "Not logged in. Please log in to the platform.") ||
 		!strings.Contains(body, `href="/oidc/login" target="_blank"`) {
-		t.Fatalf("prompt=none ohne Sitzung: %d %s", code, body)
+		t.Fatalf("prompt=none without session: %d %s", code, body)
 	}
 }
 
@@ -117,13 +117,13 @@ func TestCallbackRejectsForgedState(t *testing.T) {
 	_, srv := gateway(t, is, nil)
 	b := oidctest.NewBrowser(t)
 	is.Login(&anna)
-	// Ohne Cookie der Anmeldung (CSRF: Code eines anderen Browsers untergeschoben).
-	code, body := get(t, b, srv.URL+"/oidc/callback?code=abc&state=fremd")
-	if code != 400 || !strings.Contains(body, "abgelaufen oder ungültig") {
-		t.Fatalf("fremder state: %d %s", code, body)
+	// Without the login cookie (CSRF: code of another browser slipped in).
+	code, body := get(t, b, srv.URL+"/oidc/callback?code=abc&state=foreign")
+	if code != 400 || !strings.Contains(body, "expired or invalid") {
+		t.Fatalf("foreign state: %d %s", code, body)
 	}
 	if code, _ := get(t, b, srv.URL+"/whoami"); code != 401 {
-		t.Fatal("Sitzung trotz fremdem state")
+		t.Fatal("session despite foreign state")
 	}
 }
 
@@ -142,7 +142,7 @@ func TestReturnPathIsLocal(t *testing.T) {
 
 func TestRefreshAndRevoke(t *testing.T) {
 	is := oidctest.New(t)
-	is.AccessTTL = 20 * time.Second // unter der Schwelle: jeder Abruf erneuert
+	is.AccessTTL = 20 * time.Second // below the threshold: every fetch renews
 	svc, srv := gateway(t, is, nil)
 	b := oidctest.NewBrowser(t)
 	is.Login(&anna)
@@ -153,23 +153,23 @@ func TestRefreshAndRevoke(t *testing.T) {
 		t.Fatal(err)
 	}
 	if is.Refreshes == 0 {
-		t.Fatal("Token kurz vor Ablauf nicht erneuert")
+		t.Fatal("token not renewed shortly before expiry")
 	}
 	t2, err := svc.AccessToken(ctx, "sub-anna")
 	if err != nil || t2 == "" {
 		t.Fatal(err)
 	}
 	_ = t1
-	// Keycloak beendet die Sitzung: die Erneuerung scheitert, die Sitzung endet.
+	// Keycloak ends the session: the renewal fails, the session ends.
 	is.Revoke("sub-anna")
 	if _, err := svc.AccessToken(ctx, "sub-anna"); !errors.Is(err, oidc.ErrNoSession) {
-		t.Fatalf("nach Widerruf: %v", err)
+		t.Fatalf("after revocation: %v", err)
 	}
 	if svc.Sessions() != 0 {
-		t.Fatalf("Sitzung nicht verworfen: %d", svc.Sessions())
+		t.Fatalf("session not discarded: %d", svc.Sessions())
 	}
 	if code, _ := get(t, b, srv.URL+"/whoami"); code != 401 {
-		t.Fatal("UI-Sitzung lebt nach Widerruf weiter")
+		t.Fatal("UI session lives on after revocation")
 	}
 }
 
@@ -183,13 +183,13 @@ func TestNewValidates(t *testing.T) {
 		{Issuer: "https://kc/realms/r", ClientID: "a", ClientSecret: "s", PublicURL: "https://x//agent"},
 	} {
 		if _, err := oidc.New(c); err == nil {
-			t.Errorf("angenommen: %+v", c)
+			t.Errorf("accepted: %+v", c)
 		}
 	}
 }
 
-// prefixed startet den Orchestrator-Ersatz hinter einem Proxy, der /agent abschneidet (wie Traefik mit
-// stripprefix). Außerhalb von /agent antwortet die „Plattform“.
+// prefixed starts the orchestrator stand-in behind a proxy that strips /agent (like Traefik with
+// stripprefix). Outside /agent the "platform" answers.
 func prefixed(t *testing.T, is *oidctest.Issuer) (*oidc.Service, *httptest.Server) {
 	t.Helper()
 	inner := http.NewServeMux()
@@ -213,7 +213,7 @@ func prefixed(t *testing.T, is *oidctest.Issuer) (*oidc.Service, *httptest.Serve
 	})
 	inner.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "UI "+r.URL.RequestURI()) })
 	outer.Handle("/agent/", http.StripPrefix("/agent", inner))
-	outer.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "Plattform "+r.URL.RequestURI()) })
+	outer.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "Platform "+r.URL.RequestURI()) })
 	return svc, srv
 }
 
@@ -224,20 +224,20 @@ func TestLoginFlowUnderPrefix(t *testing.T) {
 	is.Login(&anna)
 	code, body := get(t, b, srv.URL+"/agent/oidc/login?return="+url.QueryEscape("/agent/?embed=1#/chats/x"))
 	if code != 200 || body != "UI /?embed=1" {
-		t.Fatalf("nach der Anmeldung: %d %q", code, body)
+		t.Fatalf("after login: %d %q", code, body)
 	}
 	if code, body := get(t, b, srv.URL+"/agent/whoami"); code != 200 || body != "sub-anna" {
 		t.Fatalf("whoami: %d %q", code, body)
 	}
-	// Das Sitzungs-Cookie gilt nur unter /agent/, die Plattform auf demselben Host sieht es nicht.
+	// The session cookie only applies under /agent/; the platform on the same host does not see it.
 	pu, _ := url.Parse(srv.URL + "/")
 	for _, c := range b.Jar.Cookies(pu) {
-		t.Errorf("Cookie außerhalb von /agent sichtbar: %s", c.Name)
+		t.Errorf("cookie visible outside /agent: %s", c.Name)
 	}
-	// Ohne return geht es zur Startseite der UI unter /agent/.
+	// Without return it goes to the UI's start page under /agent/.
 	b2 := oidctest.NewBrowser(t)
 	if code, body := get(t, b2, srv.URL+"/agent/oidc/login"); code != 200 || body != "UI /" {
-		t.Fatalf("ohne return: %d %q", code, body)
+		t.Fatalf("without return: %d %q", code, body)
 	}
 }
 
@@ -248,7 +248,7 @@ func TestReturnPathUnderPrefix(t *testing.T) {
 	for ret, want := range map[string]string{
 		"/agent/":                     "UI /",
 		"/agent/?embed=1":             "UI /?embed=1",
-		"/":                           "UI /", // Plattform-Startseite: nicht unser Pfad
+		"/":                           "UI /", // platform start page: not our path
 		"/agentx/":                    "UI /",
 		"/agent/../evil":              "UI /",
 		"/agent/%2e%2e/evil":          "UI /",
@@ -261,7 +261,7 @@ func TestReturnPathUnderPrefix(t *testing.T) {
 		b := oidctest.NewBrowser(t)
 		code, body := get(t, b, srv.URL+"/agent/oidc/login?return="+url.QueryEscape(ret))
 		if code != 200 || body != want {
-			t.Errorf("return %q: %d %q, erwartet %q", ret, code, body, want)
+			t.Errorf("return %q: %d %q, expected %q", ret, code, body, want)
 		}
 	}
 }
@@ -272,6 +272,6 @@ func TestPromptNoneUnderPrefixLinksToPrefixedLogin(t *testing.T) {
 	b := oidctest.NewBrowser(t)
 	code, body := get(t, b, srv.URL+"/agent/oidc/login?prompt=none&return="+url.QueryEscape("/agent/?embed=1"))
 	if code != 401 || !strings.Contains(body, `href="/agent/oidc/login?return=%2Fagent%2F%3Fembed%3D1" target="_blank"`) {
-		t.Fatalf("prompt=none unter /agent: %d %s", code, body)
+		t.Fatalf("prompt=none under /agent: %d %s", code, body)
 	}
 }

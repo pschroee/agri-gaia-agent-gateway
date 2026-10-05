@@ -1,6 +1,7 @@
-e2e/letzter-lauf.log
+e2e/last-run.log
 .dev/
 third_party/pi-subagents/node_modules/
 .env
 node_modules/
 web/dist/
+/agw-artifact

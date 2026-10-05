@@ -8,11 +8,11 @@ import (
 	"agw/internal/agwclient"
 )
 
-// agw chat execs: Werkzeugausführungen des Orchestrators, abgeglichen mit den am
-// LLM-Proxy angeforderten Aufrufen (E9).
+// agw chat execs: tool executions of the orchestrator, reconciled with the calls
+// requested at the LLM proxy (E9).
 func (a *app) cmdChatExecs(args []string) error {
 	fs := a.flags("chat execs")
-	flagged := fs.Bool("flagged", false, "nur auffällige Aufrufe (nicht ausgeführt, nicht angefordert, abweichend)")
+	flagged := fs.Bool("flagged", false, "only suspicious calls (not executed, not requested, mismatching)")
 	pos, err := a.parse(fs, args, 1, 1, "agw chat execs <id> [--flagged] [--json]")
 	if err != nil {
 		return err
@@ -37,17 +37,17 @@ func (a *app) cmdChatExecs(args []string) error {
 		}
 		calls = append(calls, c)
 	}
-	// Auffälliges zuerst, sonst in zeitlicher Reihenfolge.
+	// Suspicious ones first, otherwise in chronological order.
 	sort.SliceStable(calls, func(i, j int) bool { return isFlagged(calls[i].State) && !isFlagged(calls[j].State) })
 	if len(calls) == 0 {
 		if *flagged {
-			fmt.Fprintln(a.stdout, "Nichts Auffälliges.")
+			fmt.Fprintln(a.stdout, "Nothing suspicious.")
 		} else {
-			fmt.Fprintln(a.stdout, "Keine Werkzeugausführungen erfasst.")
+			fmt.Fprintln(a.stdout, "No tool executions recorded.")
 		}
 	} else {
 		tw := a.table()
-		fmt.Fprintln(tw, "Zeit\tSitzung\tWerkzeug\tOperationen\tBeleg\tErgebnis\tDauer\tBefehl/Pfad\tKennung")
+		fmt.Fprintln(tw, "Time\tSession\tTool\tOperations\tEvidence\tResult\tDuration\tCommand/path\tID")
 		for _, c := range calls {
 			at := c.StartedAt
 			if at == "" {
@@ -62,26 +62,26 @@ func (a *app) cmdChatExecs(args []string) error {
 			case c.Error != "":
 				res = c.Error
 			case c.Reason != "":
-				res = "laut Sitzung: " + c.Reason
+				res = "according to the session: " + c.Reason
 			case c.ExitCode != nil:
-				res = fmt.Sprintf("Exit %d", *c.ExitCode)
+				res = fmt.Sprintf("exit %d", *c.ExitCode)
 			case c.Executed:
 				res = "ok"
 			}
 			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", orDefault(fmtClock(at), "–"), sessionName(c.Session), tool,
 				orDefault(strings.Join(c.Ops, ", "), "–"), evidenceName(c.State), clipCell(res, 40),
-				fmt.Sprintf("%s s", deNum(float64(c.DurationMs)/1000, 1, 2)), clipCell(argSummary(firstArgs[c.ToolCallID]), 50), c.ToolCallID)
+				fmt.Sprintf("%s s", fmtNum(float64(c.DurationMs)/1000, 1, 2)), clipCell(argSummary(firstArgs[c.ToolCallID]), 50), c.ToolCallID)
 		}
 		tw.Flush()
 	}
 	s := r.Summary
 	bad := s["unexecuted"] + s["unrequested"] + s["mismatch"]
-	fmt.Fprintf(a.stdout, "%d belegt · %d auffällig (%d nicht ausgeführt, %d nicht angefordert, %d abweichend) · %d Antwort abgebrochen · %d von pi abgewiesen · %d Operationen\n",
+	fmt.Fprintf(a.stdout, "%d confirmed · %d suspicious (%d not executed, %d not requested, %d mismatching) · %d reply aborted · %d refused by pi · %d operations\n",
 		s["confirmed"], bad, s["unexecuted"], s["unrequested"], s["mismatch"], s["aborted"], s["rejected"], len(r.Executions))
 	return nil
 }
 
-// isFlagged: auffällig sind nur Zustände, die auf eine Umgehung deuten können (M1).
+// isFlagged: only states that can indicate a bypass are suspicious (M1).
 func isFlagged(state string) bool {
 	return state == "unexecuted" || state == "unrequested" || state == "mismatch"
 }
@@ -89,17 +89,17 @@ func isFlagged(state string) bool {
 func evidenceName(state string) string {
 	switch state {
 	case "confirmed":
-		return "belegt"
+		return "confirmed"
 	case "unexecuted":
-		return "NICHT AUSGEFÜHRT"
+		return "NOT EXECUTED"
 	case "unrequested":
-		return "NICHT ANGEFORDERT"
+		return "NOT REQUESTED"
 	case "mismatch":
-		return "ABWEICHEND"
+		return "MISMATCH"
 	case "aborted":
-		return "Antwort abgebrochen"
+		return "reply aborted"
 	case "rejected":
-		return "von pi abgewiesen"
+		return "refused by pi"
 	}
 	return state
 }
@@ -109,7 +109,7 @@ func sessionName(s string) string {
 	case "":
 		return "–"
 	case "main":
-		return "Hauptagent"
+		return "main agent"
 	}
 	run, n, _ := strings.Cut(s, "#")
 	if len(run) > 8 {

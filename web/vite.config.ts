@@ -4,8 +4,8 @@ import react from "@vitejs/plugin-react"
 import { defineConfig } from "vite"
 
 export default defineConfig({
-  // Relative Adressen: Die UI läuft unter / (lokal) und hinter einem Proxy unter einem Pfadpräfix
-  // (https://app.<basis>/agent/). Dank Hash-Routing ist der Dokumentpfad immer der Einstiegspunkt.
+  // Relative addresses: the UI runs under / (locally) and behind a proxy under a path prefix
+  // (https://app.<base>/agent/). Thanks to hash routing the document path is always the entry point.
   base: "./",
   plugins: [react(), tailwindcss()],
   resolve: {
@@ -13,8 +13,8 @@ export default defineConfig({
       "@": path.resolve(import.meta.dirname, "src"),
     },
   },
-  // ./dev.sh start: Vite liefert die UI mit Hot Reload und reicht API und Anmeldung an den
-  // Orchestrator weiter. changeOrigin, weil der Orchestrator nur bekannte Host-Kopfzeilen annimmt.
+  // ./dev.sh start: Vite serves the UI with hot reload and forwards the API and login to the
+  // orchestrator. changeOrigin because the orchestrator only accepts known Host headers.
   server: {
     proxy: {
       "/api": { target: "http://127.0.0.1:18480", changeOrigin: true },

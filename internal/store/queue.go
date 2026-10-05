@@ -9,37 +9,37 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// ErrDelivered: Der Eintrag der Warteschlange ist schon an pi übergeben.
-var ErrDelivered = errors.New("Nachricht ist bereits übergeben")
+// ErrDelivered: the queue entry has already been delivered to pi.
+var ErrDelivered = errors.New("message has already been delivered")
 
-// QueueEntry ist eine eingereihte Nachricht (Warteschlange je Chat).
+// QueueEntry is an enqueued message (queue per chat).
 type QueueEntry struct {
 	ID          string    `json:"id"`
 	ChatID      string    `json:"chat_id"`
 	Text        string    `json:"text"`
 	Attachments []string  `json:"attachments"`
 	CreatedAt   time.Time `json:"created_at"`
-	// Kind: "user" (Nachricht des Nutzers) oder "system" (Meldung des Orchestrators, etwa das
-	// Ende einer Hintergrundaufgabe).
+	// Kind: "user" (message from the user) or "system" (orchestrator note, such as the
+	// end of a background task).
 	Kind string `json:"kind"`
-	// Note und Refs nur bei Systemeinträgen: Art der Meldung (NoteBackground, NoteSandbox) und die
-	// betroffenen Aufgaben (bg-3). Text ist dann die erste Zeile (vom Orchestrator gebildet) und
-	// darunter, was aus der Sandbox stammt (Befehl, Ausgabe); siehe chat.BackgroundNote.
+	// Note and Refs only for system entries: kind of note (NoteBackground, NoteSandbox) and the
+	// affected tasks (bg-3). Text is then the first line (built by the orchestrator) and
+	// below it what comes from the sandbox (command, output); see chat.BackgroundNote.
 	Note string   `json:"note,omitempty"`
 	Refs []string `json:"refs,omitempty"`
 }
 
-// Arten eines Eintrags der Warteschlange.
+// Kinds of a queue entry.
 const (
 	QueueUser   = "user"
 	QueueSystem = "system"
 )
 
-// Arten einer Meldung des Orchestrators.
+// Kinds of an orchestrator note.
 const (
-	NoteBackground = "background" // Ende einer Hintergrundaufgabe
-	NoteSandbox    = "sandbox"    // Aufgaben sind mit der vorigen Sandbox beendet worden
-	NoteLanguage   = "language"   // bevorzugte Sprache des Nutzers laut Browser (erster Auftrag des Chats)
+	NoteBackground = "background" // end of a background task
+	NoteSandbox    = "sandbox"    // tasks were ended with the previous sandbox
+	NoteLanguage   = "language"   // the user's preferred language according to the browser (first request of the chat)
 )
 
 const queueCols = `id::text, chat_id::text, text, attachments, created_at, kind, note, refs`
@@ -66,17 +66,17 @@ func scanQueue(rows pgx.Rows) ([]QueueEntry, error) {
 	return out, rows.Err()
 }
 
-// Enqueue reiht eine Nachricht des Nutzers ein.
+// Enqueue enqueues a message from the user.
 func (s *Store) Enqueue(ctx context.Context, chatID, text string, attachments []string) (QueueEntry, error) {
 	return s.EnqueueKind(ctx, chatID, QueueUser, text, attachments)
 }
 
-// EnqueueKind reiht einen Eintrag der genannten Art ein (QueueUser, QueueSystem).
+// EnqueueKind enqueues an entry of the given kind (QueueUser, QueueSystem).
 func (s *Store) EnqueueKind(ctx context.Context, chatID, kind, text string, attachments []string) (QueueEntry, error) {
 	return s.enqueue(ctx, chatID, kind, text, attachments, "", nil)
 }
 
-// EnqueueSystem reiht eine Meldung des Orchestrators ein (note: NoteBackground, NoteSandbox).
+// EnqueueSystem enqueues an orchestrator note (note: NoteBackground, NoteSandbox).
 func (s *Store) EnqueueSystem(ctx context.Context, chatID, note string, refs []string, text string) (QueueEntry, error) {
 	return s.enqueue(ctx, chatID, QueueSystem, text, nil, note, refs)
 }
@@ -103,12 +103,12 @@ func (s *Store) enqueue(ctx context.Context, chatID, kind, text string, attachme
 		return QueueEntry{}, err
 	}
 	if len(es) != 1 {
-		return QueueEntry{}, errors.New("Einreihen: keine Zeile")
+		return QueueEntry{}, errors.New("enqueue: no row")
 	}
 	return es[0], nil
 }
 
-// ListQueue liefert die offenen (nicht übergebenen) Einträge in Reihenfolge.
+// ListQueue returns the open (not delivered) entries in order.
 func (s *Store) ListQueue(ctx context.Context, chatID string) ([]QueueEntry, error) {
 	if !isUUID(chatID) {
 		return []QueueEntry{}, nil
@@ -120,7 +120,7 @@ func (s *Store) ListQueue(ctx context.Context, chatID string) ([]QueueEntry, err
 	return scanQueue(rows)
 }
 
-// ClaimQueue markiert alle offenen Einträge als übergeben und liefert sie in Reihenfolge.
+// ClaimQueue marks all open entries as delivered and returns them in order.
 func (s *Store) ClaimQueue(ctx context.Context, chatID string) ([]QueueEntry, error) {
 	rows, err := s.pool.Query(ctx, `
 WITH c AS (UPDATE chat_queue SET delivered_at=now() WHERE chat_id=$1 AND delivered_at IS NULL RETURNING seq, `+queueCols+`)
@@ -131,7 +131,7 @@ SELECT `+queueCols+` FROM c ORDER BY seq`, chatID)
 	return scanQueue(rows)
 }
 
-// UnclaimQueue nimmt eine Übergabe zurück (pi hat den Auftrag nicht angenommen).
+// UnclaimQueue reverts a delivery (pi did not accept the request).
 func (s *Store) UnclaimQueue(ctx context.Context, ids []string) error {
 	if len(ids) == 0 {
 		return nil
@@ -140,7 +140,7 @@ func (s *Store) UnclaimQueue(ctx context.Context, ids []string) error {
 	return err
 }
 
-// RemoveQueued entfernt einen offenen Eintrag. ErrNotFound: unbekannt; ErrDelivered: schon übergeben.
+// RemoveQueued removes an open entry. ErrNotFound: unknown; ErrDelivered: already delivered.
 func (s *Store) RemoveQueued(ctx context.Context, chatID, id string) error {
 	if !isUUID(chatID) || !isUUID(id) {
 		return ErrNotFound
@@ -161,7 +161,7 @@ func (s *Store) RemoveQueued(ctx context.Context, chatID, id string) error {
 		return err
 	}
 	if tag.RowsAffected() == 0 {
-		return ErrDelivered // zwischen Lesen und Löschen übergeben
+		return ErrDelivered // delivered between reading and deleting
 	}
 	return nil
 }

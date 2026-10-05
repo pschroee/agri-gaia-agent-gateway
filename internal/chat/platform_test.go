@@ -18,8 +18,8 @@ import (
 
 var _ sock.PlatformBackend = (*Manager)(nil)
 
-// withPlatform hängt eine nachgebildete Plattform an den Manager und liefert die
-// dort eingegangenen Aufrufe.
+// withPlatform attaches a fake platform to the manager and returns the calls
+// that arrived there.
 func withPlatform(t *testing.T, e *env) func() []string {
 	t.Helper()
 	var mu sync.Mutex
@@ -56,10 +56,10 @@ func TestPlatformCallReadDirect(t *testing.T) {
 	slot := e.m.live[c.ID].slot.ID
 	r, err := e.m.PlatformCall(ctx, c.ID, slot, "mcp", platform.Request{Method: "GET", Path: "/datasets"})
 	if err != nil || r.Status != "ok" || len(got()) != 1 {
-		t.Fatalf("lesend: %+v %v %v", r, err, got())
+		t.Fatalf("reading: %+v %v %v", r, err, got())
 	}
 	if aps, _ := e.st.ListApprovals(ctx, "", c.ID); len(aps) != 0 {
-		t.Fatalf("GET darf keine Bestätigung anlegen: %+v", aps)
+		t.Fatalf("GET must not create an approval: %+v", aps)
 	}
 }
 
@@ -79,24 +79,24 @@ func TestPlatformCallWriteNeedsApproval(t *testing.T) {
 			done <- r
 		}()
 		ap := waitEvent(t, events, "approval", "").Data.(store.Approval)
-		for ap.State != store.ApprovalPending { // Ereignis der vorigen Entscheidung überspringen
+		for ap.State != store.ApprovalPending { // skip the event of the previous decision
 			ap = waitEvent(t, events, "approval", "").Data.(store.Approval)
 		}
 		if ap.Kind != "platform_write" || ap.Name != "POST /train/config" || !strings.Contains(ap.Preview, `"dataset_id": 2`) {
-			t.Fatalf("Bestätigung: %+v", ap)
+			t.Fatalf("approval: %+v", ap)
 		}
 		if n := len(got()); n != 0 && !approve {
-			t.Fatalf("vor der Entscheidung ausgeführt: %v", got())
+			t.Fatalf("executed before the decision: %v", got())
 		}
 		if _, err := e.m.Decide(ctx, ap.ID, approve); err != nil {
 			t.Fatal(err)
 		}
 		r := <-done
 		if !approve && (r.Status != "rejected" || len(got()) != 0) {
-			t.Fatalf("Ablehnung: %+v %v", r, got())
+			t.Fatalf("rejection: %+v %v", r, got())
 		}
 		if approve && (r.Status != "ok" || r.HTTPStatus != 202 || r.Location != "/tasks/5" || len(got()) != 1) {
-			t.Fatalf("Zustimmung: %+v %v", r, got())
+			t.Fatalf("approval granted: %+v %v", r, got())
 		}
 	}
 }
@@ -107,14 +107,14 @@ func TestPlatformCallNotConfigured(t *testing.T) {
 	c, _ := e.m.Create(ctx, NewChat{})
 	r, err := e.m.PlatformCall(ctx, c.ID, "", "cli", platform.Request{Method: "POST", Path: "/x"})
 	if err != nil || r.Status != "error" {
-		t.Fatalf("ohne Plattform: %+v %v", r, err)
+		t.Fatalf("without platform: %+v %v", r, err)
 	}
 	if aps, _ := e.st.ListApprovals(ctx, "", c.ID); len(aps) != 0 {
-		t.Fatal("ohne Plattform keine Bestätigung")
+		t.Fatal("no approval without platform")
 	}
 }
 
-// Review W1: Was nicht vollständig in die Vorschau passt, wird abgewiesen, nicht gekürzt bestätigt.
+// Review W1: what does not fit completely into the preview is refused, not approved truncated.
 func TestPlatformCallPreviewTooLarge(t *testing.T) {
 	e := setup(t)
 	got := withPlatform(t, e)
@@ -122,16 +122,16 @@ func TestPlatformCallPreviewTooLarge(t *testing.T) {
 	c, _ := e.m.Create(ctx, NewChat{})
 	body, _ := json.Marshal(map[string]string{"description": strings.Repeat("x", maxPlatformPreview)})
 	r, err := e.m.PlatformCall(ctx, c.ID, e.m.live[c.ID].slot.ID, "mcp", platform.Request{Method: "PATCH", Path: "/datasets/1", Body: body})
-	if err != nil || r.Status != "error" || !strings.Contains(r.Message, "zu groß") || len(got()) != 0 {
-		t.Fatalf("zu große Vorschau: %+v %v %v", r, err, got())
+	if err != nil || r.Status != "error" || !strings.Contains(r.Message, "too large") || len(got()) != 0 {
+		t.Fatalf("preview too large: %+v %v %v", r, err, got())
 	}
 	if aps, _ := e.st.ListApprovals(ctx, "", c.ID); len(aps) != 0 {
-		t.Fatalf("keine Bestätigung erwartet: %+v", aps)
+		t.Fatalf("no approval expected: %+v", aps)
 	}
 }
 
-// Review M7: Ablauf der Wartezeit führt nichts aus; ein schreibendes GET (K1) fragt nach;
-// Steuerzeichen erscheinen sichtbar in der Vorschau.
+// Review M7: expiry of the waiting time executes nothing; a writing GET (K1) asks for approval;
+// control characters appear visibly in the preview.
 func TestPlatformCallExpiredAndWritingGET(t *testing.T) {
 	e := setup(t)
 	got := withPlatform(t, e)
@@ -147,18 +147,18 @@ func TestPlatformCallExpiredAndWritingGET(t *testing.T) {
 	}()
 	ap := waitEvent(t, events, "approval", "").Data.(store.Approval)
 	if ap.Kind != "platform_write" || ap.Name != "GET /train/containers/3/model" {
-		t.Fatalf("schreibendes GET ohne Bestätigung: %+v", ap)
+		t.Fatalf("writing GET without approval: %+v", ap)
 	}
-	if r := <-done; r.Status != "rejected" || len(got()) != 0 { // ApprovalTimeout im Test: 2 s
-		t.Fatalf("Ablauf: %+v %v", r, got())
+	if r := <-done; r.Status != "rejected" || len(got()) != 0 { // ApprovalTimeout in the test: 2 s
+		t.Fatalf("expiry: %+v %v", r, got())
 	}
-	rlo := string(rune(0x202e)) // Bidi-Steuerzeichen RIGHT-TO-LEFT OVERRIDE
+	rlo := string(rune(0x202e)) // bidi control character RIGHT-TO-LEFT OVERRIDE
 	if s := visibleControls("a" + rlo + "b\nc"); s != "a\\u202eb\nc" {
-		t.Fatalf("Steuerzeichen: %q", s)
+		t.Fatalf("control characters: %q", s)
 	}
 }
 
-// Ein Upload zeigt in der Bestätigung jede Datei mit Größe und SHA-256.
+// An upload shows every file with size and SHA-256 in the approval.
 func TestPlatformCallUploadPreview(t *testing.T) {
 	e := setup(t)
 	got := withPlatform(t, e)
@@ -176,16 +176,16 @@ func TestPlatformCallUploadPreview(t *testing.T) {
 		done <- r
 	}()
 	ap := waitEvent(t, events, "approval", "").Data.(store.Approval)
-	if ap.Name != "POST /models (multipart, 1 Datei)" || ap.Size != 5 || !strings.Contains(ap.Preview, "modelfile: m.onnx  5 Bytes  sha256 abc123") || !strings.Contains(ap.Preview, "format = onnx") {
-		t.Fatalf("Bestätigung: %+v", ap)
+	if ap.Name != "POST /models (multipart, 1 file)" || ap.Size != 5 || !strings.Contains(ap.Preview, "modelfile: m.onnx  5 bytes  sha256 abc123") || !strings.Contains(ap.Preview, "format = onnx") {
+		t.Fatalf("approval: %+v", ap)
 	}
 	_, _ = e.m.Decide(ctx, ap.ID, true)
 	if r := <-done; r.Status != "ok" || len(got()) != 1 {
-		t.Fatalf("Upload nach Zustimmung: %+v %v", r, got())
+		t.Fatalf("upload after approval: %+v %v", r, got())
 	}
 }
 
-// Mit Token-Austausch steht jeder Austausch im Socket-Protokoll des Chats.
+// With token exchange, every exchange is in the chat's socket log.
 func TestPlatformExchangeLogged(t *testing.T) {
 	e := setup(t)
 	ctx := context.Background()
@@ -194,7 +194,7 @@ func TestPlatformExchangeLogged(t *testing.T) {
 		if r.URL.Path == "/token" {
 			_ = r.ParseForm()
 			if r.Form.Get("grant_type") == "password" {
-				fmt.Fprint(w, `{"access_token":"nutzer","expires_in":3600}`)
+				fmt.Fprint(w, `{"access_token":"user","expires_in":3600}`)
 				return
 			}
 			claims, _ := json.Marshal(map[string]any{"preferred_username": "test", "azp": "agw-agent", "aud": r.Form["audience"], "exp": 4102444800})
@@ -213,7 +213,7 @@ func TestPlatformExchangeLogged(t *testing.T) {
 	c, _ := e.m.Create(ctx, NewChat{})
 	slot := e.m.live[c.ID].slot.ID
 	if r, _ := e.m.PlatformCall(ctx, c.ID, slot, "mcp", platform.Request{Method: "GET", Path: "/datasets"}); r.Status != "ok" {
-		t.Fatalf("Aufruf: %+v", r)
+		t.Fatalf("call: %+v", r)
 	}
 	calls, _ := e.st.ListSocketCalls(ctx, c.ID)
 	found := false
@@ -223,6 +223,6 @@ func TestPlatformExchangeLogged(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Fatalf("Austausch nicht protokolliert: %+v", calls)
+		t.Fatalf("exchange not logged: %+v", calls)
 	}
 }

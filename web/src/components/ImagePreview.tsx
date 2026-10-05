@@ -6,17 +6,17 @@ import { cn } from "@/lib/utils"
 type Props = {
   src: string
   alt?: string
-  /** Pfad oder Dateiname: Tooltip, Unterschrift in der Großansicht und Hinweis bei Ladefehlern. */
+  /** Path or file name: tooltip, caption in the large view and hint on load errors. */
   label?: string
-  /** Dateiname für „Herunterladen“. */
+  /** File name for "Download". */
   filename?: string
-  /** Klassen des Vorschaubilds (Standard: höchstens 320 px hoch). */
+  /** Classes of the thumbnail (default: at most 320 px high). */
   thumbClassName?: string
 }
 
 /**
- * Bild als kleine Vorschau; ein Klick öffnet die Großansicht mit Download. Nur für Adressen, die die UI laden
- * darf (Endpunkt des Orchestrators, eigene Anhänge, data:-Rasterbilder), siehe lib/images.
+ * Image as a small thumbnail; a click opens the large view with download. Only for addresses the UI may load
+ * (orchestrator endpoint, own attachments, data: raster images), see lib/images.
  */
 export function ImagePreview({ src, alt, label, filename, thumbClassName }: Props) {
   const [failed, setFailed] = useState(false)
@@ -27,18 +27,18 @@ export function ImagePreview({ src, alt, label, filename, thumbClassName }: Prop
         title={label}
       >
         <ImageOffIcon className="size-3 shrink-0" />
-        <span className="truncate">Bild nicht verfügbar{label ? ` · ${label}` : ""}</span>
+        <span className="truncate">Image not available{label ? ` · ${label}` : ""}</span>
       </span>
     )
   }
-  const name = filename ?? label?.split("/").pop() ?? "bild"
+  const name = filename ?? label?.split("/").pop() ?? "image"
   return (
     <Dialog>
       <DialogTrigger asChild>
         <button
           type="button"
           className="not-prose my-1 inline-block max-w-full cursor-zoom-in rounded-lg align-top focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
-          title={label ? `${label} – vergrößern` : "vergrößern"}
+          title={label ? `${label} – enlarge` : "enlarge"}
         >
           <img
             src={src}
@@ -54,7 +54,7 @@ export function ImagePreview({ src, alt, label, filename, thumbClassName }: Prop
         <div className="flex w-full min-w-0 items-center gap-3 text-xs">
           <div className="min-w-0 flex-1">
             <DialogTitle className="truncate text-sm">{alt || name}</DialogTitle>
-            {/* zweite Zeile nur, wenn sie mehr sagt als der Titel (etwa den Pfad) */}
+            {/* second line only if it says more than the title (e.g. the path) */}
             {(label ?? name) !== (alt || name) ? (
               <DialogDescription className="truncate text-xs">{label ?? name}</DialogDescription>
             ) : (
@@ -67,7 +67,7 @@ export function ImagePreview({ src, alt, label, filename, thumbClassName }: Prop
             className="inline-flex shrink-0 items-center gap-1 rounded-md border px-2 py-1 hover:bg-muted"
           >
             <DownloadIcon className="size-3" />
-            Herunterladen
+            Download
           </a>
         </div>
       </DialogContent>

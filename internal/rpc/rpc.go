@@ -1,6 +1,6 @@
-// Package rpc spricht das RPC-Protokoll von pi (docs/rpc.md): Befehle als
-// JSON-Zeilen auf stdin, Antworten und Ereignisse als JSON-Zeilen auf stdout.
-// Getrennt wird nur an '\n'; U+2028/U+2029 sind gültiger Teil von JSON-Strings.
+// Package rpc speaks pi's RPC protocol (docs/rpc.md): commands as
+// JSON lines on stdin, responses and events as JSON lines on stdout.
+// Lines are split only at '\n'; U+2028/U+2029 are a valid part of JSON strings.
 package rpc
 
 import (
@@ -16,16 +16,16 @@ import (
 	"sync/atomic"
 )
 
-// DefaultMaxLine begrenzt eine Zeile. pi liest Daten, die der Agent erzeugt;
-// eine Grenze schützt den Orchestrator. Längere Zeilen werden nicht still
-// verworfen, sondern als Ereignis TypeOversized gemeldet (docs/entwurf.md).
+// DefaultMaxLine limits a line. pi reads data the agent produces;
+// a limit protects the orchestrator. Longer lines are not silently
+// discarded but reported as a TypeOversized event (docs/design.md).
 const DefaultMaxLine = 32 << 20
 
 const (
 	TypeOversized = "agw_oversized_line"
 	TypeInvalid   = "agw_invalid_line"
-	// TypeOverflow meldet verworfene Ereignisse (Raw: Anzahl). Der Lesefaden
-	// blockiert nie an vollen Ereignissen, damit Antworten immer zugestellt werden.
+	// TypeOverflow reports discarded events (Raw: count). The reader goroutine
+	// never blocks on full events, so responses are always delivered.
 	TypeOverflow = "agw_events_dropped"
 )
 
@@ -38,7 +38,7 @@ type Response struct {
 	Data    json.RawMessage `json:"data"`
 }
 
-// Event ist ein pi-Ereignis. Raw enthält die Zeile unverändert.
+// Event is a pi event. Raw contains the line unchanged.
 type Event struct {
 	Type string
 	Raw  json.RawMessage
@@ -54,7 +54,7 @@ type Client struct {
 	events  chan Event
 	done    chan struct{}
 	err     error
-	dropped int // nur im Lesefaden benutzt
+	dropped int // used only in the reader goroutine
 }
 
 func New(w io.Writer, r io.Reader) *Client { return NewWithLimit(w, r, DefaultMaxLine) }
@@ -70,11 +70,11 @@ func NewWithLimit(w io.Writer, r io.Reader, maxLine int) *Client {
 	return c
 }
 
-// Events liefert alle Zeilen, die keine Antwort sind. Der Kanal wird
-// geschlossen, wenn pi endet.
+// Events returns all lines that are not a response. The channel is
+// closed when pi ends.
 func (c *Client) Events() <-chan Event { return c.events }
 
-// Done wird geschlossen, wenn der Strom endet.
+// Done is closed when the stream ends.
 func (c *Client) Done() <-chan struct{} { return c.done }
 
 func (c *Client) Err() error {
@@ -144,8 +144,8 @@ func (c *Client) dispatch(line []byte) {
 	c.emit(Event{Type: head.Type, Raw: line})
 }
 
-// emit stellt ein Ereignis zu, ohne zu blockieren. Ist der Puffer voll, wird
-// es verworfen; sobald wieder Platz ist, folgt ein TypeOverflow mit der Anzahl.
+// emit delivers an event without blocking. If the buffer is full, it is
+// discarded; as soon as there is room again, a TypeOverflow with the count follows.
 func (c *Client) emit(ev Event) {
 	if c.dropped > 0 {
 		select {
@@ -182,9 +182,9 @@ func (c *Client) fail(err error) {
 	}
 }
 
-var ErrClosed = errors.New("pi-RPC-Strom beendet")
+var ErrClosed = errors.New("pi RPC stream ended")
 
-// Call sendet einen Befehl und wartet auf die zugehörige Antwort.
+// Call sends a command and waits for the corresponding response.
 func (c *Client) Call(ctx context.Context, cmd map[string]any) (Response, error) {
 	id := "agw-" + strconv.FormatUint(c.next.Add(1), 10)
 	msg := make(map[string]any, len(cmd)+1)
@@ -212,7 +212,7 @@ func (c *Client) Call(ctx context.Context, cmd map[string]any) (Response, error)
 		c.mu.Lock()
 		delete(c.pending, id)
 		c.mu.Unlock()
-		return Response{}, fmt.Errorf("Befehl %v senden: %w", cmd["type"], err)
+		return Response{}, fmt.Errorf("sending command %v: %w", cmd["type"], err)
 	}
 	select {
 	case resp, ok := <-ch:
@@ -220,7 +220,7 @@ func (c *Client) Call(ctx context.Context, cmd map[string]any) (Response, error)
 			return Response{}, ErrClosed
 		}
 		if !resp.Success {
-			return resp, fmt.Errorf("pi lehnt %s ab: %s", resp.Command, resp.Error)
+			return resp, fmt.Errorf("pi rejects %s: %s", resp.Command, resp.Error)
 		}
 		return resp, nil
 	case <-ctx.Done():
@@ -231,8 +231,8 @@ func (c *Client) Call(ctx context.Context, cmd map[string]any) (Response, error)
 	}
 }
 
-// Notify schreibt einen Befehl, ohne auf eine Antwort zu warten
-// (etwa extension_ui_response).
+// Notify writes a command without waiting for a response
+// (e.g. extension_ui_response).
 func (c *Client) Notify(cmd map[string]any) error {
 	line, err := json.Marshal(cmd)
 	if err != nil {
@@ -244,7 +244,7 @@ func (c *Client) Notify(cmd map[string]any) error {
 	return err
 }
 
-// Close schließt den Schreibkanal, sofern er ein io.Closer ist.
+// Close closes the write channel if it is an io.Closer.
 func (c *Client) Close() error {
 	if cl, ok := c.w.(io.Closer); ok {
 		return cl.Close()

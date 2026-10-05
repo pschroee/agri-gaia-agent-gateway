@@ -28,21 +28,21 @@ import { cn } from "@/lib/utils"
 type CardProps = {
   block: ToolCallBlock
   exec?: ToolExecution
-  /** Abgleich mit dem Protokoll des Orchestrators (E9). */
+  /** Matching against the orchestrator's log (E9). */
   evidence?: Evidence
-  /** Der Lauf ist fertig; erst dann gelten fehlende Belege als auffällig. */
+  /** The run is finished; only then does missing evidence count as suspicious. */
   settled?: boolean
-  /** Hintergrundaufgaben des Chats (für bash mit run_in_background, bg_output, bg_stop). */
+  /** Background tasks of the chat (for bash with run_in_background, bg_output, bg_stop). */
   background?: BackgroundTask[]
-  /** Öffnet den Reiter „Hintergrund“ mit dieser Aufgabe im Blick. */
+  /** Opens the "Background" tab with this task in focus. */
   onOpenBackground?: (id?: string) => void
-  /** Chat des Aufrufs; mit ihm bekommt ein laufendes bash „Stoppen“ und „In den Hintergrund“. */
+  /** Chat of the call; with it, a running bash gets "Stop" and "Move to background". */
   chatId?: string
 }
 
 /**
- * Karte eines Werkzeugaufrufs. Hintergrundaufgaben bekommen eine eigene Form: bash mit
- * run_in_background zeigt Kennung, Zustand und Laufzeit der Aufgabe, bg_output und bg_stop eine Zeile.
+ * Card of a tool call. Background tasks get their own form: bash with run_in_background shows the
+ * task's ID, state and run time, bg_output and bg_stop a single line.
  */
 export function ToolCallCard(props: CardProps) {
   const { block, exec, background } = props
@@ -51,7 +51,7 @@ export function ToolCallCard(props: CardProps) {
     background && (block.arguments ?? exec?.args) !== undefined
       ? backgroundCall(name, block.arguments ?? exec?.args, block.id, exec?.result, background)
       : undefined
-  // Gescheiterter Start (etwa Grenze erreicht): die gewöhnliche Karte zeigt den Fehler.
+  // Failed start (e.g. limit reached): the ordinary card shows the error.
   if (call?.kind === "start" && exec?.isError !== true) return <BackgroundStartCard {...props} call={call} />
   if (call && call.kind !== "start") return <BackgroundCallLine {...props} call={call} />
   return <GenericToolCallCard {...props} />
@@ -62,22 +62,22 @@ function GenericToolCallCard({ block, exec, evidence, settled = true, chatId }: 
   const running = exec?.running ?? false
   const done = exec !== undefined && !running && exec.result !== undefined
   const error = exec?.isError === true
-  const name = block.name || exec?.toolName || "Werkzeug"
-  // Das Modell schreibt den Aufruf noch (toolcall_delta): Argumente sind halbfertiges JSON.
+  const name = block.name || exec?.toolName || "tool"
+  // The model is still writing the call (toolcall_delta): the arguments are half-finished JSON.
   const preparing = block.arguments === undefined && block.argsText !== undefined && exec === undefined
   const prep = preparing ? preparingInfo(name, block.argsText ?? "") : undefined
   const view = describeToolArgs(name, block.arguments ?? exec?.args, block.argsText)
   const summary = prep ? (prep.path ?? view.summary) : view.summary
-  // Während der Vorbereitung aufgeklappt, damit man sieht, was entsteht; danach wie gewählt.
+  // Expanded while being prepared, so you see what is emerging; afterwards as chosen.
   const isOpen = preparing || open
-  // Dauer: laufend live, fertig aus Start und Ende; nach dem Neuladen ohne Zeitstempel die vom
-  // Orchestrator gemessene Ausführungszeit (E9), sonst keine Angabe.
+  // Duration: live while running, from start and end when finished; after a reload without timestamps
+  // the execution time measured by the orchestrator (E9), otherwise nothing.
   const live = running && exec?.startedAt !== undefined
   const now = useNow(1000, live)
   const measured = toolDurationMs(exec, now)
   const fallback = !running && measured === undefined && evidence?.executed && evidence.durationMs > 0 ? evidence.durationMs : undefined
   const took = running ? (measured !== undefined ? formatElapsed(measured) : "") : formatStepDuration(measured ?? fallback)
-  const tookTitle = measured === undefined && fallback !== undefined ? "Ausführungszeit laut Orchestrator" : "Dauer des Werkzeugaufrufs"
+  const tookTitle = measured === undefined && fallback !== undefined ? "Execution time according to the orchestrator" : "Duration of the tool call"
 
   return (
     <Collapsible
@@ -98,25 +98,25 @@ function GenericToolCallCard({ block, exec, evidence, settled = true, chatId }: 
           <span className="ml-auto flex shrink-0 items-center gap-1.5">
             <EvidenceBadge evidence={evidence} settled={settled} className="hidden sm:inline-flex" />
             {preparing ? (
-              <Badge variant="outline" className="border-violet-200 bg-violet-50 text-violet-800" title="Das Modell schreibt diesen Werkzeugaufruf gerade">
-                <Loader2Icon className="animate-spin" /> wird vorbereitet · {formatBytes(prep!.bytes)}
-                {prep!.lines > 1 ? ` · ${prep!.lines} Zeilen` : ""}
+              <Badge variant="outline" className="border-violet-200 bg-violet-50 text-violet-800" title="The model is writing this tool call right now">
+                <Loader2Icon className="animate-spin" /> preparing · {formatBytes(prep!.bytes)}
+                {prep!.lines > 1 ? ` · ${prep!.lines} lines` : ""}
               </Badge>
             ) : running ? (
               <Badge variant="outline" className="border-sky-200 bg-sky-50 text-sky-800">
-                <Loader2Icon className="animate-spin" /> läuft
+                <Loader2Icon className="animate-spin" /> running
                 {took && <span className="tabular-nums">· {took}</span>}
               </Badge>
             ) : error ? (
               <Badge variant="destructive" title={took ? tookTitle : undefined}>
-                Fehler{took && <span className="tabular-nums">· {took}</span>}
+                error{took && <span className="tabular-nums">· {took}</span>}
               </Badge>
             ) : done ? (
               <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-emerald-800" title={took ? tookTitle : undefined}>
-                fertig{took && <span className="tabular-nums">· {took}</span>}
+                done{took && <span className="tabular-nums">· {took}</span>}
               </Badge>
             ) : (
-              <Badge variant="outline">angefordert</Badge>
+              <Badge variant="outline">requested</Badge>
             )}
           </span>
         </CollapsibleTrigger>
@@ -124,13 +124,13 @@ function GenericToolCallCard({ block, exec, evidence, settled = true, chatId }: 
       </div>
       <CollapsibleContent className="space-y-2 border-t px-3 py-2">
         {prep && (
-          <Section title={prep.path ? `Entsteht: ${prep.path}` : "Entsteht"} text={prep.preview || "…"} />
+          <Section title={prep.path ? `Writing: ${prep.path}` : "Writing"} text={prep.preview || "…"} />
         )}
         {!prep && view.sections.map((sec, i) => (
           <ArgBlock key={i} section={sec} />
         ))}
-        {running && exec?.output !== undefined && <Section title="Ausgabe (laufend)" text={exec.output} />}
-        {exec?.result !== undefined && <Section title={error ? "Fehler" : "Ergebnis"} text={exec.result} error={error} />}
+        {running && exec?.output !== undefined && <Section title="Output (live)" text={exec.output} />}
+        {exec?.result !== undefined && <Section title={error ? "Error" : "Result"} text={exec.result} error={error} />}
         {evidence && <EvidenceDetails evidence={evidence} settled={settled} />}
       </CollapsibleContent>
     </Collapsible>
@@ -138,9 +138,9 @@ function GenericToolCallCard({ block, exec, evidence, settled = true, chatId }: 
 }
 
 /**
- * Knöpfe an einem laufenden bash: stoppen (der Agent bekommt „Command stopped by the user“ und
- * arbeitet weiter) oder in den Hintergrund schieben (der Befehl läuft als bg-N weiter; der Agent
- * erfährt es sofort und wird bei seinem Ende benachrichtigt).
+ * Buttons on a running bash: stop (the agent gets "Command stopped by the user" and keeps working)
+ * or move to the background (the command keeps running as bg-N; the agent learns about it right
+ * away and is notified when it ends).
  */
 function ForegroundControls({ chatId, toolCallId }: { chatId: string; toolCallId: string }) {
   const [busy, setBusy] = useState<"stop" | "bg">()
@@ -151,10 +151,10 @@ function ForegroundControls({ chatId, toolCallId }: { chatId: string; toolCallId
         await api.stopTool(chatId, toolCallId)
       } else {
         const t = await api.backgroundTool(chatId, toolCallId)
-        toast.success(`Läuft als ${t.id} im Hintergrund weiter`)
+        toast.success(`Continues as ${t.id} in the background`)
       }
     } catch (e) {
-      toast.error(`${kind === "stop" ? "Stoppen" : "In den Hintergrund schieben"} fehlgeschlagen: ${e instanceof Error ? e.message : String(e)}`)
+      toast.error(`${kind === "stop" ? "Stopping" : "Moving to the background"} failed: ${e instanceof Error ? e.message : String(e)}`)
     } finally {
       setBusy(undefined)
     }
@@ -165,8 +165,8 @@ function ForegroundControls({ chatId, toolCallId }: { chatId: string; toolCallId
         size="icon-sm"
         variant="ghost"
         disabled={!!busy}
-        title="In den Hintergrund schieben: läuft weiter, der Agent arbeitet weiter und wird beim Ende benachrichtigt"
-        aria-label="In den Hintergrund schieben"
+        title="Move to the background: keeps running, the agent keeps working and is notified when it ends"
+        aria-label="Move to the background"
         onClick={() => void act("bg")}
       >
         {busy === "bg" ? <Loader2Icon className="animate-spin" /> : <ArrowDownToLineIcon />}
@@ -175,8 +175,8 @@ function ForegroundControls({ chatId, toolCallId }: { chatId: string; toolCallId
         size="icon-sm"
         variant="ghost"
         disabled={!!busy}
-        title="Befehl stoppen: der Agent erfährt es und arbeitet weiter"
-        aria-label="Befehl stoppen"
+        title="Stop command: the agent learns about it and keeps working"
+        aria-label="Stop command"
         onClick={() => void act("stop")}
       >
         {busy === "stop" ? <Loader2Icon className="animate-spin" /> : <CircleStopIcon className="text-red-600" />}
@@ -192,9 +192,9 @@ const toneBadge: Record<Tone, string> = {
   muted: "",
 }
 
-/** Kennung einer Hintergrundaufgabe als Link auf den Reiter „Hintergrund“. */
+/** ID of a background task as a link to the "Background" tab. */
 function BgLink({ id, onOpen, short }: { id: string; onOpen?: (id?: string) => void; short?: boolean }) {
-  const text = short ? id : `Hintergrund ${id}`
+  const text = short ? id : `Background ${id}`
   if (!onOpen) {
     return (
       <Badge variant="outline" className="font-mono">
@@ -207,14 +207,14 @@ function BgLink({ id, onOpen, short }: { id: string; onOpen?: (id?: string) => v
       type="button"
       onClick={() => onOpen(id)}
       className="inline-flex shrink-0 items-center gap-1 rounded-md border border-violet-200 bg-violet-50 px-1.5 py-0.5 text-xs text-violet-800 hover:bg-violet-100 dark:border-violet-800 dark:bg-violet-950 dark:text-violet-200"
-      title={`${id} im Reiter „Hintergrund“ zeigen`}
+      title={`Show ${id} in the Background tab`}
     >
       <TerminalSquareIcon className="size-3" />
       {short ? (
         <span className="font-mono">{id}</span>
       ) : (
         <>
-          <span className="hidden sm:inline">Hintergrund</span>
+          <span className="hidden sm:inline">Background</span>
           <span className="font-mono">{id}</span>
         </>
       )}
@@ -222,7 +222,7 @@ function BgLink({ id, onOpen, short }: { id: string; onOpen?: (id?: string) => v
   )
 }
 
-/** bash mit run_in_background: Kennung, Zustand und Laufzeit der Aufgabe; nach dem Ende Exit-Code und letzte Zeilen. */
+/** bash with run_in_background: ID, state and run time of the task; after the end, exit code and last lines. */
 function BackgroundStartCard({ block, exec, evidence, settled = true, onOpenBackground, call }: CardProps & { call: BackgroundCall }) {
   const [open, setOpen] = useState(false)
   const task = call.task
@@ -252,20 +252,20 @@ function BackgroundStartCard({ block, exec, evidence, settled = true, onOpenBack
           <Badge
             variant="outline"
             className={cn("shrink-0", toneBadge[status.tone])}
-            title={task?.state === "running" ? "Läuft im Hintergrund; der Agent wird beim Ende benachrichtigt" : "Zustand der Hintergrundaufgabe"}
+            title={task?.state === "running" ? "Running in the background; the agent is notified when it ends" : "State of the background task"}
           >
             {running && <Loader2Icon className="animate-spin" />}
             <span className="hidden sm:inline">{status.label}</span>
-            <span className="sm:hidden">{running ? "läuft" : status.tone === "ok" ? "fertig" : status.tone === "error" ? "Fehler" : "beendet"}</span>
+            <span className="sm:hidden">{running ? "running" : status.tone === "ok" ? "done" : status.tone === "error" ? "error" : "ended"}</span>
             {runtime && <span className="tabular-nums">· {runtime}</span>}
           </Badge>
         ) : starting ? (
           <Badge variant="outline" className="shrink-0 border-sky-200 bg-sky-50 text-sky-800">
-            <Loader2Icon className="animate-spin" /> startet
+            <Loader2Icon className="animate-spin" /> starting
           </Badge>
         ) : (
           <Badge variant="outline" className="shrink-0">
-            gestartet
+            started
           </Badge>
         )}
       </div>
@@ -276,27 +276,27 @@ function BackgroundStartCard({ block, exec, evidence, settled = true, onOpenBack
         {task && (
           <div className="min-w-0">
             <div className="mb-1 text-xs font-medium text-muted-foreground">
-              {running ? "Letzte Zeilen (laufend)" : "Letzte Zeilen"}
-              {task.output_lines > 0 && ` · ${task.output_lines} Zeilen, ${formatBytes(task.output_bytes)}`}
-              {!running && task.exit_code !== undefined && ` · Exit ${task.exit_code}`}
+              {running ? "Last lines (live)" : "Last lines"}
+              {task.output_lines > 0 && ` · ${task.output_lines} lines, ${formatBytes(task.output_bytes)}`}
+              {!running && task.exit_code !== undefined && ` · exit ${task.exit_code}`}
               {task.error && !running ? ` · ${task.error}` : ""}
             </div>
             <pre className="max-h-60 overflow-auto rounded bg-muted p-2 font-mono text-xs whitespace-pre-wrap break-all">
-              {lines.length ? lines.join("\n") : running ? "Noch keine Ausgabe." : "Keine Ausgabe."}
+              {lines.length ? lines.join("\n") : running ? "No output yet." : "No output."}
             </pre>
-            <div className="mt-1 font-mono text-[11px] break-all text-muted-foreground" title="Ganze Ausgabe in der Ausführungs-Sandbox">
+            <div className="mt-1 font-mono text-[11px] break-all text-muted-foreground" title="Full output in the execution sandbox">
               {task.log_path}
             </div>
           </div>
         )}
-        {exec?.result !== undefined && <Section title="Rückmeldung an das Modell" text={exec.result} />}
+        {exec?.result !== undefined && <Section title="Feedback to the model" text={exec.result} />}
         {evidence && <EvidenceDetails evidence={evidence} settled={settled} />}
       </CollapsibleContent>
     </Collapsible>
   )
 }
 
-/** bg_output und bg_stop als eine Zeile („Ausgabe von bg-3 abgerufen“, „bg-3 gestoppt“), aufklappbar. */
+/** bg_output and bg_stop as one line ("fetched output of bg-3", "stopped bg-3"), expandable. */
 function BackgroundCallLine({ exec, evidence, settled = true, onOpenBackground, call }: CardProps & { call: BackgroundCall }) {
   const [open, setOpen] = useState(false)
   const error = exec?.isError === true
@@ -316,9 +316,9 @@ function BackgroundCallLine({ exec, evidence, settled = true, onOpenBackground, 
       </div>
       <CollapsibleContent className="mt-1 ml-4.5 space-y-1.5">
         {exec?.result !== undefined ? (
-          <Section title={error ? "Fehler" : "Rückmeldung an das Modell"} text={exec.result} error={error} />
+          <Section title={error ? "Error" : "Feedback to the model"} text={exec.result} error={error} />
         ) : (
-          <p>Noch keine Rückmeldung.</p>
+          <p>No feedback yet.</p>
         )}
         {evidence && <EvidenceDetails evidence={evidence} settled={settled} />}
       </CollapsibleContent>
@@ -335,7 +335,7 @@ export function Section({
   title: React.ReactNode
   text: string
   error?: boolean
-  /** Zusätzliche Klassen für den Textblock, etwa eine größere Höchsthöhe. */
+  /** Additional classes for the text block, e.g. a larger maximum height. */
   className?: string
 }) {
   return (
@@ -348,7 +348,7 @@ export function Section({
           className,
         )}
       >
-        {text || "(leer)"}
+        {text || "(empty)"}
       </pre>
     </div>
   )
@@ -375,13 +375,13 @@ export function ArgBlock({ section, className }: { section: ArgSection; classNam
           className,
         )}
       >
-        {section.text || "(leer)"}
+        {section.text || "(empty)"}
       </pre>
     </div>
   )
 }
 
-/** Was der Orchestrator zu diesem Aufruf protokolliert hat (E9). */
+/** What the orchestrator logged for this call (E9). */
 export function EvidenceDetails({ evidence, settled }: { evidence: Evidence; settled: boolean }) {
   if (evidence.state === "internal") return null
   return (
@@ -390,11 +390,11 @@ export function EvidenceDetails({ evidence, settled }: { evidence: Evidence; set
       {evidence.executed ? (
         <span>
           Orchestrator: {evidence.ops.join(", ")} · {evidence.durationMs} ms
-          {evidence.exitCode !== undefined ? ` · Exit ${evidence.exitCode}` : ""}
+          {evidence.exitCode !== undefined ? ` · exit ${evidence.exitCode}` : ""}
           {evidence.error ? ` · ${evidence.error}` : ""}
         </span>
       ) : (
-        <span>keine Ausführung im Protokoll des Orchestrators</span>
+        <span>no execution in the orchestrator's log</span>
       )}
       <span className="font-mono">{evidence.toolCallId}</span>
     </div>

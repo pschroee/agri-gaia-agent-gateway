@@ -15,29 +15,29 @@ import { effortLabels } from "@/lib/commands"
 
 type ModelSwitch = ReturnType<typeof useModelSwitch>
 
-const num = (n: number) => n.toLocaleString("de-DE")
+const num = (n: number) => n.toLocaleString("en-US")
 
-/** Rückfrage, wenn der Kontext nicht ins neue Modell passt: erst kompaktieren, dann wechseln. */
+/** Prompt when the context does not fit the new model: compact first, then switch. */
 export function ContextTooLargeDialog({ sw, modelName }: { sw: ModelSwitch; modelName: (id: string) => string }) {
   const { tooLarge, busy } = sw
   return (
     <Dialog open={!!tooLarge} onOpenChange={(o) => !o && sw.cancel()}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Kontext passt nicht in {tooLarge ? modelName(tooLarge.model) : ""}</DialogTitle>
+          <DialogTitle>Context does not fit {tooLarge ? modelName(tooLarge.model) : ""}</DialogTitle>
           <DialogDescription>
             {tooLarge &&
-              `Der bisherige Verlauf umfasst ${num(tooLarge.tokens)} Tokens. ${modelName(tooLarge.model)} verarbeitet ` +
-                `höchstens ${num(tooLarge.limit)} (Kontextfenster ${num(tooLarge.window)}). Soll der Verlauf erst ` +
-                "kompaktiert werden? Danach geht es mit dem neuen Modell weiter."}
+              `The history so far has ${num(tooLarge.tokens)} tokens. ${modelName(tooLarge.model)} processes ` +
+                `at most ${num(tooLarge.limit)} (context window ${num(tooLarge.window)}). Compact the history ` +
+                "first? Then the chat continues with the new model."}
           </DialogDescription>
         </DialogHeader>
         <DialogFooter>
           <Button variant="outline" onClick={sw.cancel}>
-            Abbrechen
+            Cancel
           </Button>
           <Button disabled={busy} onClick={() => void sw.compactAndSwitch()}>
-            {busy && <LoaderCircleIcon className="animate-spin" />} Kompaktieren und wechseln
+            {busy && <LoaderCircleIcon className="animate-spin" />} Compact and switch
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -45,7 +45,7 @@ export function ContextTooLargeDialog({ sw, modelName }: { sw: ModelSwitch; mode
   )
 }
 
-/** Modell und Denkstufe unten im Eingabefeld. Werte aus den Vorschlägen von /model und /effort. */
+/** Model and thinking level at the bottom of the input field. Values from the suggestions of /model and /effort. */
 export function ModelEffortPicker({
   chat,
   commands,
@@ -63,12 +63,12 @@ export function ModelEffortPicker({
 }) {
   const models = commands.find((c) => c.name === "model")?.options ?? [{ value: chat.model }]
   const levels = commands.find((c) => c.name === "effort")?.options ?? []
-  const hint = disabled ? "Erst nach der laufenden Antwort" : undefined
+  const hint = disabled ? "Only after the running response" : undefined
   const trigger = "h-8 max-w-44 gap-1 rounded-full border-0 bg-transparent px-2 text-xs text-muted-foreground shadow-none hover:bg-muted"
   return (
     <div className="flex min-w-0 items-center">
       <Select value={chat.model} onValueChange={onModel} disabled={disabled || !!chat.pending_model}>
-        <SelectTrigger size="sm" className={trigger} title={hint ?? "Modell (/model)"} aria-label="Modell">
+        <SelectTrigger size="sm" className={trigger} title={hint ?? "Model (/model)"} aria-label="Model">
           <CpuIcon className="size-3.5" />
           <SelectValue>{modelName(chat.model)}</SelectValue>
         </SelectTrigger>
@@ -82,10 +82,10 @@ export function ModelEffortPicker({
       </Select>
       {levels.length > 1 && (
         <Select value={chat.thinking_level ?? ""} onValueChange={onEffort} disabled={disabled}>
-          <SelectTrigger size="sm" className={trigger} title={hint ?? "Denkstufe (/effort)"} aria-label="Denkstufe">
+          <SelectTrigger size="sm" className={trigger} title={hint ?? "Thinking level (/effort)"} aria-label="Thinking level">
             <BrainIcon className="size-3.5" />
-            <SelectValue placeholder="Denkstufe">
-              {chat.thinking_level ? (effortLabels[chat.thinking_level] ?? chat.thinking_level) : "Denkstufe"}
+            <SelectValue placeholder="Thinking level">
+              {chat.thinking_level ? (effortLabels[chat.thinking_level] ?? chat.thinking_level) : "Thinking level"}
             </SelectValue>
           </SelectTrigger>
           <SelectContent>
@@ -99,7 +99,7 @@ export function ModelEffortPicker({
       )}
       {chat.pending_model && (
         <span className="truncate text-xs text-muted-foreground">
-          wechselt nach dem Kompaktieren zu {modelName(chat.pending_model)}
+          switches to {modelName(chat.pending_model)} after compaction
         </span>
       )}
     </div>

@@ -1,80 +1,80 @@
 ---
 name: mermaid
-description: Abläufe, Architekturen, Zustände, Sequenzen, Zeitpläne (Gantt) und Datenmodelle (ER) als Mermaid-Diagramm direkt in der Antwort zeigen. Verwenden, wenn der Nutzer ein Diagramm, Flussdiagramm, Ablaufdiagramm, Sequenzdiagramm, Zustandsdiagramm, Klassendiagramm, ER-Diagramm, Gantt-Diagramm, Mindmap oder eine Skizze einer Architektur möchte oder ein Zusammenhang als Bild klarer wird als als Text.
+description: Show processes, architectures, states, sequences, schedules (Gantt) and data models (ER) as a Mermaid diagram directly in the answer. Use when the user wants a diagram, flowchart, process diagram, sequence diagram, state diagram, class diagram, ER diagram, Gantt chart, mind map or a sketch of an architecture, or when a relationship is clearer as a picture than as text.
 ---
 
-# Mermaid-Diagramme zeigen
+# Showing Mermaid diagrams
 
-## Mermaid oder matplotlib?
+## Mermaid or matplotlib?
 
-- **Mermaid** für Struktur: Abläufe, Entscheidungen, Architekturen, Zustände, Nachrichtenfolgen,
-  Zeitpläne, Datenmodelle, Gliederungen. Kein Werkzeug, keine Datei nötig.
-- **matplotlib** (Skill `diagramme`) für **Daten**: Messwerte, Verläufe, Verteilungen, alles mit Achsen und
-  Zahlen. Ein Balkendiagramm aus einer CSV ist kein Fall für Mermaid.
+- **Mermaid** for structure: processes, decisions, architectures, states, message sequences,
+  schedules, data models, outlines. No tool, no file needed.
+- **matplotlib** (skill `charts`) for **data**: measurements, trends, distributions, anything with axes and
+  numbers. A bar chart from a CSV is not a case for Mermaid.
 
-## So zeigst du es
+## How to show it
 
-Schreib das Diagramm als Codeblock mit der Sprache `mermaid` in die Antwort:
+Write the diagram as a code block with the language `mermaid` in the answer:
 
 ````markdown
 ```mermaid
 flowchart TD
-  A["Anfrage"] --> B["Prüfung"]
+  A["Request"] --> B["Check"]
 ```
 ````
 
-Die Web-UI zeichnet den Block, sobald er geschlossen ist; der Nutzer kann zwischen Diagramm und
-Quelltext umschalten und es vergrößern. **Nur die Web-UI zeichnet**: In der CLI, in Artefakten und in
-Dateien bleibt es Quelltext. Das ist der Normalfall; eine Datei brauchst du nur, wenn der Nutzer eine
-möchte.
+The web UI renders the block as soon as it is closed; the user can switch between diagram and
+source and enlarge it. **Only the web UI renders**: in the CLI, in artifacts and in
+files it stays source text. That is the normal case; you only need a file if the user wants
+one.
 
-## Zur Not als Datei: mmdc
+## If need be as a file: mmdc
 
-Soll das Diagramm eine Datei werden (Artefakt, Typst-Dokument, Bild mit `![…](…)`), zeichnest du es
-mit der Mermaid-CLI `mmdc` (Version 12, wie die Web-UI; läuft ohne Internet, etwa 1 s je Diagramm):
+If the diagram is to become a file (artifact, Typst document, image with `![…](…)`), render it
+with the Mermaid CLI `mmdc` (version 12, like the web UI; runs without internet, about 1 s per diagram):
 
 ```bash
-mmdc -i diagramm.mmd -o diagramm.png          # PNG; auch .svg oder .pdf
-mmdc -i diagramm.mmd -o diagramm.png -s 2     # doppelte Auflösung, schärfer
-mmdc -i bericht.md -o bericht.out.md          # ersetzt alle mermaid-Blöcke durch SVG-Dateien
+mmdc -i diagram.mmd -o diagram.png          # PNG; also .svg or .pdf
+mmdc -i diagram.mmd -o diagram.png -s 2     # double resolution, sharper
+mmdc -i report.md -o report.out.md          # replaces all mermaid blocks with SVG files
 ```
 
-Für die Anzeige im Chat nimm **PNG** (SVG zeigt die Web-UI nicht an), für Typst **SVG** oder **PDF**.
-Dateien unter `/workspace` ablegen. Scheitert der Aufruf mit einem Syntaxfehler, steht die Zeile in
-der Meldung; die Fallstricke unten gelten genauso.
+For display in the chat use **PNG** (the web UI does not display SVG), for Typst **SVG** or **PDF**.
+Store files under `/workspace`. If the call fails with a syntax error, the line is in
+the message; the pitfalls below apply just the same.
 
-Ein Diagramm je Codeblock. Halte es klein (etwa bis 20 Knoten); lieber zwei übersichtliche als ein
-unlesbares. Ein Satz davor sagt, was es zeigt.
+One diagram per code block. Keep it small (up to about 20 nodes); better two clear ones than one
+unreadable one. A sentence before it says what it shows.
 
-## Fallstricke
+## Pitfalls
 
-- **Beschriftungen in Anführungszeichen**, sobald sie Umlaute, ß, Leerzeichen, Klammern, Doppelpunkte,
-  Schrägstriche, `#`, `&` oder Satzzeichen enthalten: `A["Größe prüfen (m²)"]`, Kantentext
-  `-->|"ja, bestätigt"|`. Anführungszeichen im Text selbst als `#quot;` schreiben.
-- **Kennungen** (`A`, `pruefung`, `db1`) nur aus ASCII-Buchstaben, Ziffern und `_`; kein `end` als
-  Kennung (Schlüsselwort), sonst `End` oder `ende`.
-- **Kein HTML** in Beschriftungen (`<br>`, `<b>` …): Die UI zeichnet mit `securityLevel: "strict"` und
-  ohne HTML-Labels. Für Zeilenumbrüche lieber kürzere Beschriftungen.
-- **Keine `click`-Direktiven, Links oder Callbacks**: im strikten Modus wirkungslos.
-- **Keine `%%{init: …}%%`-Direktiven** für Theme, Schrift, HTML-Labels oder Sicherheit: Die UI setzt sie
-  selbst und ignoriert Änderungen daran.
-- Keine Stile mit Adressen (`url(...)`) oder Bildern aus dem Netz; sie werden entfernt.
-- Bei einem Syntaxfehler zeigt die UI den Quelltext mit Hinweis. Dann den Fehler suchen (meist
-  fehlende Anführungszeichen) und den Block korrigiert neu senden.
+- **Labels in quotes** as soon as they contain umlauts, ß, spaces, brackets, colons,
+  slashes, `#`, `&` or punctuation: `A["Größe prüfen (m²)"]`, edge text
+  `-->|"ja, bestätigt"|`. Write quotes within the text as `#quot;`.
+- **Identifiers** (`A`, `check`, `db1`) only from ASCII letters, digits and `_`; no `end` as
+  an identifier (keyword), use `End` or `finish` instead.
+- **No HTML** in labels (`<br>`, `<b>` …): the UI renders with `securityLevel: "strict"` and
+  without HTML labels. For line breaks, prefer shorter labels.
+- **No `click` directives, links or callbacks**: they have no effect in strict mode.
+- **No `%%{init: …}%%` directives** for theme, font, HTML labels or security: the UI sets them
+  itself and ignores changes to them.
+- No styles with addresses (`url(...)`) or images from the network; they are removed.
+- On a syntax error the UI shows the source with a note. Then look for the error (usually
+  missing quotes) and send the corrected block again.
 
-## Gängige Typen
+## Common types
 
-**Ablauf** (`flowchart`, Richtung `TD` oben nach unten, `LR` links nach rechts):
+**Process** (`flowchart`, direction `TD` top to bottom, `LR` left to right):
 
 ```mermaid
 flowchart LR
-  A["Nachricht"] --> B{"Internet nötig?"}
-  B -->|ja| C["Nutzer fragen"]
-  B -->|nein| D["Ausführen"]
+  A["Message"] --> B{"Internet needed?"}
+  B -->|yes| C["Ask the user"]
+  B -->|no| D["Run"]
   C --> D
 ```
 
-**Architektur** (Ablauf mit Gruppen):
+**Architecture** (process with groups):
 
 ```mermaid
 flowchart TB
@@ -85,93 +85,93 @@ flowchart TB
     P["pi"] --> S[("Socket")]
   end
   S --> O
-  O --> M["Sprachmodell"]
+  O --> M["Language model"]
 ```
 
-**Sequenz:**
+**Sequence:**
 
 ```mermaid
 sequenceDiagram
-  participant N as Nutzer
+  participant U as User
   participant A as Agent
   participant O as Orchestrator
-  N->>A: Auftrag
-  A->>O: Werkzeugaufruf
-  O-->>A: Ergebnis
-  A-->>N: Antwort
+  U->>A: Request
+  A->>O: Tool call
+  O-->>A: Result
+  A-->>U: Answer
 ```
 
-**Zustände:**
+**States:**
 
 ```mermaid
 stateDiagram-v2
-  [*] --> Aktiv
-  Aktiv --> Ruhend: ruhen lassen
-  Ruhend --> Aktiv: fortsetzen
-  Aktiv --> Beendet: beenden
-  Beendet --> [*]
+  [*] --> Active
+  Active --> Idle: let idle
+  Idle --> Active: resume
+  Active --> Closed: close
+  Closed --> [*]
 ```
 
-**Klassen:**
+**Classes:**
 
 ```mermaid
 classDiagram
   class Chat {
-    +String titel
-    +senden(text)
+    +String title
+    +send(text)
   }
-  class Nachricht {
-    +String rolle
+  class Message {
+    +String role
   }
-  Chat "1" --> "*" Nachricht
+  Chat "1" --> "*" Message
 ```
 
-**Datenmodell (ER):**
+**Data model (ER):**
 
 ```mermaid
 erDiagram
-  CHAT ||--o{ NACHRICHT : enthaelt
-  CHAT ||--o{ ARTEFAKT : erzeugt
+  CHAT ||--o{ MESSAGE : contains
+  CHAT ||--o{ ARTIFACT : creates
   CHAT {
     string id
-    string titel
+    string title
   }
 ```
 
-In ER-Diagrammen stehen Beziehungsnamen ohne Anführungszeichen nur in ASCII; mit Umlauten in
-Anführungszeichen: `CHAT ||--o{ NACHRICHT : "enthält"`.
+In ER diagrams, relationship names without quotes may only be ASCII; with umlauts, put them in
+quotes: `CHAT ||--o{ NACHRICHT : "enthält"`.
 
-**Zeitplan (Gantt):**
+**Schedule (Gantt):**
 
 ```mermaid
 gantt
-  title Zeitplan
+  title Schedule
   dateFormat YYYY-MM-DD
-  section Analyse
-  Literatur      :a1, 2026-10-01, 14d
-  section Umsetzung
-  Prototyp       :a2, after a1, 21d
-  Auswertung     :after a2, 10d
+  section Analysis
+  Literature     :a1, 2026-10-01, 14d
+  section Implementation
+  Prototype      :a2, after a1, 21d
+  Evaluation     :after a2, 10d
 ```
 
-**Mindmap** (Einrückung bestimmt die Ebene):
+**Mind map** (indentation determines the level):
 
 ```mermaid
 mindmap
   root(("Agent"))
-    Werkzeuge
+    Tools
       bash
       read
-    Grenzen
+    Limits
       Internet
-      Subagenten
+      Subagents
 ```
 
-**Kreis** (Anteile, nur für wenige Werte; genaue Zahlen lieber mit matplotlib):
+**Pie** (shares, only for a few values; exact numbers better with matplotlib):
 
 ```mermaid
-pie title Kosten nach Art
-  "Antworten" : 70
-  "Subagenten" : 20
-  "Kompaktierung" : 10
+pie title Costs by type
+  "Answers" : 70
+  "Subagents" : 20
+  "Compaction" : 10
 ```

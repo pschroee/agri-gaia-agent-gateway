@@ -2,7 +2,7 @@
 web/node_modules
 web/dist
 **/*_test.go.tmp
-# Kopie von pi-subagents: nur die Quelle; die Abhängigkeiten installiert der Bau selbst.
+# Copy of pi-subagents: source only; the build installs the dependencies itself.
 third_party/**/node_modules
 images/agw-basis/pi-subagents-deps/node_modules
 third_party/pi-subagents/test-agw

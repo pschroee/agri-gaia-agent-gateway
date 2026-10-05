@@ -194,6 +194,6 @@ export declare function previewSimpleWorkflowRun(script: string | undefined): Si
 /** Parse a workflowScript and apply only rules that are decidable from its local syntax. */
 export declare function validateWorkflowScript(script: string, options?: WorkflowScriptValidationOptions): WorkflowScriptValidationResult;
 export declare function runWorkflowScript(options: RunWorkflowScriptOptions): Promise<WorkflowScriptResult>;
-/** agw: Modul, aus dem `Worker` für workflowScript stammt (PI_SUBAGENTS_WORKFLOW_WORKER oder "node:worker_threads"). */
+/** agw: module that `Worker` for workflowScript comes from (PI_SUBAGENTS_WORKFLOW_WORKER or "node:worker_threads"). */
 export declare const workflowWorkerModule: string;
 //# sourceMappingURL=scripted-workflow.d.ts.map

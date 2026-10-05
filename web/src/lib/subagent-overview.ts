@@ -1,35 +1,35 @@
-// Übersicht der Subagenten für Chatkopf, Umschalter und Baum im Seitenreiter: Titel, Status, Dauer,
-// Kennzahlen und Gruppierung. Reine Funktionen, ohne React.
+// Overview of the subagents for the chat header, switcher and tree in the side tab: title, status, duration,
+// metrics and grouping. Pure functions, without React.
 import type { LLMCall } from "@/api/types"
 import { buildRunTree, runStatus, shortRunId, type RunStatus, type SubagentRun } from "./subagents"
 
 const round = (v: number) => Math.round(v * 1e9) / 1e9
 
-/** Titel eines Laufs: erste nicht leere Zeile des Auftrags, gekürzt; sonst der Agentenname. */
+/** Title of a run: first non-empty line of the task, shortened; otherwise the agent name. */
 export function runTitle(run: Pick<SubagentRun, "task" | "agent" | "runId" | "label">, max = 80): string {
   if (run.label) return run.label
   const line = (run.task ?? "")
     .split("\n")
     .map((l) => l.trim())
     .find((l) => l !== "")
-    // pi-subagents stellt dem Auftrag „Task:“ voran; im Titel ist das nur Rauschen.
+    // pi-subagents prefixes the task with "Task:"; in the title that is just noise.
     ?.replace(/^task:\s*/i, "")
   if (!line) return `Subagent${run.agent ? ` ${run.agent}` : ""}`
   return line.length > max ? `${line.slice(0, max - 1)}…` : line
 }
 
-/** Zweite Zeile: Agent und kurze Laufkennung. */
+/** Second line: agent and short run ID. */
 export function runSubtitle(run: Pick<SubagentRun, "agent" | "runId" | "task" | "label">): string {
-  const base = `${run.agent || "Subagent"} · Lauf ${shortRunId(run.runId)}`
+  const base = `${run.agent || "Subagent"} · run ${shortRunId(run.runId)}`
   if (!run.label) return base
-  // Mit Namen steht der Auftrag in der zweiten Zeile, damit er nicht verloren geht.
+  // With a name, the task goes into the second line so that it does not get lost.
   const task = runTitle({ ...run, label: undefined }, 60)
   return task && task !== `Subagent${run.agent ? ` ${run.agent}` : ""}` ? `${base} · ${task}` : base
 }
 
 const live = (s: RunStatus) => s === "running" || s === "idle"
 
-/** Dauer in ms: beendet vom ersten bis zum letzten Eintrag, sonst bis jetzt. */
+/** Duration in ms: when ended from the first to the last entry, otherwise until now. */
 export function runDuration(run: Pick<SubagentRun, "start" | "end">, status: RunStatus, now: number): number {
   const end = live(status) ? Math.max(now, run.end) : run.end
   return Math.max(0, end - run.start)
@@ -42,10 +42,10 @@ export function formatSpan(ms: number): string {
   return m < 60 ? `${m} min ${s % 60} s` : `${Math.floor(m / 60)} h ${m % 60} min`
 }
 
-const dec1 = new Intl.NumberFormat("de-DE", { maximumFractionDigits: 1 })
-const dec0 = new Intl.NumberFormat("de-DE", { maximumFractionDigits: 0 })
+const dec1 = new Intl.NumberFormat("en-US", { maximumFractionDigits: 1 })
+const dec0 = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 })
 
-/** Tokenzahl kurz: 999, 1,2k, 12k, 2,5M. */
+/** Short token count: 999, 1.2k, 12k, 2.5M. */
 export function formatTokensShort(n: number): string {
   if (n < 1000) return dec0.format(n)
   if (n < 1_000_000) return `${(n < 10_000 ? dec1 : dec0).format(n / 1000)}k`
@@ -53,22 +53,22 @@ export function formatTokensShort(n: number): string {
 }
 
 export type RunMetrics = {
-  /** Am Proxy erfasste Modellaufrufe, deren Antwort im Lauf vorkommt. */
+  /** Model calls recorded at the proxy whose response occurs in the run. */
   llmCalls: number
   input: number
   output: number
   cacheRead: number
-  /** Ein- plus Ausgabetokens; fehlt, wenn kein Modellaufruf zugeordnet ist. */
+  /** Input plus output tokens; missing if no model call is assigned. */
   tokens?: number
-  /** Kosten nach Tarif; fehlt, wenn kein Modellaufruf zugeordnet ist. */
+  /** Cost by tariff; missing if no model call is assigned. */
   cost?: number
   toolCalls: number
   errors: number
 }
 
 /**
- * Kennzahlen eines Laufs. Tokens und Kosten kommen vom Proxy (fälschungssicher); zugeordnet werden sie
- * über die response_id der Einträge, und die stammt aus der Sandbox.
+ * Metrics of a run. Tokens and cost come from the proxy (tamper-proof); they are assigned
+ * via the response_id of the entries, and that comes from the sandbox.
  */
 export function runMetrics(
   run: Pick<SubagentRun, "entries" | "toolCalls" | "errors">,
@@ -101,13 +101,13 @@ export function statusCounts(list: RunStatus[]): StatusCounts {
 }
 
 const countWords: [RunStatus, string][] = [
-  ["running", "läuft"],
-  ["idle", "still"],
-  ["done", "fertig"],
-  ["stopped", "ohne Antwort"],
+  ["running", "running"],
+  ["idle", "quiet"],
+  ["done", "done"],
+  ["stopped", "without response"],
 ]
 
-/** „1 läuft · 4 fertig“; leere Zähler entfallen. */
+/** "1 running · 4 done"; empty counters are left out. */
 export function statusCountsLabel(c: StatusCounts): string {
   return countWords
     .filter(([k]) => c[k] > 0)
@@ -115,13 +115,13 @@ export function statusCountsLabel(c: StatusCounts): string {
     .join(" · ")
 }
 
-export const subagentCountLabel = (n: number) => `${n} Subagent${n === 1 ? "" : "en"}`
+export const subagentCountLabel = (n: number) => `${n} subagent${n === 1 ? "" : "s"}`
 
 export type AgentNode = {
-  /** main: Hauptagent (Wurzel); run: ein Lauf; parallel: parallele Läufe ohne eigenen Basis-Lauf. */
+  /** main: main agent (root); run: a run; parallel: parallel runs without their own base run. */
   kind: "main" | "run" | "parallel"
   id: string
-  /** Nur bei kind "run": Ziel der Detailansicht. */
+  /** Only for kind "run": target of the detail view. */
   runId?: string
   title: string
   subtitle: string
@@ -153,7 +153,7 @@ function sumMetrics(list: RunMetrics[]): RunMetrics {
   return m
 }
 
-/** Gesamtstatus mehrerer Läufe: läuft vor still vor ohne Antwort vor fertig. */
+/** Combined status of several runs: running before quiet before without response before done. */
 function combinedStatus(list: RunStatus[]): RunStatus {
   for (const s of ["running", "idle", "stopped"] as const) if (list.includes(s)) return s
   return "done"
@@ -162,8 +162,8 @@ function combinedStatus(list: RunStatus[]): RunStatus {
 type TreeInput = { chatTitle: string; chatRunning: boolean; runs: SubagentRun[]; llmCalls: LLMCall[]; now: number }
 
 /**
- * Baum für Chatkopf und Seitenreiter: der Hauptagent als Wurzel, darunter je Basis-Lauf ein Knoten,
- * parallele Läufe (`id#n`) eine Ebene tiefer. Eine weitere Ebene ließe sich über `children` anhängen.
+ * Tree for the chat header and side tab: the main agent as root, below it one node per base run,
+ * parallel runs (`id#n`) one level deeper. A further level could be attached via `children`.
  */
 export function buildAgentTree({ chatTitle, chatRunning, runs, llmCalls, now }: TreeInput): AgentNode {
   const leaf = (r: SubagentRun, children: AgentNode[] = []): AgentNode => {
@@ -189,8 +189,8 @@ export function buildAgentTree({ chatTitle, chatRunning, runs, llmCalls, now }: 
     return {
       kind: "parallel",
       id: n.id,
-      title: `Parallele Läufe (${kids.length})`,
-      subtitle: `Lauf ${shortRunId(n.id)}`,
+      title: `Parallel runs (${kids.length})`,
+      subtitle: `run ${shortRunId(n.id)}`,
       status: combinedStatus(kids.map((k) => k.status)),
       metrics: sumMetrics(kids.map((k) => k.metrics)),
       durationMs: Math.max(0, end - start),
@@ -201,8 +201,8 @@ export function buildAgentTree({ chatTitle, chatRunning, runs, llmCalls, now }: 
   return {
     kind: "main",
     id: "main",
-    title: chatTitle || "Ohne Titel",
-    subtitle: "Hauptagent",
+    title: chatTitle || "Untitled",
+    subtitle: "Main agent",
     status: chatRunning ? "running" : "done",
     metrics: sumMetrics(children.map((c) => c.metrics)),
     durationMs: 0,
@@ -211,7 +211,7 @@ export function buildAgentTree({ chatTitle, chatRunning, runs, llmCalls, now }: 
   }
 }
 
-/** Alle Läufe unterhalb der Wurzel in Baumreihenfolge; Gruppenknoten ohne Lauf entfallen, ihre Kinder nicht. */
+/** All runs below the root in tree order; group nodes without a run are left out, their children are not. */
 export function flattenAgentTree(root: AgentNode): { node: AgentNode; depth: number }[] {
   const out: { node: AgentNode; depth: number }[] = []
   const walk = (list: AgentNode[], depth: number) => {
@@ -229,14 +229,14 @@ export function containsRun(list: AgentNode[], runId: string | undefined): boole
   return list.some((n) => n.runId === runId || containsRun(n.children, runId))
 }
 
-/** Wie viele Karten der Baum einzeln zeigt, bevor er sie zu einer Gruppenkarte zusammenfasst. */
+/** How many cards the tree shows individually before combining them into a group card. */
 export const GROUP_AFTER = 3
 
 export type NodeGroup =
   | { type: "nodes"; nodes: AgentNode[] }
   | { type: "group"; nodes: AgentNode[]; counts: StatusCounts }
 
-/** Bis `max` Knoten stehen einzeln, darüber alle in einer aufklappbaren Gruppe mit Zählern. */
+/** Up to `max` nodes stand individually, above that all in a collapsible group with counters. */
 export function groupAgentNodes(nodes: AgentNode[], max = GROUP_AFTER): NodeGroup {
   if (nodes.length <= max) return { type: "nodes", nodes }
   return { type: "group", nodes, counts: statusCounts(nodes.map((n) => n.status)) }

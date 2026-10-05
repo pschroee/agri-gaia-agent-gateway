@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react"
 
 /**
- * Aktuelle Zeit in ms, alle `intervalMs` aktualisiert – für laufende Dauern. Mit `active = false` steht der
- * Zeitgeber still (etwa, solange nichts läuft); beim Wiedereinschalten holt er die Zeit sofort nach.
+ * Current time in ms, updated every `intervalMs` – for running durations. With `active = false` the
+ * timer stands still (e.g. while nothing is running); when switched on again it catches up immediately.
  */
 export function useNow(intervalMs: number, active = true): number {
   const [now, setNow] = useState(() => Date.now())

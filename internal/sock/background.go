@@ -1,9 +1,9 @@
 package sock
 
-// Endpunkte der Hintergrundaufgaben am Socket von pi. Der Start kommt vom Werkzeug bash
-// (run_in_background), Abruf und Stopp von den Werkzeugen bg_output und bg_stop der Bridge. Jeder
-// Aufruf steht in tool_executions (Werkzeug bash mit Operation bg_start bzw. bg_output, bg_stop),
-// damit der Abgleich mit dem Proxy ihn als belegt führt.
+// Endpoints of the background tasks at pi's socket. The start comes from the tool bash
+// (run_in_background), retrieval and stop from the bridge's tools bg_output and bg_stop. Every
+// call is in tool_executions (tool bash with operation bg_start, or bg_output, bg_stop),
+// so that the reconciliation with the proxy lists it as recorded.
 
 import (
 	"encoding/json"
@@ -17,7 +17,7 @@ import (
 	"agw/internal/store"
 )
 
-// Operationen im Protokoll (tool_executions.op).
+// Operations in the log (tool_executions.op).
 const (
 	OpBgStart  = "bg_start"
 	OpBgOutput = "bg_output"
@@ -28,13 +28,13 @@ type bgRequest struct {
 	ToolCallID  string            `json:"toolCallId"`
 	Tool        string            `json:"tool"`
 	SessionFile string            `json:"sessionFile"`
-	Req         execproto.Request `json:"req"`       // nur start
+	Req         execproto.Request `json:"req"`       // start only
 	ID          string            `json:"id"`        // output, stop
 	TailLines   int               `json:"tailLines"` // output
 }
 
-// BgResponse ist die Antwort der Endpunkte: der Stand der Aufgabe, bei output das Ende der
-// Ausgabe (bis bgtask.TailBytes), bei einem Fehler nur Error (englisch, geht ans Modell).
+// BgResponse is the response of the endpoints: the state of the task, for output the tail of the
+// output (up to bgtask.TailBytes), on an error only Error (English, goes to the model).
 type BgResponse struct {
 	Task   *store.BackgroundTask `json:"task,omitempty"`
 	Output string                `json:"output,omitempty"`
@@ -42,7 +42,7 @@ type BgResponse struct {
 	Error  string                `json:"error,omitempty"`
 }
 
-// decodeBg liest und prüft eine Anfrage; bei einem Fehler ist die Antwort geschrieben.
+// decodeBg reads and checks a request; on an error the response has been written.
 func (th *toolHandler) decodeBg(w http.ResponseWriter, r *http.Request, tool string) (bgRequest, string, func(), bool) {
 	release := func() {}
 	if th.bg == nil {
@@ -94,7 +94,7 @@ func (th *toolHandler) bgStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req := br.Req
-	req.Op, req.Spill = execproto.OpBg, execproto.BgLogPath(1) // Pfad nur zur Prüfung; das Register setzt ihn
+	req.Op, req.Spill = execproto.OpBg, execproto.BgLogPath(1) // path only for validation; the registry sets it
 	if err := req.Validate(); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return

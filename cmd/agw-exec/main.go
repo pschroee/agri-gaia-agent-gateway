@@ -1,17 +1,17 @@
-// agw-exec: statischer Helfer für beide Container eines Platzes (E9).
+// agw-exec: static helper for both containers of a slot (E9).
 //
-// In der Ausführungs-Sandbox:
+// In the execution sandbox:
 //
-//	agw-exec idle            PID 1: wartet und räumt verwaiste Prozesse ab
-//	agw-exec serve           Überwacher (als root per docker exec), Protokoll execproto über stdin/stdout
-//	agw-exec op              Kindprozess des Überwachers, eine Operation als Agent-Nutzer
+//	agw-exec idle            PID 1: waits and reaps orphaned processes
+//	agw-exec serve           supervisor (as root via docker exec), protocol execproto over stdin/stdout
+//	agw-exec op              child process of the supervisor, one operation as the agent user
 //
-// Im Container von pi (ohne Shell):
+// In pi's container (without a shell):
 //
-//	agw-exec pi-entry ARGS   Entrypoint: Konfiguration schreiben, pi im RPC-Modus starten (execve)
-//	agw-exec put PFAD        stdin in eine Datei schreiben (Sitzung, Konfiguration)
-//	agw-exec poll-subagents  neue Zeilen aus den Sitzungsdateien der Subagenten (JSON auf stdin/stdout)
-//	agw-exec kill-node       alle node-Prozesse außer pi (PID 1) beenden
+//	agw-exec pi-entry ARGS   entrypoint: write the configuration, start pi in RPC mode (execve)
+//	agw-exec put PATH        write stdin into a file (session, configuration)
+//	agw-exec poll-subagents  new lines from the subagents' session files (JSON on stdin/stdout)
+//	agw-exec kill-node       end all node processes except pi (PID 1)
 package main
 
 import (
@@ -25,7 +25,7 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "Aufruf: agw-exec idle|serve|op|pi-entry|put|poll-subagents|kill-node")
+		fmt.Fprintln(os.Stderr, "usage: agw-exec idle|serve|op|pi-entry|put|poll-subagents|kill-node")
 		os.Exit(2)
 	}
 	switch os.Args[1] {
@@ -33,9 +33,9 @@ func main() {
 		idle()
 	case "serve":
 		fs := flag.NewFlagSet("serve", flag.ExitOnError)
-		uid := fs.Int("uid", 10001, "Agent-Nutzer (-1: nicht wechseln)")
-		gid := fs.Int("gid", 10001, "Gruppe des Agenten")
-		bgMax := fs.Int("bg-max", execproto.DefaultBgMax, "höchstens so viele Hintergrundaufgaben gleichzeitig")
+		uid := fs.Int("uid", 10001, "agent user (-1: do not switch)")
+		gid := fs.Int("gid", 10001, "group of the agent")
+		bgMax := fs.Int("bg-max", execproto.DefaultBgMax, "at most this many concurrent background tasks")
 		_ = fs.Parse(os.Args[2:])
 		self, err := os.Executable()
 		if err != nil {
@@ -47,9 +47,9 @@ func main() {
 		srv := newServer(os.Stdout, self, *uid, *gid)
 		srv.bgMax = max(1, *bgMax)
 		if *uid >= 0 {
-			// Vor dem ersten Befehl des Agenten anlegen, damit er dort nichts vorab ablegen kann.
+			// Create it before the agent's first command, so that it cannot plant anything there beforehand.
 			if err := ensureBgDir(filepath.Dir(bgLogFile(execproto.BgLogPath(1)))); err != nil {
-				fmt.Fprintln(os.Stderr, "agw-exec serve: Verzeichnis der Hintergrundaufgaben:", err)
+				fmt.Fprintln(os.Stderr, "agw-exec serve: directory of the background tasks:", err)
 			}
 		}
 		srv.run(os.Stdin)
@@ -76,7 +76,7 @@ func main() {
 	case "kill-node":
 		fmt.Println(killNode("/proc"))
 	default:
-		fmt.Fprintln(os.Stderr, "unbekannter Befehl", os.Args[1])
+		fmt.Fprintln(os.Stderr, "unknown command", os.Args[1])
 		os.Exit(2)
 	}
 }

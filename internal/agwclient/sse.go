@@ -8,13 +8,13 @@ import (
 	"strings"
 )
 
-// Event ist ein Ereignis aus GET /api/chats/{id}/events.
+// Event is an event from GET /api/chats/{id}/events.
 type Event struct {
 	Kind string          `json:"kind"`
 	Data json.RawMessage `json:"data"`
 }
 
-// PiType liefert bei kind "pi" den pi-Ereignistyp (data.type), sonst "".
+// PiType returns the pi event type (data.type) for kind "pi", otherwise "".
 func (e Event) PiType() string {
 	if e.Kind != "pi" {
 		return ""
@@ -26,9 +26,9 @@ func (e Event) PiType() string {
 	return t.Type
 }
 
-// ReadEvents liest einen SSE-Strom und ruft fn für jedes Ereignis auf. Kommentare (": ping")
-// und fremde Felder werden übergangen, Ereignisse mit ungültigem JSON ebenfalls. Gibt fn einen
-// Fehler zurück, bricht ReadEvents damit ab. Am Stromende ist das Ergebnis nil.
+// ReadEvents reads an SSE stream and calls fn for every event. Comments (": ping")
+// and unknown fields are skipped, as are events with invalid JSON. If fn returns an
+// error, ReadEvents aborts with it. At the end of the stream the result is nil.
 func ReadEvents(r io.Reader, fn func(Event) error) error {
 	br := bufio.NewReader(r)
 	var data []string

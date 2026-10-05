@@ -1,12 +1,12 @@
 package worker
 
-// Gleichlauf der Umleitung (exec-bridge.ts) mit pis eingebauten Werkzeugen (Code-Review:
-// Testlücke „Gleichlauf der Bridge-Werkzeuge gegen pi“, M2, L1, L3, L4, H1). Ein Container aus
-// dem Test-Abbild agw-parity ist zugleich Ausführungs-Sandbox und Laufort von pis Werkzeugen:
-// pi arbeitet direkt auf seinem Dateisystem, die Bridge über den Socket dieses Tests, dessen
-// Werkzeug-Endpunkte (sock.NewPiHandler) mit agw-exec serve in demselben Container ausführen.
-// Das Skript images/agw-basis/test/parity.mjs vergleicht je Fall Text, Details und bei langer
-// Ausgabe von bash den Inhalt der Datei mit der ganzen Ausgabe.
+// Parity of the redirection (exec-bridge.ts) with pi's built-in tools (code review:
+// test gap "parity of the bridge tools against pi", M2, L1, L3, L4, H1). A container from
+// the test image agw-parity is both the execution sandbox and the place where pi's tools run:
+// pi works directly on its file system, the bridge via this test's socket, whose
+// tool endpoints (sock.NewPiHandler) execute with agw-exec serve in the same container.
+// The script images/agw-basis/test/parity.mjs compares per case the text, the details and, for long
+// bash output, the content of the file with the full output.
 
 import (
 	"context"
@@ -36,7 +36,7 @@ type parityResult struct {
 
 func TestBridgeParity(t *testing.T) {
 	if os.Getenv("AGW_E9_IN_DOCKER") != "1" {
-		t.Skip("läuft nur im Go-Container mit Docker-Socket (./dev.sh test)")
+		t.Skip("runs only in the Go container with the Docker socket (./dev.sh test)")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
@@ -76,7 +76,7 @@ func TestBridgeParity(t *testing.T) {
 	}
 	defer rt.Remove(context.Background(), inst.ID)
 	if f, err := box.Run(ctx, execproto.Request{Op: execproto.OpStat, Path: "/workspace"}, nil); err != nil || f.Error != "" {
-		t.Fatalf("Überwacher: %v %s", err, f.Error)
+		t.Fatalf("supervisor: %v %s", err, f.Error)
 	}
 	cmd := []string{"node", "/opt/pi/test/parity.mjs"}
 	if only := os.Getenv("PARITY_ONLY"); only != "" {
@@ -100,37 +100,37 @@ func TestBridgeParity(t *testing.T) {
 		line = line[i+1:]
 	}
 	if err := json.Unmarshal([]byte(line), &res); err != nil {
-		t.Fatalf("Ausgabe unlesbar: %v\n%s", err, tail(string(out), 4000))
+		t.Fatalf("output unparsable: %v\n%s", err, tail(string(out), 4000))
 	}
 	bad := 0
 	for _, r := range res.Results {
 		if !r.Equal {
 			bad++
-			t.Errorf("abweichend: %s\n  pi:     %s\n  Bridge: %s\n  Datei gleich: %v", r.Name, clip(string(r.Builtin)), clip(string(r.Bridge)), r.FullEqual)
+			t.Errorf("differs: %s\n  pi:     %s\n  bridge: %s\n  file equal: %v", r.Name, clip(string(r.Builtin)), clip(string(r.Bridge)), r.FullEqual)
 		}
 	}
 	for _, c := range res.Checks {
 		if !c.OK {
-			t.Errorf("Grenze der Sandbox: %s → %q", c.Name, c.Text)
+			t.Errorf("sandbox boundary: %s → %q", c.Name, c.Text)
 		}
 	}
-	// Jede Operation der Bridge ist protokolliert, mit den IDs dieses Laufs.
+	// Every operation of the bridge is logged, with the IDs of this run.
 	n := 0
 	for _, e := range b.executions() {
 		if !strings.HasPrefix(e.ToolCallID, "call_parity_") {
-			t.Errorf("fremde ID im Protokoll: %+v", e)
+			t.Errorf("foreign ID in the log: %+v", e)
 		}
 		n++
 	}
-	// Unit-Tests des Wächters (checkSubagentCall, checkWorkflowMessage) mit node --test.
+	// Unit tests of the guard (checkSubagentCall, checkWorkflowMessage) with node --test.
 	if out, _, err := rt.Exec(ctx, inst.ID, []string{"node", "--test", "/opt/pi/test/guard.test.mjs"}, nil); err != nil {
-		t.Errorf("Wächter: %v\n%s", err, tail(string(out), 3000))
+		t.Errorf("guard: %v\n%s", err, tail(string(out), 3000))
 	} else {
-		t.Logf("Wächter: %s", strings.ReplaceAll(strings.TrimSpace(tail(string(out), 220)), "\n", " | "))
+		t.Logf("guard: %s", strings.ReplaceAll(strings.TrimSpace(tail(string(out), 220)), "\n", " | "))
 	}
-	t.Logf("%d Fälle, %d abweichend, %d Operationen protokolliert, Dateien mit ganzer Ausgabe in /tmp: %s", len(res.Results), bad, n, res.Leftovers)
+	t.Logf("%d cases, %d differing, %d operations logged, files with full output in /tmp: %s", len(res.Results), bad, n, res.Leftovers)
 	if len(res.Results) < 40 && os.Getenv("PARITY_ONLY") == "" {
-		t.Fatalf("nur %d Fälle gelaufen", len(res.Results))
+		t.Fatalf("only %d cases ran", len(res.Results))
 	}
 }
 

@@ -30,32 +30,32 @@ export function StatusView({ meta, approvals, onApprovalsChanged }: Props) {
   return (
     <div className="min-h-0 flex-1 overflow-y-auto">
       <div className="mx-auto flex max-w-7xl flex-col gap-6 p-4">
-        {pool.error && <p className="text-sm text-red-700">Pool nicht erreichbar: {pool.error}</p>}
+        {pool.error && <p className="text-sm text-red-700">Pool unreachable: {pool.error}</p>}
         {pool.data && <Kennzahlen pool={pool.data} />}
 
         <section>
-          <h2 className="mb-2 text-sm font-semibold">Pool-Plätze</h2>
+          <h2 className="mb-2 text-sm font-semibold">Pool slots</h2>
           <div className="rounded-lg border">
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Platz</TableHead>
-                  <TableHead>Variante</TableHead>
-                  <TableHead>Zustand</TableHead>
+                  <TableHead>Slot</TableHead>
+                  <TableHead>Variant</TableHead>
+                  <TableHead>State</TableHead>
                   <TableHead>Internet</TableHead>
                   <TableHead>Container</TableHead>
-                  <TableHead>Abbild</TableHead>
-                  <TableHead>Seit</TableHead>
+                  <TableHead>Image</TableHead>
+                  <TableHead>Since</TableHead>
                   <TableHead>Chat</TableHead>
-                  <TableHead>Tätigkeit</TableHead>
-                  <TableHead>Dauer</TableHead>
+                  <TableHead>Activity</TableHead>
+                  <TableHead>Duration</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {(pool.data?.slots ?? []).length === 0 && (
                   <TableRow>
                     <TableCell colSpan={10} className="text-center text-muted-foreground">
-                      Keine Plätze.
+                      No slots.
                     </TableCell>
                   </TableRow>
                 )}
@@ -73,10 +73,10 @@ export function StatusView({ meta, approvals, onApprovalsChanged }: Props) {
                         <span className="text-muted-foreground">–</span>
                       ) : s.internet ? (
                         <span className="inline-flex items-center gap-1 text-sky-700">
-                          <GlobeIcon className="size-3.5" /> an
+                          <GlobeIcon className="size-3.5" /> on
                         </span>
                       ) : (
-                        <span className="text-muted-foreground">aus</span>
+                        <span className="text-muted-foreground">off</span>
                       )}
                     </TableCell>
                     <TableCell>
@@ -111,17 +111,17 @@ export function StatusView({ meta, approvals, onApprovalsChanged }: Props) {
         </section>
 
         <section>
-          <h2 className="mb-2 text-sm font-semibold">Aktive Chats ({activeChats.length})</h2>
+          <h2 className="mb-2 text-sm font-semibold">Active chats ({activeChats.length})</h2>
           <ActiveChats chats={activeChats} modelName={(id) => modelName(meta.models, id)} />
         </section>
 
         <section>
           <h2 className="mb-2 text-sm font-semibold">
-            Offene Bestätigungen ({approvals.length}
-            {internetCount > 0 && `, davon ${internetCount} Internetzugang`})
+            Pending approvals ({approvals.length}
+            {internetCount > 0 && `, ${internetCount} of them internet access`})
           </h2>
           {approvals.length === 0 ? (
-            <p className="text-sm text-muted-foreground">Keine offenen Bestätigungen.</p>
+            <p className="text-sm text-muted-foreground">No pending approvals.</p>
           ) : (
             <div className="grid gap-3 md:grid-cols-2">
               {approvals.map((a) => (
@@ -157,14 +157,14 @@ function Kennzahlen({ pool }: { pool: Pool }) {
           <Card key={v} size="sm">
             <CardHeader>
               <CardTitle className="flex items-center gap-2 text-sm">
-                Variante <VariantBadge variant={v} />
+                Variant <VariantBadge variant={v} />
               </CardTitle>
             </CardHeader>
             <CardContent className="grid grid-cols-4 gap-2 text-center">
-              <Stat label="Ziel" value={pool.targets[v] ?? 0} />
-              <Stat label="frei" value={count("idle")} className="text-emerald-700" />
-              <Stat label="vergeben" value={count("assigned")} className="text-violet-700" />
-              <Stat label="startend" value={count("starting")} className="text-sky-700" />
+              <Stat label="Target" value={pool.targets[v] ?? 0} />
+              <Stat label="idle" value={count("idle")} className="text-emerald-700" />
+              <Stat label="assigned" value={count("assigned")} className="text-violet-700" />
+              <Stat label="starting" value={count("starting")} className="text-sky-700" />
             </CardContent>
           </Card>
         )
@@ -172,12 +172,12 @@ function Kennzahlen({ pool }: { pool: Pool }) {
       {pool.totals && (
         <Card size="sm">
           <CardHeader>
-            <CardTitle className="text-sm">Gesamt</CardTitle>
+            <CardTitle className="text-sm">Total</CardTitle>
           </CardHeader>
           <CardContent className="grid grid-cols-3 gap-2 text-center">
-            <Stat label="Kosten" value={formatUsd(pool.totals.cost)} />
+            <Stat label="Cost" value={formatUsd(pool.totals.cost)} />
             <Stat label="Tokens" value={formatTokens(pool.totals.tokens?.total)} />
-            <Stat label="aktive Chats" value={pool.totals.chats_active} />
+            <Stat label="active chats" value={pool.totals.chats_active} />
           </CardContent>
         </Card>
       )}
@@ -195,23 +195,23 @@ function Stat({ label, value, className }: { label: string; value: React.ReactNo
 }
 
 function ActiveChats({ chats, modelName }: { chats: Chat[]; modelName: (id: string) => string }) {
-  if (chats.length === 0) return <p className="text-sm text-muted-foreground">Keine aktiven Chats.</p>
+  if (chats.length === 0) return <p className="text-sm text-muted-foreground">No active chats.</p>
   return (
     <div className="rounded-lg border">
       <Table>
         <TableHeader>
           <TableRow>
-            <TableHead>Titel</TableHead>
-            <TableHead>Zustand</TableHead>
-            <TableHead>Variante</TableHead>
-            <TableHead>Modell</TableHead>
-            <TableHead>Platz</TableHead>
+            <TableHead>Title</TableHead>
+            <TableHead>State</TableHead>
+            <TableHead>Variant</TableHead>
+            <TableHead>Model</TableHead>
+            <TableHead>Slot</TableHead>
             <TableHead className="text-right">Tokens</TableHead>
-            <TableHead className="text-right">Kosten</TableHead>
-            <TableHead>Kontext</TableHead>
-            <TableHead title="gestartete / erlaubte Subagenten">Subagenten</TableHead>
-            <TableHead className="text-right">Modellaufrufe</TableHead>
-            <TableHead>Offen</TableHead>
+            <TableHead className="text-right">Cost</TableHead>
+            <TableHead>Context</TableHead>
+            <TableHead title="started / allowed subagents">Subagents</TableHead>
+            <TableHead className="text-right">Model calls</TableHead>
+            <TableHead>Pending</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -219,7 +219,7 @@ function ActiveChats({ chats, modelName }: { chats: Chat[]; modelName: (id: stri
             <TableRow key={c.id}>
               <TableCell>
                 <a className="text-sky-700 hover:underline" href={chatHref(c.id)}>
-                  {c.title || "Ohne Titel"}
+                  {c.title || "Untitled"}
                 </a>
                 {c.internet && <GlobeIcon className="ml-1 inline size-3.5 text-sky-600" />}
               </TableCell>
@@ -237,7 +237,7 @@ function ActiveChats({ chats, modelName }: { chats: Chat[]; modelName: (id: stri
               <TableCell className="text-right tabular-nums">{formatTokens(c.tokens?.total)}</TableCell>
               <TableCell
                 className="text-right tabular-nums"
-                title={c.cost_other ? `davon außerhalb der Hauptantworten: ${formatUsd(c.cost_other)}` : undefined}
+                title={c.cost_other ? `of which outside the main responses: ${formatUsd(c.cost_other)}` : undefined}
               >
                 {formatUsd(c.cost)}
               </TableCell>

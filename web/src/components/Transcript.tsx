@@ -25,33 +25,33 @@ import { type MessagePart, splitMessage } from "@/lib/systemnote"
 import { groupTodoBlocks, type TodoTimeline, todoTimeline } from "@/lib/tasks"
 import { cn } from "@/lib/utils"
 
-/** Subagenten-Läufe, zugeordnet zu den subagent-Aufrufen des Hauptagenten. */
+/** Subagent runs, assigned to the main agent's subagent calls. */
 export type TranscriptSubagents = {
   runs: Map<string, SubagentRun>
   assignment: RunAssignment
   proxyIds: Set<string>
-  /** Abgleich der Werkzeugaufrufe mit dem Protokoll des Orchestrators (E9). */
+  /** Matching of the tool calls against the orchestrator's log (E9). */
   evidence?: Map<string, Evidence>
-  /** Der Chat arbeitet nicht; fehlende Belege gelten dann als auffällig. */
+  /** The chat is not working; missing evidence then counts as suspicious. */
   settled?: boolean
 }
 
 type Props = {
   transcript: TranscriptState
-  /** Für Download-Links der Anhänge. */
+  /** For download links of the attachments. */
   chatId?: string
   subagents?: TranscriptSubagents
-  /** Hinweise zu Grenzen (agent_limit, subagent_limit), nach Zeit einsortiert. */
+  /** Notices about limits (agent_limit, subagent_limit), sorted in by time. */
   notices?: LimitNotice[]
-  /** Wird unter dem Verlauf angezeigt, etwa offene Bestätigungen. */
+  /** Shown below the history, e.g. pending approvals. */
   footer?: React.ReactNode
-  /** Der Agent arbeitet (für „Denkt …“, solange noch keine Antwort streamt). */
+  /** The agent is working (for "Thinking …" while no response is streaming yet). */
   working?: boolean
-  /** Hintergrundaufgaben: Karten von bash mit run_in_background und Meldungen im Verlauf. */
+  /** Background tasks: cards of bash with run_in_background and notes in the history. */
   background?: BackgroundTask[]
-  /** Öffnet den Reiter „Hintergrund“, optional mit einer Aufgabe im Blick. */
+  /** Opens the "Background" tab, optionally with a task in focus. */
   onOpenBackground?: (id?: string) => void
-  /** Artefakte des Chats; Ergebnisse erscheinen unter dem Werkzeugaufruf, der sie hochgeladen hat. */
+  /** Artifacts of the chat; results appear below the tool call that uploaded them. */
   artifacts?: Artifact[]
 }
 
@@ -82,7 +82,7 @@ export function Transcript({
     if (el && stick) el.scrollTop = el.scrollHeight
   })
 
-  // Lose Subagenten-Läufe und Grenzhinweise hinter dem passenden Eintrag einsetzen
+  // Insert loose subagent runs and limit notices after the matching entry
   const extras = useMemo(() => {
     const m = new Map<number, React.ReactNode[]>()
     const add = (idx: number, node: React.ReactNode) => {
@@ -110,9 +110,9 @@ export function Transcript({
     for (const n of notices ?? []) add(placeAfter(transcript.items, n.time), <LimitNoticeView key={`notice-${n.id}`} notice={n} />)
     return m
   }, [subagents, notices, transcript.items, chatId])
-  // Aufrufe der Aufgabenliste (todo) als kompakte Karten statt roher Werkzeugkarten
+  // Calls of the task list (todo) as compact cards instead of raw tool cards
   const todo = useMemo(() => todoTimeline(transcript), [transcript])
-  // Meldungen des Orchestrators in Nutzernachrichten, zerlegt nach der Herkunft laut Server
+  // Orchestrator notes in user messages, split by origin according to the server
   const userParts = useMemo(() => {
     const m = new Map<string, MessagePart[]>()
     for (const it of transcript.items) {
@@ -126,7 +126,7 @@ export function Transcript({
     <div ref={ref} onScroll={onScroll} className="min-h-0 flex-1 overflow-y-auto">
       <div className="mx-auto flex max-w-3xl flex-col gap-4 px-4 py-4">
         {transcript.items.length === 0 && transcript.pending.length === 0 && !transcript.resume && (
-          <p className="py-8 text-center text-sm text-muted-foreground">Noch keine Nachrichten.</p>
+          <p className="py-8 text-center text-sm text-muted-foreground">No messages yet.</p>
         )}
         {extras.get(-1)}
         {transcript.items.map((item, idx) => (
@@ -201,12 +201,12 @@ function AssistantMessage({
   onOpenBackground?: (id?: string) => void
   artifacts?: Artifact[]
 }) {
-  // Live-Antworten (ohne seq) haben noch keinen Tarifwert vom Orchestrator; pis Wert ist vorläufig.
+  // Live responses (without seq) have no tariff value from the orchestrator yet; pi's value is provisional.
   const provisional = item.cost === undefined && item.seq === undefined && !!item.usage?.cost?.total
   const usage = formatUsage(item.usage, item.cost, { provisional })
   const cache = item.usage ? cacheHitRate(item.usage.input, item.usage.cacheRead) : undefined
   const lastIdx = item.blocks.length - 1
-  // Erster Block einer Folge von todo-Aufrufen → Indizes der Folge; die übrigen entfallen.
+  // First block of a sequence of todo calls → indices of the sequence; the others are dropped.
   const todoRuns = useMemo(() => {
     const m = new Map<number, number[]>()
     for (const g of groupTodoBlocks(item.blocks)) if (g.kind === "todo") m.set(g.indices[0], g.indices)
@@ -281,7 +281,7 @@ function AssistantMessage({
           case "image":
             return (
               <div key={i} className="text-xs text-muted-foreground">
-                [Bild]
+                [image]
               </div>
             )
           default:
@@ -302,15 +302,15 @@ function AssistantMessage({
           <span
             title={
               provisional
-                ? "Vorläufig: pis Einheitspreis. Der Wert nach Tarif (Spitzen-/Nebenzeit) folgt, sobald die Antwort gespeichert ist."
+                ? "Provisional: pi's flat price. The value by tariff (peak/off-peak) follows once the response is stored."
                 : undefined
             }
           >
             {usage}
           </span>
-          {cache !== undefined && <span title="Cache-Trefferquote: Cache-Tokens / (Eingabe + Cache)">· Cache {formatPercent(cache * 100)}</span>}
+          {cache !== undefined && <span title="Cache hit rate: cache tokens / (input + cache)">· cache {formatPercent(cache * 100)}</span>}
           {item.durationMs !== undefined && (
-            <span className="tabular-nums" title="Dauer des ganzen Laufs: von der Nachricht bis zu dieser Antwort">
+            <span className="tabular-nums" title="Duration of the whole run: from the message to this response">
               {usage ? "· " : ""}
               {formatStepDuration(item.durationMs)}
             </span>
@@ -321,14 +321,14 @@ function AssistantMessage({
                 "ml-1 rounded border px-1 py-px text-[10px] font-medium",
                 item.peak ? "border-amber-200 bg-amber-50 text-amber-800" : "border-emerald-200 bg-emerald-50 text-emerald-800",
               )}
-              title={item.peak ? "Antwort fiel in die Spitzenzeit (voller Preis)" : "Antwort fiel in die Nebenzeit (ermäßigter Preis)"}
+              title={item.peak ? "Response fell in peak time (full price)" : "Response fell in off-peak time (reduced price)"}
             >
-              {item.peak ? "Spitzentarif" : "Nebentarif"}
+              {item.peak ? "Peak tariff" : "Off-peak tariff"}
             </span>
           )}
-          {isUserAbort(item) && <span> · abgebrochen</span>}
-          {item.stopReason === "error" && !isUserAbort(item) && <span> · Fehler</span>}
-          {item.stopReason === "length" && <span> · Längengrenze erreicht</span>}
+          {isUserAbort(item) && <span> · aborted</span>}
+          {item.stopReason === "error" && !isUserAbort(item) && <span> · error</span>}
+          {item.stopReason === "length" && <span> · length limit reached</span>}
         </div>
       )}
     </div>
@@ -336,8 +336,8 @@ function AssistantMessage({
 }
 
 /**
- * Statuszeile unter dem Verlauf, solange der Agent arbeitet: was er tut und wie lange der Lauf schon dauert
- * („Führt bash aus … 1:05“). Ohne bekannten Start nur die Tätigkeit.
+ * Status line below the history while the agent is working: what it is doing and how long the run has taken
+ * ("Running bash … 1:05"). Without a known start, only the activity.
  */
 function ActivityLine({ transcript, since }: { transcript: TranscriptState; since?: number }) {
   const now = useNow(1000, since !== undefined)
@@ -358,7 +358,7 @@ function ThinkingBlock({ text, live }: { text: string; live: boolean }) {
       <CollapsibleTrigger className="flex items-center gap-1 hover:text-foreground">
         <ChevronRightIcon className={cn("size-3 transition-transform", open && "rotate-90")} />
         <BrainIcon className="size-3" />
-        {live ? "Denkt …" : "Gedanken"}
+        {live ? "Thinking …" : "Thoughts"}
       </CollapsibleTrigger>
       <CollapsibleContent>
         <div className="mt-1 border-l-2 pl-3 italic whitespace-pre-wrap">{text}</div>
@@ -385,8 +385,8 @@ function LimitNoticeView({ notice }: { notice: LimitNotice }) {
         </div>
         <div className="text-xs opacity-80">
           {abort
-            ? "Der Orchestrator hat den Durchgang abgebrochen und die Subagenten-Prozesse beendet."
-            : "Der LLM-Proxy hat weitere gleichzeitige Modellaufrufe mit HTTP 429 abgewiesen."}{" "}
+            ? "The orchestrator aborted the turn and ended the subagent processes."
+            : "The LLM proxy refused further concurrent model calls with HTTP 429."}{" "}
           {formatTime(new Date(notice.time).toISOString())}
         </div>
       </div>
@@ -398,29 +398,30 @@ function Caret() {
   return <span className="ml-0.5 inline-block h-4 w-1.5 animate-pulse bg-foreground/60 align-text-bottom" />
 }
 
-const reasonText: Record<string, string> = { manual: "manuell", threshold: "automatisch", overflow: "automatisch, Überlauf" }
+const reasonText: Record<string, string> = { manual: "manual", threshold: "automatic", overflow: "automatic, overflow" }
 
 function CompactionDivider({ item }: { item: CompactionItem }) {
   const [open, setOpen] = useState(false)
   const reason = reasonText[item.reason] ?? item.reason
   const failed = item.failed || item.aborted || !!item.errorMessage
   let label: string
-  if (item.running) label = `Kontext wird zusammengefasst … (${reason})`
-  else if (item.aborted) label = `Kompaktierung abgebrochen (${reason})`
+  if (item.running) label = `Summarising context … (${reason})`
+  else if (item.aborted) label = `Compaction aborted (${reason})`
   else if (failed) label = compactionNotice(item.errorMessage)
   else {
     const before = item.tokensBefore !== undefined ? formatTokens(item.tokensBefore) : "?"
-    const after = item.tokensAfter !== undefined ? ` → ca. ${formatTokens(item.tokensAfter)}` : ""
-    label = `Kontext zusammengefasst: ${before}${after} Tokens (${reason})`
+    const after = item.tokensAfter !== undefined ? ` → approx. ${formatTokens(item.tokensAfter)}` : ""
+    label = `Context summarised: ${before}${after} tokens (${reason})`
   }
   const cost = item.cost ?? item.usage?.cost?.total
   const hasDetails = !item.running && (!!item.summary || cost !== undefined)
-  // „nicht möglich“/„nicht nötig“ ist ein Hinweis, kein Fehler: dezent statt rot
-  const benign = failed && !item.aborted && /nicht (möglich|nötig)/.test(label)
+  // "not possible"/"not needed" is a notice, not an error: subtle instead of red. The label comes from
+  // compactionNotice (lib/stream).
+  const benign = failed && !item.aborted && /not (possible|needed|necessary)/i.test(label)
 
   return (
     <Collapsible open={open} onOpenChange={setOpen} className="text-xs">
-      {/* Titel am Rahmen, weil deaktivierte Knöpfe in manchen Browsern keinen Tooltip zeigen */}
+      {/* title on the frame, because disabled buttons show no tooltip in some browsers */}
       <div className="flex items-center gap-2" title={failed && item.errorMessage ? `pi: ${item.errorMessage}` : undefined}>
         <div className="h-px flex-1 bg-border" />
         <CollapsibleTrigger
@@ -445,7 +446,7 @@ function CompactionDivider({ item }: { item: CompactionItem }) {
         <div className="mt-2 rounded-md border bg-muted/30 p-3">
           {item.summary && <Markdown text={item.summary} />}
           {cost !== undefined && (
-            <p className="mt-2 text-[11px] text-muted-foreground">Kosten der Zusammenfassung: {formatUsd(cost)}</p>
+            <p className="mt-2 text-[11px] text-muted-foreground">Cost of the summary: {formatUsd(cost)}</p>
           )}
         </div>
       </CollapsibleContent>
@@ -454,9 +455,9 @@ function CompactionDivider({ item }: { item: CompactionItem }) {
 }
 
 /**
- * Nutzernachricht; Anhänge (fester Block am Ende, siehe lib/attachments) als Chips. `pending`: gesendet,
- * von pi noch nicht bestätigt; `failed`: nicht gesendet. `parts`: Zerlegung nach lib/systemnote (Herkunft
- * laut Server); Meldungen des Orchestrators erscheinen als graue Zeile statt in der Blase.
+ * User message; attachments (fixed block at the end, see lib/attachments) as chips. `pending`: sent, not yet
+ * acknowledged by pi; `failed`: not sent. `parts`: split according to lib/systemnote (origin according to the
+ * server); orchestrator notes appear as a grey line instead of in the bubble.
  */
 function UserMessage({
   text,
@@ -475,7 +476,7 @@ function UserMessage({
 }) {
   const { text: body, files } = splitAttachments(text)
   const hasSystem = !!parts?.some((p) => p.kind !== "user")
-  // Ohne Systemanteil bleibt der Text genau wie gesendet (auch Leerzeilen).
+  // Without a system part, the text stays exactly as sent (including blank lines).
   const segments: MessagePart[] = hasSystem ? parts! : body ? [{ kind: "user", text: body }] : []
   const lastUser = segments.reduce((acc, p, i) => (p.kind === "user" ? i : acc), -1)
   return (
@@ -506,7 +507,7 @@ function UserMessage({
           <AttachmentChips files={files} chatId={chatId} />
         </div>
       )}
-      {state === "failed" && <span className="ml-auto text-xs text-red-700 dark:text-red-400">Nicht gesendet</span>}
+      {state === "failed" && <span className="ml-auto text-xs text-red-700 dark:text-red-400">Not sent</span>}
     </div>
   )
 }
@@ -514,7 +515,7 @@ function UserMessage({
 function AttachmentChips({ files, chatId }: { files: string[]; chatId?: string }) {
   if (files.length === 0) return null
   return (
-    <ul className="flex flex-wrap justify-end gap-1.5" aria-label="Anhänge">
+    <ul className="flex flex-wrap justify-end gap-1.5" aria-label="Attachments">
       {files.map((f) => (
         <li key={f}>
           {chatId && isPreviewImage(f) ? (
@@ -529,7 +530,7 @@ function AttachmentChips({ files, chatId }: { files: string[]; chatId?: string }
             <a
               href={chatId ? urls.artifact(chatId, f, "input") : undefined}
               className="inline-flex max-w-72 items-center gap-1.5 rounded-md border bg-background px-2 py-1 text-xs hover:bg-muted"
-              title={`/workspace/inputs/${f} – herunterladen`}
+              title={`/workspace/inputs/${f} – download`}
             >
               <PaperclipIcon className="size-3 shrink-0 text-muted-foreground" />
               <span className="truncate">{f}</span>

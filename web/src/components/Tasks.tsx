@@ -1,4 +1,4 @@
-// Aufgabenliste des Agenten (Werkzeug todo): Liste, Fortschritt im Chatkopf, Karte im Verlauf.
+// Task list of the agent (tool todo): list, progress in the chat header, card in the history.
 import { useState } from "react"
 import { CheckIcon, ChevronDownIcon, ChevronRightIcon, CircleIcon, ListTodoIcon, Loader2Icon } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
@@ -27,10 +27,10 @@ function StatusIcon({ status, className }: { status: Task["status"]; className?:
   return <CircleIcon className={cn(cls, "text-muted-foreground")} />
 }
 
-/** Liste der Aufgaben; `detailed` zeigt Beschreibung, Abhängigkeiten und Bearbeiter. */
+/** List of tasks; `detailed` shows description, dependencies and owner. */
 export function TaskList({ tasks, detailed, className }: { tasks: Task[]; detailed?: boolean; className?: string }) {
   const list = visibleTasks(tasks)
-  if (list.length === 0) return <p className="text-xs text-muted-foreground">Keine Aufgaben.</p>
+  if (list.length === 0) return <p className="text-xs text-muted-foreground">No tasks.</p>
   return (
     <ul className={cn("flex min-w-0 flex-col gap-1", className)}>
       {list.map((t) => (
@@ -55,9 +55,9 @@ export function TaskList({ tasks, detailed, className }: { tasks: Task[]; detail
             )}
             {detailed && (t.blockedBy?.length || t.owner) && (
               <div className="mt-0.5 text-xs text-muted-foreground">
-                {t.blockedBy?.length ? `wartet auf ${t.blockedBy.map((id) => `#${id}`).join(", ")}` : ""}
+                {t.blockedBy?.length ? `waiting for ${t.blockedBy.map((id) => `#${id}`).join(", ")}` : ""}
                 {t.blockedBy?.length && t.owner ? " · " : ""}
-                {t.owner ? `Bearbeiter: ${t.owner}` : ""}
+                {t.owner ? `Owner: ${t.owner}` : ""}
               </div>
             )}
           </div>
@@ -67,7 +67,7 @@ export function TaskList({ tasks, detailed, className }: { tasks: Task[]; detail
   )
 }
 
-/** Kleiner Fortschrittsring (erledigt / gesamt). */
+/** Small progress ring (done / total). */
 function ProgressRing({ done, total, className }: { done: number; total: number; className?: string }) {
   const r = 6
   const c = 2 * Math.PI * r
@@ -89,7 +89,7 @@ function ProgressRing({ done, total, className }: { done: number; total: number;
   )
 }
 
-/** Fortschritt „3/7 Aufgaben“ im Chatkopf; die Liste öffnet erst beim Klick. */
+/** Progress "3/7 tasks" in the chat header; the list opens only on click. */
 export function TasksMenu({ tasks }: { tasks: Task[] }) {
   const c = taskCounts(tasks)
   if (c.total === 0) return null
@@ -98,7 +98,7 @@ export function TasksMenu({ tasks }: { tasks: Task[] }) {
     <Popover>
       <PopoverTrigger
         className="inline-flex shrink-0 items-center gap-1 rounded-md border border-emerald-200 bg-emerald-50/60 px-2 py-0.5 text-xs font-medium text-emerald-900 hover:bg-emerald-100 data-[state=open]:bg-emerald-100 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200"
-        aria-label={`${label}${c.inProgress ? `, ${c.inProgress} in Arbeit` : ""}: Liste öffnen`}
+        aria-label={`${label}${c.inProgress ? `, ${c.inProgress} in progress` : ""}: open list`}
       >
         {c.inProgress > 0 ? <Loader2Icon className="size-3.5 animate-spin text-sky-600" /> : <ProgressRing done={c.completed} total={c.total} />}
         {label}
@@ -107,7 +107,7 @@ export function TasksMenu({ tasks }: { tasks: Task[] }) {
       <PopoverContent align="start" collisionPadding={12} className="max-h-[70vh] w-80 max-w-[calc(100vw-1.5rem)] overflow-y-auto">
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
           <ProgressRing done={c.completed} total={c.total} />
-          Aufgaben des Agenten · {c.completed} von {c.total} erledigt
+          Agent tasks · {c.completed} of {c.total} done
         </div>
         <TaskList tasks={tasks} />
       </PopoverContent>
@@ -115,36 +115,36 @@ export function TasksMenu({ tasks }: { tasks: Task[] }) {
   )
 }
 
-/** Inhalt des Seitenreiters „Aufgaben“. */
+/** Content of the "Tasks" side tab. */
 export function TasksPanel({ tasks }: { tasks: Task[] }) {
   const c = taskCounts(tasks)
   if (c.total === 0)
     return (
       <p className="text-xs text-muted-foreground">
-        Der Agent hat keine Aufgabenliste angelegt. Bei Arbeiten mit mehreren Schritten führt er sie mit dem Werkzeug todo.
+        The agent has not created a task list. For work with several steps it keeps one with the tool todo.
       </p>
     )
   return (
     <div className="flex flex-col gap-3 text-sm">
       <div className="flex items-center gap-2 text-xs text-muted-foreground">
         <ProgressRing done={c.completed} total={c.total} className="size-4" />
-        {c.completed} von {c.total} erledigt
-        {c.inProgress ? ` · ${c.inProgress} in Arbeit` : ""}
-        {c.pending ? ` · ${c.pending} offen` : ""}
+        {c.completed} of {c.total} done
+        {c.inProgress ? ` · ${c.inProgress} in progress` : ""}
+        {c.pending ? ` · ${c.pending} open` : ""}
       </div>
       <TaskList tasks={tasks} detailed />
     </div>
   )
 }
 
-/** Kompakte Karte für aufeinanderfolgende todo-Aufrufe im Verlauf, mit aufklappbarer Liste. */
+/** Compact card for consecutive todo calls in the history, with an expandable list. */
 export function TodoCallGroup({ calls }: { calls: TodoCall[] }) {
   const [open, setOpen] = useState(false)
   if (calls.length === 0) return null
   const last = calls[calls.length - 1]
   const running = calls.some((c) => c.running)
   const failed = calls.filter((c) => c.error).length
-  const summary = running ? "Aufgaben werden aktualisiert …" : todoGroupSummary(calls.map((c) => c.action), last.after)
+  const summary = running ? "Updating tasks …" : todoGroupSummary(calls.map((c) => c.action), last.after)
   const changes = calls.map((c) => c.change)
   return (
     <Collapsible open={open} onOpenChange={setOpen} className={cn("rounded-md border bg-background text-sm", failed && "border-amber-300")}>
@@ -159,7 +159,7 @@ export function TodoCallGroup({ calls }: { calls: TodoCall[] }) {
             <Loader2Icon className="size-3.5 animate-spin text-sky-600" />
           ) : failed ? (
             <Badge variant="outline" className="border-amber-300 bg-amber-50 text-amber-800">
-              {failed} abgewiesen
+              {failed} refused
             </Badge>
           ) : null}
         </span>

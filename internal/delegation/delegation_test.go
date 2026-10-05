@@ -17,7 +17,7 @@ func TestConformanceWithoutPlatform(t *testing.T) {
 		got, why := Evaluate(c, time.Now())
 		results[c.Name] = got
 		if got != c.Allowed {
-			t.Errorf("%s [%s]: erlaubt=%v, Soll %v (%s)", c.Name, c.Group, got, c.Allowed, why)
+			t.Errorf("%s [%s]: allowed=%v, expected %v (%s)", c.Name, c.Group, got, c.Allowed, why)
 		}
 		if !c.Allowed {
 			forbidden++
@@ -25,9 +25,9 @@ func TestConformanceWithoutPlatform(t *testing.T) {
 			allowedOK++
 		}
 	}
-	t.Logf("%d verbotene und %d erlaubte Fälle\n%s", forbidden, len(cases)-forbidden, Report(results, cases))
+	t.Logf("%d forbidden and %d allowed cases\n%s", forbidden, len(cases)-forbidden, Report(results, cases))
 	if forbidden < 30 {
-		t.Fatalf("zu wenige verbotene Fälle: %d", forbidden)
+		t.Fatalf("too few forbidden cases: %d", forbidden)
 	}
 }
 
@@ -36,14 +36,14 @@ func TestParseRejects(t *testing.T) {
 		`{"rules":[{"action":"write","resource":"dataset"}]}`,
 		`{"rules":[{"action":"read","resource":"datasets"}]}`,
 		`{"rules":[{"action":"read","resource":"dataset","ids":[""]}]}`,
-		`{"rules":[],"confirm":"immer"}`,
-		`{"rules":[],"expires":"2026-01-01T00:00:00Z"}`, // Tippfehler im Feldnamen
+		`{"rules":[],"confirm":"always"}`,
+		`{"rules":[],"expires":"2026-01-01T00:00:00Z"}`, // typo in the field name
 		`{"rules":[]} {"rules":[]}`,
 		`{"rules":[{"action":"update","resource":"training","ids":["?"]}]}`, // Review 5, M3
 	}
 	for _, b := range bad {
 		if _, err := Parse([]byte(b)); err == nil {
-			t.Errorf("erwartet abgewiesen: %s", b)
+			t.Errorf("expected refused: %s", b)
 		}
 	}
 	d, err := Parse([]byte(`{"rules":[{"action":"run","resource":"training","ids":[" 07 ","own","*"]}]}`))
@@ -72,7 +72,7 @@ func TestClassify(t *testing.T) {
 	}
 	for _, c := range cases {
 		if got := Classify(platform.Request{Method: c.m, Path: c.p}).String(); got != c.want {
-			t.Errorf("%s %s: %q, erwartet %q", c.m, c.p, got, c.want)
+			t.Errorf("%s %s: %q, expected %q", c.m, c.p, got, c.want)
 		}
 	}
 	a := Classify(platform.Request{Method: "PUT", Path: "/train/config", Body: json.RawMessage(`{"container_id":7,"container_id":9,"dataset_id":12}`)})
@@ -84,24 +84,24 @@ func TestClassify(t *testing.T) {
 func TestCreated(t *testing.T) {
 	res, id, ok := Created(Access{Action: Create, Resource: Dataset}, platform.Result{Status: "ok", HTTPStatus: 201, Body: `{"id":12,"name":"x"}`})
 	if !ok || res != Dataset || id != "12" {
-		t.Fatalf("Datensatz: %s %s %v", res, id, ok)
+		t.Fatalf("dataset: %s %s %v", res, id, ok)
 	}
 	res, id, ok = Created(Access{Action: Create, Resource: Training}, platform.Result{Status: "ok", HTTPStatus: 202, Location: "/tasks/40"})
 	if !ok || res != Task || id != "40" {
 		t.Fatalf("Training: %s %s %v", res, id, ok)
 	}
 	if _, _, ok := Created(Access{Action: Create, Resource: Dataset}, platform.Result{Status: "error", HTTPStatus: 500, Body: `{"id":1}`}); ok {
-		t.Fatal("Fehlschlag darf keine Herkunft erzeugen")
+		t.Fatal("a failure must not create provenance")
 	}
 	if _, _, ok := Created(Access{Action: Update, Resource: Dataset}, platform.Result{Status: "ok", HTTPStatus: 200, Body: `{"id":5}`}); ok {
-		t.Fatal("nur Anlage-Aufrufe erzeugen Herkunft")
+		t.Fatal("only create calls create provenance")
 	}
 }
 
 func TestSummary(t *testing.T) {
 	d, _ := Parse([]byte(ConformanceDelegation))
 	s := d.Summary()
-	if !strings.Contains(s, "update dataset: in diesem Chat angelegte") || !strings.Contains(s, "read dataset: alle") {
-		t.Fatalf("Zusammenfassung: %s", s)
+	if !strings.Contains(s, "update dataset: created in this chat") || !strings.Contains(s, "read dataset: all") {
+		t.Fatalf("summary: %s", s)
 	}
 }

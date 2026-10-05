@@ -1,5 +1,5 @@
-// Setzt den Verlauf eines Chats aus der gespeicherten Historie und den Live-Ereignissen von pi
-// zusammen (siehe „Streaming zusammensetzen" in poc/API.md). Reine Funktionen, ohne React.
+// Assembles a chat's history from the stored messages and pi's live events
+// (see "Assembling the stream" in poc/API.md). Pure functions, without React.
 import type { ContentBlock, MessageMeta, MessageOrigin, MessageSource, PiEvent, ResumePhase, ResumeStep, StoredMessage, TurnTrigger, Usage } from "@/api/types"
 import { splitAttachments } from "@/lib/attachments"
 import { messageImageKey } from "@/lib/images"
@@ -9,7 +9,7 @@ export type ToolCallBlock = {
   id: string
   name: string
   arguments?: unknown
-  /** Roh-JSON der Argumente, solange sie noch gestreamt werden. */
+  /** Raw JSON of the arguments while they are still being streamed. */
   argsText?: string
 }
 export type ViewBlock =
@@ -19,8 +19,8 @@ export type ViewBlock =
   | { type: "image"; mimeType?: string }
 
 /**
- * `time`: Zeitpunkt in ms (Historie: created_at, live: timestamp von pi), sofern bekannt. `origin`,
- * `sources`, `trigger`, `turnId`: Herkunft laut Server (Review 3, H1); fehlen bei alten Zeilen.
+ * `time`: time in ms (history: created_at, live: pi's timestamp), if known. `origin`,
+ * `sources`, `trigger`, `turnId`: origin according to the server (Review 3, H1); missing on old rows.
  */
 export type UserItem = {
   kind: "user"
@@ -41,18 +41,18 @@ export type AssistantItem = {
   seq?: number
   time?: number
   usage?: Usage
-  /** Kosten nach Tarif (vom Orchestrator, nur aus der Historie). */
+  /** Cost by tariff (from the orchestrator, only from the history). */
   cost?: number
-  /** Antwort fiel in die Spitzenzeit. */
+  /** Response fell into peak hours. */
   peak?: boolean
   stopReason?: string
   errorMessage?: string
   model?: string
-  /** Kennung der fertigen Antwort für ihre Bilder (responseId bzw. ts-<timestamp>); fehlt beim Streamen. */
+  /** ID of the finished response for its images (responseId or ts-<timestamp>); missing while streaming. */
   msgKey?: string
   /**
-   * Gesamtdauer des Laufs in ms, nur an der Antwort, die ihn beendet (stopReason nicht „toolUse“). Live ab
-   * agent_start gemessen, nach dem Neuladen aus created_at von Nutzernachricht und Antwort; sonst leer.
+   * Total duration of the run in ms, only on the response that ends it (stopReason not "toolUse"). Live, measured
+   * from agent_start; after a reload from created_at of user message and response; otherwise empty.
    */
   durationMs?: number
 }
@@ -63,7 +63,7 @@ export type CompactionItem = {
   seq?: number
   time?: number
   reason: CompactionReason | string
-  /** Kompaktierung läuft noch (zwischen compaction_start und compaction_end). */
+  /** Compaction still running (between compaction_start and compaction_end). */
   running: boolean
   summary?: string
   tokensBefore?: number
@@ -73,13 +73,13 @@ export type CompactionItem = {
   aborted?: boolean
   errorMessage?: string
   /**
-   * Kompaktierung abgebrochen oder fehlgeschlagen. Solche Einträge gibt es nur live (die Historie
-   * speichert sie nicht); beim Neuladen bleiben sie hinter der Nachricht `afterSeq` stehen.
+   * Compaction aborted or failed. Such entries exist only live (the history
+   * does not store them); on reload they stay behind the message `afterSeq`.
    */
   failed?: boolean
   afterSeq?: number
 }
-/** Schritt beim Fortsetzen, wie ihn der Block im Verlauf zeigt; „pending“ ist noch nicht begonnen. */
+/** Step while resuming, as the block in the history shows it; "pending" has not started yet. */
 export type ResumeStepView = {
   phase: ResumePhase
   status: "pending" | ResumeStep["status"]
@@ -89,8 +89,8 @@ export type ResumeStepView = {
   ms?: number
 }
 /**
- * Fortsetzen in frischer Sandbox (SSE „resume“). Nur live bekannt; beim Neuladen bleibt der Eintrag
- * hinter der Nachricht `afterSeq` stehen (mit `withUser` hinter der Nutzernachricht, die folgte).
+ * Resuming in a fresh sandbox (SSE "resume"). Only known live; on reload the entry stays
+ * behind the message `afterSeq` (with `withUser` behind the user message that followed).
  */
 export type ResumeItem = {
   kind: "resume"
@@ -106,8 +106,8 @@ export type ResumeItem = {
   withUser?: boolean
 }
 /**
- * Nachricht einer Erweiterung in pi an den Agenten (Rolle custom), etwa das Ende eines Subagenten im
- * Hintergrund (pi-subagents). Nicht vom Nutzer; `trigger` wake, wenn sie einen Durchgang begonnen hat.
+ * Message from an extension in pi to the agent (role custom), e.g. the end of a subagent in the
+ * background (pi-subagents). Not from the user; `trigger` wake if it started a turn.
  */
 export type NoticeItem = {
   kind: "notice"
@@ -121,16 +121,16 @@ export type NoticeItem = {
 export type TranscriptItem = UserItem | AssistantItem | CompactionItem | ResumeItem | NoticeItem
 
 /**
- * Gesendete Nutzernachricht, die pi noch nicht bestätigt hat (optimistisch). Sie steht am Ende des
- * Verlaufs und wird durch die echte Nachricht (message_end, role user) ersetzt. `failed`: nicht
- * gesendet (Fehler beim Senden oder Fortsetzen).
+ * Sent user message that pi has not confirmed yet (optimistic). It stands at the end of the
+ * history and is replaced by the real message (message_end, role user). `failed`: not
+ * sent (error while sending or resuming).
  */
 export type PendingUser = {
   key: string
   text: string
   failed?: boolean
   afterSeq?: number
-  /** Herkunft laut Server (übergebene Warteschlange) */
+  /** Origin according to the server (handed-over queue) */
   origin?: MessageOrigin
   sources?: MessageSource[]
 }
@@ -140,13 +140,13 @@ export type ToolExecution = {
   toolName: string
   args?: unknown
   running: boolean
-  /** Bisherige Ausgabe aus tool_execution_update (wird ersetzt, nicht angehängt). */
+  /** Output so far from tool_execution_update (replaced, not appended). */
   output?: string
   result?: string
   isError?: boolean
-  /** Strukturiertes Ergebnis des Werkzeugs (`details`), etwa der Stand der Aufgabenliste bei todo. */
+  /** Structured result of the tool (`details`), e.g. the state of the task list for todo. */
   details?: unknown
-  /** Beginn und Ende in ms: live beim Empfang von tool_execution_start/_end, nach dem Neuladen aus created_at. */
+  /** Start and end in ms: live on receipt of tool_execution_start/_end, after a reload from created_at. */
   startedAt?: number
   endedAt?: number
 }
@@ -154,22 +154,22 @@ export type ToolExecution = {
 export type TranscriptState = {
   items: TranscriptItem[]
   tools: Record<string, ToolExecution>
-  /** Rolle der Nachricht zwischen message_start und message_end. */
+  /** Role of the message between message_start and message_end. */
   currentRole?: string
-  /** Schlüssel der gerade gestreamten Antwort. */
+  /** Key of the response currently being streamed. */
   streamingKey?: string
-  /** Schlüssel der gerade laufenden Kompaktierung. */
+  /** Key of the compaction currently running. */
   compactingKey?: string
-  /** Gesendet, von pi noch nicht bestätigt; erscheint unter dem Verlauf. */
+  /** Sent, not yet confirmed by pi; appears below the history. */
   pending: PendingUser[]
   /**
-   * Laufendes oder gerade beendetes Fortsetzen. Es steht unter den gesendeten Nachrichten, bis die
-   * Nutzernachricht von pi kommt, und wandert dann direkt hinter sie in den Verlauf.
+   * Running or just finished resume. It stands below the sent messages until pi's
+   * user message arrives, and then moves into the history directly behind it.
    */
   resume?: ResumeItem
-  /** Beginn des laufenden Durchgangs (Empfang von agent_start, ms); bis agent_settled. */
+  /** Start of the current turn (receipt of agent_start, ms); until agent_settled. */
   runStart?: number
-  /** Herkunft der nächsten Nutzernachricht von pi (SSE „user_meta“ kommt unmittelbar davor). */
+  /** Origin of pi's next user message (SSE "user_meta" arrives right before it). */
   nextUserMeta?: MessageMeta
   nextKey: number
 }
@@ -186,7 +186,7 @@ const isoTime = (iso: string | undefined): number | undefined => {
   return Number.isNaN(v) ? undefined : v
 }
 
-/** Wandelt Nachrichteninhalt (Zeichenkette oder Blockliste) in Text. */
+/** Turns message content (string or block list) into text. */
 export function contentToText(content: unknown): string {
   if (typeof content === "string") return content
   if (!Array.isArray(content)) return ""
@@ -200,7 +200,7 @@ export function contentToText(content: unknown): string {
     .join("")
 }
 
-/** Ergebnis oder Teilergebnis einer Werkzeugausführung als Text. */
+/** Result or partial result of a tool execution as text. */
 export function resultToText(result: unknown): string {
   if (result === undefined || result === null) return ""
   if (typeof result === "string") return result
@@ -239,7 +239,7 @@ function applyToolResultMessage(state: TranscriptState, m: Obj): TranscriptState
   })
 }
 
-/** Liefert den Zustand mit einer gerade gestreamten Antwort (legt sie bei Bedarf an). */
+/** Returns the state with a response currently being streamed (creates it if needed). */
 function ensureStreaming(state: TranscriptState): [TranscriptState, number] {
   if (state.streamingKey) {
     const idx = state.items.findIndex((i) => i.key === state.streamingKey)
@@ -263,7 +263,7 @@ function updateBlocks(
   return { ...s, items }
 }
 
-/** Index des Blocks, an den ein Delta geht: contentIndex, sonst letzter Block des Typs. */
+/** Index of the block a delta goes to: contentIndex, otherwise the last block of the type. */
 function blockIndex(blocks: ViewBlock[], ev: Obj, type: ViewBlock["type"]): number {
   if (typeof ev.contentIndex === "number") return ev.contentIndex
   const last = blocks.length - 1
@@ -272,7 +272,7 @@ function blockIndex(blocks: ViewBlock[], ev: Obj, type: ViewBlock["type"]): numb
 
 function withBlock(blocks: ViewBlock[], idx: number, fn: (b: ViewBlock | undefined) => ViewBlock): ViewBlock[] {
   const next = blocks.slice()
-  // Lücken (verpasste *_start-Ereignisse) mit leerem Text füllen
+  // fill gaps (missed *_start events) with empty text
   while (next.length < idx) next.push({ type: "text", text: "" })
   next[idx] = fn(next[idx])
   return next
@@ -376,7 +376,7 @@ function finishAssistant(state: TranscriptState, m: Obj, now: number): Transcrip
 
 const num = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined)
 
-/** Felder einer Kompaktierung aus pis CompactionResult bzw. der gespeicherten compaction-Nachricht. */
+/** Fields of a compaction from pi's CompactionResult or the stored compaction message. */
 function compactionFields(r: Obj): Partial<CompactionItem> {
   return {
     summary: str(r.summary),
@@ -386,26 +386,27 @@ function compactionFields(r: Obj): Partial<CompactionItem> {
   }
 }
 
-const compactPrefix = /^Kompaktierung fehlgeschlagen:\s*/i
+// The orchestrator's error text (internal/chat/manager.go).
+const compactPrefix = /^Compaction failed:\s*/i
 
 /**
- * Hinweistext zu einer fehlgeschlagenen Kompaktierung. pis Meldungen „Nothing to compact“ und
- * „Already compacted“ werden übersetzt; die Originalmeldung gehört in den Tooltip.
+ * Notice text for a failed compaction. pi's messages "Nothing to compact" and
+ * "Already compacted" are rephrased; the original message belongs in the tooltip.
  */
 export function compactionNotice(message: string | undefined): string {
   const msg = (message ?? "").replace(compactPrefix, "").trim()
-  if (/nothing to compact/i.test(msg)) return "Kompaktierung nicht möglich: noch zu wenig Verlauf zum Zusammenfassen"
-  if (/already compacted/i.test(msg)) return "Kompaktierung nicht nötig: bereits zusammengefasst"
-  return msg ? `Kompaktierung fehlgeschlagen: ${msg}` : "Kompaktierung fehlgeschlagen"
+  if (/nothing to compact/i.test(msg)) return "Compaction not possible: not enough history to summarize yet"
+  if (/already compacted/i.test(msg)) return "Compaction not needed: already summarized"
+  return msg ? `Compaction failed: ${msg}` : "Compaction failed"
 }
 
-/** Ob eine Fehlermeldung des Orchestrators (Ereignis `error`) eine Kompaktierung betrifft. */
+/** Whether an error message of the orchestrator (event `error`) concerns a compaction. */
 export const isCompactionError = (message: string | undefined) => !!message && compactPrefix.test(message)
 
 const lastSeq = (items: TranscriptItem[]) =>
   items.reduce<number | undefined>((m, i) => (i.seq !== undefined && (m === undefined || i.seq > m) ? i.seq : m), undefined)
 
-/** Ein fehlgeschlagener Live-Eintrag am Ende des Verlaufs mit derselben Ursache (gegen Doppelmeldungen). */
+/** A failed live entry at the end of the history with the same cause (against duplicate notices). */
 function duplicateFailure(state: TranscriptState, message: string | undefined): number {
   const idx = state.items.length - 1
   const last = state.items[idx]
@@ -438,9 +439,9 @@ function applyCompactionEnd(state: TranscriptState, ev: PiEvent): TranscriptStat
 }
 
 /**
- * Fehlermeldung „Kompaktierung fehlgeschlagen: …“ des Orchestrators (Ereignis `error`): beendet
- * eine laufende Kompaktierung als fehlgeschlagen oder legt einen Hinweis an, sofern derselbe
- * Fehler nicht schon als compaction_end angekommen ist.
+ * The orchestrator's error message "Compaction failed: …" (event `error`): ends
+ * a running compaction as failed or creates a notice, unless the same
+ * error already arrived as compaction_end.
  */
 export function applyCompactionError(state: TranscriptState, message: string): TranscriptState {
   const patch: Partial<CompactionItem> = {
@@ -460,7 +461,7 @@ export function applyCompactionError(state: TranscriptState, message: string): T
   return { ...state, items: [...state.items, item], nextKey }
 }
 
-/** Reducer: ein pi-Ereignis auf den Verlauf anwenden. `now`: Empfangszeit (für Laufzeiten). */
+/** Reducer: apply a pi event to the history. `now`: receipt time (for durations). */
 export function applyPiEvent(state: TranscriptState, ev: PiEvent, now: number = Date.now()): TranscriptState {
   switch (ev.type) {
     case "agent_start":
@@ -497,7 +498,7 @@ export function applyPiEvent(state: TranscriptState, ev: PiEvent, now: number = 
         const item: NoticeItem = { kind: "notice", key, text: contentToText(m.content), customType: str(m.customType), time: msgTime(m) }
         return { ...base, items: [...state.items, item], nextKey }
       }
-      return base // system und andere Rollen werden nicht angezeigt
+      return base // system and other roles are not shown
     }
     case "tool_execution_start": {
       const id = str(ev.toolCallId)
@@ -547,16 +548,16 @@ export function applyPiEvent(state: TranscriptState, ev: PiEvent, now: number = 
 }
 
 /**
- * Baut den Verlauf aus der gespeicherten Historie neu auf. Abgeschlossene Live-Einträge werden
- * durch die Historie ersetzt; eine noch laufende Antwort und laufende Werkzeuge bleiben erhalten.
+ * Rebuilds the history from the stored messages. Completed live entries are
+ * replaced by the history; a response still running and running tools are kept.
  */
 export function hydrate(prev: TranscriptState, history: StoredMessage[]): TranscriptState {
   let state: TranscriptState = { items: [], tools: {}, pending: [], nextKey: prev.nextKey, runStart: prev.runStart }
   const sorted = [...history].sort((a, b) => a.seq - b.seq)
-  // Ende der Antwort, die ein Werkzeug aufrief, sofern sie genau einen Aufruf enthielt (Start des Werkzeugs)
+  // end of the response that called a tool, if it contained exactly one call (start of the tool)
   const toolStart = new Map<string, number>()
-  // Gesamtdauer je Lauf: von der Nutzernachricht bis zur Antwort, die ihn beendet (beides created_at des
-  // Orchestrators). Steht davor keine Nutzernachricht, sondern das Ende eines früheren Laufs: keine Angabe.
+  // total duration per run: from the user message to the response that ends it (both created_at of the
+  // orchestrator). If not a user message but the end of an earlier run precedes it: no value.
   let runFrom: number | undefined
   for (const sm of sorted) {
     const m = sm.message as Obj
@@ -597,7 +598,7 @@ export function hydrate(prev: TranscriptState, history: StoredMessage[]): Transc
       state = applyToolResultMessage(state, m)
       const id = str(m.toolCallId)
       if (id) {
-        // live gemessene Zeiten haben Vorrang; sonst aus den Zeitstempeln, soweit eindeutig
+        // times measured live take precedence; otherwise from the timestamps, where unambiguous
         const live = prev.tools[id]
         const times =
           live?.startedAt !== undefined && live.endedAt !== undefined
@@ -630,21 +631,21 @@ export function hydrate(prev: TranscriptState, history: StoredMessage[]): Transc
       state = { ...state, items: [...state.items, item] }
     }
   }
-  // fehlgeschlagene Kompaktierungen und Fortsetzungen (nur live bekannt) hinter ihrer Nachricht wieder einsetzen
+  // re-insert failed compactions and resumes (only known live) behind their message
   for (const f of prev.items) {
     const liveOnly = (f.kind === "compaction" && f.failed) || f.kind === "resume"
     if (!liveOnly || f.seq !== undefined) continue
     const at = f.afterSeq === undefined ? 0 : state.items.findLastIndex((i) => i.seq !== undefined && i.seq <= f.afterSeq!) + 1
-    // hinter bereits eingesetzten Hinweisen derselben Stelle einreihen
+    // line up behind notices already inserted at the same position
     let pos = at
     while (pos < state.items.length && state.items[pos].seq === undefined) pos++
-    // ein Fortsetzen steht hinter der Nutzernachricht, die es ausgelöst hat
+    // a resume stands behind the user message that triggered it
     if (f.kind === "resume" && f.withUser && state.items[pos]?.kind === "user") pos++
     state = { ...state, items: [...state.items.slice(0, pos), f, ...state.items.slice(pos)] }
   }
-  // Gesendete Nachrichten, die inzwischen in der Historie stehen, nicht doppelt zeigen
+  // do not show sent messages twice that are in the history by now
   state = { ...state, pending: prunePending(prev.pending ?? [], sorted), resume: prev.resume }
-  // laufende Werkzeuge ohne gespeichertes Ergebnis übernehmen
+  // take over running tools without a stored result
   for (const [id, t] of Object.entries(prev.tools)) {
     if (t.running && !state.tools[id]) state = { ...state, tools: { ...state.tools, [id]: t } }
   }
@@ -659,14 +660,14 @@ export function hydrate(prev: TranscriptState, history: StoredMessage[]): Transc
   return state
 }
 
-// --- Gesendete Nachrichten und Fortsetzen ---
+// --- Sent messages and resuming ---
 
-/** Letzte bekannte Nachrichtennummer im Verlauf (Anker für nur live bekannte Einträge). */
+/** Last known message number in the history (anchor for entries only known live). */
 export const lastKnownSeq = (state: TranscriptState) => lastSeq(state.items)
 
 /**
- * Nachricht optimistisch anzeigen, bevor der Server antwortet. Fehlgeschlagene Sendungen und ein
- * gescheitertes Fortsetzen verschwinden dabei (ihr Text stand wieder im Eingabefeld).
+ * Show a message optimistically before the server answers. Failed sends and a
+ * failed resume disappear in the process (their text was back in the input field).
  */
 export function addPending(state: TranscriptState, key: string, text: string): TranscriptState {
   const pending = [...state.pending.filter((p) => !p.failed), { key, text, afterSeq: lastSeq(state.items) }]
@@ -675,9 +676,9 @@ export function addPending(state: TranscriptState, key: string, text: string): T
 }
 
 /**
- * Eingereihte Nachrichten sind übergeben (SSE „queue“, change „delivered“): Der Auftrag erscheint
- * sofort als gesendete Nachricht. Ging dabei eine eben gesendete Nachricht mit (sie steht am Ende
- * des Auftrags), wird deren Anzeige erweitert statt eine zweite anzulegen.
+ * Queued messages have been handed over (SSE "queue", change "delivered"): the request appears
+ * right away as a sent message. If a just-sent message went along (it stands at the end
+ * of the request), its display is extended instead of creating a second one.
  */
 export function applyQueueDelivered(state: TranscriptState, key: string, text: string, meta?: Pick<MessageMeta, "origin" | "sources">): TranscriptState {
   const body = splitAttachments(text).text
@@ -691,12 +692,12 @@ export function applyQueueDelivered(state: TranscriptState, key: string, text: s
   return { ...state, pending: [...state.pending, { key, text, afterSeq: lastSeq(state.items), ...origin }] }
 }
 
-/** SSE „user_meta“: Herkunft der Nutzernachricht, die pi als Nächstes meldet. */
+/** SSE "user_meta": origin of the user message pi reports next. */
 export function applyUserMeta(state: TranscriptState, meta: MessageMeta): TranscriptState {
   return { ...state, nextUserMeta: meta }
 }
 
-/** Felder der Herkunft für einen Eintrag im Verlauf (nur, was der Server angibt). */
+/** Origin fields for an entry in the history (only what the server states). */
 function metaFields(meta: MessageMeta | undefined): Partial<UserItem> {
   if (!meta) return {}
   const out: Partial<UserItem> = {}
@@ -707,21 +708,21 @@ function metaFields(meta: MessageMeta | undefined): Partial<UserItem> {
   return out
 }
 
-/** Senden gescheitert: Die Nachricht bleibt sichtbar, als nicht gesendet markiert. */
+/** Sending failed: the message stays visible, marked as not sent. */
 export function failPending(state: TranscriptState, key: string): TranscriptState {
   if (!state.pending.some((p) => p.key === key)) return state
   return { ...state, pending: state.pending.map((p) => (p.key === key ? { ...p, failed: true } : p)) }
 }
 
-/** Optimistische Nachricht entfernen (etwa, weil sie doch eingereiht wurde). */
+/** Remove an optimistic message (e.g. because it was queued after all). */
 export function dropPending(state: TranscriptState, key: string): TranscriptState {
   if (!state.pending.some((p) => p.key === key)) return state
   return { ...state, pending: state.pending.filter((p) => p.key !== key) }
 }
 
 /**
- * Die Nutzernachricht von pi ersetzt die älteste passende gesendete (gleicher Text); sonst die
- * älteste noch nicht gescheiterte, denn pi kann den Text verändern (Skills, Vorlagen).
+ * pi's user message replaces the oldest matching sent one (same text); otherwise the
+ * oldest not yet failed one, because pi can change the text (skills, templates).
  */
 function consumePending(pending: PendingUser[], text: string): PendingUser[] {
   if (pending.length === 0) return pending
@@ -730,7 +731,7 @@ function consumePending(pending: PendingUser[], text: string): PendingUser[] {
   return idx < 0 ? pending : [...pending.slice(0, idx), ...pending.slice(idx + 1)]
 }
 
-/** Gesendete, die schon in der Historie stehen (nach ihrem Anker, gleicher Text), entfallen. */
+/** Sent messages already in the history (after their anchor, same text) are dropped. */
 function prunePending(pending: PendingUser[], history: StoredMessage[]): PendingUser[] {
   const used = new Set<number>()
   return pending.filter((p) => {
@@ -765,11 +766,11 @@ function newResume(state: TranscriptState, step: ResumeStep): TranscriptState {
   return { ...state, resume: item, nextKey }
 }
 
-/** Reducer für ein Ereignis „resume“ (Schritte beim Fortsetzen, siehe poc/API.md). */
+/** Reducer for a "resume" event (steps while resuming, see poc/API.md). */
 export function applyResumeStep(state: TranscriptState, step: ResumeStep): TranscriptState {
   let s = state
   if (!s.resume || s.resume.id !== step.id) {
-    // Ein früheres, abgeschlossenes Fortsetzen vorher in den Verlauf übernehmen
+    // first move an earlier, finished resume into the history
     s = newResume(flushResume(s), step)
   }
   const r = s.resume!
@@ -789,8 +790,8 @@ export function applyResumeStep(state: TranscriptState, step: ResumeStep): Trans
 }
 
 /**
- * Ein abgeschlossenes Fortsetzen wandert in den Verlauf: hinter die Nutzernachricht, die es
- * ausgelöst hat (afterUser), sonst vor den nächsten Eintrag. Ein laufendes bleibt stehen.
+ * A finished resume moves into the history: behind the user message that triggered
+ * it (afterUser), otherwise before the next entry. A running one stays in place.
  */
 function flushResume(state: TranscriptState, afterUser = false): TranscriptState {
   const r = state.resume
@@ -799,7 +800,7 @@ function flushResume(state: TranscriptState, afterUser = false): TranscriptState
   return { ...state, items: [...state.items, { ...r, withUser: afterUser }], resume: undefined }
 }
 
-/** Ob der Chat gerade auf die erste Antwort wartet (für „Denkt …“). */
+/** Whether the chat is waiting for the first response right now (for "Thinking …"). */
 export function awaitingAnswer(state: TranscriptState): boolean {
   if (state.streamingKey) return false
   if (Object.values(state.tools).some((t) => t.running)) return false

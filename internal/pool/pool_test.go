@@ -18,7 +18,7 @@ type fakeFactory struct {
 	mu        sync.Mutex
 	created   []string
 	destroyed []string
-	fail      atomic.Int32 // so viele Create-Aufrufe schlagen fehl
+	fail      atomic.Int32 // this many Create calls fail
 	block     chan struct{}
 }
 
@@ -32,7 +32,7 @@ func (f *fakeFactory) Create(ctx context.Context, slotID, variant string) (*fake
 	}
 	if f.fail.Load() > 0 {
 		f.fail.Add(-1)
-		return nil, errors.New("Start fehlgeschlagen")
+		return nil, errors.New("start failed")
 	}
 	f.mu.Lock()
 	f.created = append(f.created, slotID)
@@ -61,7 +61,7 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	t.Fatalf("Zeitüberschreitung: %s", what)
+	t.Fatalf("timeout: %s", what)
 }
 
 func idle(p *Pool[*fakeWorker], variant string) int {
@@ -86,29 +86,29 @@ func newTestPool(t *testing.T, f *fakeFactory, targets map[string]int) *Pool[*fa
 
 func TestFillsToTargetPerVariant(t *testing.T) {
 	f := &fakeFactory{}
-	p := newTestPool(t, f, map[string]int{"cli": 2, "mcp": 1, "beide": 0})
-	waitFor(t, "Pool gefüllt", func() bool { return idle(p, "cli") == 2 && idle(p, "mcp") == 1 })
-	if n := idle(p, "beide"); n != 0 {
-		t.Fatalf("beide: %d", n)
+	p := newTestPool(t, f, map[string]int{"cli": 2, "mcp": 1, "both": 0})
+	waitFor(t, "pool filled", func() bool { return idle(p, "cli") == 2 && idle(p, "mcp") == 1 })
+	if n := idle(p, "both"); n != 0 {
+		t.Fatalf("both: %d", n)
 	}
 }
 
 func TestAcquireAssignsAndRefills(t *testing.T) {
 	f := &fakeFactory{}
 	p := newTestPool(t, f, map[string]int{"cli": 1})
-	waitFor(t, "Pool gefüllt", func() bool { return idle(p, "cli") == 1 })
+	waitFor(t, "pool filled", func() bool { return idle(p, "cli") == 1 })
 
 	s, err := p.Acquire("cli", "chat-1")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if s.State() != StateAssigned || s.ChatID() != "chat-1" || s.Worker == nil {
-		t.Fatalf("Platz nicht vergeben: %+v", s.Info())
+		t.Fatalf("slot not assigned: %+v", s.Info())
 	}
-	// Nachfüllen: ein neuer freier Platz entsteht, der vergebene bleibt.
-	waitFor(t, "nachgefüllt", func() bool { return idle(p, "cli") == 1 })
+	// Refill: a new free slot appears, the assigned one stays.
+	waitFor(t, "refilled", func() bool { return idle(p, "cli") == 1 })
 	if len(p.Snapshot()) != 2 {
-		t.Fatalf("erwartet 2 Plätze, bekam %d", len(p.Snapshot()))
+		t.Fatalf("expected 2 slots, got %d", len(p.Snapshot()))
 	}
 }
 
@@ -116,26 +116,26 @@ func TestAcquireEmpty(t *testing.T) {
 	f := &fakeFactory{block: make(chan struct{})}
 	p := newTestPool(t, f, map[string]int{"cli": 1})
 	if _, err := p.Acquire("cli", "c"); !errors.Is(err, ErrNoIdleSlot) {
-		t.Fatalf("ErrNoIdleSlot erwartet, bekam %v", err)
+		t.Fatalf("expected ErrNoIdleSlot, got %v", err)
 	}
-	if _, err := p.Acquire("gibtsnicht", "c"); !errors.Is(err, ErrUnknownVariant) {
-		t.Fatalf("ErrUnknownVariant erwartet, bekam %v", err)
+	if _, err := p.Acquire("doesnotexist", "c"); !errors.Is(err, ErrUnknownVariant) {
+		t.Fatalf("expected ErrUnknownVariant, got %v", err)
 	}
 	close(f.block)
 }
 
-// Einmalvergabe: Ein zurückgegebener Platz wird zerstört, nie wiederverwendet.
+// Single assignment: a returned slot is destroyed, never reused.
 func TestReleaseDestroysNeverReuses(t *testing.T) {
 	f := &fakeFactory{}
 	p := newTestPool(t, f, map[string]int{"cli": 1})
-	waitFor(t, "gefüllt", func() bool { return idle(p, "cli") == 1 })
+	waitFor(t, "filled", func() bool { return idle(p, "cli") == 1 })
 	s, _ := p.Acquire("cli", "chat-1")
 	first := s.ID
 	p.Release(context.Background(), s)
-	waitFor(t, "zerstört", func() bool { _, d := f.counts(); return d == 1 })
+	waitFor(t, "destroyed", func() bool { _, d := f.counts(); return d == 1 })
 	for _, info := range p.Snapshot() {
 		if info.ID == first {
-			t.Fatalf("zerstörter Platz noch im Pool: %+v", info)
+			t.Fatalf("destroyed slot still in the pool: %+v", info)
 		}
 	}
 	s2, err := p.AcquireWait(context.Background(), "cli", "chat-2", time.Second)
@@ -143,7 +143,7 @@ func TestReleaseDestroysNeverReuses(t *testing.T) {
 		t.Fatal(err)
 	}
 	if s2.ID == first {
-		t.Fatal("Platz wiederverwendet")
+		t.Fatal("slot reused")
 	}
 }
 
@@ -151,9 +151,9 @@ func TestCreateFailureIsRetried(t *testing.T) {
 	f := &fakeFactory{}
 	f.fail.Store(2)
 	p := newTestPool(t, f, map[string]int{"cli": 1})
-	waitFor(t, "nach Fehlern gefüllt", func() bool { return idle(p, "cli") == 1 })
+	waitFor(t, "filled after errors", func() bool { return idle(p, "cli") == 1 })
 	if p.LastError("cli") == "" {
-		t.Fatal("letzter Fehler nicht festgehalten")
+		t.Fatal("last error not recorded")
 	}
 }
 
@@ -162,24 +162,24 @@ func TestShutdownDestroysAll(t *testing.T) {
 	p := New[*fakeWorker](f.Create, f.Destroy, map[string]int{"cli": 2})
 	ctx, cancel := context.WithCancel(context.Background())
 	p.Start(ctx)
-	waitFor(t, "gefüllt", func() bool { return idle(p, "cli") == 2 })
+	waitFor(t, "filled", func() bool { return idle(p, "cli") == 2 })
 	_, _ = p.Acquire("cli", "c")
 	cancel()
 	p.Shutdown(context.Background())
 	c, d := f.counts()
 	if c != d {
-		t.Fatalf("erzeugt %d, zerstört %d", c, d)
+		t.Fatalf("created %d, destroyed %d", c, d)
 	}
 }
 
 func TestActivityOnSlot(t *testing.T) {
 	f := &fakeFactory{}
 	p := newTestPool(t, f, map[string]int{"cli": 1})
-	waitFor(t, "gefüllt", func() bool { return idle(p, "cli") == 1 })
+	waitFor(t, "filled", func() bool { return idle(p, "cli") == 1 })
 	s, _ := p.Acquire("cli", "c")
 	s.SetActivity("tool", "bash")
 	info := s.Info()
 	if info.Activity == nil || info.Activity.Kind != "tool" || info.Activity.Tool != "bash" {
-		t.Fatalf("Tätigkeit: %+v", info.Activity)
+		t.Fatalf("activity: %+v", info.Activity)
 	}
 }

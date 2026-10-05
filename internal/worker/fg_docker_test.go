@@ -1,7 +1,7 @@
 package worker
 
-// Platztest für Stopp und Umwandlung eines laufenden Vordergrundbefehls durch den Nutzer: echter
-// Container von pi, echte Ausführungs-Sandbox, echte exec-bridge.ts (Muster TestSlotBackground…).
+// Slot test for stopping and converting a running foreground command by the user: real
+// pi container, real execution sandbox, real exec-bridge.ts (pattern TestSlotBackground…).
 
 import (
 	"context"
@@ -20,7 +20,7 @@ import (
 
 func TestSlotForegroundControl(t *testing.T) {
 	if os.Getenv("AGW_E9_IN_DOCKER") != "1" {
-		t.Skip("läuft nur im Go-Container mit Docker-Socket (./dev.sh test)")
+		t.Skip("runs only in the Go container with the Docker socket (./dev.sh test)")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
@@ -62,7 +62,7 @@ func TestSlotForegroundControl(t *testing.T) {
 	var mu sync.Mutex
 	ends := map[string]end{}
 	settled := make(chan struct{}, 4)
-	// Der Nutzer greift ein, sobald ein Befehl läuft: „umwandeln“ in den Hintergrund, „stoppen“ stoppen.
+	// The user steps in as soon as a command runs: "background-me" moves it to the background, "stop-me" stops it.
 	go func() {
 		for ev := range w.Events() {
 			switch ev.Type {
@@ -77,13 +77,13 @@ func TestSlotForegroundControl(t *testing.T) {
 				go func(id, cmd string) {
 					time.Sleep(1500 * time.Millisecond)
 					switch {
-					case strings.Contains(cmd, "umwandeln"):
+					case strings.Contains(cmd, "background-me"):
 						if _, err := w.BackgroundForeground(ctx, "chat-e9", id); err != nil {
-							t.Errorf("umwandeln: %v", err)
+							t.Errorf("convert: %v", err)
 						}
-					case strings.Contains(cmd, "stoppen"):
+					case strings.Contains(cmd, "stop-me"):
 						if err := w.StopForeground("chat-e9", id); err != nil {
-							t.Errorf("stoppen: %v", err)
+							t.Errorf("stop: %v", err)
 						}
 					}
 				}(e.ToolCallID, e.Args.Command)
@@ -114,9 +114,9 @@ func TestSlotForegroundControl(t *testing.T) {
 		}
 	}()
 	script := strings.Join([]string{
-		"Vordergrundbefehle steuern.",
-		callLine("bash", map[string]any{"command": "echo vorher; sleep 4; echo nachher # umwandeln", "timeout": 3}),
-		callLine("bash", map[string]any{"command": "echo a; sleep 60 # stoppen"}),
+		"Control foreground commands.",
+		callLine("bash", map[string]any{"command": "echo before; sleep 4; echo after # background-me", "timeout": 3}),
+		callLine("bash", map[string]any{"command": "echo a; sleep 60 # stop-me"}),
 		callLine("bash", map[string]any{"command": "sleep 5", "timeout": 1}),
 	}, "\n")
 	if _, err := w.Call(ctx, map[string]any{"type": "prompt", "message": script}); err != nil {
@@ -125,7 +125,7 @@ func TestSlotForegroundControl(t *testing.T) {
 	select {
 	case <-settled:
 	case <-ctx.Done():
-		t.Fatal("Lauf wird nicht fertig")
+		t.Fatal("run does not finish")
 	}
 	var bg store.BackgroundTask
 	for deadline := time.Now().Add(20 * time.Second); time.Now().Before(deadline); time.Sleep(200 * time.Millisecond) {
@@ -142,20 +142,20 @@ func TestSlotForegroundControl(t *testing.T) {
 				return ends[is.ID]
 			}
 		}
-		t.Fatalf("nicht angefordert: %s", contains)
+		t.Fatalf("not requested: %s", contains)
 		return end{}
 	}
-	if r := result("umwandeln"); r.isError || !strings.Contains(r.text, "vorher") || !strings.Contains(r.text, "moved this command to the background as bg-1") {
-		t.Errorf("Umwandlung: %+v", r)
+	if r := result("background-me"); r.isError || !strings.Contains(r.text, "before") || !strings.Contains(r.text, "moved this command to the background as bg-1") {
+		t.Errorf("conversion: %+v", r)
 	}
-	// Die Zeitgrenze (3 s) gilt nach der Umwandlung nicht mehr: Der Befehl endet regulär nach 4 s.
-	if bg.State != store.BgExited || bg.ExitCode == nil || *bg.ExitCode != 0 || !strings.Contains(bg.OutputExcerpt, "nachher") || !b.notify["bg-1"] {
-		t.Errorf("umgewandelte Aufgabe: %+v", bg)
+	// The timeout (3 s) no longer applies after the conversion: the command ends normally after 4 s.
+	if bg.State != store.BgExited || bg.ExitCode == nil || *bg.ExitCode != 0 || !strings.Contains(bg.OutputExcerpt, "after") || !b.notify["bg-1"] {
+		t.Errorf("converted task: %+v", bg)
 	}
-	if r := result("stoppen"); !r.isError || !strings.Contains(r.text, "a\n") || !strings.Contains(r.text, "Command stopped by the user") {
-		t.Errorf("Stopp: %+v", r)
+	if r := result("stop-me"); !r.isError || !strings.Contains(r.text, "a\n") || !strings.Contains(r.text, "Command stopped by the user") {
+		t.Errorf("stop: %+v", r)
 	}
 	if r := result("sleep 5"); !r.isError || !strings.Contains(r.text, "Command timed out after 1 seconds") {
-		t.Errorf("Zeitgrenze: %+v", r)
+		t.Errorf("timeout: %+v", r)
 	}
 }

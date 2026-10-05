@@ -1,6 +1,6 @@
-// Package e2e prüft den laufenden Stack Ende zu Ende mit dem echten Modell.
-// Start über ./dev.sh e2e (setzt AGW_E2E=1 und eine niedrige
-// Kompaktierungsschwelle, damit die Auto-Kompaktierung testbar ist).
+// Package e2e tests the running stack end to end with the real model.
+// Start with ./dev.sh e2e (sets AGW_E2E=1 and a low compaction
+// threshold, so that auto-compaction can be tested).
 package e2e
 
 import (
@@ -32,7 +32,7 @@ func auth(r *http.Request) { r.Header.Set("Authorization", "Bearer "+os.Getenv("
 func requireE2E(t *testing.T) {
 	t.Helper()
 	if os.Getenv("AGW_E2E") != "1" {
-		t.Skip("AGW_E2E=1 setzen (./dev.sh e2e)")
+		t.Skip("set AGW_E2E=1 (./dev.sh e2e)")
 	}
 }
 
@@ -68,7 +68,7 @@ type message struct {
 	Message json.RawMessage `json:"message"`
 	Cost    *float64        `json:"cost"`
 	Peak    *bool           `json:"peak"`
-	// Review 3 (H1): Durchgang, Auslöser, Herkunft und Teile.
+	// Review 3 (H1): turn, trigger, origin and parts.
 	TurnID  *int64 `json:"turn_id"`
 	Trigger string `json:"trigger"`
 	Origin  string `json:"origin"`
@@ -125,7 +125,7 @@ func call(t *testing.T, method, path string, body any, out any) int {
 	raw, _ := io.ReadAll(resp.Body)
 	if out != nil && resp.StatusCode < 300 {
 		if err := json.Unmarshal(raw, out); err != nil {
-			t.Fatalf("%s %s: Antwort unlesbar: %s", method, path, raw)
+			t.Fatalf("%s %s: unreadable response: %s", method, path, raw)
 		}
 	}
 	if resp.StatusCode >= 300 {
@@ -143,7 +143,7 @@ func newChatWith(t *testing.T, req map[string]any) string {
 	req["title"] = "E2E " + t.Name()
 	var c chatView
 	var code int
-	for i := 0; i < 30; i++ { // Pool füllt nach; kurz warten statt scheitern
+	for i := 0; i < 30; i++ { // the pool refills; wait briefly instead of failing
 		code = call(t, "POST", "/api/chats", req, &c)
 		if code != http.StatusServiceUnavailable {
 			break
@@ -151,14 +151,14 @@ func newChatWith(t *testing.T, req map[string]any) string {
 		time.Sleep(2 * time.Second)
 	}
 	if code != http.StatusCreated {
-		t.Fatalf("Chat anlegen: %d", code)
+		t.Fatalf("create chat: %d", code)
 	}
 	t.Cleanup(func() { releaseChat(t, c.ID) })
 	return c.ID
 }
 
-// releaseChat gibt die Sandbox des Chats frei: Abbruch, dann Ruhen. Beenden gibt es nicht mehr;
-// Ruhen scheitert mit 409, solange die abgebrochene Antwort noch nicht abgeschlossen ist.
+// releaseChat frees the chat's sandbox: abort, then idle. Closing no longer exists;
+// idling fails with 409 as long as the aborted reply has not finished.
 func releaseChat(t *testing.T, id string) {
 	call(t, "POST", "/api/chats/"+id+"/abort", nil, nil)
 	for i := 0; i < 20; i++ {
@@ -173,12 +173,12 @@ func getChat(t *testing.T, id string) fullChat {
 	t.Helper()
 	var f fullChat
 	if code := call(t, "GET", "/api/chats/"+id, nil, &f); code != 200 {
-		t.Fatalf("Chat lesen: %d", code)
+		t.Fatalf("read chat: %d", code)
 	}
 	return f
 }
 
-// stream liest die SSE-Ereignisse eines Chats in eine Liste.
+// stream reads a chat's SSE events into a list.
 type stream struct {
 	mu     sync.Mutex
 	events []map[string]any
@@ -214,7 +214,7 @@ func subscribe(t *testing.T, id string) *stream {
 		}
 	}()
 	t.Cleanup(cancel)
-	time.Sleep(200 * time.Millisecond) // Abo steht, bevor gesendet wird
+	time.Sleep(200 * time.Millisecond) // subscription is in place before sending
 	return s
 }
 
@@ -227,7 +227,7 @@ func piType(ev map[string]any) string {
 	return s
 }
 
-// waitFor wartet, bis ein Ereignis ab Index from die Bedingung erfüllt.
+// waitFor waits until an event from index from onwards satisfies the condition.
 func (s *stream) waitFor(t *testing.T, from int, timeout time.Duration, what string, cond func(map[string]any) bool) (map[string]any, int) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
@@ -243,7 +243,7 @@ func (s *stream) waitFor(t *testing.T, from int, timeout time.Duration, what str
 		s.mu.Unlock()
 		time.Sleep(100 * time.Millisecond)
 	}
-	t.Fatalf("Zeitüberschreitung: %s", what)
+	t.Fatalf("timeout: %s", what)
 	return nil, 0
 }
 
@@ -265,13 +265,13 @@ func (s *stream) count(cond func(map[string]any) bool) int {
 	return n
 }
 
-// ask sendet eine Nachricht und wartet auf das Ende des Durchgangs. Offene
-// Bestätigungen werden mit decide entschieden (nil: nicht anfassen).
+// ask sends a message and waits for the end of the turn. Pending
+// approvals are decided with decide (nil: leave them alone).
 func ask(t *testing.T, s *stream, id, text string, decide func(approval) bool) {
 	t.Helper()
 	from := s.len()
 	if code := call(t, "POST", "/api/chats/"+id+"/messages", map[string]string{"text": text}, nil); code != 200 {
-		t.Fatalf("senden: %d", code)
+		t.Fatalf("send: %d", code)
 	}
 	deadline := time.Now().Add(6 * time.Minute)
 	started := false
@@ -298,10 +298,10 @@ func ask(t *testing.T, s *stream, id, text string, decide func(approval) bool) {
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
-	t.Fatalf("Antwort auf %q kam nicht", text)
+	t.Fatalf("reply to %q did not arrive", text)
 }
 
-// lastAssistantText liefert den Text der letzten Antwort.
+// lastAssistantText returns the text of the last reply.
 func lastAssistantText(t *testing.T, id string) string {
 	t.Helper()
 	f := getChat(t, id)
@@ -376,7 +376,7 @@ func containerOf(t *testing.T, id string) string {
 	t.Helper()
 	c := getChat(t, id).Chat
 	if c.SlotID == "" {
-		t.Fatal("Chat hat keinen Platz")
+		t.Fatal("chat has no slot")
 	}
 	return "agwpoc-" + c.SlotID
 }
@@ -384,28 +384,28 @@ func containerOf(t *testing.T, id string) string {
 func mustContain(t *testing.T, s, sub, what string) {
 	t.Helper()
 	if !strings.Contains(strings.ToLower(s), strings.ToLower(sub)) {
-		t.Fatalf("%s: %q fehlt in %q", what, sub, trunc(s, 600))
+		t.Fatalf("%s: %q missing in %q", what, sub, trunc(s, 600))
 	}
 }
 
 func trunc(s string, n int) string {
 	if len(s) > n {
-		return s[:n] + fmt.Sprintf(" … (%d Zeichen)", len(s))
+		return s[:n] + fmt.Sprintf(" … (%d characters)", len(s))
 	}
 	return s
 }
 
-// piContainerOf nennt den Container von pi (E9); containerOf die Ausführungs-Sandbox, in der
-// die Werkzeuge des Agenten laufen.
+// piContainerOf names pi's container (E9); containerOf the execution sandbox in which
+// the agent's tools run.
 func piContainerOf(t *testing.T, id string) string {
 	return containerOf(t, id) + "-pi"
 }
 
-// nodeFetch schickt aus dem Container von pi (ohne Shell, ohne curl) eine HTTP-Anfrage mit Node
-// und liefert Status und Rumpf. Nur der Container von pi erreicht den LLM-Proxy.
+// nodeFetch sends an HTTP request with Node from pi's container (no shell, no curl)
+// and returns status and body. Only pi's container reaches the LLM proxy.
 func nodeFetch(t *testing.T, container, method, url, body string) string {
 	t.Helper()
-	js := `const [m,u,b]=process.argv.slice(1);fetch(u,{method:m,headers:{"content-type":"application/json"},body:m==="GET"?undefined:b,signal:AbortSignal.timeout(8000)}).then(async r=>console.log(r.status,await r.text())).catch(e=>console.log("FEHLER",e.cause?.code||e.message))`
+	js := `const [m,u,b]=process.argv.slice(1);fetch(u,{method:m,headers:{"content-type":"application/json"},body:m==="GET"?undefined:b,signal:AbortSignal.timeout(8000)}).then(async r=>console.log(r.status,await r.text())).catch(e=>console.log("ERROR",e.cause?.code||e.message))`
 	out, _ := dockerExec(t, container, "node", "-e", js, method, url, body)
 	return out
 }
@@ -446,12 +446,12 @@ func getToolExecs(t *testing.T, id string) toolExecs {
 	return r
 }
 
-// requireNoFlagged prüft den Abgleich: nichts nicht ausgeführt, nicht angefordert oder abweichend.
+// requireNoFlagged checks the reconciliation: nothing unexecuted, unrequested or mismatching.
 func requireNoFlagged(t *testing.T, r toolExecs) {
 	t.Helper()
 	for _, c := range r.Calls {
 		if c.State == "unexecuted" || c.State == "unrequested" || c.State == "mismatch" {
-			t.Errorf("Abgleich auffällig: %+v", c)
+			t.Errorf("reconciliation suspicious: %+v", c)
 		}
 	}
 }

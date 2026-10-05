@@ -25,23 +25,23 @@ const stored = (seq: number, message: StoredMessage["message"]): StoredMessage =
   created_at: "2026-09-29T10:00:00Z",
 })
 
-describe("applyPiEvent: Text", () => {
-  it("setzt Text-Deltas Token für Token zusammen", () => {
+describe("applyPiEvent: text", () => {
+  it("assembles text deltas token by token", () => {
     const s = run([
       ev("message_start", { message: { role: "assistant", content: [] } }),
-      upd({ type: "text_delta", contentIndex: 0, delta: "Hal" }),
+      upd({ type: "text_delta", contentIndex: 0, delta: "Hel" }),
       upd({ type: "text_delta", contentIndex: 0, delta: "lo" }),
-      upd({ type: "text_delta", contentIndex: 0, delta: " Welt" }),
+      upd({ type: "text_delta", contentIndex: 0, delta: " world" }),
     ])
     expect(s.items).toHaveLength(1)
     const item = s.items[0]
     expect(item.kind).toBe("assistant")
     if (item.kind !== "assistant") throw new Error()
     expect(item.streaming).toBe(true)
-    expect(item.blocks).toEqual([{ type: "text", text: "Hallo Welt" }])
+    expect(item.blocks).toEqual([{ type: "text", text: "Hello world" }])
   })
 
-  it("hängt ohne contentIndex an den letzten Block gleichen Typs an", () => {
+  it("appends to the last block of the same type without contentIndex", () => {
     const s = run([
       ev("message_start", { message: { role: "assistant", content: [] } }),
       upd({ type: "text_delta", delta: "a" }),
@@ -52,32 +52,32 @@ describe("applyPiEvent: Text", () => {
     expect(item.blocks).toEqual([{ type: "text", text: "ab" }])
   })
 
-  it("legt eine Antwort an, wenn message_start verpasst wurde", () => {
+  it("creates a response if message_start was missed", () => {
     const s = run([upd({ type: "text_delta", contentIndex: 0, delta: "x" })])
     expect(s.items).toHaveLength(1)
     expect(s.items[0].kind).toBe("assistant")
   })
 })
 
-describe("applyPiEvent: Thinking", () => {
-  it("führt Thinking und Text als getrennte Blöcke", () => {
+describe("applyPiEvent: thinking", () => {
+  it("keeps thinking and text as separate blocks", () => {
     const s = run([
       ev("message_start", { message: { role: "assistant", content: [] } }),
-      upd({ type: "thinking_delta", contentIndex: 0, delta: "Ich über" }),
-      upd({ type: "thinking_delta", contentIndex: 0, delta: "lege" }),
-      upd({ type: "text_delta", contentIndex: 1, delta: "Antwort" }),
+      upd({ type: "thinking_delta", contentIndex: 0, delta: "Let me th" }),
+      upd({ type: "thinking_delta", contentIndex: 0, delta: "ink" }),
+      upd({ type: "text_delta", contentIndex: 1, delta: "Answer" }),
     ])
     const item = s.items[0]
     if (item.kind !== "assistant") throw new Error()
     expect(item.blocks).toEqual([
-      { type: "thinking", thinking: "Ich überlege" },
-      { type: "text", text: "Antwort" },
+      { type: "thinking", thinking: "Let me think" },
+      { type: "text", text: "Answer" },
     ])
   })
 })
 
-describe("applyPiEvent: Werkzeugaufrufe", () => {
-  it("baut einen toolCall aus start, delta und end", () => {
+describe("applyPiEvent: tool calls", () => {
+  it("builds a toolCall from start, delta and end", () => {
     const s = run([
       ev("message_start", { message: { role: "assistant", content: [] } }),
       upd({ type: "toolcall_start", contentIndex: 0, id: "c1", toolName: "bash" }),
@@ -97,7 +97,7 @@ describe("applyPiEvent: Werkzeugaufrufe", () => {
     expect(item.blocks[0]).toMatchObject({ type: "toolCall", id: "c1", name: "bash", arguments: { command: "ls" } })
   })
 
-  it("liest id und Name aus partial, wenn sie nicht direkt am Ereignis stehen", () => {
+  it("reads id and name from partial if they are not on the event directly", () => {
     const s = run([
       ev("message_start", { message: { role: "assistant", content: [] } }),
       upd({
@@ -111,7 +111,7 @@ describe("applyPiEvent: Werkzeugaufrufe", () => {
     expect(item.blocks[0]).toMatchObject({ type: "toolCall", id: "c9", name: "read" })
   })
 
-  it("verfolgt die Ausführung: start, update ersetzt Ausgabe, end setzt Ergebnis", () => {
+  it("tracks the execution: start, update replaces output, end sets the result", () => {
     let s = run([
       ev("tool_execution_start", { toolCallId: "c1", toolName: "bash", args: { command: "ls" } }),
       ev("tool_execution_update", { toolCallId: "c1", toolName: "bash", partialResult: { content: [{ type: "text", text: "a\n" }] } }),
@@ -121,12 +121,12 @@ describe("applyPiEvent: Werkzeugaufrufe", () => {
 
     s = applyPiEvent(
       s,
-      ev("tool_execution_end", { toolCallId: "c1", toolName: "bash", result: { content: [{ type: "text", text: "fertig" }] }, isError: false }),
+      ev("tool_execution_end", { toolCallId: "c1", toolName: "bash", result: { content: [{ type: "text", text: "done" }] }, isError: false }),
     )
-    expect(s.tools.c1).toMatchObject({ running: false, result: "fertig", isError: false })
+    expect(s.tools.c1).toMatchObject({ running: false, result: "done", isError: false })
   })
 
-  it("übernimmt einen Fehler aus tool_execution_end", () => {
+  it("takes over an error from tool_execution_end", () => {
     const s = run([
       ev("tool_execution_start", { toolCallId: "c2", toolName: "bash", args: {} }),
       ev("tool_execution_end", { toolCallId: "c2", toolName: "bash", result: { content: [{ type: "text", text: "exit 1" }] }, isError: true }),
@@ -134,7 +134,7 @@ describe("applyPiEvent: Werkzeugaufrufe", () => {
     expect(s.tools.c2).toMatchObject({ running: false, result: "exit 1", isError: true })
   })
 
-  it("übernimmt toolResult-Nachrichten in die Werkzeugtabelle, ohne einen Eintrag im Verlauf", () => {
+  it("takes toolResult messages into the tool table without an entry in the history", () => {
     const s = run([
       ev("message_end", {
         message: { role: "toolResult", toolCallId: "c3", toolName: "bash", content: [{ type: "text", text: "ok" }], isError: false },
@@ -146,19 +146,19 @@ describe("applyPiEvent: Werkzeugaufrufe", () => {
 })
 
 describe("applyPiEvent: message_end", () => {
-  it("ersetzt das Zusammengesetzte durch die maßgebliche Nachricht", () => {
+  it("replaces the assembled content with the authoritative message", () => {
     const final = {
       role: "assistant",
       content: [
         { type: "thinking", thinking: "t" },
-        { type: "text", text: "Endgültig" },
+        { type: "text", text: "Final" },
       ],
       usage: { input: 10, output: 5, cacheRead: 0, cost: { total: 0.001 } },
       stopReason: "stop",
     }
     const s = run([
       ev("message_start", { message: { role: "assistant", content: [] } }),
-      upd({ type: "text_delta", contentIndex: 0, delta: "Vorläu" }),
+      upd({ type: "text_delta", contentIndex: 0, delta: "Provis" }),
       ev("message_end", { message: final }),
     ])
     expect(s.items).toHaveLength(1)
@@ -170,7 +170,7 @@ describe("applyPiEvent: message_end", () => {
     expect(item.stopReason).toBe("stop")
   })
 
-  it("hängt eine Nutzernachricht aus message_end an", () => {
+  it("appends a user message from message_end", () => {
     const s = run([
       ev("message_start", { message: { role: "user", content: [{ type: "text", text: "Hi" }] } }),
       ev("message_end", { message: { role: "user", content: [{ type: "text", text: "Hi" }] } }),
@@ -178,12 +178,12 @@ describe("applyPiEvent: message_end", () => {
     expect(s.items).toEqual([expect.objectContaining({ kind: "user", text: "Hi" })])
   })
 
-  it("akzeptiert Nutzertext als Zeichenkette", () => {
-    const s = run([ev("message_end", { message: { role: "user", content: "direkt" } })])
-    expect(s.items).toEqual([expect.objectContaining({ kind: "user", text: "direkt" })])
+  it("accepts user text as a string", () => {
+    const s = run([ev("message_end", { message: { role: "user", content: "direct" } })])
+    expect(s.items).toEqual([expect.objectContaining({ kind: "user", text: "direct" })])
   })
 
-  it("zwei Antworten nacheinander ergeben zwei Einträge", () => {
+  it("two responses in a row give two entries", () => {
     const s = run([
       ev("message_start", { message: { role: "assistant", content: [] } }),
       ev("message_end", { message: { role: "assistant", content: [{ type: "text", text: "1" }] } }),
@@ -194,16 +194,16 @@ describe("applyPiEvent: message_end", () => {
   })
 })
 
-describe("applyPiEvent: system und Unbekanntes", () => {
-  it("ignoriert system-Nachrichten", () => {
+describe("applyPiEvent: system and unknown", () => {
+  it("ignores system messages", () => {
     const s = run([
-      ev("message_start", { message: { role: "system", content: [{ type: "text", text: "geheim" }] } }),
-      ev("message_end", { message: { role: "system", content: [{ type: "text", text: "geheim" }] } }),
+      ev("message_start", { message: { role: "system", content: [{ type: "text", text: "secret" }] } }),
+      ev("message_end", { message: { role: "system", content: [{ type: "text", text: "secret" }] } }),
     ])
     expect(s.items).toHaveLength(0)
   })
 
-  it("ignoriert Deltas, die zu einer system-Nachricht gehören", () => {
+  it("ignores deltas belonging to a system message", () => {
     const s = run([
       ev("message_start", { message: { role: "system", content: [] } }),
       upd({ type: "text_delta", contentIndex: 0, delta: "x" }),
@@ -212,13 +212,13 @@ describe("applyPiEvent: system und Unbekanntes", () => {
     expect(s.items).toHaveLength(0)
   })
 
-  it("lässt unbekannte Ereignisse den Zustand unverändert", () => {
+  it("leaves the state unchanged for unknown events", () => {
     const start = emptyTranscript()
     expect(applyPiEvent(start, ev("turn_start"))).toBe(start)
     expect(applyPiEvent(start, ev("auto_retry_start"))).toBe(start)
   })
 
-  it("beendet bei agent_end ein hängengebliebenes Streaming", () => {
+  it("ends a stuck streaming at agent_end", () => {
     const s = run([
       ev("message_start", { message: { role: "assistant", content: [] } }),
       upd({ type: "text_delta", contentIndex: 0, delta: "x" }),
@@ -229,15 +229,15 @@ describe("applyPiEvent: system und Unbekanntes", () => {
     expect(item.streaming).toBe(false)
   })
 
-  it("markiert laufende Werkzeuge bei agent_end als nicht mehr laufend", () => {
+  it("marks running tools as no longer running at agent_end", () => {
     const s = run([ev("tool_execution_start", { toolCallId: "c1", toolName: "bash", args: {} }), ev("agent_end")])
     expect(s.tools.c1.running).toBe(false)
   })
 })
 
-describe("hydrate: Historie und Live gemischt", () => {
+describe("hydrate: history and live mixed", () => {
   const history: StoredMessage[] = [
-    stored(1, { role: "user", content: [{ type: "text", text: "Liste Dateien" }] }),
+    stored(1, { role: "user", content: [{ type: "text", text: "List files" }] }),
     stored(2, {
       role: "assistant",
       content: [{ type: "toolCall", id: "c1", name: "bash", arguments: { command: "ls" } }],
@@ -247,17 +247,17 @@ describe("hydrate: Historie und Live gemischt", () => {
     stored(4, { role: "system", content: [{ type: "text", text: "x" }] }),
   ]
 
-  it("baut den Verlauf aus der Historie; toolResult landet in der Werkzeugtabelle, system entfällt", () => {
+  it("builds the history from the stored messages; toolResult goes into the tool table, system is dropped", () => {
     const s = hydrate(emptyTranscript(), history)
     expect(s.items.map((i) => i.kind)).toEqual(["user", "assistant"])
     expect(s.tools.c1).toMatchObject({ result: "a.txt", running: false, isError: false })
   })
 
-  it("setzt Live-Ereignisse nach der Historie fort", () => {
+  it("continues live events after the history", () => {
     const s = run(
       [
         ev("message_start", { message: { role: "assistant", content: [] } }),
-        upd({ type: "text_delta", contentIndex: 0, delta: "Da liegt a.txt" }),
+        upd({ type: "text_delta", contentIndex: 0, delta: "There is a.txt" }),
       ],
       hydrate(emptyTranscript(), history),
     )
@@ -265,13 +265,13 @@ describe("hydrate: Historie und Live gemischt", () => {
     const last = s.items[2]
     if (last.kind !== "assistant") throw new Error()
     expect(last.streaming).toBe(true)
-    expect(last.blocks).toEqual([{ type: "text", text: "Da liegt a.txt" }])
+    expect(last.blocks).toEqual([{ type: "text", text: "There is a.txt" }])
   })
 
-  it("behält beim Neuladen eine noch laufende Antwort und laufende Werkzeuge", () => {
+  it("keeps a response still running and running tools on reload", () => {
     const live = run([
       ev("message_start", { message: { role: "assistant", content: [] } }),
-      upd({ type: "text_delta", contentIndex: 0, delta: "halb" }),
+      upd({ type: "text_delta", contentIndex: 0, delta: "half" }),
       ev("tool_execution_start", { toolCallId: "c7", toolName: "bash", args: {} }),
     ])
     const s = hydrate(live, history)
@@ -279,15 +279,15 @@ describe("hydrate: Historie und Live gemischt", () => {
     expect(s.tools.c7?.running).toBe(true)
   })
 
-  it("ersetzt beim Neuladen bereits abgeschlossene Live-Einträge durch die Historie", () => {
-    const live = run([ev("message_end", { message: { role: "user", content: "Liste Dateien" } })])
+  it("replaces already completed live entries with the history on reload", () => {
+    const live = run([ev("message_end", { message: { role: "user", content: "List files" } })])
     const s = hydrate(live, history)
     expect(s.items.filter((i) => i.kind === "user")).toHaveLength(1)
   })
 })
 
-describe("hydrate: Tarifkosten je Antwort", () => {
-  it("übernimmt cost und peak aus der gespeicherten Nachricht", () => {
+describe("hydrate: tariff cost per response", () => {
+  it("takes cost and peak from the stored message", () => {
     const s = hydrate(emptyTranscript(), [
       {
         seq: 1,
@@ -302,8 +302,8 @@ describe("hydrate: Tarifkosten je Antwort", () => {
   })
 })
 
-describe("Kompaktierung", () => {
-  it("zeigt eine laufende Kompaktierung und ersetzt sie durch das Ergebnis", () => {
+describe("compaction", () => {
+  it("shows a running compaction and replaces it with the result", () => {
     const s1 = run([ev("compaction_start", { reason: "threshold" })])
     expect(s1.items).toEqual([expect.objectContaining({ kind: "compaction", reason: "threshold", running: true })])
     const s2 = run(
@@ -312,7 +312,7 @@ describe("Kompaktierung", () => {
           reason: "threshold",
           aborted: false,
           willRetry: false,
-          result: { summary: "## Ziel\nDaten", tokensBefore: 152000, estimatedTokensAfter: 32000, usage: { input: 10 } },
+          result: { summary: "## Goal\nData", tokensBefore: 152000, estimatedTokensAfter: 32000, usage: { input: 10 } },
         }),
       ],
       s1,
@@ -322,27 +322,27 @@ describe("Kompaktierung", () => {
       kind: "compaction",
       running: false,
       reason: "threshold",
-      summary: "## Ziel\nDaten",
+      summary: "## Goal\nData",
       tokensBefore: 152000,
       tokensAfter: 32000,
       aborted: false,
     })
   })
 
-  it("hält Abbruch und Fehler fest", () => {
+  it("records abort and error", () => {
     const s = run([
       ev("compaction_start", { reason: "manual" }),
-      ev("compaction_end", { reason: "manual", aborted: true, errorMessage: "abgebrochen vom Nutzer" }),
+      ev("compaction_end", { reason: "manual", aborted: true, errorMessage: "aborted by the user" }),
     ])
-    expect(s.items[0]).toMatchObject({ kind: "compaction", running: false, aborted: true, errorMessage: "abgebrochen vom Nutzer" })
+    expect(s.items[0]).toMatchObject({ kind: "compaction", running: false, aborted: true, errorMessage: "aborted by the user" })
   })
 
-  it("legt bei compaction_end ohne Start einen Eintrag an", () => {
+  it("creates an entry at compaction_end without a start", () => {
     const s = run([ev("compaction_end", { reason: "overflow", aborted: false, result: { summary: "x", tokensBefore: 5 } })])
     expect(s.items[0]).toMatchObject({ kind: "compaction", running: false, reason: "overflow", tokensBefore: 5 })
   })
 
-  it("baut Kompaktierungen aus der Historie auf, samt Kosten", () => {
+  it("builds compactions from the history, including cost", () => {
     const s = hydrate(emptyTranscript(), [
       stored(1, { role: "user", content: [{ type: "text", text: "a" }] }),
       {
@@ -365,7 +365,7 @@ describe("Kompaktierung", () => {
     })
   })
 
-  it("behält beim Neuladen eine noch laufende Kompaktierung", () => {
+  it("keeps a compaction still running on reload", () => {
     const live = run([ev("compaction_start", { reason: "manual" })])
     const s = hydrate(live, [stored(1, { role: "user", content: [{ type: "text", text: "a" }] })])
     expect(s.items.map((i) => i.kind)).toEqual(["user", "compaction"])
@@ -375,20 +375,21 @@ describe("Kompaktierung", () => {
   })
 })
 
-describe("Kompaktierung: fehlgeschlagen", () => {
-  it("übersetzt bekannte Meldungen von pi", () => {
+describe("compaction: failed", () => {
+  // the orchestrator's prefix "Compaction failed:" (internal/chat/manager.go)
+  it("rephrases known messages from pi", () => {
     expect(compactionNotice("Nothing to compact (session too small)")).toBe(
-      "Kompaktierung nicht möglich: noch zu wenig Verlauf zum Zusammenfassen",
+      "Compaction not possible: not enough history to summarize yet",
     )
-    expect(compactionNotice("Kompaktierung fehlgeschlagen: Already compacted")).toBe(
-      "Kompaktierung nicht nötig: bereits zusammengefasst",
+    expect(compactionNotice("Compaction failed: Already compacted")).toBe(
+      "Compaction not needed: already summarized",
     )
-    expect(compactionNotice("Kompaktierung fehlgeschlagen: timeout")).toBe("Kompaktierung fehlgeschlagen: timeout")
-    expect(compactionNotice("boom")).toBe("Kompaktierung fehlgeschlagen: boom")
-    expect(compactionNotice(undefined)).toBe("Kompaktierung fehlgeschlagen")
+    expect(compactionNotice("Compaction failed: timeout")).toBe("Compaction failed: timeout")
+    expect(compactionNotice("boom")).toBe("Compaction failed: boom")
+    expect(compactionNotice(undefined)).toBe("Compaction failed")
   })
 
-  it("markiert compaction_end mit errorMessage als fehlgeschlagen", () => {
+  it("marks compaction_end with errorMessage as failed", () => {
     const s = run([
       ev("compaction_start", { reason: "manual" }),
       ev("compaction_end", { reason: "manual", aborted: false, result: null, errorMessage: "Nothing to compact (session too small)" }),
@@ -397,13 +398,13 @@ describe("Kompaktierung: fehlgeschlagen", () => {
     expect(s.items[0]).toMatchObject({ kind: "compaction", running: false, failed: true })
   })
 
-  it("wertet compaction_end mit result:null als fehlgeschlagen", () => {
+  it("treats compaction_end with result:null as failed", () => {
     const s = run([ev("compaction_end", { reason: "manual", aborted: false, result: null })])
     expect(s.items[0]).toMatchObject({ kind: "compaction", failed: true })
   })
 
-  it("legt bei einem error-Ereignis einen Hinweis an und verdoppelt ihn nicht", () => {
-    const msg = "Kompaktierung fehlgeschlagen: Nothing to compact (session too small)"
+  it("creates a notice on an error event and does not duplicate it", () => {
+    const msg = "Compaction failed: Nothing to compact (session too small)"
     let s = applyCompactionError(emptyTranscript(), msg)
     expect(s.items).toEqual([expect.objectContaining({ kind: "compaction", failed: true, errorMessage: msg, running: false })])
     s = applyPiEvent(s, ev("compaction_end", { reason: "manual", result: null, errorMessage: "Nothing to compact (session too small)" }))
@@ -412,15 +413,15 @@ describe("Kompaktierung: fehlgeschlagen", () => {
     expect(s.items).toHaveLength(1)
   })
 
-  it("beendet eine laufende Kompaktierung beim error-Ereignis", () => {
+  it("ends a running compaction on the error event", () => {
     let s = run([ev("compaction_start", { reason: "manual" })])
-    s = applyCompactionError(s, "Kompaktierung fehlgeschlagen: kaputt")
+    s = applyCompactionError(s, "Compaction failed: broken")
     expect(s.items).toHaveLength(1)
-    expect(s.items[0]).toMatchObject({ running: false, failed: true, errorMessage: "Kompaktierung fehlgeschlagen: kaputt" })
+    expect(s.items[0]).toMatchObject({ running: false, failed: true, errorMessage: "Compaction failed: broken" })
     expect(s.compactingKey).toBeUndefined()
   })
 
-  it("behält den Hinweis beim Neuladen an seiner Stelle", () => {
+  it("keeps the notice in its place on reload", () => {
     const hist = [
       stored(1, { role: "user", content: [{ type: "text", text: "a" }] }),
       stored(2, { role: "assistant", content: [{ type: "text", text: "b" }] }),
@@ -429,7 +430,7 @@ describe("Kompaktierung: fehlgeschlagen", () => {
     s = applyPiEvent(s, ev("compaction_end", { reason: "manual", result: null, errorMessage: "Already compacted" }))
     s = hydrate(s, hist)
     expect(s.items.map((i) => i.kind)).toEqual(["user", "assistant", "compaction"])
-    // später kommen weitere Nachrichten dazu; der Hinweis bleibt hinter seq 2
+    // later more messages are added; the notice stays behind seq 2
     s = hydrate(s, [
       ...hist,
       stored(3, { role: "user", content: [{ type: "text", text: "c" }] }),
@@ -437,15 +438,15 @@ describe("Kompaktierung: fehlgeschlagen", () => {
     expect(s.items.map((i) => i.key)).toEqual(["seq-1", "seq-2", expect.stringMatching(/^live-/), "seq-3"])
   })
 
-  it("übernimmt erfolgreiche Live-Kompaktierungen nicht (die kommen aus der Historie)", () => {
+  it("does not take over successful live compactions (they come from the history)", () => {
     let s = run([ev("compaction_end", { reason: "manual", result: { summary: "x", tokensBefore: 1 } })])
     s = hydrate(s, [])
     expect(s.items).toHaveLength(0)
   })
 })
 
-describe("Zeitpunkte der Einträge", () => {
-  it("übernimmt created_at aus der Historie als Zeit", () => {
+describe("times of the entries", () => {
+  it("takes created_at from the history as the time", () => {
     const s = hydrate(emptyTranscript(), [
       { ...stored(1, { role: "user", content: [{ type: "text", text: "a" }] }), created_at: "2026-09-29T10:00:00Z" },
       { ...stored(2, { role: "assistant", content: [] }), created_at: "2026-09-29T10:00:05Z" },
@@ -453,7 +454,7 @@ describe("Zeitpunkte der Einträge", () => {
     expect(s.items.map((i) => i.time)).toEqual([Date.parse("2026-09-29T10:00:00Z"), Date.parse("2026-09-29T10:00:05Z")])
   })
 
-  it("nimmt live den timestamp von pi", () => {
+  it("takes pi's timestamp live", () => {
     const s = run([
       ev("message_start", { message: { role: "assistant", content: [], timestamp: 1000 } }),
       ev("message_end", { message: { role: "assistant", content: [], timestamp: 1000 } }),
@@ -463,8 +464,8 @@ describe("Zeitpunkte der Einträge", () => {
   })
 })
 
-describe("Kennung der Antwort für Bilder (msgKey)", () => {
-  it("ist live nach message_end und nach dem Neuladen dieselbe, während des Streamens leer", () => {
+describe("response ID for images (msgKey)", () => {
+  it("is the same live after message_end and after a reload, empty while streaming", () => {
     const msg = { role: "assistant", responseId: "resp-7", timestamp: 1700000000000, content: [{ type: "text", text: "![a](a.png)" }] }
     let s = run([ev("message_start", { message: { role: "assistant", content: [] } }), upd({ type: "text_delta", delta: "x" })])
     const live = s.items[0]
@@ -480,37 +481,37 @@ describe("Kennung der Antwort für Bilder (msgKey)", () => {
   })
 })
 
-// Review 3, H1: Herkunft der Nutzernachricht kommt vom Server (user_meta live, Felder der Historie).
-describe("Herkunft der Nutzernachricht", () => {
+// Review 3, H1: the origin of the user message comes from the server (user_meta live, fields of the history).
+describe("origin of the user message", () => {
   const meta = { turn_id: 7, trigger: "wake" as const, origin: "system" as const, sources: [{ kind: "system" as const, type: "background", refs: ["bg-1"], marker: "agw-0123456789abcdef" }] }
-  it("user_meta gilt für die nächste Nutzernachricht, danach nicht mehr", () => {
+  it("user_meta applies to the next user message, not after that", () => {
     let s = applyUserMeta(emptyTranscript(), meta)
-    s = run([ev("message_end", { message: { role: "user", content: "Meldung" } }), ev("message_end", { message: { role: "user", content: "danach" } })], s)
+    s = run([ev("message_end", { message: { role: "user", content: "Note" } }), ev("message_end", { message: { role: "user", content: "afterwards" } })], s)
     const users = s.items.filter((i) => i.kind === "user")
     expect(users[0]).toMatchObject({ origin: "system", trigger: "wake", turnId: 7, sources: meta.sources })
     expect(users[1]).not.toHaveProperty("origin")
     expect(s.nextUserMeta).toBeUndefined()
   })
-  it("Historie trägt origin, sources und trigger", () => {
+  it("the history carries origin, sources and trigger", () => {
     const s = hydrate(emptyTranscript(), [{ ...stored(1, { role: "user", content: "x" }), turn_id: 7, trigger: "wake", origin: "system", sources: meta.sources }])
     expect(s.items[0]).toMatchObject({ kind: "user", origin: "system", trigger: "wake", turnId: 7 })
   })
-  it("übergebene Warteschlange zeigt die Herkunft schon vor der Bestätigung durch pi", () => {
-    const s = applyQueueDelivered(emptyTranscript(), "q-1", "Meldung", { origin: "system", sources: meta.sources })
-    expect(s.pending[0]).toMatchObject({ text: "Meldung", origin: "system", sources: meta.sources })
-    const t = applyQueueDelivered(addPending(emptyTranscript(), "p", "weiter"), "q-2", "Meldung\n\nweiter", { origin: "mixed", sources: meta.sources })
+  it("a handed-over queue shows the origin even before pi confirms", () => {
+    const s = applyQueueDelivered(emptyTranscript(), "q-1", "Note", { origin: "system", sources: meta.sources })
+    expect(s.pending[0]).toMatchObject({ text: "Note", origin: "system", sources: meta.sources })
+    const t = applyQueueDelivered(addPending(emptyTranscript(), "p", "continue"), "q-2", "Note\n\ncontinue", { origin: "mixed", sources: meta.sources })
     expect(t.pending).toHaveLength(1)
     expect(t.pending[0]).toMatchObject({ key: "p", origin: "mixed" })
   })
 })
 
-describe("Meldungen von Erweiterungen (Rolle custom)", () => {
-  it("live und nach dem Neuladen als eigene Zeile, nicht als Nutzernachricht", () => {
-    const live = run([ev("message_end", { message: { role: "custom", customType: "subagent-notify", content: "Subagent fertig\nBericht liegt vor" } })])
-    expect(live.items).toMatchObject([{ kind: "notice", text: "Subagent fertig\nBericht liegt vor", customType: "subagent-notify" }])
+describe("messages from extensions (role custom)", () => {
+  it("live and after a reload as a line of its own, not as a user message", () => {
+    const live = run([ev("message_end", { message: { role: "custom", customType: "subagent-notify", content: "Subagent done\nreport available" } })])
+    expect(live.items).toMatchObject([{ kind: "notice", text: "Subagent done\nreport available", customType: "subagent-notify" }])
     const h = hydrate(emptyTranscript(), [
-      { ...stored(1, { role: "custom", customType: "subagent-notify", content: [{ type: "text", text: "fertig" }] }), trigger: "wake" },
+      { ...stored(1, { role: "custom", customType: "subagent-notify", content: [{ type: "text", text: "done" }] }), trigger: "wake" },
     ])
-    expect(h.items).toMatchObject([{ kind: "notice", text: "fertig", trigger: "wake", seq: 1 }])
+    expect(h.items).toMatchObject([{ kind: "notice", text: "done", trigger: "wake", seq: 1 }])
   })
 })

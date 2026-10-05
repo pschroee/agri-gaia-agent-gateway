@@ -3,10 +3,10 @@ import { formatMs, formatTime, formatTokens, formatUsd } from "@/lib/format"
 import { llmToolNames, summarizeLlmCalls } from "@/lib/llmcalls"
 import { cn } from "@/lib/utils"
 
-/** Reiter „Modellaufrufe“: alle am LLM-Proxy erfassten Aufrufe des Chats, oben die Summe. */
+/** "Model calls" tab: all calls of the chat recorded at the LLM proxy, with the total at the top. */
 export function LlmCallsPanel({ calls, modelName }: { calls: LLMCall[]; modelName: (id: string) => string }) {
   if (calls.length === 0) {
-    return <p className="text-xs text-muted-foreground">Noch keine Modellaufrufe am Proxy erfasst.</p>
+    return <p className="text-xs text-muted-foreground">No model calls recorded at the proxy yet.</p>
   }
   const s = summarizeLlmCalls(calls)
   const sorted = [...calls].sort((a, b) => b.id - a.id)
@@ -15,20 +15,20 @@ export function LlmCallsPanel({ calls, modelName }: { calls: LLMCall[]; modelNam
       <div className="rounded-md border bg-muted/40 p-2 text-xs">
         <div className="flex items-baseline justify-between gap-2">
           <span className="font-semibold">
-            {s.count} Aufruf{s.count === 1 ? "" : "e"}
-            {s.failed > 0 && <span className="text-red-700"> · {s.failed} mit Fehler</span>}
+            {s.count} call{s.count === 1 ? "" : "s"}
+            {s.failed > 0 && <span className="text-red-700"> · {s.failed} failed</span>}
           </span>
           <span className="font-semibold tabular-nums">{formatUsd(s.cost)}</span>
         </div>
         <div className="mt-0.5 text-muted-foreground tabular-nums">
-          {formatTokens(s.input)} ein · {formatTokens(s.output)} aus · {formatTokens(s.cacheRead)} Cache
-          {s.cacheWrite > 0 && ` · ${formatTokens(s.cacheWrite)} Cache geschrieben`}
+          {formatTokens(s.input)} in · {formatTokens(s.output)} out · {formatTokens(s.cacheRead)} cache
+          {s.cacheWrite > 0 && ` · ${formatTokens(s.cacheWrite)} cache written`}
         </div>
         <div className="text-muted-foreground tabular-nums">
-          Hauptagent {s.main.count} · {formatUsd(s.main.cost)} — Subagenten u. a. {s.other.count} · {formatUsd(s.other.cost)}
+          Main agent {s.main.count} · {formatUsd(s.main.cost)} — subagents etc. {s.other.count} · {formatUsd(s.other.cost)}
         </div>
         <p className="mt-1 text-[11px] text-muted-foreground">
-          Gemessen am LLM-Proxy außerhalb der Sandbox, also fälschungssicher.
+          Measured at the LLM proxy outside the sandbox, so tamper-proof.
         </p>
       </div>
       <ul className="flex flex-col gap-1.5">
@@ -44,13 +44,13 @@ export function LlmCallsPanel({ calls, modelName }: { calls: LLMCall[]; modelNam
                     "rounded border px-1 py-px text-[10px] font-medium",
                     c.main ? "border-sky-200 bg-sky-50 text-sky-800" : "border-violet-200 bg-violet-50 text-violet-800",
                   )}
-                  title={c.main ? "Antwort der Hauptsitzung" : "nicht Teil der Hauptantworten: Subagent, Kompaktierung o. Ä."}
+                  title={c.main ? "Response of the main session" : "not part of the main responses: subagent, compaction or similar"}
                 >
-                  {c.main ? "Hauptagent" : "Subagent u. a."}
+                  {c.main ? "Main agent" : "Subagent etc."}
                 </span>
                 <span
                   className={cn("font-mono", failed ? "font-semibold text-red-700" : "text-muted-foreground")}
-                  title="HTTP-Status der Antwort"
+                  title="HTTP status of the response"
                 >
                   {c.status}
                 </span>
@@ -60,7 +60,7 @@ export function LlmCallsPanel({ calls, modelName }: { calls: LLMCall[]; modelNam
                 {modelName(c.model)}
               </div>
               <div className="text-muted-foreground tabular-nums">
-                {formatTokens(c.input)} ein · {formatTokens(c.output)} aus · {formatTokens(c.cache_read)} Cache
+                {formatTokens(c.input)} in · {formatTokens(c.output)} out · {formatTokens(c.cache_read)} cache
               </div>
               <div className="flex flex-wrap items-center gap-x-1.5 text-muted-foreground tabular-nums">
                 <span className="font-medium text-foreground">{formatUsd(c.cost)}</span>
@@ -70,13 +70,13 @@ export function LlmCallsPanel({ calls, modelName }: { calls: LLMCall[]; modelNam
                     c.peak ? "border-amber-200 bg-amber-50 text-amber-800" : "border-emerald-200 bg-emerald-50 text-emerald-800",
                   )}
                 >
-                  {c.peak ? "Spitzentarif" : "Nebentarif"}
+                  {c.peak ? "Peak tariff" : "Off-peak tariff"}
                 </span>
                 <span>· {formatMs(c.duration_ms)}</span>
               </div>
               {tools.length > 0 && (
                 <div className="mt-0.5 break-all">
-                  <span className="text-muted-foreground">Werkzeuge: </span>
+                  <span className="text-muted-foreground">Tools: </span>
                   <span className="font-mono">{tools.join(", ")}</span>
                 </div>
               )}

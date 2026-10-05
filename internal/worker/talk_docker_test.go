@@ -1,8 +1,8 @@
 package worker
 
-// Platztest der Kommunikation zwischen Haupt- und Subagenten (pi-subagents): Subagent fragt den
-// Hauptagenten (contact_supervisor), der Hauptagent antwortet (subagent_supervisor) und lenkt einen
-// laufenden Subagenten (subagent steer). Echter Container von pi, geskriptetes Modell.
+// Slot test of the communication between the main agent and subagents (pi-subagents): a subagent asks
+// the main agent (contact_supervisor), the main agent replies (subagent_supervisor) and steers a
+// running subagent (subagent steer). Real pi container, scripted model.
 
 import (
 	"context"
@@ -20,7 +20,7 @@ import (
 	"agw/internal/store"
 )
 
-// talkSlot legt einen Platz der Variante cli an (Backend ohne Websuche); done baut ihn ab.
+// talkSlot creates a slot of the variant cli (backend without web search); done tears it down.
 func talkSlot(t *testing.T, ctx context.Context) (*Worker, func()) {
 	t.Helper()
 	rt, err := sandbox.New(envOr("AGW_EGRESS_NETWORK", "agwpoc_egress"))
@@ -55,7 +55,7 @@ func talkSlot(t *testing.T, ctx context.Context) (*Worker, func()) {
 
 func TestSlotSubagentTalk(t *testing.T) {
 	if os.Getenv("AGW_E9_IN_DOCKER") != "1" {
-		t.Skip("läuft nur im Go-Container mit Docker-Socket (./dev.sh test)")
+		t.Skip("runs only in the Go container with the Docker socket (./dev.sh test)")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
@@ -81,17 +81,17 @@ func TestSlotSubagentTalk(t *testing.T) {
 			}
 		}
 	}()
-	// Subagent (im Hintergrund) fragt, der Hauptagent antwortet und lenkt ihn danach, während er noch
-	// arbeitet; der Subagent sieht beides.
+	// The subagent (in the background) asks, the main agent replies and then steers it while it is still
+	// working; the subagent sees both.
 	script := strings.Join([]string{
-		"Kommunikation.",
+		"Communication.",
 		callLine("subagent", map[string]any{"agent": "worker", "async": true,
-			"task": "T1\n" + callLine("contact_supervisor", map[string]any{"reason": "need_decision", "message": "Frage an den Hauptagenten"}) + "\n" +
-				callLine("bash", map[string]any{"command": "sleep 6; echo nach-antwort sitzung=$PI_AGW_SESSION"})}),
+			"task": "T1\n" + callLine("contact_supervisor", map[string]any{"reason": "need_decision", "message": "Question to the main agent"}) + "\n" +
+				callLine("bash", map[string]any{"command": "sleep 6; echo after-reply session=$PI_AGW_SESSION"})}),
 		callLine("bash", map[string]any{"command": "sleep 8"}),
-		callLine("subagent_supervisor", map[string]any{"action": "reply", "replyTo": "{{replyTo}}", "message": "Antwort vom Hauptagenten"}),
-		callLine("bash", map[string]any{"command": "sleep 2; echo haupt-sitzung=$PI_AGW_SESSION"}),
-		callLine("subagent", map[string]any{"action": "steer", "id": "{{runId}}", "message": "Hinweis vom Hauptagenten"}),
+		callLine("subagent_supervisor", map[string]any{"action": "reply", "replyTo": "{{replyTo}}", "message": "Reply from the main agent"}),
+		callLine("bash", map[string]any{"command": "sleep 2; echo main-session=$PI_AGW_SESSION"}),
+		callLine("subagent", map[string]any{"action": "steer", "id": "{{runId}}", "message": "Hint from the main agent"}),
 		callLine("bash", map[string]any{"command": "sleep 12"}),
 	}, "\n")
 	if _, err := w.Call(ctx, map[string]any{"type": "prompt", "message": script}); err != nil {
@@ -99,8 +99,8 @@ func TestSlotSubagentTalk(t *testing.T) {
 	}
 	seen := func(want string) bool {
 		for _, s := range fake.Seen() {
-			// Skripte (CALL-Zeilen) enthalten die gesuchten Texte selbst; gezählt wird nur, was das Modell
-			// als Antwort, Werkzeugergebnis oder eingeschleuste Nachricht sah.
+			// Scripts (CALL lines) contain the searched texts themselves; only what the model saw as a
+			// reply, tool result or injected message counts.
 			if strings.Contains(s, want) && !strings.Contains(s, "CALL ") {
 				return true
 			}
@@ -108,39 +108,39 @@ func TestSlotSubagentTalk(t *testing.T) {
 		return false
 	}
 	for deadline := time.Now().Add(150 * time.Second); time.Now().Before(deadline); time.Sleep(time.Second) {
-		if seen("Hinweis vom Hauptagenten") && seen("nach-antwort") {
+		if seen("Hint from the main agent") && seen("after-reply") {
 			break
 		}
 	}
 	mu.Lock()
 	all := strings.Join(log, "\n")
 	mu.Unlock()
-	if !strings.Contains(all, `"customType":"subagent_supervisor_request"`) || !strings.Contains(all, "Frage an den Hauptagenten") {
-		t.Errorf("Frage des Subagenten kam nicht beim Hauptagenten an")
+	if !strings.Contains(all, `"customType":"subagent_supervisor_request"`) || !strings.Contains(all, "Question to the main agent") {
+		t.Errorf("the subagent's question did not reach the main agent")
 	}
-	if !seen("Antwort vom Hauptagenten") {
-		t.Errorf("Antwort des Hauptagenten kam nicht beim Subagenten an")
+	if !seen("Reply from the main agent") {
+		t.Errorf("the main agent's reply did not reach the subagent")
 	}
-	if !seen("Hinweis vom Hauptagenten") {
-		t.Errorf("Lenkung des laufenden Subagenten kam nicht an")
+	if !seen("Hint from the main agent") {
+		t.Errorf("steering of the running subagent did not arrive")
 	}
-	// Sitzung für agw-artifact/agw-internet: Hauptagent „main“, Subagent seine Laufkennung.
-	if !seen("haupt-sitzung=main") {
-		t.Errorf("PI_AGW_SESSION beim Hauptagenten nicht „main“")
+	// Session for agw-artifact/agw-internet: main agent "main", subagent its run ID.
+	if !seen("main-session=main") {
+		t.Errorf("PI_AGW_SESSION of the main agent is not \"main\"")
 	}
-	subSess := regexp.MustCompile(`sitzung=[0-9a-f-]{8,}`)
+	subSess := regexp.MustCompile(`session=[0-9a-f-]{8,}`)
 	found := false
 	for _, s := range fake.Seen() {
-		if !strings.Contains(s, "CALL ") && strings.Contains(s, "nach-antwort") && subSess.MatchString(s) {
+		if !strings.Contains(s, "CALL ") && strings.Contains(s, "after-reply") && subSess.MatchString(s) {
 			found = true
 		}
 	}
 	if !found {
-		t.Errorf("PI_AGW_SESSION beim Subagenten nicht die Laufkennung")
+		t.Errorf("PI_AGW_SESSION of the subagent is not the run ID")
 	}
 	for _, is := range fake.Issued() {
 		if strings.Contains(is.Args, "{{") || (is.Tool == "subagent_supervisor" && !strings.Contains(is.Args, "-")) {
-			t.Errorf("Platzhalter nicht ersetzt: %s %s", is.Tool, is.Args)
+			t.Errorf("placeholder not replaced: %s %s", is.Tool, is.Args)
 		}
 	}
 	if t.Failed() {
@@ -151,11 +151,11 @@ func TestSlotSubagentTalk(t *testing.T) {
 	_ = settled
 }
 
-// Subagenten sprechen direkt miteinander (pi-intercom): A findet B in der Liste und schickt ihm eine
-// Nachricht; B bekommt sie während seiner Arbeit zu sehen, ohne Umweg über den Hauptagenten.
+// Subagents talk to each other directly (pi-intercom): A finds B in the list and sends it a
+// message; B gets to see it while working, without a detour through the main agent.
 func TestSlotSubagentIntercom(t *testing.T) {
 	if os.Getenv("AGW_E9_IN_DOCKER") != "1" {
-		t.Skip("läuft nur im Go-Container mit Docker-Socket (./dev.sh test)")
+		t.Skip("runs only in the Go container with the Docker socket (./dev.sh test)")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
@@ -167,20 +167,20 @@ func TestSlotSubagentIntercom(t *testing.T) {
 		callLine("subagent", map[string]any{"agent": "worker", "async": true, "task": "IA\n" +
 			callLine("bash", map[string]any{"command": "sleep 3"}) + "\n" +
 			callLine("intercom", map[string]any{"action": "list"}) + "\n" +
-			callLine("intercom", map[string]any{"action": "send", "to": "{{peer}}", "message": "Hallo B, hier ist A"})}),
+			callLine("intercom", map[string]any{"action": "send", "to": "{{peer}}", "message": "Hello B, this is A"})}),
 		callLine("subagent", map[string]any{"agent": "worker", "async": true, "task": "IB\n" +
 			callLine("bash", map[string]any{"command": "sleep 12"}) + "\n" +
-			callLine("bash", map[string]any{"command": "echo b-weiter"})}),
+			callLine("bash", map[string]any{"command": "echo b-continues"})}),
 		callLine("bash", map[string]any{"command": "sleep 25"}),
 	}, "\n")
 	if _, err := w.Call(ctx, map[string]any{"type": "prompt", "message": script}); err != nil {
 		t.Fatal(err)
 	}
-	// B sieht die Nachricht als eingehende Nachricht von A (Kopf „From …“), nicht nur A ihr eigenes Senden.
+	// B sees the message as an incoming message from A (header "From …"), not just A its own sending.
 	got := func() bool {
 		for _, s := range fake.Seen() {
-			// Kopf „**From <Absender>**“ von pi-intercom (der Sitzungsname von A enthält dessen Aufgabe).
-			if strings.HasPrefix(s, "**From ") && strings.Contains(s, "Hallo B, hier ist A") {
+			// Header "**From <sender>**" from pi-intercom (A's session name contains its task).
+			if strings.HasPrefix(s, "**From ") && strings.Contains(s, "Hello B, this is A") {
 				return true
 			}
 		}
@@ -208,11 +208,11 @@ func TestSlotSubagentIntercom(t *testing.T) {
 			}
 		}
 		t.Logf("poll err=%v bytes=%d", err, len(out))
-		t.Fatal("Nachricht von A kam nicht bei B an")
+		t.Fatal("message from A did not reach B")
 	}
 	for _, is := range fake.Issued() {
 		if is.Tool == "intercom" && strings.Contains(is.Args, "send") && !strings.Contains(is.Args, "subagent-worker-") {
-			t.Errorf("Ziel nicht aufgelöst: %s", is.Args)
+			t.Errorf("target not resolved: %s", is.Args)
 		}
 	}
 }

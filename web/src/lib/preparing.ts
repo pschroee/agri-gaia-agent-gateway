@@ -1,20 +1,20 @@
-// Anzeige eines Werkzeugaufrufs, den das Modell gerade noch schreibt (toolcall_delta):
-// die Argumente sind dann halbfertiges JSON. Ausgelesen wird nur, was sicher erkennbar ist.
+// Display of a tool call the model is still writing (toolcall_delta):
+// the arguments are then half-finished JSON. Only what is reliably recognisable is read.
 
 export type PreparingInfo = {
   bytes: number
   lines: number
   path?: string
-  /** Ende des entstehenden Inhalts (bei write/edit der Text, bei bash der Befehl). */
+  /** End of the content being written (for write/edit the text, for bash the command). */
   preview: string
 }
 
 const MAX_PREVIEW = 1200
 
-// Hauptfeld je Werkzeug, dessen Inhalt als Vorschau gezeigt wird.
+// Main field per tool whose content is shown as a preview.
 const MAIN_FIELD: Record<string, string> = { write: "content", bash: "command", edit: "newText" }
 
-/** Liest einen (möglicherweise unvollständigen) JSON-String ab `start` (hinter dem öffnenden Anführungszeichen). */
+/** Reads a (possibly incomplete) JSON string from `start` (after the opening quote). */
 function readPartialString(src: string, start: number): { value: string; complete: boolean } {
   let out = ""
   for (let i = start; i < src.length; i++) {
@@ -25,7 +25,7 @@ function readPartialString(src: string, start: number): { value: string; complet
       continue
     }
     const n = src[i + 1]
-    if (n === undefined) break // Escape noch nicht vollständig
+    if (n === undefined) break // escape not yet complete
     i++
     switch (n) {
       case "n": out += "\n"; break
@@ -46,7 +46,7 @@ function readPartialString(src: string, start: number): { value: string; complet
   return { value: out, complete: false }
 }
 
-/** Letzter Wert eines String-Feldes im halbfertigen JSON. */
+/** Last value of a string field in the half-finished JSON. */
 function field(src: string, name: string): { value: string; complete: boolean } | undefined {
   const key = `"${name}"`
   const at = src.lastIndexOf(key)

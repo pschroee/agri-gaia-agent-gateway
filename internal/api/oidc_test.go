@@ -27,8 +27,8 @@ var (
 	bert = oidctest.User{Sub: "sub-bert", Username: "bert", Name: "Bert B."}
 )
 
-// oidcServer startet die API im oidc-Modus gegen einen nachgebildeten Realm. m darf nil sein (dann
-// nur Routen ohne Manager nutzen).
+// oidcServer starts the API in oidc mode against a simulated realm. m may be nil (then
+// only use routes without a manager).
 func oidcServer(t *testing.T, m *chat.Manager, p *pool.Pool[chat.Agent], cat *config.Catalog, frames []string) (*httptest.Server, *oidctest.Issuer) {
 	t.Helper()
 	is := oidctest.New(t)
@@ -43,7 +43,7 @@ func oidcServer(t *testing.T, m *chat.Manager, p *pool.Pool[chat.Agent], cat *co
 	return srv, is
 }
 
-// loggedIn meldet u über den Realm am Orchestrator an und liefert den Browser.
+// loggedIn logs u in to the orchestrator through the realm and returns the browser.
 func loggedIn(t *testing.T, srv *httptest.Server, is *oidctest.Issuer, u oidctest.User) *oidctest.Browser {
 	t.Helper()
 	b := oidctest.NewBrowser(t)
@@ -79,13 +79,13 @@ func TestOIDCMeAndUnauthorized(t *testing.T) {
 	anon := oidctest.NewBrowser(t)
 	code, body := call(t, anon, "GET", srv.URL+"/api/me", "")
 	if code != 401 || !strings.Contains(body, `"login":"/oidc/login"`) {
-		t.Fatalf("ohne Sitzung: %d %s", code, body)
+		t.Fatalf("without session: %d %s", code, body)
 	}
-	// Das API-Token gilt im oidc-Modus nicht (es ist gar keins gesetzt; ein Bearer hilft nicht).
+	// The API token does not apply in oidc mode (none is set at all; a bearer does not help).
 	req, _ := http.NewRequest("GET", srv.URL+"/api/me", nil)
 	req.Header.Set("Authorization", "Bearer "+testToken)
 	if resp, _ := http.DefaultClient.Do(req); resp.StatusCode != 401 {
-		t.Fatalf("Bearer im oidc-Modus: %d", resp.StatusCode)
+		t.Fatalf("bearer in oidc mode: %d", resp.StatusCode)
 	}
 	b := loggedIn(t, srv, is, anna)
 	code, body = call(t, b, "GET", srv.URL+"/api/me", "")
@@ -94,21 +94,21 @@ func TestOIDCMeAndUnauthorized(t *testing.T) {
 	if code != 200 || me["sub"] != "sub-anna" || me["username"] != "anna" || me["name"] != "Anna A." || me["mode"] != "oidc" {
 		t.Fatalf("me: %d %s", code, body)
 	}
-	// Einbettung: frame-ancestors aus der Einstellung.
+	// Embedding: frame-ancestors from the setting.
 	resp, _ := b.Get(srv.URL + "/api/me")
 	if csp := resp.Header.Get("Content-Security-Policy"); !strings.Contains(csp, "frame-ancestors https://app.agri-gaia.localhost") || strings.Contains(csp, "frame-ancestors 'none'") {
 		t.Fatalf("CSP: %q", csp)
 	}
-	// /login?token= gibt es nur im token-Modus.
+	// /login?token= only exists in token mode.
 	nb := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	if resp, _ := nb.Get(srv.URL + "/login?token=" + testToken); resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/oidc/login" ||
 		len(resp.Cookies()) != 0 {
-		t.Fatalf("/login im oidc-Modus: %d %v", resp.StatusCode, resp.Header)
+		t.Fatalf("/login in oidc mode: %d %v", resp.StatusCode, resp.Header)
 	}
 }
 
-// prefixedOIDCServer: die API hinter einem Proxy, der /agent abschneidet (Traefik mit stripprefix), auf
-// demselben Host wie die Plattform; frame-ancestors 'self' erlaubt die Einbettung in die Plattform.
+// prefixedOIDCServer: the API behind a proxy that strips /agent (Traefik with stripprefix), on
+// the same host as the platform; frame-ancestors 'self' allows embedding in the platform.
 func prefixedOIDCServer(t *testing.T) (*httptest.Server, *oidctest.Issuer) {
 	t.Helper()
 	is := oidctest.New(t)
@@ -121,7 +121,7 @@ func prefixedOIDCServer(t *testing.T) (*httptest.Server, *oidctest.Issuer) {
 	}
 	h := (&Server{OIDC: auth, FrameAncestors: []string{"'self'", srv.URL}}).Handler()
 	outer.Handle("/agent/", http.StripPrefix("/agent", h))
-	outer.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "Plattform") })
+	outer.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "Platform") })
 	return srv, is
 }
 
@@ -130,11 +130,11 @@ func TestOIDCUnderPrefix(t *testing.T) {
 	anon := oidctest.NewBrowser(t)
 	code, body := call(t, anon, "GET", srv.URL+"/agent/api/me", "")
 	if code != 401 || !strings.Contains(body, `"login":"/agent/oidc/login"`) {
-		t.Fatalf("ohne Sitzung: %d %s", code, body)
+		t.Fatalf("without session: %d %s", code, body)
 	}
 	nb := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	if resp, _ := nb.Get(srv.URL + "/agent/login?token=x"); resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/agent/oidc/login" {
-		t.Fatalf("/login unter /agent: %d %v", resp.StatusCode, resp.Header)
+		t.Fatalf("/login under /agent: %d %v", resp.StatusCode, resp.Header)
 	}
 	b := oidctest.NewBrowser(t)
 	is.Login(&anna)
@@ -144,14 +144,14 @@ func TestOIDCUnderPrefix(t *testing.T) {
 	}
 	resp.Body.Close()
 	if resp.Request.URL.Path != "/agent/" || resp.Request.URL.RawQuery != "embed=1" {
-		t.Fatalf("Rücksprung: %s", resp.Request.URL)
+		t.Fatalf("return: %s", resp.Request.URL)
 	}
 	if csp := resp.Header.Get("Content-Security-Policy"); !strings.Contains(csp, "frame-ancestors 'self' "+srv.URL) {
 		t.Fatalf("CSP: %q", csp)
 	}
 	code, body = call(t, b, "GET", srv.URL+"/agent/api/me", "")
 	if code != 200 || !strings.Contains(body, `"sub":"sub-anna"`) {
-		t.Fatalf("me unter /agent: %d %s", code, body)
+		t.Fatalf("me under /agent: %d %s", code, body)
 	}
 }
 
@@ -165,16 +165,16 @@ func TestTokenModeMe(t *testing.T) {
 		t.Fatalf("me: %d %s", w.Code, w.Body)
 	}
 	if csp := w.Header().Get("Content-Security-Policy"); !strings.Contains(csp, "frame-ancestors 'none'") {
-		t.Fatalf("CSP ohne Einbettung: %q", csp)
+		t.Fatalf("CSP without embedding: %q", csp)
 	}
 }
 
-// ownershipEnv: echter Manager mit Postgres, Pool ohne Plätze (Anlegen scheitert nach kurzer Wartezeit).
+// ownershipEnv: real manager with Postgres, pool without slots (creating fails after a short wait).
 func ownershipEnv(t *testing.T) (*chat.Manager, *pool.Pool[chat.Agent], *config.Catalog, *store.Store) {
 	t.Helper()
 	url := os.Getenv("AGW_TEST_DATABASE_URL")
 	if url == "" {
-		t.Skip("AGW_TEST_DATABASE_URL nicht gesetzt")
+		t.Skip("AGW_TEST_DATABASE_URL not set")
 	}
 	ctx := context.Background()
 	st, err := store.OpenSchema(ctx, url, "apitest_"+strings.ReplaceAll(time.Now().Format("150405.000000"), ".", "_"))
@@ -187,14 +187,14 @@ func ownershipEnv(t *testing.T) (*chat.Manager, *pool.Pool[chat.Agent], *config.
 		t.Fatal(err)
 	}
 	p := pool.New[chat.Agent](func(context.Context, string, string) (chat.Agent, error) {
-		return nil, errors.New("kein Platz im Test")
+		return nil, errors.New("no slot in the test")
 	},
 		func(context.Context, chat.Agent) {}, map[string]int{"cli": 0})
 	m := chat.NewManager(st, p, cat, nil, artifacts.NewBroker(), chat.Options{AcquireTimeout: 100 * time.Millisecond, MaxSubagentsLimit: 5})
 	return m, p, cat, st
 }
 
-// Chats gehören dem Nutzer: B sieht A's Chats und Bestätigungen nicht und kann darauf nichts tun.
+// Chats belong to the user: B does not see A's chats and approvals and cannot act on them.
 func TestOIDCChatOwnership(t *testing.T) {
 	m, p, cat, st := ownershipEnv(t)
 	srv, is := oidcServer(t, m, p, cat, nil)
@@ -209,19 +209,19 @@ func TestOIDCChatOwnership(t *testing.T) {
 		_ = st.SetState(ctx, c.ID, store.StateDormant)
 		return c
 	}
-	chatA, chatB, chatT := mk("von Anna", anna.Sub), mk("von Bert", bert.Sub), mk("token-Modus", "")
+	chatA, chatB, chatT := mk("by Anna", anna.Sub), mk("by Bert", bert.Sub), mk("token mode", "")
 	apA, err := st.CreateApproval(ctx, store.Approval{ChatID: chatA.ID, Kind: "platform_write", Via: "mcp", Name: "POST /datasets", PendingKey: "-"})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// Anlegen über die API setzt den Besitzer aus der Anmeldung, nie aus dem Körper.
-	call(t, a, "POST", srv.URL+"/api/chats", `{"title":"neu von Anna","owner":"sub-bert"}`)
+	// Creating via the API sets the owner from the login, never from the body.
+	call(t, a, "POST", srv.URL+"/api/chats", `{"title":"new by Anna","owner":"sub-bert"}`)
 
 	titles := func(br *oidctest.Browser) string {
 		code, body := call(t, br, "GET", srv.URL+"/api/chats", "")
 		if code != 200 {
-			t.Fatalf("Liste: %d %s", code, body)
+			t.Fatalf("list: %d %s", code, body)
 		}
 		var cs []store.Chat
 		_ = json.Unmarshal([]byte(body), &cs)
@@ -231,50 +231,50 @@ func TestOIDCChatOwnership(t *testing.T) {
 		}
 		return strings.Join(out, ",")
 	}
-	if got := titles(a); !strings.Contains(got, "von Anna") || !strings.Contains(got, "neu von Anna") || strings.Contains(got, "Bert") || strings.Contains(got, "token") {
-		t.Fatalf("Liste von Anna: %s", got)
+	if got := titles(a); !strings.Contains(got, "by Anna") || !strings.Contains(got, "new by Anna") || strings.Contains(got, "Bert") || strings.Contains(got, "token") {
+		t.Fatalf("Anna's list: %s", got)
 	}
-	if got := titles(b); got != "von Bert" {
-		t.Fatalf("Liste von Bert: %s", got)
+	if got := titles(b); got != "by Bert" {
+		t.Fatalf("Bert's list: %s", got)
 	}
 
-	// Bert auf Annas Chat: alles 404, wie ein unbekannter Chat.
+	// Bert on Anna's chat: all 404, like an unknown chat.
 	for _, c := range []struct{ method, path, body string }{
 		{"GET", "/api/chats/" + chatA.ID, ""},
 		{"GET", "/api/chats/" + chatA.ID + "/events", ""},
 		{"GET", "/api/chats/" + chatA.ID + "/session", ""},
 		{"GET", "/api/chats/" + chatA.ID + "/artifacts", ""},
-		{"POST", "/api/chats/" + chatA.ID + "/messages", `{"text":"hallo"}`},
+		{"POST", "/api/chats/" + chatA.ID + "/messages", `{"text":"hello"}`},
 		{"POST", "/api/chats/" + chatA.ID + "/abort", ""},
 		{"POST", "/api/chats/" + chatA.ID + "/internet", `{"enabled":true}`},
 		{"DELETE", "/api/chats/" + chatA.ID + "/queue/1", ""},
 		{"POST", "/api/approvals/" + apA.ID, `{"approve":true}`},
-		{"GET", "/api/chats/" + chatT.ID, ""}, // ohne Besitzer: im oidc-Modus niemandes
+		{"GET", "/api/chats/" + chatT.ID, ""}, // without owner: nobody's in oidc mode
 	} {
 		if code, body := call(t, b, c.method, srv.URL+c.path, c.body); code != 404 {
 			t.Errorf("Bert %s %s: %d %s", c.method, c.path, code, body)
 		}
 	}
 	if got, _ := st.GetApproval(ctx, apA.ID); got.State != store.ApprovalPending {
-		t.Fatalf("Bert hat Annas Bestätigung entschieden: %s", got.State)
+		t.Fatalf("Bert decided Anna's approval: %s", got.State)
 	}
 	for _, q := range []string{"?state=pending", "?chat=" + chatA.ID} {
 		if code, body := call(t, b, "GET", srv.URL+"/api/approvals"+q, ""); code != 200 || strings.Contains(body, apA.ID) {
-			t.Fatalf("Bestätigungen für Bert %s: %d %s", q, code, body)
+			t.Fatalf("approvals for Bert %s: %d %s", q, code, body)
 		}
 	}
 	if code, _ := call(t, b, "GET", srv.URL+"/api/chats/"+chatB.ID, ""); code != 200 {
-		t.Fatalf("Bert auf eigenem Chat: %d", code)
+		t.Fatalf("Bert on his own chat: %d", code)
 	}
 
-	// Anna sieht und entscheidet ihre eigene Bestätigung.
+	// Anna sees and decides her own approval.
 	if code, body := call(t, a, "GET", srv.URL+"/api/approvals?state=pending", ""); code != 200 || !strings.Contains(body, apA.ID) {
-		t.Fatalf("Bestätigungen für Anna: %d %s", code, body)
+		t.Fatalf("approvals for Anna: %d %s", code, body)
 	}
 	if code, body := call(t, a, "GET", srv.URL+"/api/chats/"+chatA.ID, ""); code != 200 || !strings.Contains(body, `"owner":"sub-anna"`) {
-		t.Fatalf("Anna auf eigenem Chat: %d %s", code, body)
+		t.Fatalf("Anna on her own chat: %d %s", code, body)
 	}
 	if code, body := call(t, a, "POST", srv.URL+"/api/approvals/"+apA.ID, `{"approve":false}`); code != 200 {
-		t.Fatalf("Anna entscheidet: %d %s", code, body)
+		t.Fatalf("Anna decides: %d %s", code, body)
 	}
 }

@@ -3,7 +3,7 @@ import type { LLMCall, ToolExecutionRecord } from "@/api/types"
 import type { ToolExecution } from "./stream"
 import { displayState, evidenceLabel, evidenceSummary, reconcile as reconcileWith, rejectionsFrom, sessionLabel } from "./evidence"
 
-// Wie /api/config → executed_tools (L6: die Liste kommt vom Server)
+// Like /api/config → executed_tools (L6: the list comes from the server)
 const EXECUTED = ["bash", "edit", "find", "grep", "ls", "mcp_upload_artifact", "read", "write"]
 const reconcile = (l: LLMCall[], e: ToolExecutionRecord[], rejections?: Map<string, string>) =>
   reconcileWith(l, e, { executedTools: EXECUTED, rejections })
@@ -45,7 +45,7 @@ const exec = (id: number, toolCallId: string, tool: string, op: string, extra: P
 })
 
 describe("reconcile", () => {
-  it("gleicht angeforderte und ausgeführte Aufrufe je toolCallId ab", () => {
+  it("reconciles requested and executed calls per toolCallId", () => {
     const m = reconcile(
       [
         call(1, [{ id: "a", name: "bash" }, { id: "b", name: "read" }, { id: "c", name: "todo" }, { name: "ohne_id" }]),
@@ -68,7 +68,7 @@ describe("reconcile", () => {
     expect(m.has("ohne_id")).toBe(false)
   })
 
-  it("sammelt mehrere Operationen eines Aufrufs", () => {
+  it("collects several operations of one call", () => {
     const m = reconcile(
       [call(1, [{ id: "e", name: "edit" }])],
       [exec(1, "e", "edit", "read"), exec(2, "e", "edit", "write", { error: "EACCES: nope" })],
@@ -81,12 +81,12 @@ describe("reconcile", () => {
     expect(e.durationMs).toBe(4)
   })
 
-  it("zählt die Zustände", () => {
+  it("counts the states", () => {
     const m = reconcile([call(1, [{ id: "a", name: "bash" }, { id: "b", name: "read" }])], [exec(1, "a", "bash", "bash"), exec(2, "z", "ls", "stat")])
     expect(evidenceSummary(m)).toEqual({ confirmed: 1, unrequested: 1, unexecuted: 1, mismatch: 0, internal: 0, aborted: 0, rejected: 0, flagged: 2, total: 3 })
   })
 
-  it("trennt harmlose Ursachen von einer Umgehung (M1): abgebrochene Antwort, von pi abgewiesen", () => {
+  it("separates harmless causes from a bypass (M1): aborted response, refused by pi", () => {
     const m = reconcile(
       [call(1, [{ id: "a", name: "bash" }], true, "2026-09-29T12:00:00Z", false), call(2, [{ id: "b", name: "grep" }, { id: "c", name: "read" }])],
       [],
@@ -102,20 +102,20 @@ describe("reconcile", () => {
     expect(s.rejected).toBe(1)
   })
 
-  it("führt ein doppelt ausgeführtes Werkzeug nur einmal (wie der Server, L6)", () => {
+  it("lists a tool executed twice only once (like the server, L6)", () => {
     const m = reconcile([call(1, [{ id: "a", name: "read" }])], [exec(1, "a", "read", "read"), exec(2, "a", "bash", "bash"), exec(3, "a", "read", "stat")])
     expect(m.get("a")?.executedTool).toBe("read,bash")
     expect(m.get("a")?.state).toBe("mismatch")
   })
 
-  it("ohne Liste der ausgeführten Werkzeuge (Konfiguration noch nicht geladen) ist nichts auffällig", () => {
+  it("without the list of executed tools (configuration not loaded yet) nothing is suspicious", () => {
     const m = reconcileWith([call(1, [{ id: "b", name: "read" }])], [])
     expect(m.get("b")?.state).toBe("internal")
   })
 })
 
 describe("rejectionsFrom", () => {
-  it("sammelt Fehlermeldungen aus der Hauptsitzung und den Subagenten", () => {
+  it("collects error messages from the main session and the subagents", () => {
     const tools: Record<string, ToolExecution> = {
       a: { toolCallId: "a", toolName: "grep", running: false, isError: true, result: "Tool grep not found" },
       b: { toolCallId: "b", toolName: "bash", running: false, isError: false, result: "ok" },
@@ -131,7 +131,7 @@ describe("rejectionsFrom", () => {
 })
 
 describe("displayState", () => {
-  it("wertet erst nach dem Lauf aus, vorher gilt ein Abgleich als ausstehend", () => {
+  it("evaluates only after the run; before that a reconciliation counts as pending", () => {
     const m = reconcile([call(1, [{ id: "b", name: "read" }])], [exec(1, "x", "read", "read")])
     expect(displayState(m.get("b"), { settled: false })).toBe("pending")
     expect(displayState(m.get("x"), { settled: false })).toBe("pending")
@@ -142,34 +142,34 @@ describe("displayState", () => {
     expect(displayState(r.get("g"), { settled: true })).toBe("rejected")
   })
 
-  it("belegt ist belegt, auch während des Laufs; ohne Angaben kein Zustand", () => {
+  it("verified is verified, also during the run; no state without data", () => {
     const m = reconcile([call(1, [{ id: "a", name: "bash" }])], [exec(1, "a", "bash", "bash")])
     expect(displayState(m.get("a"), { settled: false })).toBe("confirmed")
     expect(displayState(undefined, { settled: true })).toBeUndefined()
   })
 
-  it("eine ausgeführte, aber noch nicht am Proxy gemeldete ID ist während des Laufs ausstehend", () => {
+  it("an executed ID not yet reported at the proxy is pending during the run", () => {
     const m = reconcile([], [exec(1, "a", "bash", "bash")])
     expect(displayState(m.get("a"), { settled: false })).toBe("pending")
   })
 })
 
-describe("evidenceLabel und sessionLabel", () => {
-  it("benennt die Zustände deutsch und markiert Auffälliges", () => {
-    expect(evidenceLabel("confirmed")).toMatchObject({ label: "belegt", tone: "ok" })
-    expect(evidenceLabel("confirmed").title).toContain("vom Orchestrator ausgeführt")
-    expect(evidenceLabel("unexecuted")).toMatchObject({ label: "nicht ausgeführt", tone: "bad" })
-    expect(evidenceLabel("unrequested")).toMatchObject({ label: "nicht angefordert", tone: "bad" })
-    expect(evidenceLabel("mismatch")).toMatchObject({ label: "abweichend", tone: "bad" })
+describe("evidenceLabel and sessionLabel", () => {
+  it("names the states and marks suspicious ones", () => {
+    expect(evidenceLabel("confirmed")).toMatchObject({ label: "verified", tone: "ok" })
+    expect(evidenceLabel("confirmed").title).toContain("executed by the orchestrator")
+    expect(evidenceLabel("unexecuted")).toMatchObject({ label: "not executed", tone: "bad" })
+    expect(evidenceLabel("unrequested")).toMatchObject({ label: "not requested", tone: "bad" })
+    expect(evidenceLabel("mismatch")).toMatchObject({ label: "mismatch", tone: "bad" })
     expect(evidenceLabel("internal").tone).toBe("muted")
     expect(evidenceLabel("pending").tone).toBe("muted")
-    expect(evidenceLabel("aborted")).toMatchObject({ label: "Antwort abgebrochen", tone: "muted" })
-    expect(evidenceLabel("rejected")).toMatchObject({ label: "von pi abgewiesen", tone: "muted" })
-    expect(evidenceLabel("rejected").title).toContain("nicht fälschungssicher")
+    expect(evidenceLabel("aborted")).toMatchObject({ label: "response aborted", tone: "muted" })
+    expect(evidenceLabel("rejected")).toMatchObject({ label: "refused by pi", tone: "muted" })
+    expect(evidenceLabel("rejected").title).toContain("not tamper-proof")
   })
 
-  it("benennt die Sitzung", () => {
-    expect(sessionLabel("main")).toBe("Hauptagent")
+  it("names the session", () => {
+    expect(sessionLabel("main")).toBe("Main agent")
     expect(sessionLabel("9017da63-d08d-43ab-b978-e86cb7afc45b")).toBe("Subagent 9017da63")
     expect(sessionLabel("9017da63-d08d-43ab-b978-e86cb7afc45b#2")).toBe("Subagent 9017da63 #2")
     expect(sessionLabel(undefined)).toBe("–")

@@ -1,4 +1,4 @@
--- Schema des Orchestrators. Idempotent; wird bei jedem Start ausgeführt.
+-- Schema of the orchestrator. Idempotent; executed at every start.
 
 CREATE TABLE IF NOT EXISTS chats (
     id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -7,7 +7,7 @@ CREATE TABLE IF NOT EXISTS chats (
     variant      text NOT NULL,
     state        text NOT NULL DEFAULT 'active',   -- active | dormant
     internet     boolean NOT NULL DEFAULT false,
-    session      bytea,                            -- Sitzungsdatei von pi (JSONL)
+    session      bytea,                            -- pi's session file (JSONL)
     session_sha  text,
     created_at   timestamptz NOT NULL DEFAULT now(),
     updated_at   timestamptz NOT NULL DEFAULT now()
@@ -73,18 +73,18 @@ CREATE TABLE IF NOT EXISTS socket_calls (
 );
 CREATE INDEX IF NOT EXISTS socket_calls_chat ON socket_calls (chat_id, id);
 
--- Kosten je Antwort, vom Orchestrator nach Tarif (Spitzen-/Nebenzeit) berechnet.
--- NULL bei älteren Einträgen; dann gilt pis eigener Wert aus usage.cost.total.
+-- Cost per reply, computed by the orchestrator by tariff (peak/off-peak).
+-- NULL for older entries; then pi's own value from usage.cost.total applies.
 ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS cost double precision;
 ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS peak boolean;
 
--- Kompaktierung und Kontext (Stufe 1, Nachtrag)
+-- Compaction and context (stage 1, addendum)
 ALTER TABLE chats ADD COLUMN IF NOT EXISTS auto_compact boolean NOT NULL DEFAULT true;
-ALTER TABLE chats ADD COLUMN IF NOT EXISTS context jsonb;   -- zuletzt bekannte Kontextauslastung
-ALTER TABLE chats ADD COLUMN IF NOT EXISTS commands jsonb;  -- zuletzt bekannte Befehle von pi
+ALTER TABLE chats ADD COLUMN IF NOT EXISTS context jsonb;   -- last known context usage
+ALTER TABLE chats ADD COLUMN IF NOT EXISTS commands jsonb;  -- last known commands of pi
 
--- Modellaufrufe, am LLM-Proxy erfasst: maßgeblich für Kosten und Tokens, weil
--- hier auch Subagenten, Kompaktierungen und direkte Aufrufe erscheinen.
+-- Model calls, captured at the LLM proxy: authoritative for cost and tokens, because
+-- subagents, compactions and direct calls also show up here.
 CREATE TABLE IF NOT EXISTS llm_calls (
     id          bigserial PRIMARY KEY,
     chat_id     uuid REFERENCES chats(id) ON DELETE CASCADE,
@@ -106,8 +106,8 @@ CREATE TABLE IF NOT EXISTS llm_calls (
 CREATE INDEX IF NOT EXISTS llm_calls_chat ON llm_calls (chat_id, id);
 CREATE INDEX IF NOT EXISTS llm_calls_resp ON llm_calls (response_id);
 
--- Subagenten: Einträge aus deren Sitzungsdateien in der Sandbox (nicht
--- fälschungssicher; "confirmed" = die Antwort ist am Proxy belegt).
+-- Subagents: entries from their session files in the sandbox (not
+-- tamper-proof; "confirmed" = the reply is recorded at the proxy).
 CREATE TABLE IF NOT EXISTS subagent_entries (
     chat_id    uuid NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
     run_id     text NOT NULL,
@@ -122,8 +122,8 @@ CREATE TABLE IF NOT EXISTS subagent_entries (
 
 ALTER TABLE chats ADD COLUMN IF NOT EXISTS max_subagents integer NOT NULL DEFAULT 3;
 
--- Name und Zustand je Subagenten-Lauf aus den Statusdateien von pi-subagents (Sandbox, also nicht
--- fälschungssicher): Agent, Name im Workflow (label), Zustand, Kennungen bei pi-subagents.
+-- Name and state per subagent run from the status files of pi-subagents (sandbox, hence not
+-- tamper-proof): agent, name in the workflow (label), state, IDs at pi-subagents.
 CREATE TABLE IF NOT EXISTS subagent_runs (
     chat_id       uuid NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
     run_id        text NOT NULL,
@@ -138,11 +138,11 @@ CREATE TABLE IF NOT EXISTS subagent_runs (
     PRIMARY KEY (chat_id, run_id)
 );
 
--- Anzeige-Bilder: Bilder, die der Agent in einer Antwort per Markdown zeigt
--- (![..](/workspace/plot.png)). Der Orchestrator liest sie aus der Sandbox und legt
--- sie in S3 ab, damit sie sichtbar bleiben, wenn der Chat ruht. Keine Artefakte:
--- Sie gehen nur an die angemeldete UI, nicht als Ergebnis nach draußen.
--- msg ist die Kennung der Antwort (responseId, sonst ts-<timestamp>).
+-- Display images: images the agent shows in a reply via Markdown
+-- (![..](/workspace/plot.png)). The orchestrator reads them from the sandbox and stores
+-- them in S3 so that they stay visible while the chat is idle. Not artifacts:
+-- they only go to the logged-in UI, not to the outside as a result.
+-- msg is the ID of the reply (responseId, otherwise ts-<timestamp>).
 CREATE TABLE IF NOT EXISTS chat_images (
     chat_id      uuid NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
     msg          text NOT NULL,
@@ -155,12 +155,12 @@ CREATE TABLE IF NOT EXISTS chat_images (
     PRIMARY KEY (chat_id, msg, path)
 );
 
--- Arbeitsbereich je Chat: /workspace (ohne inputs/ und ohne Paket- und Cache-Ordner) als
--- tar.gz in S3 unter <chat>/workspace.tar.gz, damit Dateien das Ruhen überstehen. Beim
--- Fortsetzen spielt der Orchestrator das Archiv in die frische Sandbox ein. object_key NULL:
--- noch nie gesichert (dann steht hier nur, warum eine Sicherung ausgelassen wurde).
--- size: Summe der Dateigrößen (unkomprimiert), archive_size: Größe des Archivs.
--- fingerprint: Prüfsumme über Namen, Größen, Zeiten und Rechte; gleich = nichts zu tun.
+-- Workspace per chat: /workspace (without inputs/ and without package and cache folders) as
+-- tar.gz in S3 under <chat>/workspace.tar.gz, so that files survive idling. On
+-- resume the orchestrator restores the archive into the fresh sandbox. object_key NULL:
+-- never backed up (then this row only says why a backup was skipped).
+-- size: sum of the file sizes (uncompressed), archive_size: size of the archive.
+-- fingerprint: checksum over names, sizes, times and permissions; equal = nothing to do.
 CREATE TABLE IF NOT EXISTS chat_workspaces (
     chat_id        uuid PRIMARY KEY REFERENCES chats(id) ON DELETE CASCADE,
     object_key     text,
@@ -175,12 +175,12 @@ CREATE TABLE IF NOT EXISTS chat_workspaces (
     skipped_at     timestamptz
 );
 
--- Werkzeugausführungen (E9): Jede Operation, die der Orchestrator für ein Werkzeug von pi in der
--- Ausführungs-Sandbox ausführt (bash, Dateien lesen/schreiben, Suchen). Der Orchestrator trägt sie
--- selbst ein, sie sind deshalb belegt. Ein Werkzeugaufruf (tool_call_id) kann mehrere Operationen
--- haben (edit: access, read, write). session: "main" oder die Kennung des Subagenten-Laufs.
--- args ist gekürzt (bei write Pfad, Größe und SHA-256 statt Inhalt); output_excerpt sind höchstens
--- 4 KiB, output_sha256 gilt für die ganze Ausgabe (bash) bzw. den gelesenen Inhalt.
+-- Tool executions (E9): every operation the orchestrator executes for a pi tool in the
+-- execution sandbox (bash, reading/writing files, searching). The orchestrator records them
+-- itself, so they are proven. A tool call (tool_call_id) can have several operations
+-- (edit: access, read, write). session: "main" or the ID of the subagent run.
+-- args is shortened (for write: path, size and SHA-256 instead of the content); output_excerpt is at most
+-- 4 KiB, output_sha256 covers the full output (bash) or the content read.
 CREATE TABLE IF NOT EXISTS tool_executions (
     id             bigserial PRIMARY KEY,
     chat_id        uuid REFERENCES chats(id) ON DELETE CASCADE,
@@ -201,17 +201,17 @@ CREATE TABLE IF NOT EXISTS tool_executions (
 CREATE INDEX IF NOT EXISTS tool_executions_chat ON tool_executions (chat_id, id);
 CREATE INDEX IF NOT EXISTS tool_executions_call ON tool_executions (chat_id, tool_call_id);
 
--- M1 (Code-Review E9): Kam die Antwort vollständig an? finish_reason des Anbieters; complete ist
--- falsch, wenn der Strom vor dem Ende abbrach. Werkzeugaufrufe aus einer abgebrochenen Antwort
--- führt pi nicht aus; der Abgleich zeigt sie deshalb nicht als Umgehung. Ältere Zeilen gelten als
--- vollständig.
+-- M1 (code review E9): did the reply arrive completely? finish_reason of the provider; complete is
+-- false if the stream broke off before the end. pi does not execute tool calls from an aborted reply;
+-- the reconciliation therefore does not show them as a bypass. Older rows count as
+-- complete.
 ALTER TABLE llm_calls ADD COLUMN IF NOT EXISTS finish_reason text NOT NULL DEFAULT '';
 ALTER TABLE llm_calls ADD COLUMN IF NOT EXISTS complete boolean NOT NULL DEFAULT true;
 
--- Warteschlange je Chat: Nachrichten, die der Nutzer schickt, während pi arbeitet oder der Chat
--- fortgesetzt wird. Der Orchestrator übergibt alle offenen Einträge gemeinsam als nächsten Auftrag,
--- sobald der Lauf endet (agent_settled). delivered_at gesetzt: übergeben (nicht mehr entfernbar).
--- attachments: Namen hochgeladener Eingaben (/workspace/inputs/).
+-- Queue per chat: messages the user sends while pi is working or the chat is being
+-- resumed. The orchestrator delivers all open entries together as the next request
+-- as soon as the run ends (agent_settled). delivered_at set: delivered (no longer removable).
+-- attachments: names of uploaded inputs (/workspace/inputs/).
 CREATE TABLE IF NOT EXISTS chat_queue (
     id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     seq          bigserial,
@@ -223,16 +223,16 @@ CREATE TABLE IF NOT EXISTS chat_queue (
 );
 CREATE INDEX IF NOT EXISTS chat_queue_chat ON chat_queue (chat_id, seq);
 
--- Warteschlange: Systemeinträge (etwa die Meldung, dass eine Hintergrundaufgabe endete) stehen
--- neben den Nachrichten des Nutzers und gehen mit ihnen an pi.
+-- Queue: system entries (such as the note that a background task ended) sit
+-- next to the user's messages and go to pi together with them.
 ALTER TABLE chat_queue ADD COLUMN IF NOT EXISTS kind text NOT NULL DEFAULT 'user';
 
--- Hintergrundaufgaben (bash mit run_in_background): Der Orchestrator startet den Befehl in der
--- Ausführungs-Sandbox und verfolgt ihn bis zum Ende. seq ist die Nummer im Chat (bg-<seq>).
--- Zustände: running, exited, failed, timeout, stopped (bg_stop oder UI), lost (Sandbox oder
--- Verbindung weg), suspended (beim Ruhen des Chats beendet), closed (Chat beendet; nur alte Zeilen).
--- notified_at: Meldung an den Agenten erzeugt; woke: sie hat einen neuen Durchgang gestartet
--- (Grenze je Stunde); notice_pending: beim Ruhen beendet, dem Agenten noch nicht gesagt.
+-- Background tasks (bash with run_in_background): the orchestrator starts the command in the
+-- execution sandbox and follows it until it ends. seq is the number within the chat (bg-<seq>).
+-- States: running, exited, failed, timeout, stopped (bg_stop or UI), lost (sandbox or
+-- connection gone), suspended (ended when the chat went idle), closed (chat closed; old rows only).
+-- notified_at: note to the agent created; woke: it started a new turn
+-- (limit per hour); notice_pending: ended while idling, not yet told to the agent.
 CREATE TABLE IF NOT EXISTS background_tasks (
     id             bigserial PRIMARY KEY,
     chat_id        uuid NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
@@ -261,12 +261,12 @@ CREATE TABLE IF NOT EXISTS background_tasks (
 );
 CREATE INDEX IF NOT EXISTS background_tasks_running ON background_tasks (chat_id) WHERE state = 'running';
 
--- Review 3 (H1, H2): Herkunft und Auslöser. Ein Durchgang (chat_turns) ist ein Auftrag an pi mit
--- trigger user (der Nutzer hat gesendet), queue (beim Laufende übergeben, mindestens eine Nachricht
--- des Nutzers darunter) oder wake (nur Meldungen des Orchestrators, ohne Zutun des Nutzers) und origin
--- user, system oder mixed; sources nennt die Teile in Reihenfolge (Art, Meldung, Aufgaben, Eintrag der
--- Warteschlange, Marke des Zauns). Die Nachrichten des Durchgangs tragen turn_id und trigger, die
--- Nutzernachricht dazu origin und sources. chat_runs bleibt die Lebenszeit einer Sandbox.
+-- Review 3 (H1, H2): origin and trigger. A turn (chat_turns) is a request to pi with
+-- trigger user (the user sent something), queue (delivered at the end of a run, with at least one
+-- user message among it) or wake (only orchestrator notes, without the user's involvement) and origin
+-- user, system or mixed; sources lists the parts in order (kind, note, tasks, queue
+-- entry, fence marker). The messages of the turn carry turn_id and trigger, the
+-- user message additionally origin and sources. chat_runs remains the lifetime of a sandbox.
 CREATE TABLE IF NOT EXISTS chat_turns (
     id         bigserial PRIMARY KEY,
     chat_id    uuid NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
@@ -281,15 +281,15 @@ ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS turn_id bigint;
 ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS trigger text;
 ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS origin text;
 ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS sources jsonb;
--- Systemeinträge: Art der Meldung (background, sandbox) und betroffene Aufgaben (bg-3).
+-- System entries: kind of note (background, sandbox) and affected tasks (bg-3).
 ALTER TABLE chat_queue ADD COLUMN IF NOT EXISTS note text NOT NULL DEFAULT '';
 ALTER TABLE chat_queue ADD COLUMN IF NOT EXISTS refs jsonb NOT NULL DEFAULT '[]';
 
--- Herkunft des Titels (store.TitleDefault/Auto/User). Ältere Chats gelten als vom Nutzer benannt.
+-- Origin of the title (store.TitleDefault/Auto/User). Older chats count as named by the user.
 ALTER TABLE chats ADD COLUMN IF NOT EXISTS title_source text NOT NULL DEFAULT 'user';
 
--- Modellaufrufe des Orchestrators neben der Arbeit des Agenten (etwa der Chattitel). Getrennt von
--- llm_calls, damit Kosten und Aufrufzahlen je Chat nur die Arbeit des Agenten zeigen.
+-- Model calls of the orchestrator besides the agent's work (such as the chat title). Separate from
+-- llm_calls so that cost and call counts per chat show only the agent's work.
 CREATE TABLE IF NOT EXISTS aux_llm_calls (
     id          bigserial PRIMARY KEY,
     chat_id     uuid REFERENCES chats(id) ON DELETE CASCADE,
@@ -307,11 +307,11 @@ CREATE TABLE IF NOT EXISTS aux_llm_calls (
 );
 CREATE INDEX IF NOT EXISTS aux_llm_calls_chat ON aux_llm_calls (chat_id, id);
 
--- Denkstufe von pi je Chat (/effort); leer: pis Vorgabe.
+-- pi's thinking level per chat (/effort); empty: pi's default.
 ALTER TABLE chats ADD COLUMN IF NOT EXISTS thinking_level text NOT NULL DEFAULT '';
 
--- Anfragen der Werkzeuge web_search und web_extract über den Web-Proxy (webproxy), auch
--- abgewiesene (denied). Bei HTTPS (CONNECT) nur Ziel und Bytes, der Inhalt ist verschlüsselt.
+-- Requests of the tools web_search and web_extract through the web proxy (webproxy), including
+-- refused ones (denied). For HTTPS (CONNECT) only target and bytes, the content is encrypted.
 CREATE TABLE IF NOT EXISTS web_requests (
     id          bigserial PRIMARY KEY,
     chat_id     uuid REFERENCES chats(id) ON DELETE CASCADE,
@@ -330,21 +330,21 @@ CREATE TABLE IF NOT EXISTS web_requests (
 );
 CREATE INDEX IF NOT EXISTS web_requests_chat ON web_requests (chat_id, id);
 
--- Werkzeugaufruf, der ein Artefakt hochgeladen hat (Anzeige im Verlauf an der richtigen Stelle).
+-- Tool call that uploaded an artifact (shown at the right place in the history).
 ALTER TABLE artifacts ADD COLUMN IF NOT EXISTS tool_call_id text NOT NULL DEFAULT '';
 
--- Wer über den Socket fragte: Hauptagent („main“) oder Subagenten-Lauf, samt Werkzeugaufruf.
+-- Who asked via the socket: main agent ("main") or subagent run, along with the tool call.
 ALTER TABLE approvals ADD COLUMN IF NOT EXISTS session text NOT NULL DEFAULT '';
 ALTER TABLE approvals ADD COLUMN IF NOT EXISTS tool_call_id text NOT NULL DEFAULT '';
 ALTER TABLE socket_calls ADD COLUMN IF NOT EXISTS session text NOT NULL DEFAULT '';
 ALTER TABLE socket_calls ADD COLUMN IF NOT EXISTS tool_call_id text NOT NULL DEFAULT '';
 
--- Chats werden nicht mehr beendet (30.09.2026): früher beendete ruhen und lassen sich fortsetzen.
+-- Chats are no longer closed (2026-09-30): previously closed ones are idle and can be resumed.
 UPDATE chats SET state='dormant' WHERE state='closed';
 
--- Delegation (docs/plan-delegation-rest-plattform.md, Schritt 1): übertragene Rechte je Chat und das
--- Herkunftsregister der Objekte, die in dieser Delegation entstanden sind. Das Register gilt beim
--- Fortsetzen weiter; Einträge entstehen nur aus Antworten auf Anlage-Aufrufe.
+-- Delegation (docs/plan-delegation-rest-platform.md, step 1): delegated rights per chat and the
+-- provenance register of the objects created within this delegation. The register stays valid on
+-- resume; entries only arise from responses to create calls.
 ALTER TABLE chats ADD COLUMN IF NOT EXISTS delegation jsonb;
 CREATE TABLE IF NOT EXISTS delegation_objects (
     chat_id    uuid NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
@@ -354,11 +354,14 @@ CREATE TABLE IF NOT EXISTS delegation_objects (
     PRIMARY KEY (chat_id, resource, object_id)
 );
 
--- Besitzer des Chats (sub des Nutzers bei Anmeldung über die Plattform, AGW_AUTH_MODE=oidc).
--- NULL: angelegt mit dem API-Token (token-Modus), ohne Besitzer.
+-- Owner of the chat (the user's sub when logged in through the platform, AGW_AUTH_MODE=oidc).
+-- NULL: created with the API token (token mode), without an owner.
 ALTER TABLE chats ADD COLUMN IF NOT EXISTS owner text;
 CREATE INDEX IF NOT EXISTS chats_owner ON chats (owner);
 
--- Bevorzugte Sprache des Nutzers laut Browser (BCP 47, etwa en-US); NULL: unbekannt. Geht mit dem ersten
--- Auftrag des Chats als Meldung des Orchestrators an den Agenten (internal/chat, languageNote).
+-- The user's preferred language according to the browser (BCP 47, e.g. en-US); NULL: unknown. Goes to the
+-- agent with the chat's first request as an orchestrator note (internal/chat, languageNote).
 ALTER TABLE chats ADD COLUMN IF NOT EXISTS language text;
+
+-- The variant id "beide" was renamed to "both" (2026-10-05); chats created before keep resuming.
+UPDATE chats SET variant = 'both' WHERE variant = 'beide';

@@ -1,15 +1,15 @@
-// Package webproxy ist der Ausgang des Containers von pi ins Web, für die Werkzeuge web_search und
-// web_extract (pi-searxng-suite). pi hat kein Netz außer dem Platz-Netz zum Orchestrator; sein Node
-// schickt HTTP und HTTPS über diesen Proxy (NODE_USE_ENV_PROXY, HTTP_PROXY/HTTPS_PROXY).
+// Package webproxy is the exit of pi's container to the web, for the tools web_search and
+// web_extract (pi-searxng-suite). pi has no network except the slot network to the orchestrator; its Node
+// sends HTTP and HTTPS through this proxy (NODE_USE_ENV_PROXY, HTTP_PROXY/HTTPS_PROXY).
 //
-// Der Proxy lässt eine Anfrage nur durch, wenn
-//   - die Quelladresse einem aktiven Platz gehört (Zuordnung wie am LLM-Proxy),
-//   - der Chat Internet hat (derselbe Schalter wie für die Ausführungs-Sandbox),
-//   - das Ziel eine öffentliche Adresse auf Port 80 (HTTP) oder 443 (CONNECT) ist, oder der eigene
-//     SearXNG-Dienst (Name „searxng“, intern weitergeleitet).
+// The proxy lets a request through only if
+//   - the source address belongs to an active slot (attribution as at the LLM proxy),
+//   - the chat has internet (the same switch as for the execution sandbox),
+//   - the target is a public address on port 80 (HTTP) or 443 (CONNECT), or our own
+//     SearXNG service (name "searxng", forwarded internally).
 //
-// Aufgelöst wird hier, und verbunden wird mit genau der geprüften Adresse (kein DNS-Rebinding).
-// Jede Anfrage, auch eine abgewiesene, wird protokolliert (web_requests).
+// Resolution happens here, and the connection goes to exactly the checked address (no DNS rebinding).
+// Every request, including a refused one, is logged (web_requests).
 package webproxy
 
 import (
@@ -28,35 +28,35 @@ import (
 	"time"
 )
 
-// Gate ist der Manager: Zuordnung, Internet-Schalter und Protokoll.
+// Gate is the manager: attribution, internet switch and log.
 type Gate interface {
-	// WebAccess: Chat und Platz zur Quelladresse und ob der Chat Internet hat (chat leer: unbekannt).
+	// WebAccess: chat and slot for the source address and whether the chat has internet (chat empty: unknown).
 	WebAccess(ip string) (chat, slot string, internet bool)
-	// RecordWeb trägt eine Anfrage ein und liefert ihre Kennung (0: nicht gespeichert). Ein Tunnel
-	// wird beim Aufbau eingetragen und beim Schließen mit FinishWeb ergänzt (Bytes, Dauer).
+	// RecordWeb records a request and returns its ID (0: not stored). A tunnel
+	// is recorded when it is set up and completed with FinishWeb on close (bytes, duration).
 	RecordWeb(r Request) int64
 	FinishWeb(id int64, r Request)
 }
 
-// Request ist ein Protokolleintrag.
+// Request is a log entry.
 type Request struct {
 	ChatID, SlotID, SourceIP string
 	Method, Host             string
 	Port                     int
-	Path                     string // nur bei HTTP; bei CONNECT leer (verschlüsselt)
+	Path                     string // HTTP only; empty for CONNECT (encrypted)
 	Status                   int
 	BytesUp, BytesDown       int64
-	Denied                   string // Grund der Abweisung, sonst leer
+	Denied                   string // reason for refusal, otherwise empty
 	StartedAt                time.Time
 	DurationMs               int64
 }
 
-// SearxHost ist der Name, unter dem pi den eigenen SearXNG-Dienst anspricht (SEARXNG_URL).
+// SearxHost is the name under which pi addresses our own SearXNG service (SEARXNG_URL).
 const SearxHost = "searxng"
 
-// Grenzen eines Tunnels (CONNECT). RecheckEvery: So oft prüft ein offener Tunnel den Internet-Schalter
-// erneut und schließt sich, sobald er aus ist (Node hält Tunnel offen und schickt weitere Anfragen
-// hindurch; Sicherheitsreview 30.09.2026).
+// Limits of a tunnel (CONNECT). RecheckEvery: this often an open tunnel rechecks the internet switch
+// and closes as soon as it is off (Node keeps tunnels open and sends further requests
+// through them; security review 2026-09-30).
 var (
 	TunnelMax    = 5 * time.Minute
 	DialTimout   = 10 * time.Second
@@ -65,11 +65,11 @@ var (
 
 type Proxy struct {
 	Gate    Gate
-	Searx   *url.URL     // Adresse des SearXNG-Dienstes aus Sicht des Orchestrators (nil: keiner)
-	Blocked []*net.IPNet // zusätzlich gesperrte Netze (Netze des Stacks)
-	// Lookup löst Namen auf (Tests setzen ihn); nil: net.DefaultResolver.
+	Searx   *url.URL     // address of the SearXNG service as seen by the orchestrator (nil: none)
+	Blocked []*net.IPNet // additionally blocked networks (the stack's networks)
+	// Lookup resolves names (tests set it); nil: net.DefaultResolver.
 	Lookup func(ctx context.Context, host string) ([]net.IPAddr, error)
-	// Nur für Tests: erlaubte Ports (0: 80 und 443) und eine eigene Prüfung der Zieladresse.
+	// For tests only: allowed ports (0: 80 and 443) and a custom check of the target address.
 	HTTPPort, HTTPSPort int
 	Allow               func(net.IP) bool
 }
@@ -101,7 +101,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if chat != "" {
 			p.Gate.RecordWeb(rec)
 		}
-		slog.Warn("Web-Proxy: abgewiesen", "chat", chat, "von", src, "ziel", host, "grund", why)
+		slog.Warn("web proxy: refused", "chat", chat, "from", src, "target", host, "reason", why)
 		http.Error(w, why, code)
 	}
 	switch {
@@ -120,7 +120,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			deny(http.StatusServiceUnavailable, "search service not configured")
 			return
 		}
-		// Node tunnelt mit NODE_USE_ENV_PROXY auch einfaches HTTP per CONNECT.
+		// With NODE_USE_ENV_PROXY Node tunnels plain HTTP through CONNECT as well.
 		if r.Method == http.MethodConnect {
 			p.tunnel(w, r, &rec, p.Searx.Host)
 			return
@@ -130,7 +130,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	httpPort, httpsPort := p.ports()
 	if r.Method == http.MethodConnect {
-		// Port 443 für HTTPS, 80 für HTTP, das Node ebenfalls per CONNECT tunnelt.
+		// Port 443 for HTTPS, 80 for HTTP, which Node also tunnels through CONNECT.
 		if port != httpsPort && port != httpPort {
 			deny(http.StatusForbidden, "only ports 80 and 443 are allowed")
 			return
@@ -152,7 +152,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	p.forward(w, r, &rec, addr, "http", r.URL.Host)
 }
 
-// hostPort: Ziel der Anfrage (CONNECT: r.Host, sonst die absolute URL).
+// hostPort: target of the request (CONNECT: r.Host, otherwise the absolute URL).
 func hostPort(r *http.Request) (string, int) {
 	hp := r.Host
 	def := 443
@@ -170,8 +170,8 @@ func hostPort(r *http.Request) (string, int) {
 	return h, n
 }
 
-// publicIP löst host auf und liefert die erste öffentliche Adresse. Adressen des Stacks, private,
-// Loopback-, Link-Local- und ähnliche Netze sind gesperrt.
+// publicIP resolves host and returns the first public address. The stack's addresses, private,
+// loopback, link-local and similar networks are blocked.
 func (p *Proxy) publicIP(ctx context.Context, host string) (net.IP, error) {
 	if ip := net.ParseIP(host); ip != nil {
 		if !p.public(ip) {
@@ -191,7 +191,7 @@ func (p *Proxy) publicIP(ctx context.Context, host string) (net.IP, error) {
 	}
 	for _, a := range addrs {
 		if !p.public(a.IP) {
-			// Ein Name, der (auch) auf eine interne Adresse zeigt, ist verdächtig: ganz abweisen.
+			// A name that (also) points to an internal address is suspicious: refuse entirely.
 			return nil, fmt.Errorf("%s resolves to a non-public address", host)
 		}
 	}
@@ -231,10 +231,10 @@ func (p *Proxy) public(ip net.IP) bool {
 	return true
 }
 
-// countingConn zählt die gelesenen und geschriebenen Bytes.
+// countingConn counts the bytes read and written.
 type countingConn struct {
 	net.Conn
-	up, down *atomic.Int64 // up: zum Ziel geschrieben, down: vom Ziel gelesen
+	up, down *atomic.Int64 // up: written to the target, down: read from the target
 }
 
 func (c countingConn) Read(b []byte) (int, error) {
@@ -249,8 +249,8 @@ func (c countingConn) Write(b []byte) (int, error) {
 	return n, err
 }
 
-// forward leitet eine HTTP-Anfrage (absolute URL) an addr weiter, ohne erneute Namensauflösung;
-// hostHeader ist der Host, den das Ziel sieht.
+// forward forwards an HTTP request (absolute URL) to addr without resolving the name again;
+// hostHeader is the host the target sees.
 func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, rec *Request, addr, scheme, hostHeader string) {
 	var up, down atomic.Int64
 	tr := &http.Transport{
@@ -290,7 +290,7 @@ func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, rec *Request, ad
 	p.Gate.RecordWeb(*rec)
 }
 
-// tunnel verbindet für CONNECT (HTTPS) mit addr und reicht die Bytes in beide Richtungen durch.
+// tunnel connects to addr for CONNECT (HTTPS) and passes the bytes through in both directions.
 func (p *Proxy) tunnel(w http.ResponseWriter, r *http.Request, rec *Request, addr string) {
 	dst, err := (&net.Dialer{Timeout: DialTimout}).DialContext(r.Context(), "tcp", addr)
 	if err != nil {
@@ -312,7 +312,7 @@ func (p *Proxy) tunnel(w http.ResponseWriter, r *http.Request, rec *Request, add
 		return
 	}
 	_, _ = src.Write([]byte("HTTP/1.1 200 Connection established\r\n\r\n"))
-	// Node hält Tunnel offen (keep-alive): gleich eintragen, beim Schließen ergänzen.
+	// Node keeps tunnels open (keep-alive): record right away, complete on close.
 	rec.Status, rec.DurationMs = http.StatusOK, 0
 	id := p.Gate.RecordWeb(*rec)
 	deadline := time.Now().Add(TunnelMax)
@@ -340,7 +340,7 @@ func (p *Proxy) tunnel(w http.ResponseWriter, r *http.Request, rec *Request, add
 		}
 	}()
 	go func() {
-		// Was nach dem CONNECT schon gepuffert ist, zuerst.
+		// Whatever is already buffered after the CONNECT goes first.
 		if n := buf.Reader.Buffered(); n > 0 {
 			b, _ := buf.Reader.Peek(n)
 			m, _ := dst.Write(b)
@@ -364,7 +364,7 @@ func (p *Proxy) tunnel(w http.ResponseWriter, r *http.Request, rec *Request, add
 	dst.Close()
 	if revoked.Load() {
 		rec.Denied = "tunnel closed: internet switched off"
-		slog.Info("Web-Proxy: Tunnel geschlossen, Internet aus", "chat", rec.ChatID, "ziel", rec.Host)
+		slog.Info("web proxy: tunnel closed, internet off", "chat", rec.ChatID, "target", rec.Host)
 	}
 	rec.BytesUp, rec.BytesDown = up.Load(), down.Load()
 	rec.DurationMs = time.Since(rec.StartedAt).Milliseconds()

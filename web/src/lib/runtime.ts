@@ -1,12 +1,12 @@
-// Laufzeiten wie in Claude Code: wie lange der aktuelle Lauf, ein Werkzeug oder eine Antwort gedauert hat.
-// Die Zeiten stammen aus den Ereignissen (lib/stream: runStart, startedAt/endedAt, durationMs); was sich nicht
-// belegen lässt, bleibt leer statt geschätzt.
+// Durations as in Claude Code: how long the current run, a tool or a response took.
+// The times come from the events (lib/stream: runStart, startedAt/endedAt, durationMs); whatever cannot
+// be verified stays empty instead of being estimated.
 import type { Chat } from "@/api/types"
 import type { ToolExecution, TranscriptState } from "@/lib/stream"
 
 const pad = (n: number) => String(n).padStart(2, "0")
 
-/** Dauer in ms: unter 60 s „12 s“, darüber „1:05“, ab einer Stunde „1:02:03“. */
+/** Duration in ms: below 60 s "12 s", above "1:05", from one hour "1:02:03". */
 export function formatElapsed(ms: number): string {
   if (!Number.isFinite(ms)) return ""
   const secs = Math.floor(Math.max(0, ms) / 1000)
@@ -17,16 +17,16 @@ export function formatElapsed(ms: number): string {
   return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`
 }
 
-/** Abgeschlossene Dauer: unter einer Sekunde „< 1 s“ statt „0 s“; ohne Wert leer. */
+/** Completed duration: below one second "< 1 s" instead of "0 s"; empty without a value. */
 export function formatStepDuration(ms: number | undefined): string {
   if (ms === undefined || !Number.isFinite(ms)) return ""
   return ms < 1000 ? "< 1 s" : formatElapsed(ms)
 }
 
 /**
- * Beginn des laufenden Durchgangs: live der Empfang von agent_start. Wurde der Start nicht beobachtet
- * (Seite während des Laufs neu geladen), die Zeit der letzten Nutzernachricht, denn mit ihr beginnt der
- * Lauf. Arbeitet der Agent nicht, nichts.
+ * Start of the current turn: live, the receipt of agent_start. If the start was not observed
+ * (page reloaded during the run), the time of the last user message, since the run begins
+ * with it. If the agent is not working, nothing.
  */
 export function runStartOf(state: TranscriptState, running: boolean): number | undefined {
   if (!running) return undefined
@@ -39,8 +39,8 @@ export function runStartOf(state: TranscriptState, running: boolean): number | u
 }
 
 /**
- * Beginn des Laufs eines Chats für Kopf und Liste: der Wert des Orchestrators (`running_since`), sobald er
- * ihn liefert, sonst der aus dem Verlauf (runStartOf). Ruht der Chat oder ist nichts bekannt: nichts.
+ * Start of a chat's run for header and list: the orchestrator's value (`running_since`) as soon as it
+ * provides it, otherwise the one from the history (runStartOf). If the chat is idle or nothing is known: nothing.
  */
 export function chatRunSince(chat: Pick<Chat, "running" | "running_since"> | undefined, state?: TranscriptState): number | undefined {
   if (!chat?.running) return undefined
@@ -49,27 +49,27 @@ export function chatRunSince(chat: Pick<Chat, "running" | "running_since"> | und
   return state ? runStartOf(state, true) : undefined
 }
 
-/** Dauer eines Werkzeugaufrufs: laufend bis `now`, fertig von Start bis Ende; ohne Start nichts. */
+/** Duration of a tool call: running until `now`, finished from start to end; nothing without a start. */
 export function toolDurationMs(t: ToolExecution | undefined, now: number): number | undefined {
   if (!t || t.startedAt === undefined) return undefined
   if (t.endedAt !== undefined) return Math.max(0, t.endedAt - t.startedAt)
   return t.running ? Math.max(0, now - t.startedAt) : undefined
 }
 
-/** Was der Agent gerade tut, für die Statuszeile („Denkt“, „Schreibt“, „Führt bash aus“ …). */
+/** What the agent is doing right now, for the status line ("Thinking", "Writing", "Running bash" …). */
 export function liveActivity(state: TranscriptState): string {
   const running = Object.values(state.tools).find((t) => t.running)
-  if (running) return running.toolName ? `Führt ${running.toolName} aus` : "Führt ein Werkzeug aus"
+  if (running) return running.toolName ? `Running ${running.toolName}` : "Running a tool"
   const item = state.streamingKey ? state.items.find((i) => i.key === state.streamingKey) : undefined
   const last = item?.kind === "assistant" ? item.blocks.at(-1) : undefined
-  if (last?.type === "toolCall") return last.name ? `Bereitet ${last.name} vor` : "Bereitet einen Werkzeugaufruf vor"
-  if (last?.type === "text") return "Schreibt"
-  // Nach dem Neuladen fehlen tool_execution_start und streamingKey: Endet der Verlauf mit einer
-  // Antwort, deren Werkzeugaufruf noch kein Ergebnis hat, läuft genau dieses Werkzeug.
+  if (last?.type === "toolCall") return last.name ? `Preparing ${last.name}` : "Preparing a tool call"
+  if (last?.type === "text") return "Writing"
+  // After a reload tool_execution_start and streamingKey are missing: if the history ends with a
+  // response whose tool call has no result yet, exactly this tool is running.
   const tail = state.items.at(-1)
   if (!item && tail?.kind === "assistant") {
     const open = tail.blocks.find((b) => b.type === "toolCall" && b.id && !state.tools[b.id]?.result && !state.tools[b.id]?.isError)
-    if (open?.type === "toolCall") return open.name ? `Führt ${open.name} aus` : "Führt ein Werkzeug aus"
+    if (open?.type === "toolCall") return open.name ? `Running ${open.name}` : "Running a tool"
   }
-  return "Denkt"
+  return "Thinking"
 }

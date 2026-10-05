@@ -1,14 +1,14 @@
-/** Slash-Befehle im Eingabefeld. */
+/** Slash commands in the input field. */
 import type { Chat, Command, CommandOption } from "@/api/types"
 
-/** Suchtext für das Befehls-Popover, solange nur „/name“ ohne Leerzeichen eingegeben ist. */
+/** Search text for the command popover while only "/name" without spaces has been typed. */
 export function slashQuery(text: string): string | undefined {
   const m = /^\/(\S*)$/.exec(text)
   return m ? m[1].toLowerCase() : undefined
 }
 
-/** Filtert Befehle: Präfixtreffer im Namen, dann Teiltreffer im Namen, dann (ab 3 Zeichen) in der Beschreibung. */
-// Befehle, die nur in pis Terminal-Oberfläche wirken (Ausgabe per notify/Widget) und in der Web-UI nichts zeigen.
+/** Filters commands: prefix matches in the name, then partial matches in the name, then (from 3 characters) in the description. */
+// Commands that only take effect in pi's terminal UI (output via notify/widget) and show nothing in the web UI.
 const TERMINAL_ONLY = new Set(["todos"])
 
 export function filterCommands(all: Command[], query: string): Command[] {
@@ -27,33 +27,33 @@ export function filterCommands(all: Command[], query: string): Command[] {
   return [...prefix, ...infix, ...desc]
 }
 
-/** Eine Eingabe, die als Slash-Befehl an /commands geht statt als Nachricht. */
+/** An input that goes to /commands as a slash command instead of as a message. */
 export function isSlashCommand(text: string): boolean {
   return /^\/[\p{L}\p{N}]/u.test(text.trim())
 }
 
-/** Schaltwert von „/autocompact on|off“ (wie der Orchestrator: on/an/ein/true, off/aus/false); sonst undefined. */
+/** Switch value of "/autocompact on|off" (like the orchestrator: on/true, off/false); otherwise undefined. */
 export function autoCompactSwitch(text: string): boolean | undefined {
   const m = /^\/autocompact\s+(\S+)$/i.exec(text.trim())
   if (!m) return undefined
   const v = m[1].toLowerCase()
-  if (["on", "an", "ein", "true"].includes(v)) return true
-  if (["off", "aus", "false"].includes(v)) return false
+  if (["on", "true"].includes(v)) return true
+  if (["off", "false"].includes(v)) return false
   return undefined
 }
 
-/** Eingebaute Befehle des Orchestrators (/compact, /autocompact, /rename); sie erzeugen keine Nutzernachricht. */
+/** Built-in commands of the orchestrator (/compact, /autocompact, /rename); they create no user message. */
 export function isBuiltinCommand(text: string): boolean {
   return /^\/(compact|autocompact|rename|model|effort)(\s|$)/i.test(text.trim())
 }
 
-/** Befehl und angefangenes Argument, solange „/name arg“ mit genau einem Argumentwort getippt ist. */
+/** Command and started argument while "/name arg" with exactly one argument word is typed. */
 export function slashArg(text: string): { name: string; query: string } | undefined {
   const m = /^\/(\S+)\s+(\S*)$/.exec(text)
   return m ? { name: m[1].toLowerCase(), query: m[2] } : undefined
 }
 
-/** Filtert Argumente: Präfixtreffer im Wert, dann Teiltreffer in Wert oder Beschriftung. */
+/** Filters arguments: prefix matches in the value, then partial matches in value or label. */
 export function filterOptions(options: CommandOption[], query: string): CommandOption[] {
   const q = query.toLowerCase()
   if (!q) return options
@@ -65,17 +65,17 @@ export function filterOptions(options: CommandOption[], query: string): CommandO
 }
 
 export const effortLabels: Record<string, string> = {
-  off: "aus",
+  off: "off",
   minimal: "minimal",
-  low: "niedrig",
-  medium: "mittel",
-  high: "hoch",
-  xhigh: "sehr hoch",
-  max: "maximal",
+  low: "low",
+  medium: "medium",
+  high: "high",
+  xhigh: "very high",
+  max: "maximum",
 }
 
-/** Setzt die aktuellen Werte des Chats in die Vorschläge von /model und /effort (die Befehlsliste
- * wird seltener geladen als der Chat); /effort bekommt die Stufen, die pi für das Modell meldet. */
+/** Puts the chat's current values into the suggestions of /model and /effort (the command list
+ * is loaded less often than the chat); /effort gets the levels pi reports for the model. */
 export function withLiveOptions(commands: Command[], chat: Pick<Chat, "model" | "thinking_level" | "thinking_levels">): Command[] {
   return commands.map((c) => {
     if (c.name === "model" && c.options) {
@@ -93,7 +93,7 @@ export function withLiveOptions(commands: Command[], chat: Pick<Chat, "model" | 
   })
 }
 
-/** Neuer Name aus „/rename Name“ (Leerraum zusammengefasst); sonst undefined. */
+/** New name from "/rename Name" (whitespace collapsed); otherwise undefined. */
 export function renameTitle(text: string): string | undefined {
   const m = /^\/rename\s+(.+)$/is.exec(text.trim())
   return m ? m[1].split(/\s+/).join(" ") : undefined

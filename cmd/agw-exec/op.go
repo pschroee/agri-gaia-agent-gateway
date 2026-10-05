@@ -24,8 +24,8 @@ import (
 	"agw/internal/execproto"
 )
 
-// Die Operationen selbst. Sie laufen im Kindprozess "agw-exec op" als
-// Agent-Nutzer; der Überwacher (serve) führt selbst keine Dateioperation aus.
+// The operations themselves. They run in the child process "agw-exec op" as the
+// agent user; the supervisor (serve) performs no file operation itself.
 
 type opError struct {
 	code string
@@ -67,8 +67,8 @@ func fail(err error) execproto.Frame {
 	return execproto.Frame{Done: true, Error: err.Error(), Code: errCode(err)}
 }
 
-// runOp führt eine geprüfte Anfrage aus und meldet Rahmen über emit; der
-// letzte Rahmen hat Done gesetzt.
+// runOp executes a validated request and reports frames via emit; the
+// last frame has Done set.
 func runOp(ctx context.Context, req execproto.Request, emit func(execproto.Frame)) {
 	if err := req.Validate(); err != nil {
 		emit(fail(&opError{"EINVAL", err.Error()}))
@@ -139,12 +139,12 @@ func runOp(ctx context.Context, req execproto.Request, emit func(execproto.Frame
 		}
 		emit(result(r))
 	default:
-		emit(fail(&opError{"EINVAL", "unbekannte Operation"}))
+		emit(fail(&opError{"EINVAL", "unknown operation"}))
 	}
 }
 
-// openRegular öffnet nur reguläre Dateien. O_NONBLOCK verhindert, dass ein
-// FIFO des Agenten die Operation festhält.
+// openRegular opens regular files only. O_NONBLOCK prevents a FIFO of the
+// agent from holding the operation.
 func openRegular(p string, flag int, perm os.FileMode) (*os.File, error) {
 	f, err := os.OpenFile(p, flag|syscall.O_NONBLOCK, perm)
 	if err != nil {
@@ -220,8 +220,8 @@ func readDir(p string) (execproto.ReaddirResult, error) {
 		if e.Type()&fs.ModeSymlink != 0 {
 			st, err := os.Stat(filepath.Join(p, e.Name()))
 			if err != nil {
-				// Wie pi (ls stat't jeden Eintrag und überspringt, was sich nicht lesen
-				// lässt): kaputte Symlinks erscheinen nicht (L3).
+				// Like pi (ls stats every entry and skips what cannot be
+				// read): broken symlinks do not appear (L3).
 				continue
 			}
 			isDir = st.IsDir()
@@ -231,7 +231,7 @@ func readDir(p string) (execproto.ReaddirResult, error) {
 	return out, nil
 }
 
-// imageType erkennt PNG, JPEG, GIF und WebP an den ersten Bytes, wie pi.
+// imageType recognises PNG, JPEG, GIF and WebP by their first bytes, like pi.
 func imageType(p string) string {
 	f, err := openRegular(p, os.O_RDONLY, 0)
 	if err != nil {
@@ -259,11 +259,11 @@ func sniffImage(b []byte) string {
 
 // --- bash ---
 
-// spill schreibt die Ausgabe eines Befehls zusätzlich in eine Datei in der Ausführungs-
-// Sandbox (als Agent-Nutzer), damit pi bei langer Ausgabe wie gewohnt auf „Full output: <Pfad>“
-// verweisen kann und ein read darauf die Datei findet (H1). Vorher schrieb pi diese Datei im
-// eigenen Container (tmpfs 256 MiB); bei vollem tmpfs starb pi an einem unbehandelten Fehler.
-// Obergrenze MaxSpillBytes mit Vermerk. Unter pis Schwellen wird die Datei wieder gelöscht.
+// spill additionally writes a command's output into a file in the execution
+// sandbox (as the agent user), so that for long output pi can refer to "Full output: <path>"
+// as usual and a read on it finds the file (H1). Previously pi wrote this file in its
+// own container (tmpfs 256 MiB); with a full tmpfs pi died of an unhandled error.
+// Upper limit MaxSpillBytes with a note. Below pi's thresholds the file is deleted again.
 type spill struct {
 	path      string
 	f         *os.File
@@ -271,22 +271,22 @@ type spill struct {
 	raw       int64
 	newlines  int64
 	last      byte
-	decoded   int64  // Bytes nach UTF-8-Dekodierung mit Ersatzzeichen (obere Schätzung)
-	pend      []byte // unvollständige UTF-8-Folge am Ende des letzten Stücks
+	decoded   int64  // bytes after UTF-8 decoding with replacement characters (upper estimate)
+	pend      []byte // incomplete UTF-8 sequence at the end of the last chunk
 	truncated bool
 	err       error
-	// always: Datei immer behalten (Hintergrundaufgabe), limit: Obergrenze der Datei.
+	// always: always keep the file (background task), limit: upper limit of the file.
 	always bool
 	limit  int64
 }
 
-// maxSpill ist execproto.MaxSpillBytes; im Test kleiner.
+// maxSpill is execproto.MaxSpillBytes; smaller in tests.
 var maxSpill int64 = execproto.MaxSpillBytes
 
 func maxSpillForTest(n int64) int64 { old := maxSpill; maxSpill = n; return old }
 
-// openSpill legt die Datei für die ganze Ausgabe an (vor dem Start des Befehls). f: schon offene
-// Datei (Hintergrundaufgabe, vom Überwacher angelegt) oder nil.
+// openSpill creates the file for the full output (before the command starts). f: already open
+// file (background task, created by the supervisor) or nil.
 func openSpill(p string, f *os.File) *spill {
 	s := &spill{path: p, limit: maxSpill}
 	if f != nil {
@@ -305,10 +305,10 @@ func openSpill(p string, f *os.File) *spill {
 	return s
 }
 
-// openSpillFile öffnet eine Ausgabedatei zum Schreiben, ohne sich festhalten zu lassen (Review 3,
-// N1): O_NONBLOCK, damit eine FIFO des Agenten an dieser Adresse nicht auf einen Leser wartet
-// (ohne Leser: ENXIO), O_NOFOLLOW gegen Verweise, danach nur reguläre Dateien; O_NONBLOCK wird für
-// das Schreiben zurückgenommen.
+// openSpillFile opens an output file for writing without letting itself be held up (Review 3,
+// N1): O_NONBLOCK, so that a FIFO of the agent at this path does not wait for a reader
+// (without a reader: ENXIO), O_NOFOLLOW against symlinks, then regular files only; O_NONBLOCK is
+// cleared again for writing.
 func openSpillFile(p string) (*os.File, error) {
 	f, err := os.OpenFile(p, os.O_WRONLY|os.O_CREATE|os.O_TRUNC|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0o644)
 	if err != nil {
@@ -321,7 +321,7 @@ func openSpillFile(p string) (*os.File, error) {
 	return f, nil
 }
 
-// regularBlocking prüft, dass f eine reguläre Datei ist, und schaltet O_NONBLOCK ab.
+// regularBlocking checks that f is a regular file and switches O_NONBLOCK off.
 func regularBlocking(f *os.File, p string) error {
 	st, err := f.Stat()
 	if err != nil {
@@ -355,8 +355,8 @@ func (s *spill) write(b []byte) {
 	}
 }
 
-// countDecoded schätzt die Länge nach TextDecoder (ungültige Bytes als U+FFFD, drei Bytes). Die
-// Schätzung liegt nie darunter; die Datei bleibt also eher einmal zu oft liegen als zu selten.
+// countDecoded estimates the length after TextDecoder (invalid bytes as U+FFFD, three bytes). The
+// estimate is never below; so the file is kept once too often rather than too rarely.
 func (s *spill) countDecoded(b []byte) {
 	data := append(s.pend, b...)
 	s.pend = nil
@@ -376,7 +376,7 @@ func (s *spill) countDecoded(b []byte) {
 	}
 }
 
-// finish entscheidet über die Datei und liefert ihren Pfad, falls sie bleibt.
+// finish decides about the file and returns its path if it stays.
 func (s *spill) finish() (string, string) {
 	if len(s.pend) > 0 {
 		s.decoded += 3
@@ -396,7 +396,7 @@ func (s *spill) finish() (string, string) {
 	if s.truncated && s.err == nil {
 		_, s.err = fmt.Fprintf(s.f, "\n\n[output truncated after %d MiB of %d bytes]\n", s.limit>>20, s.raw)
 		if s.err != nil {
-			s.err = nil // der Vermerk ist entbehrlich
+			s.err = nil // the note is dispensable
 		}
 	}
 	cerr := s.f.Close()
@@ -413,14 +413,14 @@ func (s *spill) finish() (string, string) {
 	return s.path, ""
 }
 
-// runBash führt den Befehl mit bash -c in einer eigenen Prozessgruppe aus
-// und streamt stdout und stderr gemeinsam. Abbruch und Zeitgrenze beenden die
-// ganze Gruppe. Wie bei pi läuft ein Hintergrundprozess, der die Ausgabe
-// offen hält, weiter; gelesen wird nach dem Ende der Shell nur noch kurz.
+// runBash runs the command with bash -c in its own process group
+// and streams stdout and stderr together. Abort and timeout kill the
+// whole group. As with pi, a background process that keeps the output
+// open keeps running; after the shell ends, reading continues only briefly.
 //
-// Eine Hintergrundaufgabe (OpBg) läuft genauso, nur behält sie ihre Ausgabedatei
-// (/tmp/agw-bg/bg-<n>.log, höchstens MaxBgLogBytes) immer und meldet zuerst ihre
-// Prozessgruppe. Sie läuft, bis der Befehl endet oder der Orchestrator abbricht.
+// A background task (OpBg) runs the same way, except that it always keeps its output file
+// (/tmp/agw-bg/bg-<n>.log, at most MaxBgLogBytes) and first reports its
+// process group. It runs until the command ends or the orchestrator aborts.
 func runBash(ctx context.Context, req execproto.Request, emit func(execproto.Frame)) {
 	if st, err := os.Stat(req.Cwd); err != nil || !st.IsDir() {
 		emit(fail(&opError{"ENOENT", "Working directory does not exist: " + req.Cwd + "\nCannot execute bash commands."}))
@@ -432,7 +432,7 @@ func runBash(ctx context.Context, req execproto.Request, emit func(execproto.Fra
 	if bg {
 		logPath = bgLogFile(req.Spill)
 		if req.LogFD {
-			// Vom Überwacher angelegt und offen übergeben (Deskriptor 3).
+			// Created by the supervisor and handed over open (descriptor 3).
 			logFile = os.NewFile(3, logPath)
 			if err := regularBlocking(logFile, logPath); err != nil {
 				logFile.Close()
@@ -445,7 +445,7 @@ func runBash(ctx context.Context, req execproto.Request, emit func(execproto.Fra
 	} else if spillDir != "" && logPath != "" {
 		logPath = filepath.Join(spillDir, filepath.Base(logPath))
 	}
-	// Die Datei vor dem Start öffnen: Hängt das Öffnen, soll noch kein Befehl laufen (N1).
+	// Open the file before the start: if opening hangs, no command should be running yet (N1).
 	sp := openSpill(logPath, logFile)
 	pr, pw, err := os.Pipe()
 	if err != nil {
@@ -471,8 +471,8 @@ func runBash(ctx context.Context, req execproto.Request, emit func(execproto.Fra
 	if bg {
 		sp.always, sp.limit = true, execproto.MaxBgLogBytes
 		if sp.err != nil {
-			// Ohne Datei läuft die Aufgabe weiter; der Orchestrator hat die Ausgabe ohnehin.
-			fmt.Fprintln(os.Stderr, "agw-exec: Ausgabedatei der Hintergrundaufgabe:", sp.err)
+			// Without a file the task keeps running; the orchestrator has the output anyway.
+			fmt.Fprintln(os.Stderr, "agw-exec: output file of the background task:", sp.err)
 		}
 		emit(execproto.Frame{Pgid: pgid})
 	}
@@ -520,8 +520,8 @@ func runBash(ctx context.Context, req execproto.Request, emit func(execproto.Fra
 		_ = syscall.Kill(-pgid, syscall.SIGKILL)
 		werr = <-waitDone
 	}
-	// Nach dem Ende der Shell noch kurz lesen; Nachzügler im Hintergrund
-	// halten die Ausgabe sonst unbegrenzt offen.
+	// Keep reading briefly after the shell ends; stragglers in the background
+	// would otherwise keep the output open indefinitely.
 	select {
 	case <-readDone:
 	case <-time.After(150 * time.Millisecond):
@@ -533,7 +533,7 @@ func runBash(ctx context.Context, req execproto.Request, emit func(execproto.Fra
 	full, spillErr := sp.finish()
 	if reason != "" {
 		if reason == "aborted" {
-			// Beim Abbruch auch Nachzügler der Gruppe beenden.
+			// On abort also kill stragglers of the group.
 			_ = syscall.Kill(-pgid, syscall.SIGKILL)
 		}
 		emit(execproto.Frame{Done: true, Error: reason, Code: reason, FullOutputPath: full, SpillError: spillErr})
@@ -556,8 +556,8 @@ func runBash(ctx context.Context, req execproto.Request, emit func(execproto.Fra
 
 var bashPath = "/bin/bash"
 
-// throttle begrenzt das Lesen nach einer Menge Ausgabe auf eine Rate (N3): Der Befehl wartet dann
-// beim Schreiben in die Pipe, und der Orchestrator bekommt höchstens rate Bytes je Sekunde.
+// throttle limits reading to a rate after a certain amount of output (N3): the command then waits
+// when writing into the pipe, and the orchestrator receives at most rate bytes per second.
 type throttle struct {
 	after, rate int64
 	seen, over  int64
@@ -583,20 +583,20 @@ func (t *throttle) wait(n int) {
 	}
 }
 
-// Drosselung der Hintergrundaufgaben (Tests setzen kleinere Werte).
+// Throttling of background tasks (tests set smaller values).
 var (
 	bgThrottleAfter int64 = execproto.BgThrottleAfter
 	bgThrottleRate  int64 = execproto.BgThrottleRate
 )
 
-// spillDir lenkt /tmp/pi-bash-*.log im Test in ein eigenes Verzeichnis um.
+// spillDir redirects /tmp/pi-bash-*.log into a separate directory in tests.
 var spillDir = ""
 
 func spillDirForTest(d string) string { old := spillDir; spillDir = d; return old }
 
-// bgLogFile bildet den Pfad der Ausgabedatei einer Hintergrundaufgabe. Tests lenken ihn mit
-// AGW_EXEC_BG_DIR in ein eigenes Verzeichnis um (die Variable erreicht Befehle des Agenten nicht,
-// commandEnv entfernt AGW_EXEC_*; setzen kann sie nur, wer den Überwacher startet).
+// bgLogFile forms the path of a background task's output file. Tests redirect it with
+// AGW_EXEC_BG_DIR into a separate directory (the variable does not reach the agent's commands,
+// commandEnv removes AGW_EXEC_*; only whoever starts the supervisor can set it).
 func bgLogFile(p string) string {
 	if d := os.Getenv("AGW_EXEC_BG_DIR"); d != "" {
 		return filepath.Join(d, filepath.Base(p))
@@ -604,8 +604,8 @@ func bgLogFile(p string) string {
 	return p
 }
 
-// baseEnv ist die Umgebung der Sandbox (vom Überwacher übergeben); dazu
-// kommen HOME und Nutzer des Agenten und die PI_*-Angaben der Sitzung.
+// baseEnv is the sandbox's environment (passed on by the supervisor); added to it
+// are HOME and user of the agent and the session's PI_* values.
 func commandEnv(extra map[string]string) []string {
 	env := map[string]string{}
 	for _, kv := range os.Environ() {
@@ -631,13 +631,13 @@ func commandEnv(extra map[string]string) []string {
 	return out
 }
 
-// --- grep und glob über ripgrep ---
+// --- grep and glob via ripgrep ---
 
 var rgPath = "rg"
 
-// rgData ist ein Feld von rg --json: Text als „text“ oder, bei ungültigem UTF-8, als „bytes“
-// (base64). pi liest nur „text“ und lässt solche Treffer ohne Ausgabe; hier werden die Bytes
-// dekodiert (L5). Der Pfad bleibt als Bytefolge nutzbar, um Kontextzeilen zu lesen.
+// rgData is a field of rg --json: text as "text" or, with invalid UTF-8, as "bytes"
+// (base64). pi reads only "text" and leaves such matches without output; here the bytes
+// are decoded (L5). The path stays usable as a byte sequence for reading context lines.
 type rgData struct {
 	Text  *string `json:"text"`
 	Bytes *string `json:"bytes"`
@@ -655,8 +655,8 @@ func (d rgData) String() string {
 	return ""
 }
 
-// grep bildet pis grep nach: rg --json, höchstens Limit Treffer, Kontext aus
-// der Datei, Pfade relativ zum Suchverzeichnis.
+// grep mirrors pi's grep: rg --json, at most Limit matches, context from
+// the file, paths relative to the search directory.
 func grep(ctx context.Context, searchPath string, a execproto.GrepArgs) (execproto.GrepResult, error) {
 	st, err := os.Stat(searchPath)
 	if err != nil {
@@ -772,11 +772,11 @@ func grep(ctx context.Context, searchPath string, a execproto.GrepArgs) (execpro
 
 var fdPath = "fd"
 
-// glob ist pis find mit fd, mit denselben Argumenten wie pi (dist/core/tools/find.js): Glob gegen
-// den Namen, bei Mustern mit „/“ gegen den ganzen Pfad mit vorangestelltem „**/“; versteckte
-// Dateien dabei, .gitignore beachtet (außerhalb eines Git-Repositoriums mit --no-require-git);
-// Verzeichnisse erscheinen mit „/“ am Ende. Endet fd mit Fehler, aber mit Ausgabe, gilt wie
-// bei pi die Ausgabe (M2).
+// glob is pi's find with fd, with the same arguments as pi (dist/core/tools/find.js): glob against
+// the name, for patterns with "/" against the whole path with a leading "**/"; hidden
+// files included, .gitignore respected (outside a Git repository with --no-require-git);
+// directories appear with "/" at the end. If fd ends with an error but with output, the output
+// counts, as with pi (M2).
 func glob(ctx context.Context, searchPath string, a execproto.GlobArgs) (execproto.GlobResult, error) {
 	args := []string{"--glob", "--color=never", "--hidden"}
 	if !insideGitRepo(searchPath) {
@@ -819,7 +819,7 @@ func glob(ctx context.Context, searchPath string, a execproto.GlobArgs) (execpro
 	return res, nil
 }
 
-// insideGitRepo wie pi: gibt es in searchPath oder darüber ein .git?
+// insideGitRepo like pi: is there a .git in searchPath or above it?
 func insideGitRepo(p string) bool {
 	for cur := p; ; {
 		if _, err := os.Lstat(filepath.Join(cur, ".git")); err == nil {
@@ -845,9 +845,9 @@ func (l *limitedBuffer) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// readLines liefert einen Ausschnitt einer Textdatei, ohne sie ganz in den Speicher zu laden:
-// read über MaxFileBytes (etwa die ganze Ausgabe eines Befehls, bis 256 MiB). pi läse die Datei
-// ganz; die Bridge bildet aus dem Ausschnitt dieselbe Ausgabe wie pis read (L4).
+// readLines returns an excerpt of a text file without loading it fully into memory:
+// read beyond MaxFileBytes (e.g. the full output of a command, up to 256 MiB). pi would read the file
+// fully; the bridge forms the same output as pi's read from the excerpt (L4).
 func readLines(ctx context.Context, p string, a execproto.LinesArgs) (execproto.LinesResult, error) {
 	f, err := openRegular(p, os.O_RDONLY, 0)
 	if err != nil {
@@ -857,7 +857,7 @@ func readLines(ctx context.Context, p string, a execproto.LinesArgs) (execproto.
 	res := execproto.LinesResult{Lines: [][]byte{}}
 	br := bufio.NewReaderSize(f, 256<<10)
 	var line int64
-	var cur []byte // aktuelle Zeile im Fenster (gekürzt auf MaxBytes+1)
+	var cur []byte // current line in the window (truncated to MaxBytes+1)
 	var curLen int64
 	collected := 0
 	full := false
@@ -869,7 +869,7 @@ func readLines(ctx context.Context, p string, a execproto.LinesArgs) (execproto.
 		}
 		if selected() {
 			if res.SelLines > 0 {
-				res.SelBytes++ // Zeilenumbruch davor
+				res.SelBytes++ // line break before it
 			}
 			res.SelBytes += curLen
 			res.SelLines++
@@ -908,7 +908,7 @@ func readLines(ctx context.Context, p string, a execproto.LinesArgs) (execproto.
 			continue
 		}
 		if err == io.EOF {
-			endLine() // wie split("\n"): nach dem letzten „\n“ folgt noch eine (leere) Zeile
+			endLine() // like split("\n"): after the last "\n" another (empty) line follows
 			break
 		}
 		if err != nil {

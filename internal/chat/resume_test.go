@@ -10,7 +10,7 @@ import (
 	"agw/internal/store"
 )
 
-// collect liest Ereignisse, bis stop wahr ist oder die Frist abläuft.
+// collect reads events until stop is true or the deadline passes.
 func collect(t *testing.T, ch <-chan Event, stop func(Event) bool) []Event {
 	t.Helper()
 	var out []Event
@@ -23,7 +23,7 @@ func collect(t *testing.T, ch <-chan Event, stop func(Event) bool) []Event {
 				return out
 			}
 		case <-timeout:
-			t.Fatalf("Ereignis kam nicht; bisher %d", len(out))
+			t.Fatalf("event did not arrive; %d so far", len(out))
 		}
 	}
 }
@@ -37,7 +37,7 @@ func isPi(ev Event, typ string) bool {
 	return h.Type == typ
 }
 
-// resumeSteps liefert „phase:status“ der resume-Ereignisse und den Index des ersten pi-Ereignisses.
+// resumeSteps returns "phase:status" of the resume events and the index of the first pi event.
 func resumeSteps(evs []Event) (steps []string, byPhase map[string]ResumeStep, firstPi int, chatResuming bool) {
 	firstPi = -1
 	byPhase = map[string]ResumeStep{}
@@ -50,7 +50,7 @@ func resumeSteps(evs []Event) (steps []string, byPhase map[string]ResumeStep, fi
 				byPhase[s.Phase] = s
 			}
 			if firstPi >= 0 {
-				steps = append(steps, "NACH-PI")
+				steps = append(steps, "AFTER-PI")
 			}
 		case "pi":
 			if firstPi < 0 {
@@ -68,9 +68,9 @@ func resumeSteps(evs []Event) (steps []string, byPhase map[string]ResumeStep, fi
 func TestResumeReportsStepsBeforeFirstAnswer(t *testing.T) {
 	e := setup(t)
 	ctx := context.Background()
-	c, _ := e.m.Create(ctx, NewChat{Message: "Merke dir 42"})
+	c, _ := e.m.Create(ctx, NewChat{Message: "Remember 42"})
 	waitSettled(t, e, c.ID)
-	if _, err := e.m.AddInput(ctx, c.ID, "daten.csv", []byte("a,b\n1,2\n")); err != nil {
+	if _, err := e.m.AddInput(ctx, c.ID, "data.csv", []byte("a,b\n1,2\n")); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := e.m.Suspend(ctx, c.ID); err != nil {
@@ -78,48 +78,48 @@ func TestResumeReportsStepsBeforeFirstAnswer(t *testing.T) {
 	}
 	events, cancel := e.m.Subscribe(c.ID)
 	defer cancel()
-	res, err := e.m.Send(ctx, c.ID, "Was war die Zahl?")
+	res, err := e.m.Send(ctx, c.ID, "What was the number?")
 	if err != nil || !res.Resumed || res.Queued {
-		t.Fatalf("Senden: %+v %v", res, err)
+		t.Fatalf("send: %+v %v", res, err)
 	}
 	evs := collect(t, events, func(ev Event) bool { return isPi(ev, "agent_settled") })
 	steps, by, firstPi, resuming := resumeSteps(evs)
 	want := "acquire:running,acquire:done,session:running,session:done,settings:running,settings:done," +
 		"workspace:running,workspace:done,inputs:running,inputs:done,ready:done"
 	if got := strings.Join(steps, ","); got != want {
-		t.Fatalf("Schritte:\n%s\nerwartet\n%s", got, want)
+		t.Fatalf("steps:\n%s\nwant\n%s", got, want)
 	}
 	if firstPi < 0 {
-		t.Fatal("keine Antwort")
+		t.Fatal("no answer")
 	}
 	if !resuming {
-		t.Error("Chat-Ereignis mit resuming=true fehlt")
+		t.Error("chat event with resuming=true missing")
 	}
 	if s := by[PhaseSession]; s.Size == nil || *s.Size == 0 {
-		t.Errorf("Sitzung ohne Größe: %+v", s)
+		t.Errorf("session without size: %+v", s)
 	}
 	if s := by[PhaseInputs]; s.Files == nil || *s.Files != 1 || s.Size == nil || *s.Size != 8 {
-		t.Errorf("Eingaben: %+v", s)
+		t.Errorf("inputs: %+v", s)
 	}
-	if s := by[PhaseWorkspace]; s.Detail != "keine Sicherung" {
-		t.Errorf("Arbeitsbereich: %+v", s)
+	if s := by[PhaseWorkspace]; s.Detail != "no backup" {
+		t.Errorf("workspace: %+v", s)
 	}
 	if s := by[PhaseReady]; s.ID == "" || s.ID != by[PhaseAcquire].ID {
-		t.Errorf("Kennung: %+v / %+v", s, by[PhaseAcquire])
+		t.Errorf("ID: %+v / %+v", s, by[PhaseAcquire])
 	}
 	v, _ := e.m.View(ctx, c.ID)
 	if v.Resuming {
-		t.Error("nach dem Fortsetzen noch resuming")
+		t.Error("still resuming after resume")
 	}
-	// Ein aktiver Chat meldet beim Senden keine Schritte.
+	// An active chat reports no steps when sending.
 	events2, cancel2 := e.m.Subscribe(c.ID)
 	defer cancel2()
-	if _, err := e.m.Send(ctx, c.ID, "Und jetzt?"); err != nil {
+	if _, err := e.m.Send(ctx, c.ID, "And now?"); err != nil {
 		t.Fatal(err)
 	}
 	for _, ev := range collect(t, events2, func(ev Event) bool { return isPi(ev, "agent_settled") }) {
 		if ev.Kind == "resume" {
-			t.Fatalf("Schritt bei aktivem Chat: %+v", ev.Data)
+			t.Fatalf("step with active chat: %+v", ev.Data)
 		}
 	}
 }
@@ -127,7 +127,7 @@ func TestResumeReportsStepsBeforeFirstAnswer(t *testing.T) {
 func TestResumeFailureReportsFailed(t *testing.T) {
 	e := setup(t)
 	ctx := context.Background()
-	c, _ := e.m.Create(ctx, NewChat{Message: "eins"})
+	c, _ := e.m.Create(ctx, NewChat{Message: "one"})
 	waitSettled(t, e, c.ID)
 	if _, err := e.m.Suspend(ctx, c.ID); err != nil {
 		t.Fatal(err)
@@ -142,8 +142,8 @@ func TestResumeFailureReportsFailed(t *testing.T) {
 	e.mu.Unlock()
 	events, cancel := e.m.Subscribe(c.ID)
 	defer cancel()
-	if _, err := e.m.Send(ctx, c.ID, "zwei"); err == nil {
-		t.Fatal("Fortsetzen hätte scheitern müssen")
+	if _, err := e.m.Send(ctx, c.ID, "two"); err == nil {
+		t.Fatal("resume should have failed")
 	}
 	evs := collect(t, events, func(ev Event) bool {
 		s, ok := ev.Data.(ResumeStep)
@@ -152,24 +152,24 @@ func TestResumeFailureReportsFailed(t *testing.T) {
 	steps, by, firstPi, _ := resumeSteps(evs)
 	want := "acquire:running,acquire:done,session:running,session:error,failed:error"
 	if got := strings.Join(steps, ","); got != want {
-		t.Fatalf("Schritte:\n%s\nerwartet\n%s", got, want)
+		t.Fatalf("steps:\n%s\nwant\n%s", got, want)
 	}
 	if firstPi >= 0 {
-		t.Error("pi-Ereignis trotz gescheitertem Fortsetzen")
+		t.Error("pi event despite failed resume")
 	}
 	if !strings.Contains(by[PhaseFailed].Detail, "switch_session") {
-		t.Errorf("Grund: %q", by[PhaseFailed].Detail)
+		t.Errorf("reason: %q", by[PhaseFailed].Detail)
 	}
 	v, _ := e.m.View(ctx, c.ID)
 	if v.State != store.StateDormant || v.Resuming || v.SlotID != "" {
-		t.Fatalf("nach Fehler: %+v", v)
+		t.Fatalf("after error: %+v", v)
 	}
-	// Die Nachricht ist nicht gesendet und nicht gespeichert; sie ist auch nicht eingereiht.
+	// The message was neither sent nor stored; it is not queued either.
 	msgs, _ := e.st.Messages(ctx, c.ID)
 	if len(msgs) != 2 {
-		t.Fatalf("Nachrichten: %d", len(msgs))
+		t.Fatalf("messages: %d", len(msgs))
 	}
 	if q, _ := e.m.Queue(ctx, c.ID); len(q) != 0 {
-		t.Fatalf("eingereiht: %+v", q)
+		t.Fatalf("enqueued: %+v", q)
 	}
 }

@@ -16,12 +16,12 @@ import {
 } from "./mermaid"
 
 describe("isMermaidClass", () => {
-  it("erkennt Codeblöcke mit Sprache mermaid", () => {
+  it("recognises code blocks with language mermaid", () => {
     expect(isMermaidClass("language-mermaid")).toBe(true)
     expect(isMermaidClass(["language-mermaid"])).toBe(true)
     expect(isMermaidClass("hljs language-Mermaid")).toBe(true)
   })
-  it("nimmt andere Sprachen und fehlende Angaben nicht", () => {
+  it("does not accept other languages and missing values", () => {
     for (const c of [undefined, "", "language-python", "language-mermaidx", "mermaid", ["language-js"]]) {
       expect(isMermaidClass(c), String(c)).toBe(false)
     }
@@ -29,48 +29,48 @@ describe("isMermaidClass", () => {
 })
 
 describe("openFenceStart", () => {
-  it("liefert nichts, wenn alle Codeblöcke geschlossen sind", () => {
-    expect(openFenceStart("Text ohne Code")).toBeUndefined()
+  it("returns nothing when all code blocks are closed", () => {
+    expect(openFenceStart("text without code")).toBeUndefined()
     expect(openFenceStart("a\n```mermaid\ngraph TD\nA-->B\n```\nb")).toBeUndefined()
     expect(openFenceStart("~~~\nx\n~~~")).toBeUndefined()
   })
-  it("liefert den Anfang des offenen Blocks beim Streamen", () => {
-    const text = "Hier:\n\n```mermaid\ngraph TD\n  A-->"
+  it("returns the start of the open block while streaming", () => {
+    const text = "Here:\n\n```mermaid\ngraph TD\n  A-->"
     expect(openFenceStart(text)).toBe(text.indexOf("```"))
   })
-  it("schließt nur mit gleichem Zeichen und mindestens gleicher Länge", () => {
-    expect(openFenceStart("````\n```\nnoch offen")).toBe(0)
+  it("closes only with the same character and at least the same length", () => {
+    expect(openFenceStart("````\n```\nstill open")).toBe(0)
     expect(openFenceStart("```\n~~~\n")).toBe(0)
     expect(openFenceStart("```\nx\n`````")).toBeUndefined()
   })
-  it("zählt einen zweiten, offenen Block nach einem geschlossenen", () => {
+  it("counts a second open block after a closed one", () => {
     const text = "```js\n1\n```\n\n```mermaid\nsequenceDiagram"
     expect(openFenceStart(text)).toBe(text.indexOf("```mermaid"))
   })
-  it("ignoriert Backticks mitten in der Zeile und eingerückten Code", () => {
-    expect(openFenceStart("Text mit ``` in der Zeile")).toBeUndefined()
-    expect(openFenceStart("    ```\n    eingerückt")).toBeUndefined()
+  it("ignores backticks in the middle of a line and indented code", () => {
+    expect(openFenceStart("text with ``` in the line")).toBeUndefined()
+    expect(openFenceStart("    ```\n    indented")).toBeUndefined()
   })
 })
 
 describe("diagramView", () => {
-  it("zeigt beim Streamen eines offenen Blocks den Quelltext", () => {
+  it("shows the source while streaming an open block", () => {
     expect(diagramView({ ready: false })).toBe("source")
   })
-  it("wartet auf das Ergebnis, sobald der Block fertig ist", () => {
+  it("waits for the result once the block is finished", () => {
     expect(diagramView({ ready: true })).toBe("loading")
   })
-  it("zeigt das Diagramm oder den Fehler", () => {
+  it("shows the diagram or the error", () => {
     expect(diagramView({ ready: true, outcome: { ok: true, svg: "<svg/>" } })).toBe("diagram")
     expect(diagramView({ ready: true, outcome: { ok: false, error: "Parse error" } })).toBe("error")
   })
-  it("zeigt auf Wunsch den Quelltext statt des Diagramms", () => {
+  it("shows the source instead of the diagram on request", () => {
     expect(diagramView({ ready: true, outcome: { ok: true, svg: "<svg/>" }, showSource: true })).toBe("source")
   })
 })
 
 describe("svgDataUrl", () => {
-  it("kodiert das SVG als data:-Adresse (für <img>, dort läuft kein Skript)", () => {
+  it("encodes the SVG as a data: address (for <img>, where no script runs)", () => {
     const url = svgDataUrl('<svg xmlns="http://www.w3.org/2000/svg"><text>Ä & #</text></svg>')
     expect(url.startsWith("data:image/svg+xml;charset=utf-8,")).toBe(true)
     expect(url).not.toContain("#")
@@ -78,14 +78,14 @@ describe("svgDataUrl", () => {
   })
 })
 
-describe("createMermaidRenderer (Bibliothek attrappiert)", () => {
+describe("createMermaidRenderer (library mocked)", () => {
   const fake = (render: MermaidApi["render"]) => {
     const api: MermaidApi = { initialize: vi.fn(), render: vi.fn(render) }
-    const load = vi.fn(async () => ({ api, sanitize: (svg: string) => `sauber:${svg}` }))
+    const load = vi.fn(async () => ({ api, sanitize: (svg: string) => `clean:${svg}` }))
     return { api, load }
   }
 
-  it("lädt die Bibliothek erst beim ersten Diagramm und nur einmal", async () => {
+  it("loads the library only at the first diagram and only once", async () => {
     const { api, load } = fake(async (id, code) => ({ svg: `<svg id="${id}">${code}</svg>` }))
     const r = createMermaidRenderer(load)
     expect(load).not.toHaveBeenCalled()
@@ -95,7 +95,7 @@ describe("createMermaidRenderer (Bibliothek attrappiert)", () => {
     expect(api.render).toHaveBeenCalledTimes(2)
   })
 
-  it("setzt securityLevel strict und keine HTML-Labels, und das Diagramm kann es nicht überschreiben", async () => {
+  it("sets securityLevel strict and no HTML labels, and the diagram cannot override it", async () => {
     const { api, load } = fake(async () => ({ svg: "<svg/>" }))
     await createMermaidRenderer(load).render("graph TD\nA-->B", "dark")
     const cfg = vi.mocked(api.initialize).mock.calls[0][0]
@@ -106,17 +106,17 @@ describe("createMermaidRenderer (Bibliothek attrappiert)", () => {
     expect(cfg.secure).toEqual(expect.arrayContaining(["securityLevel", "htmlLabels", "themeCSS", "startOnLoad"]))
   })
 
-  it("säubert das Ergebnis und merkt es sich je Quelltext und Theme", async () => {
+  it("sanitizes the result and caches it per source and theme", async () => {
     const { api, load } = fake(async () => ({ svg: "<svg/>" }))
     const r = createMermaidRenderer(load)
-    expect(await r.render("graph TD\nA-->B", "light")).toEqual({ ok: true, svg: "sauber:<svg/>" })
+    expect(await r.render("graph TD\nA-->B", "light")).toEqual({ ok: true, svg: "clean:<svg/>" })
     await r.render("graph TD\nA-->B", "light")
     expect(api.render).toHaveBeenCalledTimes(1)
     await r.render("graph TD\nA-->B", "dark")
     expect(api.render).toHaveBeenCalledTimes(2)
   })
 
-  it("meldet einen Syntaxfehler als Ergebnis statt als Ausnahme", async () => {
+  it("reports a syntax error as a result instead of an exception", async () => {
     const { load } = fake(async () => {
       throw new Error("Parse error on line 2")
     })
@@ -124,14 +124,14 @@ describe("createMermaidRenderer (Bibliothek attrappiert)", () => {
     expect(out).toEqual({ ok: false, error: "Parse error on line 2" })
   })
 
-  it("meldet einen Fehler beim Laden der Bibliothek", async () => {
+  it("reports an error while loading the library", async () => {
     const r = createMermaidRenderer(async () => {
-      throw new Error("Chunk nicht geladen")
+      throw new Error("chunk not loaded")
     })
-    expect(await r.render("graph TD", "light")).toEqual({ ok: false, error: "Chunk nicht geladen" })
+    expect(await r.render("graph TD", "light")).toEqual({ ok: false, error: "chunk not loaded" })
   })
 
-  it("zeichnet nacheinander, nie gleichzeitig (mermaid ist dafür nicht gebaut)", async () => {
+  it("draws one after another, never concurrently (mermaid is not built for that)", async () => {
     let active = 0
     let max = 0
     const { load } = fake(async () => {
@@ -147,30 +147,30 @@ describe("createMermaidRenderer (Bibliothek attrappiert)", () => {
   })
 })
 
-// Review 3, N4: Große Diagramme blockieren den Browser (rund 3,4 s je Diagramm). Ab einer Größe und ab dem
-// sechsten Diagramm einer Nachricht wird erst auf Klick gezeichnet.
-describe("große und viele Diagramme", () => {
+// Review 3, N4: large diagrams block the browser (about 3.4 s per diagram). From a certain size and from the
+// sixth diagram of a message on, drawing happens only on click.
+describe("large and many diagrams", () => {
   const graph = (edges: number) => ["graph TD", ...Array.from({ length: edges }, (_, i) => `  n${i} --> n${i + 1}`)].join("\n")
-  it("misst Zeichen und Kanten", () => {
+  it("measures characters and edges", () => {
     expect(mermaidSize(graph(3))).toEqual({ chars: graph(3).length, edges: 3 })
     expect(mermaidSize("sequenceDiagram\n  A->>B: hi\n  B-->>A: ok\n  A-)B: x")).toMatchObject({ edges: 3 })
     expect(isLargeDiagram(graph(20))).toBe(false)
     expect(isLargeDiagram(graph(MERMAID_LARGE_EDGES + 1))).toBe(true)
     expect(isLargeDiagram("graph TD\n" + "%% " + "x".repeat(MERMAID_LARGE_CHARS))).toBe(true)
   })
-  it("zeichnet höchstens MERMAID_AUTO_MAX je Nachricht von selbst, große nie", () => {
+  it("draws at most MERMAID_AUTO_MAX per message on its own, large ones never", () => {
     expect(MERMAID_AUTO_MAX).toBe(5)
     expect(autoRender({ index: 0, large: false })).toBe(true)
     expect(autoRender({ index: 4, large: false })).toBe(true)
     expect(autoRender({ index: 5, large: false })).toBe(false)
     expect(autoRender({ index: 0, large: true })).toBe(false)
   })
-  it("zeigt zurückgestellte Diagramme als Quelltext mit Knopf", () => {
+  it("shows deferred diagrams as source with a button", () => {
     expect(diagramView({ ready: true, deferred: true })).toBe("deferred")
     expect(diagramView({ ready: false, deferred: true })).toBe("source")
     expect(diagramView({ ready: true, deferred: false })).toBe("loading")
   })
-  it("findet die Mermaid-Blöcke einer Nachricht in Reihenfolge", () => {
+  it("finds the Mermaid blocks of a message in order", () => {
     const text = "a\n```mermaid\ngraph TD\nA-->B\n```\n\n```js\nx\n```\n\n  ~~~ Mermaid\ngraph LR\n~~~\n"
     const starts = mermaidFenceStarts(text)
     expect(starts).toEqual([2, text.indexOf("  ~~~")])

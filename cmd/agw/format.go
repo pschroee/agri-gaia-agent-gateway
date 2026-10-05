@@ -9,8 +9,8 @@ import (
 	"agw/internal/agwclient"
 )
 
-// deNum formatiert eine Zahl mit Dezimalkomma: mindestens minDec, höchstens maxDec Stellen.
-func deNum(v float64, minDec, maxDec int) string {
+// fmtNum formats a number with a decimal point: at least minDec, at most maxDec digits.
+func fmtNum(v float64, minDec, maxDec int) string {
 	s := strconv.FormatFloat(v, 'f', maxDec, 64)
 	if i := strings.IndexByte(s, '.'); i >= 0 {
 		keep := i + 1 + minDec
@@ -19,15 +19,15 @@ func deNum(v float64, minDec, maxDec int) string {
 		}
 		s = strings.TrimSuffix(s, ".")
 	}
-	return strings.Replace(s, ".", ",", 1)
+	return s
 }
 
-func fmtPrice(v float64) string { return deNum(v, 2, 4) }
+func fmtPrice(v float64) string { return fmtNum(v, 2, 4) }
 
-func fmtCost(v float64) string { return deNum(v, 4, 4) + " USD" }
+func fmtCost(v float64) string { return fmtNum(v, 4, 4) + " USD" }
 
 func fmtTokens(t agwclient.Tokens) string {
-	return fmt.Sprintf("%d (ein %d, aus %d, Cache %d)", t.Total, t.Input, t.Output, t.CacheRead)
+	return fmt.Sprintf("%d (in %d, out %d, cache %d)", t.Total, t.Input, t.Output, t.CacheRead)
 }
 
 func fmtTime(s string) string {
@@ -38,7 +38,7 @@ func fmtTime(s string) string {
 	return t.Local().Format("2006-01-02 15:04")
 }
 
-// fmtSince gibt die Dauer seit dem Zeitpunkt kurz an („45s", „3m", „2h05m").
+// fmtSince gives the duration since the point in time in short form ("45s", "3m", "2h05m").
 func fmtSince(s string, now time.Time) string {
 	t, err := time.Parse(time.RFC3339, s)
 	if err != nil || s == "" {
@@ -60,24 +60,24 @@ func fmtSince(s string, now time.Time) string {
 
 func yesNo(b bool) string {
 	if b {
-		return "ja"
+		return "yes"
 	}
-	return "nein"
+	return "no"
 }
 
 func onOff(b bool) string {
 	if b {
-		return "an"
+		return "on"
 	}
-	return "aus"
+	return "off"
 }
 
 func chatState(s string) string {
 	switch s {
 	case "active":
-		return "aktiv"
+		return "active"
 	case "dormant":
-		return "ruhend"
+		return "dormant"
 	}
 	return s
 }
@@ -85,13 +85,13 @@ func chatState(s string) string {
 func slotState(s string) string {
 	switch s {
 	case "starting":
-		return "startet"
+		return "starting"
 	case "idle":
-		return "frei"
+		return "free"
 	case "assigned":
-		return "vergeben"
+		return "assigned"
 	case "stopping":
-		return "stoppt"
+		return "stopping"
 	}
 	return s
 }
@@ -99,13 +99,13 @@ func slotState(s string) string {
 func approvalState(s string) string {
 	switch s {
 	case "pending":
-		return "offen"
+		return "pending"
 	case "approved":
-		return "bestätigt"
+		return "approved"
 	case "rejected":
-		return "abgelehnt"
+		return "rejected"
 	case "expired":
-		return "abgelaufen"
+		return "expired"
 	}
 	return s
 }
@@ -113,9 +113,9 @@ func approvalState(s string) string {
 func kindLabel(s string) string {
 	switch s {
 	case "input":
-		return "Eingabe"
+		return "input"
 	case "output":
-		return "Ausgabe"
+		return "output"
 	}
 	return s
 }
@@ -126,27 +126,27 @@ func activityLabel(a *agwclient.Activity) string {
 	}
 	switch a.Kind {
 	case "idle":
-		return "Wartet"
+		return "Waiting"
 	case "thinking":
-		return "Denkt"
+		return "Thinking"
 	case "writing":
-		return "Schreibt"
+		return "Writing"
 	case "tool":
 		if a.Tool != "" {
-			return "Führt " + a.Tool + " aus"
+			return "Running " + a.Tool
 		}
-		return "Führt ein Werkzeug aus"
+		return "Running a tool"
 	case "waiting_approval":
-		return "Wartet auf Bestätigung"
+		return "Waiting for approval"
 	case "starting":
-		return "Startet"
+		return "Starting"
 	case "preparing":
 		if a.Tool != "" {
-			return "Bereitet " + a.Tool + " vor"
+			return "Preparing " + a.Tool
 		}
-		return "Bereitet einen Werkzeugaufruf vor"
+		return "Preparing a tool call"
 	case "compacting":
-		return "Fasst den Kontext zusammen"
+		return "Summarising the context"
 	}
 	return a.Kind
 }
@@ -158,7 +158,7 @@ func shortID(id string) string {
 	return id
 }
 
-// fmtInt setzt Tausenderpunkte („983.616").
+// fmtInt inserts thousands separators ("983,616").
 func fmtInt(v int64) string {
 	neg := v < 0
 	if neg {
@@ -168,7 +168,7 @@ func fmtInt(v int64) string {
 	var b strings.Builder
 	for i, r := range s {
 		if i > 0 && (len(s)-i)%3 == 0 {
-			b.WriteByte('.')
+			b.WriteByte(',')
 		}
 		b.WriteRune(r)
 	}
@@ -178,45 +178,45 @@ func fmtInt(v int64) string {
 	return b.String()
 }
 
-// fmtContext beschreibt Kontextauslastung, Automatik und Zahl der Kompaktierungen in einer Zeile.
+// fmtContext describes context usage, automation and number of compactions in one line.
 func fmtContext(c agwclient.Chat) string {
 	var sb strings.Builder
 	cu := c.Context
 	switch {
 	case cu == nil:
-		sb.WriteString("Kontext noch nicht gemessen")
+		sb.WriteString("context not measured yet")
 	case cu.Tokens == nil || cu.Percent == nil:
-		fmt.Fprintf(&sb, "Kontext ? / %s Tokens (neu gemessen nach der nächsten Antwort)", fmtInt(cu.Window))
+		fmt.Fprintf(&sb, "context ? / %s tokens (measured again after the next reply)", fmtInt(cu.Window))
 	default:
-		fmt.Fprintf(&sb, "Kontext %s / %s Tokens (%s %%)", fmtInt(*cu.Tokens), fmtInt(cu.Window), deNum(*cu.Percent, 0, 1))
+		fmt.Fprintf(&sb, "context %s / %s tokens (%s %%)", fmtInt(*cu.Tokens), fmtInt(cu.Window), fmtNum(*cu.Percent, 0, 1))
 	}
-	sb.WriteString(", Auto-Kompaktierung " + onOff(c.AutoCompact))
+	sb.WriteString(", auto-compaction " + onOff(c.AutoCompact))
 	if c.AutoCompact && cu != nil && cu.ThresholdTokens > 0 {
-		sb.WriteString(" ab " + fmtInt(cu.ThresholdTokens))
+		sb.WriteString(" from " + fmtInt(cu.ThresholdTokens))
 	}
 	switch {
 	case c.Compactions == 1:
-		sb.WriteString(", 1 Kompaktierung")
+		sb.WriteString(", 1 compaction")
 	case c.Compactions > 1:
-		fmt.Fprintf(&sb, ", %d Kompaktierungen", c.Compactions)
+		fmt.Fprintf(&sb, ", %d compactions", c.Compactions)
 	}
 	return sb.String()
 }
 
-// fmtWorkspace: „Arbeitsbereich gesichert: 1,2 MB, 14 Dateien (2026-09-29 17:05)".
+// fmtWorkspace: "workspace saved: 1.2 MB, 14 files (2026-09-29 17:05)".
 func fmtWorkspace(w *agwclient.Workspace) string {
 	var sb strings.Builder
 	if w == nil || w.SavedAt == "" {
-		sb.WriteString("Arbeitsbereich noch nicht gesichert")
+		sb.WriteString("workspace not saved yet")
 	} else {
-		files := fmt.Sprintf("%d Dateien", w.Files)
+		files := fmt.Sprintf("%d files", w.Files)
 		if w.Files == 1 {
-			files = "1 Datei"
+			files = "1 file"
 		}
-		fmt.Fprintf(&sb, "Arbeitsbereich gesichert: %s MB, %s (%s)", deNum(float64(w.Size)/(1<<20), 1, 1), files, fmtTime(w.SavedAt))
+		fmt.Fprintf(&sb, "workspace saved: %s MB, %s (%s)", fmtNum(float64(w.Size)/(1<<20), 1, 1), files, fmtTime(w.SavedAt))
 	}
 	if w != nil && w.SkippedReason != "" {
-		fmt.Fprintf(&sb, "; zuletzt NICHT gesichert (%s): %s", fmtTime(w.SkippedAt), w.SkippedReason)
+		fmt.Fprintf(&sb, "; last time NOT saved (%s): %s", fmtTime(w.SkippedAt), w.SkippedReason)
 	}
 	return sb.String()
 }
@@ -224,26 +224,26 @@ func fmtWorkspace(w *agwclient.Workspace) string {
 func compactionReason(r string) string {
 	switch r {
 	case "manual":
-		return "manuell"
+		return "manual"
 	case "threshold":
-		return "Schwelle erreicht"
+		return "threshold reached"
 	case "overflow":
-		return "Kontext übergelaufen"
+		return "context overflowed"
 	}
 	return r
 }
 
-// fmtCompacted: „Kontext zusammengefasst: 42.000 → ca. 3.100 Tokens".
+// fmtCompacted: "context summarised: 42.000 → approx. 3.100 tokens".
 func fmtCompacted(reason string, before, after int64) string {
-	head := "Kontext zusammengefasst"
+	head := "context summarised"
 	if reason != "" {
 		head += " (" + compactionReason(reason) + ")"
 	}
 	switch {
 	case before > 0 && after > 0:
-		return fmt.Sprintf("%s: %s → ca. %s Tokens", head, fmtInt(before), fmtInt(after))
+		return fmt.Sprintf("%s: %s → approx. %s tokens", head, fmtInt(before), fmtInt(after))
 	case before > 0:
-		return fmt.Sprintf("%s: vorher %s Tokens", head, fmtInt(before))
+		return fmt.Sprintf("%s: before %s tokens", head, fmtInt(before))
 	}
 	return head
 }
@@ -251,31 +251,31 @@ func fmtCompacted(reason string, before, after int64) string {
 func commandSource(s string) string {
 	switch s {
 	case "builtin":
-		return "eingebaut"
+		return "built-in"
 	case "extension":
-		return "Erweiterung"
+		return "extension"
 	case "prompt":
-		return "Vorlage"
+		return "prompt"
 	case "skill":
-		return "Skill"
+		return "skill"
 	}
 	return s
 }
 
 func tariffLabel(peak bool) string {
 	if peak {
-		return "Spitzentarif"
+		return "peak tariff"
 	}
-	return "Nebentarif"
+	return "off-peak tariff"
 }
 
-var dayLabels = map[string]string{"mon": "Mo", "tue": "Di", "wed": "Mi", "thu": "Do", "fri": "Fr", "sat": "Sa", "sun": "So"}
+var dayLabels = map[string]string{"mon": "Mon", "tue": "Tue", "wed": "Wed", "thu": "Thu", "fri": "Fri", "sat": "Sat", "sun": "Sun"}
 
-// fmtDays übersetzt „mon-fri" → „Mo–Fr", „sat,sun" → „Sa, So", „all" → „täglich".
+// fmtDays translates "mon-fri" → "Mon–Fri", "sat,sun" → "Sat, Sun", "all" → "daily".
 func fmtDays(d string) string {
 	d = strings.ToLower(strings.TrimSpace(d))
 	if d == "" || d == "all" {
-		return "täglich"
+		return "daily"
 	}
 	parts := strings.Split(d, ",")
 	for i, p := range parts {
@@ -289,7 +289,7 @@ func fmtDays(d string) string {
 	return strings.Join(parts, ", ")
 }
 
-// fmtWindows: „Mo–Fr 01:00–09:00 UTC; Sa 02:00–04:00 UTC".
+// fmtWindows: "Mon–Fri 01:00–09:00 UTC; Sat 02:00–04:00 UTC".
 func fmtWindows(ws []agwclient.TariffWindow) string {
 	out := make([]string, 0, len(ws))
 	for _, w := range ws {
@@ -298,15 +298,15 @@ func fmtWindows(ws []agwclient.TariffWindow) string {
 	return strings.Join(out, "; ")
 }
 
-// oneLine fasst Leerraum einschließlich Zeilenumbrüchen zu einfachen Leerzeichen zusammen.
+// oneLine collapses whitespace including line breaks into single spaces.
 func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
 
-// firstLine: erste Zeile gekürzt, dazu die Zahl weiterer Zeilen.
+// firstLine: first line truncated, plus the number of further lines.
 func firstLine(s string, max int) string {
 	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
 	out := truncate(lines[0], max)
 	if len(lines) > 1 {
-		out += fmt.Sprintf(" … (+%d Zeilen)", len(lines)-1)
+		out += fmt.Sprintf(" … (+%d lines)", len(lines)-1)
 	}
 	return out
 }
@@ -320,18 +320,18 @@ func resultMark(isError bool) string {
 
 func mainLabel(main bool) string {
 	if main {
-		return "Haupt"
+		return "main"
 	}
-	return "Sub"
+	return "sub"
 }
 
-// fmtStatus: 200 → „ok", 429 → „429 abgewiesen", sonst die Zahl.
+// fmtStatus: 200 → "ok", 429 → "429 refused", otherwise the number.
 func fmtStatus(code int) string {
 	switch {
 	case code >= 200 && code < 300:
 		return "ok"
 	case code == 429:
-		return "429 abgewiesen"
+		return "429 refused"
 	case code == 0:
 		return "–"
 	}
@@ -346,17 +346,17 @@ func llmToolNames(c agwclient.LLMCall) string {
 	return strings.Join(names, ", ")
 }
 
-// fmtLLMCallLine: „Modellaufruf Sub · ein 500, aus 100, Cache 0 · 0,0012 USD · Werkzeuge bash · ok".
+// fmtLLMCallLine: "model call sub · in 500, out 100, cache 0 · 0.0012 USD · tools bash · ok".
 func fmtLLMCallLine(c agwclient.LLMCall) string {
-	s := fmt.Sprintf("Modellaufruf %s · ein %s, aus %s, Cache %s · %s", mainLabel(c.Main),
+	s := fmt.Sprintf("model call %s · in %s, out %s, cache %s · %s", mainLabel(c.Main),
 		fmtInt(c.Input), fmtInt(c.Output), fmtInt(c.CacheRead), fmtCost(c.Cost))
 	if t := llmToolNames(c); t != "" {
-		s += " · Werkzeuge " + t
+		s += " · tools " + t
 	}
 	return s + " · " + fmtStatus(c.Status)
 }
 
-// fmtClock: Uhrzeit (lokal) eines RFC-3339-Zeitpunkts.
+// fmtClock: time of day (local) of an RFC 3339 timestamp.
 func fmtClock(s string) string {
 	t, err := time.Parse(time.RFC3339, s)
 	if err != nil {

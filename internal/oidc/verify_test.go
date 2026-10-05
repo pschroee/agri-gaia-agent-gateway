@@ -25,7 +25,7 @@ func TestVerify(t *testing.T) {
 	u := oidctest.User{Sub: "s1", Username: "anna"}
 	good := is.AccessClaims(u)
 	if c, err := s.verify(ctx, is.Sign(good)); err != nil || c.Sub != "s1" || c.Azp != "agw-agent" {
-		t.Fatalf("gültig: %+v %v", c, err)
+		t.Fatalf("valid: %+v %v", c, err)
 	}
 	with := func(k string, v any) map[string]any {
 		m := map[string]any{}
@@ -37,15 +37,15 @@ func TestVerify(t *testing.T) {
 	}
 	none := strings.Join([]string{"eyJhbGciOiJub25lIn0", strings.Split(is.Sign(good), ".")[1], ""}, ".")
 	for name, tok := range map[string]string{
-		"fremder Schlüssel": is.SignForeign(good),
-		"fremder Issuer":    is.Sign(with("iss", "https://evil.example/realms/test")),
-		"abgelaufen":        is.Sign(with("exp", time.Now().Add(-time.Hour).Unix())),
-		"ohne exp":          is.Sign(with("exp", 0)),
-		"alg none":          none,
-		"kein JWT":          "abc",
+		"foreign key":    is.SignForeign(good),
+		"foreign issuer": is.Sign(with("iss", "https://evil.example/realms/test")),
+		"expired":        is.Sign(with("exp", time.Now().Add(-time.Hour).Unix())),
+		"without exp":    is.Sign(with("exp", 0)),
+		"alg none":       none,
+		"not a JWT":      "abc",
 	} {
 		if _, err := s.verify(ctx, tok); err == nil {
-			t.Errorf("%s: angenommen", name)
+			t.Errorf("%s: accepted", name)
 		}
 	}
 }
@@ -65,21 +65,21 @@ func TestCheckLogin(t *testing.T) {
 	}
 	access := is.Sign(is.AccessClaims(u))
 	if got, _, err := s.checkLogin(ctx, tokenResp{ID: id(nil), Access: access}, "n1"); err != nil || got.Username != "anna" || got.Name != "Anna" {
-		t.Fatalf("gültig: %+v %v", got, err)
+		t.Fatalf("valid: %+v %v", got, err)
 	}
 	otherClient := is.AccessClaims(u)
 	otherClient["azp"] = "frontend"
 	otherSub := is.AccessClaims(oidctest.User{Sub: "s2"})
 	for name, tr := range map[string]tokenResp{
-		"falsche nonce":          {ID: id(func(c map[string]any) { c["nonce"] = "n2" }), Access: access},
-		"fremde Zielgruppe":      {ID: id(func(c map[string]any) { c["aud"] = "frontend"; c["azp"] = "frontend" }), Access: access},
-		"ohne ID-Token":          {Access: access},
-		"Token für frontend":     {ID: id(nil), Access: is.Sign(otherClient)},
-		"Token anderer Nutzer":   {ID: id(nil), Access: is.Sign(otherSub)},
-		"Zugangstoken gefälscht": {ID: id(nil), Access: is.SignForeign(is.AccessClaims(u))},
+		"wrong nonce":           {ID: id(func(c map[string]any) { c["nonce"] = "n2" }), Access: access},
+		"foreign audience":      {ID: id(func(c map[string]any) { c["aud"] = "frontend"; c["azp"] = "frontend" }), Access: access},
+		"without ID token":      {Access: access},
+		"token for frontend":    {ID: id(nil), Access: is.Sign(otherClient)},
+		"token of another user": {ID: id(nil), Access: is.Sign(otherSub)},
+		"forged access token":   {ID: id(nil), Access: is.SignForeign(is.AccessClaims(u))},
 	} {
 		if _, _, err := s.checkLogin(ctx, tr, "n1"); err == nil {
-			t.Errorf("%s: angenommen", name)
+			t.Errorf("%s: accepted", name)
 		}
 	}
 }

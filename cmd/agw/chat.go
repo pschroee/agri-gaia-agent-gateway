@@ -27,15 +27,15 @@ func (a *app) cmdChatList(args []string) error {
 		return a.printJSON(cs)
 	}
 	if len(cs) == 0 {
-		fmt.Fprintln(a.stdout, "Noch keine Chats.")
+		fmt.Fprintln(a.stdout, "No chats yet.")
 		return nil
 	}
 	tw := a.table()
-	fmt.Fprintln(tw, "ID\tTitel\tModell\tVariante\tZustand\tInternet\tTokens\tKosten\tArtefakte\toffen\tgeändert")
+	fmt.Fprintln(tw, "ID\tTitle\tModel\tVariant\tState\tInternet\tTokens\tCost\tArtifacts\tpending\tchanged")
 	for _, c := range cs {
 		st := chatState(c.State)
 		if c.Running {
-			st += ", läuft"
+			st += ", running"
 		}
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%d\t%s\t%d\t%d\t%s\n", c.ID, truncate(c.Title, 40), c.Model, c.Variant,
 			st, onOff(c.Internet), c.Tokens.Total, fmtCost(c.Cost), c.ArtifactCount, c.PendingApprovals, fmtTime(c.UpdatedAt))
@@ -44,12 +44,12 @@ func (a *app) cmdChatList(args []string) error {
 }
 
 func (a *app) chatFlags(fs *flag.FlagSet, req *agwclient.CreateChatRequest, inet *triBool, maxSub *optInt) {
-	fs.StringVar(&req.Model, "model", "", "Modell (Kennung aus agw models)")
-	fs.StringVar(&req.Variant, "variant", "", "Anbindung: cli, mcp, api oder beide")
-	fs.StringVar(&req.Title, "title", "", "Titel des Chats")
-	fs.Var(inet, "internet", "Internetzugang der Sandbox (true|false)")
-	fs.Var(maxSub, "max-subagents", "höchstens so viele Subagenten (Standard: Voreinstellung des Servers)")
-	fs.Func("delegation", "übertragene Rechte als JSON-Datei (siehe docs/plan-delegation-rest-plattform.md); - liest von stdin", func(p string) error {
+	fs.StringVar(&req.Model, "model", "", "model (ID from agw models)")
+	fs.StringVar(&req.Variant, "variant", "", "binding: cli, mcp, api or both")
+	fs.StringVar(&req.Title, "title", "", "title of the chat")
+	fs.Var(inet, "internet", "internet access of the sandbox (true|false)")
+	fs.Var(maxSub, "max-subagents", "at most this many subagents (default: server default)")
+	fs.Func("delegation", "delegated rights as a JSON file (see docs/plan-delegation-rest-platform.md); - reads from stdin", func(p string) error {
 		var b []byte
 		var err error
 		if p == "-" {
@@ -61,7 +61,7 @@ func (a *app) chatFlags(fs *flag.FlagSet, req *agwclient.CreateChatRequest, inet
 			return err
 		}
 		if !json.Valid(b) {
-			return fmt.Errorf("%s ist kein gültiges JSON", p)
+			return fmt.Errorf("%s is not valid JSON", p)
 		}
 		req.Delegation = b
 		return nil
@@ -74,7 +74,7 @@ func (a *app) cmdChatNew(args []string) error {
 	var inet triBool
 	var maxSub optInt
 	a.chatFlags(fs, &req, &inet, &maxSub)
-	pos, err := a.parse(fs, args, 0, -1, "agw chat new [--model M] [--variant cli|mcp|api|beide] [--title T] [--internet=true|false] [--max-subagents N] [--delegation datei.json] [nachricht]")
+	pos, err := a.parse(fs, args, 0, -1, "agw chat new [--model M] [--variant cli|mcp|api|both] [--title T] [--internet=true|false] [--max-subagents N] [--delegation file.json] [message]")
 	if err != nil {
 		return err
 	}
@@ -94,8 +94,8 @@ func (a *app) cmdChatNew(args []string) error {
 
 func (a *app) cmdChatShow(args []string) error {
 	fs := a.flags("chat show")
-	thinking := fs.Bool("thinking", false, "Thinking-Blöcke anzeigen")
-	summary := fs.Bool("summary", false, "Zusammenfassungen der Kompaktierungen anzeigen")
+	thinking := fs.Bool("thinking", false, "show thinking blocks")
+	summary := fs.Bool("summary", false, "show the summaries of the compactions")
 	pos, err := a.parse(fs, args, 1, 1, "agw chat show <id> [--thinking] [--summary] [--json]")
 	if err != nil {
 		return err
@@ -110,33 +110,33 @@ func (a *app) cmdChatShow(args []string) error {
 	w := a.stdout
 	c := det.Chat
 	fmt.Fprintf(w, "Chat %s – %s\n", c.ID, c.Title)
-	fmt.Fprintf(w, "Modell %s · Variante %s · Zustand %s · Internet %s · läuft %s", c.Model, c.Variant, chatState(c.State), onOff(c.Internet), yesNo(c.Running))
+	fmt.Fprintf(w, "model %s · variant %s · state %s · internet %s · running %s", c.Model, c.Variant, chatState(c.State), onOff(c.Internet), yesNo(c.Running))
 	if c.SlotID != "" {
-		fmt.Fprintf(w, " · Platz %s", c.SlotID)
+		fmt.Fprintf(w, " · slot %s", c.SlotID)
 	}
-	fmt.Fprintf(w, "\nTokens %s · %s\n", fmtTokens(c.Tokens), fmtChatCost(c))
-	fmt.Fprintf(w, "Subagenten %d/%d · Modellaufrufe %d\n", c.Subagents, c.MaxSubagents, c.LLMCalls)
+	fmt.Fprintf(w, "\ntokens %s · %s\n", fmtTokens(c.Tokens), fmtChatCost(c))
+	fmt.Fprintf(w, "subagents %d/%d · model calls %d\n", c.Subagents, c.MaxSubagents, c.LLMCalls)
 	fmt.Fprintln(w, fmtContext(c))
 	fmt.Fprintln(w, fmtWorkspace(c.Workspace))
 	if c.Queued > 0 {
-		fmt.Fprintf(w, "Eingereiht: %d Nachricht(en)", c.Queued)
+		fmt.Fprintf(w, "Queued: %d message(s)", c.Queued)
 		if c.QueueHeld {
 			if r := holdReasonText(c.HoldReason); r != "" {
 				fmt.Fprintf(w, " – %s", r)
 			}
-			fmt.Fprintf(w, " – gehen mit der nächsten Nachricht mit (agw chat queue %s --send)", c.ID)
+			fmt.Fprintf(w, " – go along with the next message (agw chat queue %s --send)", c.ID)
 		}
 		fmt.Fprintln(w)
 	}
 	if c.BackgroundRunning > 0 {
-		fmt.Fprintf(w, "Hintergrundaufgaben: %d laufen (agw chat bg %s)\n", c.BackgroundRunning, c.ID)
+		fmt.Fprintf(w, "Background tasks: %d running (agw chat bg %s)\n", c.BackgroundRunning, c.ID)
 	}
 	if c.CreatedAt != "" {
-		fmt.Fprintf(w, "angelegt %s · geändert %s\n", fmtTime(c.CreatedAt), fmtTime(c.UpdatedAt))
+		fmt.Fprintf(w, "created %s · changed %s\n", fmtTime(c.CreatedAt), fmtTime(c.UpdatedAt))
 	}
 	fmt.Fprintln(w)
-	// Spitzen-/Nebentarif nur vermerken, wenn das Modell überhaupt einen Tarif hat; ohne Tarif
-	// liefert der Server peak=false, das wäre als „Nebentarif" irreführend.
+	// Note peak/off-peak tariff only if the model has a tariff at all; without a tariff
+	// the server returns peak=false, which would be misleading as "off-peak tariff".
 	tariff := false
 	if ms, err := a.c.Models(a.ctx); err == nil {
 		for _, m := range ms {
@@ -149,10 +149,10 @@ func (a *app) cmdChatShow(args []string) error {
 		a.printStoredMessage(sm, *thinking, *summary, tariff)
 	}
 	if len(det.Artifacts) > 0 {
-		fmt.Fprintln(w, "\nArtefakte:")
+		fmt.Fprintln(w, "\nArtifacts:")
 		tw := a.table()
 		for _, ar := range det.Artifacts {
-			fmt.Fprintf(tw, "  %s\t%s\t%d Bytes\tüber %s\t%s\n", kindLabel(ar.Kind), ar.Name, ar.Size, ar.Via, fmtTime(ar.CreatedAt))
+			fmt.Fprintf(tw, "  %s\t%s\t%d bytes\tvia %s\t%s\n", kindLabel(ar.Kind), ar.Name, ar.Size, ar.Via, fmtTime(ar.CreatedAt))
 		}
 		tw.Flush()
 	}
@@ -163,9 +163,9 @@ func (a *app) cmdChatShow(args []string) error {
 		}
 	}
 	if len(open) > 0 {
-		fmt.Fprintln(w, "\nOffene Bestätigungen:")
+		fmt.Fprintln(w, "\nPending approvals:")
 		for _, ap := range open {
-			fmt.Fprintf(w, "  %s  %s (über %s) – agw approve %s | agw reject %s\n", ap.ID, approvalSubject(ap), ap.Via, ap.ID, ap.ID)
+			fmt.Fprintf(w, "  %s  %s (via %s) – agw approve %s | agw reject %s\n", ap.ID, approvalSubject(ap), ap.Via, ap.ID, ap.ID)
 		}
 	}
 	return nil
@@ -175,18 +175,18 @@ func indent(s, prefix string) string {
 	return strings.ReplaceAll(strings.TrimRight(s, "\n"), "\n", "\n"+prefix)
 }
 
-// approvalSubject beschreibt, worum eine Bestätigung bittet.
+// approvalSubject describes what an approval asks for.
 func approvalSubject(ap agwclient.Approval) string {
 	if ap.Kind == "internet_access" {
-		return "Internetzugang: " + orDefault(ap.Name, "(ohne Begründung)")
+		return "Internet access: " + orDefault(ap.Name, "(no reason given)")
 	}
 	if ap.Kind == "platform_write" {
-		return "Plattform-Aufruf: " + ap.Name
+		return "Platform call: " + ap.Name
 	}
-	return fmt.Sprintf("%s (%d Bytes)", ap.Name, ap.Size)
+	return fmt.Sprintf("%s (%d bytes)", ap.Name, ap.Size)
 }
 
-// fmtMsgCost: „0,0012 USD (Nebentarif)"; leer, wenn der Server keine Kosten nennt.
+// fmtMsgCost: "0.0012 USD (off-peak tariff)"; empty if the server reports no costs.
 func fmtMsgCost(sm agwclient.StoredMessage, tariff bool) string {
 	if sm.Cost == nil {
 		return ""
@@ -226,7 +226,7 @@ func (a *app) printStoredMessage(sm agwclient.StoredMessage, thinking, summary, 
 			fmt.Fprintf(w, "%s\n", a.dim("  "+indent(cm.Summary, "  ")))
 		}
 	case "user":
-		fmt.Fprintf(w, "Nutzer: %s\n", indent(textOf(m.Content), "        "))
+		fmt.Fprintf(w, "User: %s\n", indent(textOf(m.Content), "      "))
 	case "assistant":
 		var text []string
 		for _, b := range blocks(m.Content) {
@@ -237,11 +237,11 @@ func (a *app) printStoredMessage(sm agwclient.StoredMessage, thinking, summary, 
 				}
 			case "thinking":
 				if thinking && strings.TrimSpace(b.Thinking) != "" {
-					fmt.Fprintf(w, "%s\n", a.dim("  (denkt) "+indent(b.Thinking, "          ")))
+					fmt.Fprintf(w, "%s\n", a.dim("  (thinking) "+indent(b.Thinking, "             ")))
 				}
 			case "toolCall":
 				if len(text) > 0 {
-					fmt.Fprintf(w, "Assistent: %s\n", indent(strings.Join(text, ""), "           "))
+					fmt.Fprintf(w, "Assistant: %s\n", indent(strings.Join(text, ""), "           "))
 					text = nil
 				}
 				line := "  ▶ " + b.Name
@@ -252,13 +252,13 @@ func (a *app) printStoredMessage(sm agwclient.StoredMessage, thinking, summary, 
 			}
 		}
 		if len(text) > 0 {
-			fmt.Fprintf(w, "Assistent: %s\n", indent(strings.Join(text, ""), "           "))
+			fmt.Fprintf(w, "Assistant: %s\n", indent(strings.Join(text, ""), "           "))
 		}
 		if m.StopReason == "error" {
-			fmt.Fprintf(w, "  Fehler: %s\n", m.ErrorMessage)
+			fmt.Fprintf(w, "  Error: %s\n", m.ErrorMessage)
 		}
 		if c := fmtMsgCost(sm, tariff); c != "" {
-			fmt.Fprintf(w, "%s\n", a.dim("  Kosten "+c))
+			fmt.Fprintf(w, "%s\n", a.dim("  cost "+c))
 		}
 	case "toolResult":
 		t := strings.TrimRight(textOf(m.Content), "\n")
@@ -269,33 +269,33 @@ func (a *app) printStoredMessage(sm agwclient.StoredMessage, thinking, summary, 
 		}
 		first := truncate(lines[0], 160)
 		if len(lines) > 1 {
-			first += fmt.Sprintf(" … (+%d Zeilen)", len(lines)-1)
+			first += fmt.Sprintf(" … (+%d lines)", len(lines)-1)
 		}
 		fmt.Fprintf(w, "  %s %s\n", mark, a.dim(first))
 	}
 }
 
-// fmtChatCost: „Kosten 0,0500 USD (davon 0,0100 USD außerhalb der Hauptantworten)".
-// cost stammt vom LLM-Proxy und schließt Subagenten und Kompaktierungen ein.
+// fmtChatCost: "cost 0.0500 USD (of which 0.0100 USD outside the main replies)".
+// cost comes from the LLM proxy and includes subagents and compactions.
 func fmtChatCost(c agwclient.Chat) string {
-	s := "Kosten " + fmtCost(c.Cost)
+	s := "cost " + fmtCost(c.Cost)
 	if c.CostOther > 0 {
-		s += " (davon " + fmtCost(c.CostOther) + " außerhalb der Hauptantworten)"
+		s += " (of which " + fmtCost(c.CostOther) + " outside the main replies)"
 	}
 	return s
 }
 
-// streamOpts: gemeinsame Schalter für send --wait, cmd --wait und run.
+// streamOpts: common switches for send --wait, cmd --wait and run.
 type streamOpts struct {
 	auto, reject, thinking, verbose *bool
 }
 
 func approvalFlags(fs *flag.FlagSet) streamOpts {
 	return streamOpts{
-		auto:     fs.Bool("auto-approve", false, "Artefakte und Internetzugang automatisch bestätigen"),
-		reject:   fs.Bool("auto-reject", false, "Artefakte und Internetzugang automatisch ablehnen"),
-		thinking: fs.Bool("thinking", false, "Thinking gedimmt auf stderr ausgeben"),
-		verbose:  fs.Bool("verbose", false, "jeden Modellaufruf mit Kosten und Eingriffe der Subagenten-Grenze zeigen"),
+		auto:     fs.Bool("auto-approve", false, "approve artifacts and internet access automatically"),
+		reject:   fs.Bool("auto-reject", false, "reject artifacts and internet access automatically"),
+		thinking: fs.Bool("thinking", false, "print thinking dimmed on stderr"),
+		verbose:  fs.Bool("verbose", false, "show every model call with costs and the interventions of the subagent limit"),
 	}
 }
 
@@ -309,7 +309,7 @@ func (a *app) newStreamer(chatID string, o streamOpts) (*streamer, error) {
 
 func (a *app) newStreamerMode(chatID string, auto, reject, thinking bool) (*streamer, error) {
 	if auto && reject {
-		return nil, usagef("--auto-approve und --auto-reject schließen sich aus")
+		return nil, usagef("--auto-approve and --auto-reject are mutually exclusive")
 	}
 	s := newStreamer(a.stdout, a.stderr)
 	s.in = a.stdin
@@ -328,7 +328,7 @@ func (a *app) newStreamerMode(chatID string, auto, reject, thinking bool) (*stre
 
 func (a *app) cmdChatSend(args []string) error {
 	fs := a.flags("chat send")
-	wait := fs.Bool("wait", false, "Antwort live ausgeben, bis pi fertig ist")
+	wait := fs.Bool("wait", false, "print the reply live until pi is done")
 	o := approvalFlags(fs)
 	pos, err := a.parse(fs, args, 2, -1, "agw chat send <id> <text> [--wait] [--auto-approve|--auto-reject] [--thinking] [--verbose]")
 	if err != nil {
@@ -337,7 +337,7 @@ func (a *app) cmdChatSend(args []string) error {
 	id, text := pos[0], strings.Join(pos[1:], " ")
 	if !*wait {
 		if *o.auto || *o.reject {
-			return usagef("--auto-approve/--auto-reject wirken nur mit --wait")
+			return usagef("--auto-approve/--auto-reject only work with --wait")
 		}
 		res, err := a.c.Send(a.ctx, id, text)
 		if err != nil {
@@ -348,11 +348,11 @@ func (a *app) cmdChatSend(args []string) error {
 		}
 		switch {
 		case res.Queued:
-			fmt.Fprintf(a.stdout, "Eingereiht (%s); geht an den Agenten, sobald der laufende Durchgang endet.\n", res.QueueID)
+			fmt.Fprintf(a.stdout, "Queued (%s); goes to the agent as soon as the running turn ends.\n", res.QueueID)
 		case res.Resumed:
-			fmt.Fprintln(a.stdout, "Gesendet; der Chat wurde in einer frischen Sandbox fortgesetzt.")
+			fmt.Fprintln(a.stdout, "Sent; the chat was resumed in a fresh sandbox.")
 		default:
-			fmt.Fprintln(a.stdout, "Gesendet.")
+			fmt.Fprintln(a.stdout, "Sent.")
 		}
 		return nil
 	}
@@ -363,32 +363,32 @@ func (a *app) cmdChatSend(args []string) error {
 	return a.streamToEnd(id, text, s, true)
 }
 
-// streamToEnd sendet, gibt die Antwort aus und schließt mit einer Summenzeile auf stderr.
+// streamToEnd sends, prints the reply and ends with a totals line on stderr.
 func (a *app) streamToEnd(id, text string, s *streamer, checkRunning bool) error {
 	return a.actToEnd(id, s, checkRunning, func(ctx context.Context) (agwclient.SendResult, error) {
 		return a.c.Send(ctx, id, text)
 	})
 }
 
-// actToEnd: wie streamToEnd, aber mit beliebiger Aktion (Nachricht oder Slash-Befehl).
+// actToEnd: like streamToEnd, but with any action (message or slash command).
 func (a *app) actToEnd(id string, s *streamer, checkRunning bool, act func(context.Context) (agwclient.SendResult, error)) error {
 	_, err := actAndFollow(a.ctx, a.c, id, s, checkRunning, act)
 	if err != nil {
 		if a.ctx.Err() != nil {
-			fmt.Fprintf(a.stderr, "\nAbgebrochen. Der Agent arbeitet ggf. weiter: agw chat abort %s\n", id)
+			fmt.Fprintf(a.stderr, "\nAborted. The agent may keep working: agw chat abort %s\n", id)
 		}
 		return err
 	}
 	if det, err := a.c.Chat(a.ctx, id); err == nil {
 		c := det.Chat
-		line := fmt.Sprintf("Chat %s · Tokens %s · %s", c.ID, fmtTokens(c.Tokens), fmtChatCost(c))
+		line := fmt.Sprintf("chat %s · tokens %s · %s", c.ID, fmtTokens(c.Tokens), fmtChatCost(c))
 		if c.Subagents > 0 {
-			line += fmt.Sprintf(" · Subagenten %d/%d", c.Subagents, c.MaxSubagents)
+			line += fmt.Sprintf(" · subagents %d/%d", c.Subagents, c.MaxSubagents)
 		}
 		fmt.Fprintf(a.stderr, "%s\n", a.dim(line))
 		fmt.Fprintf(a.stderr, "%s\n", a.dim(fmtContext(c)))
 	} else {
-		fmt.Fprintf(a.stderr, "Chat %s (Summen nicht abrufbar: %v)\n", id, err)
+		fmt.Fprintf(a.stderr, "chat %s (totals not available: %v)\n", id, err)
 	}
 	if s.failed {
 		return errSilentFailure
@@ -407,22 +407,22 @@ func (a *app) cmdChatAction(action string, args []string) error {
 	switch action {
 	case "suspend":
 		c, err = a.c.Suspend(a.ctx, pos[0])
-		msg = "ruht; die Sandbox ist abgebaut"
+		msg = "is idle; the sandbox has been removed"
 	case "abort":
 		c, err = a.c.Abort(a.ctx, pos[0])
-		msg = "– laufende Antwort abgebrochen"
+		msg = "– running reply aborted"
 	}
 	if err != nil {
 		var ae *agwclient.APIError
 		if action == "suspend" && errors.As(err, &ae) && ae.Status == 409 {
-			return fmt.Errorf("Chat kann nicht ruhen, solange eine Bestätigung offen ist (agw approvals --chat %s): %s", pos[0], ae.Message)
+			return fmt.Errorf("chat cannot go idle while an approval is pending (agw approvals --chat %s): %s", pos[0], ae.Message)
 		}
 		return err
 	}
 	if a.json {
 		return a.printJSON(c)
 	}
-	fmt.Fprintf(a.stdout, "Chat %s %s (Zustand %s).\n", c.ID, msg, chatState(c.State))
+	fmt.Fprintf(a.stdout, "Chat %s %s (state %s).\n", c.ID, msg, chatState(c.State))
 	return nil
 }
 
@@ -434,7 +434,7 @@ func (a *app) cmdChatInternet(args []string) error {
 	}
 	var t triBool
 	if t.Set(pos[1]) != nil {
-		return usagef("Aufruf: agw chat internet <id> on|off")
+		return usagef("usage: agw chat internet <id> on|off")
 	}
 	c, err := a.c.SetInternet(a.ctx, pos[0], t.val)
 	if err != nil {
@@ -443,21 +443,21 @@ func (a *app) cmdChatInternet(args []string) error {
 	if a.json {
 		return a.printJSON(c)
 	}
-	when := "sofort"
+	when := "immediately"
 	if c.State != "active" {
-		when = "beim nächsten Fortsetzen"
+		when = "on the next resume"
 	}
-	fmt.Fprintf(a.stdout, "Internet für Chat %s %s (wirkt %s).\n", c.ID, onOff(c.Internet), when)
+	fmt.Fprintf(a.stdout, "Internet for chat %s %s (takes effect %s).\n", c.ID, onOff(c.Internet), when)
 	return nil
 }
 
 func (a *app) printArtifacts(arts []agwclient.Artifact) error {
 	if len(arts) == 0 {
-		fmt.Fprintln(a.stdout, "Keine Artefakte.")
+		fmt.Fprintln(a.stdout, "No artifacts.")
 		return nil
 	}
 	tw := a.table()
-	fmt.Fprintln(tw, "Art\tName\tGröße\tTyp\tüber\tSHA-256\tangelegt")
+	fmt.Fprintln(tw, "Kind\tName\tSize\tType\tvia\tSHA-256\tcreated")
 	for _, ar := range arts {
 		sha := ar.SHA256
 		if len(sha) > 12 {
@@ -470,7 +470,7 @@ func (a *app) printArtifacts(arts []agwclient.Artifact) error {
 
 func (a *app) cmdChatUpload(args []string) error {
 	fs := a.flags("chat upload")
-	pos, err := a.parse(fs, args, 2, -1, "agw chat upload <id> <datei>...")
+	pos, err := a.parse(fs, args, 2, -1, "agw chat upload <id> <file>...")
 	if err != nil {
 		return err
 	}
@@ -484,7 +484,7 @@ func (a *app) cmdChatUpload(args []string) error {
 	if err := a.printArtifacts(arts); err != nil {
 		return err
 	}
-	fmt.Fprintln(a.stdout, a.dim("In der Sandbox unter /workspace/inputs/."))
+	fmt.Fprintln(a.stdout, a.dim("In the sandbox under /workspace/inputs/."))
 	return nil
 }
 
@@ -506,14 +506,14 @@ func (a *app) cmdChatArtifacts(args []string) error {
 
 func (a *app) cmdChatDownload(args []string) error {
 	fs := a.flags("chat download")
-	kind := fs.String("kind", "output", "input oder output")
-	out := fs.String("o", "", "Zieldatei (Standard: Name des Artefakts, - für stdout)")
-	pos, err := a.parse(fs, args, 2, 2, "agw chat download <id> <name> [--kind input|output] [-o datei]")
+	kind := fs.String("kind", "output", "input or output")
+	out := fs.String("o", "", "target file (default: name of the artifact, - for stdout)")
+	pos, err := a.parse(fs, args, 2, 2, "agw chat download <id> <name> [--kind input|output] [-o file]")
 	if err != nil {
 		return err
 	}
 	if *kind != "input" && *kind != "output" {
-		return usagef("--kind muss input oder output sein")
+		return usagef("--kind must be input or output")
 	}
 	id, name := pos[0], pos[1]
 	if *out == "-" {
@@ -524,7 +524,7 @@ func (a *app) cmdChatDownload(args []string) error {
 	if dst == "" {
 		dst = filepath.Base(name)
 		if dst == "." || dst == "/" || dst == ".." {
-			return usagef("Kein brauchbarer Dateiname – bitte -o angeben")
+			return usagef("no usable file name – please give -o")
 		}
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(dst), ".agw-download-*")
@@ -542,7 +542,7 @@ func (a *app) cmdChatDownload(args []string) error {
 		os.Remove(tmp.Name())
 		return err
 	}
-	fmt.Fprintf(a.stderr, "%d Bytes nach %s geschrieben.\n", n, dst)
+	fmt.Fprintf(a.stderr, "%d bytes written to %s.\n", n, dst)
 	return nil
 }
 
@@ -555,7 +555,7 @@ func (a *app) cmdChatSession(args []string) error {
 	return a.c.Session(a.ctx, pos[0], a.stdout)
 }
 
-// ---- Kompaktierung und Slash-Befehle --------------------------------------------------------
+// ---- compaction and slash commands ----------------------------------------------------------
 
 func (a *app) cmdChatAutocompact(args []string) error {
 	fs := a.flags("chat autocompact")
@@ -565,7 +565,7 @@ func (a *app) cmdChatAutocompact(args []string) error {
 	}
 	var t triBool
 	if t.Set(pos[1]) != nil {
-		return usagef("Aufruf: agw chat autocompact <id> on|off")
+		return usagef("usage: agw chat autocompact <id> on|off")
 	}
 	c, err := a.c.SetAutoCompact(a.ctx, pos[0], t.val)
 	if err != nil {
@@ -574,7 +574,7 @@ func (a *app) cmdChatAutocompact(args []string) error {
 	if a.json {
 		return a.printJSON(c)
 	}
-	fmt.Fprintf(a.stdout, "Auto-Kompaktierung für Chat %s %s.\n", c.ID, onOff(c.AutoCompact))
+	fmt.Fprintf(a.stdout, "Auto-compaction for chat %s %s.\n", c.ID, onOff(c.AutoCompact))
 	return nil
 }
 
@@ -595,11 +595,11 @@ func (a *app) cmdChatCommands(args []string) error {
 		return a.printJSON(cmds)
 	}
 	if len(cmds) == 0 {
-		fmt.Fprintln(a.stdout, "Keine Befehle.")
+		fmt.Fprintln(a.stdout, "No commands.")
 		return nil
 	}
 	tw := a.table()
-	fmt.Fprintln(tw, "Name\tQuelle\tBeschreibung")
+	fmt.Fprintln(tw, "Name\tSource\tDescription")
 	for _, c := range cmds {
 		name := "/" + c.Name
 		if c.Args != "" {
@@ -612,24 +612,24 @@ func (a *app) cmdChatCommands(args []string) error {
 
 func (a *app) cmdChatCmd(args []string) error {
 	fs := a.flags("chat cmd")
-	wait := fs.Bool("wait", false, "warten, bis der Befehl fertig ist (bei /compact bis zum Ende der Kompaktierung)")
+	wait := fs.Bool("wait", false, "wait until the command is done (for /compact until the compaction ends)")
 	o := approvalFlags(fs)
-	usage := "agw chat cmd <id> \"/befehl …\" [--wait] [--auto-approve|--auto-reject] [--thinking] [--verbose]"
+	usage := "agw chat cmd <id> \"/command …\" [--wait] [--auto-approve|--auto-reject] [--thinking] [--verbose]"
 	pos, err := a.parse(fs, args, 2, -1, usage)
 	if err != nil {
 		return err
 	}
 	line := strings.TrimSpace(strings.Join(pos[1:], " "))
 	if !strings.HasPrefix(line, "/") || len(line) < 2 {
-		return usagef("Ein Befehl beginnt mit „/\" (agw chat commands %s zeigt alle) – Aufruf: %s", pos[0], usage)
+		return usagef("a command starts with \"/\" (agw chat commands %s shows all) – usage: %s", pos[0], usage)
 	}
 	return a.runCommand(pos[0], line, *wait, o)
 }
 
 func (a *app) cmdChatCompact(args []string) error {
 	fs := a.flags("chat compact")
-	wait := fs.Bool("wait", false, "warten, bis die Kompaktierung fertig ist")
-	pos, err := a.parse(fs, args, 1, -1, "agw chat compact <id> [anweisungen] [--wait]")
+	wait := fs.Bool("wait", false, "wait until the compaction is done")
+	pos, err := a.parse(fs, args, 1, -1, "agw chat compact <id> [instructions] [--wait]")
 	if err != nil {
 		return err
 	}
@@ -641,17 +641,17 @@ func (a *app) cmdChatCompact(args []string) error {
 	return a.runCommand(pos[0], line, *wait, streamOpts{&f, &f, &f, &f})
 }
 
-// commandError formuliert den 409 bei /compact verständlich.
+// commandError phrases the 409 for /compact understandably.
 func commandError(id, name string, err error) error {
 	var ae *agwclient.APIError
 	if name == "compact" && errors.As(err, &ae) && ae.Status == 409 {
-		return fmt.Errorf("Der Agent arbeitet gerade; /compact geht erst danach (agw chat abort %s bricht ab)", id)
+		return fmt.Errorf("the agent is working right now; /compact only works afterwards (agw chat abort %s aborts)", id)
 	}
 	return err
 }
 
-// runCommand führt einen Slash-Befehl aus. Mit wait wird vorher abonniert und bei /compact bis
-// compaction_end, sonst bis agent_settled mitgelesen; /autocompact liefert keine Ereignisse.
+// runCommand runs a slash command. With wait it subscribes first and follows until
+// compaction_end for /compact, otherwise until agent_settled; /autocompact delivers no events.
 func (a *app) runCommand(id, line string, wait bool, o streamOpts) error {
 	name, _, _ := strings.Cut(strings.TrimPrefix(line, "/"), " ")
 	act := func(ctx context.Context) (agwclient.SendResult, error) {
@@ -663,7 +663,7 @@ func (a *app) runCommand(id, line string, wait bool, o streamOpts) error {
 	}
 	if !wait || name == "autocompact" {
 		if *o.auto || *o.reject {
-			return usagef("--auto-approve/--auto-reject wirken nur mit --wait")
+			return usagef("--auto-approve/--auto-reject only work with --wait")
 		}
 		res, err := a.c.RunCommand(a.ctx, id, line)
 		if err != nil {
@@ -674,18 +674,18 @@ func (a *app) runCommand(id, line string, wait bool, o streamOpts) error {
 		}
 		switch name {
 		case "compact":
-			fmt.Fprintf(a.stdout, "Kompaktierung gestartet – agw chat show %s zeigt das Ergebnis, --wait wartet darauf.\n", id)
+			fmt.Fprintf(a.stdout, "Compaction started – agw chat show %s shows the result, --wait waits for it.\n", id)
 		case "autocompact":
-			fmt.Fprintln(a.stdout, "Auto-Kompaktierung umgeschaltet.")
+			fmt.Fprintln(a.stdout, "Auto-compaction toggled.")
 		default:
 			if res.Queued {
-				fmt.Fprintln(a.stdout, "Befehl eingereiht; geht an den Agenten, sobald der laufende Durchgang endet.")
+				fmt.Fprintln(a.stdout, "Command queued; goes to the agent as soon as the running turn ends.")
 			} else {
-				fmt.Fprintln(a.stdout, "Befehl gesendet.")
+				fmt.Fprintln(a.stdout, "Command sent.")
 			}
 		}
 		if res.Resumed {
-			fmt.Fprintln(a.stdout, "Der Chat wurde in einer frischen Sandbox fortgesetzt.")
+			fmt.Fprintln(a.stdout, "The chat was resumed in a fresh sandbox.")
 		}
 		return nil
 	}
@@ -697,12 +697,12 @@ func (a *app) runCommand(id, line string, wait bool, o streamOpts) error {
 	return a.actToEnd(id, s, name != "compact", act)
 }
 
-// ---- Bestätigungen --------------------------------------------------------------------------
+// ---- approvals ------------------------------------------------------------------------------
 
 func (a *app) cmdApprovals(args []string) error {
 	fs := a.flags("approvals")
-	chat := fs.String("chat", "", "nur Bestätigungen dieses Chats")
-	all := fs.Bool("all", false, "auch entschiedene und abgelaufene")
+	chat := fs.String("chat", "", "only approvals of this chat")
+	all := fs.Bool("all", false, "also decided and expired ones")
 	if _, err := a.parse(fs, args, 0, 0, "agw approvals [--chat id] [--all] [--json]"); err != nil {
 		return err
 	}
@@ -731,21 +731,21 @@ func (a *app) cmdApprovals(args []string) error {
 	}
 	if len(aps) == 0 {
 		if *all {
-			fmt.Fprintln(a.stdout, "Keine Bestätigungen.")
+			fmt.Fprintln(a.stdout, "No approvals.")
 		} else {
-			fmt.Fprintln(a.stdout, "Keine offenen Bestätigungen.")
+			fmt.Fprintln(a.stdout, "No pending approvals.")
 		}
 		return nil
 	}
 	tw := a.table()
-	fmt.Fprintln(tw, "ID\tChat\tName\tGröße\tüber\tZustand\tangelegt")
+	fmt.Fprintln(tw, "ID\tChat\tName\tSize\tvia\tState\tcreated")
 	for _, ap := range aps {
 		name, size := ap.Name, fmt.Sprint(ap.Size)
 		if ap.Kind == "internet_access" {
-			name, size = "Internetzugang: "+truncate(orDefault(ap.Name, "(ohne Begründung)"), 60), "–"
+			name, size = "Internet access: "+truncate(orDefault(ap.Name, "(no reason given)"), 60), "–"
 		}
 		if ap.Kind == "platform_write" {
-			name = "Plattform-Aufruf: " + truncate(ap.Name, 60)
+			name = "Platform call: " + truncate(ap.Name, 60)
 		}
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", ap.ID, ap.ChatID, name, size, ap.Via, approvalState(ap.State), fmtTime(ap.CreatedAt))
 	}
@@ -769,7 +769,7 @@ func (a *app) cmdDecide(name string, args []string, approve bool) error {
 	if label == "" {
 		label = ap.ID
 	}
-	fmt.Fprintf(a.stdout, "Bestätigung %s (%s): %s\n", ap.ID, label, approvalState(ap.State))
+	fmt.Fprintf(a.stdout, "Approval %s (%s): %s\n", ap.ID, label, approvalState(ap.State))
 	return nil
 }
 
@@ -777,8 +777,8 @@ func (a *app) cmdDecide(name string, args []string, approve bool) error {
 
 func (a *app) cmdWatch(args []string) error {
 	fs := a.flags("watch")
-	thinking := fs.Bool("thinking", false, "Thinking gedimmt ausgeben")
-	verbose := fs.Bool("verbose", false, "auch jeden Modellaufruf mit Kosten zeigen")
+	thinking := fs.Bool("thinking", false, "print thinking dimmed")
+	verbose := fs.Bool("verbose", false, "also show every model call with costs")
 	pos, err := a.parse(fs, args, 1, 1, "agw watch <chat-id> [--thinking] [--verbose]")
 	if err != nil {
 		return err
@@ -790,13 +790,13 @@ func (a *app) cmdWatch(args []string) error {
 	defer body.Close()
 	s := newStreamer(a.stdout, a.stderr)
 	s.color, s.thinking, s.verbose, s.calls, s.chatID, s.mode = a.color, *thinking, true, *verbose, pos[0], approvalShow
-	fmt.Fprintln(a.stderr, a.dim("Lese Chat "+pos[0]+" mit – Strg+C beendet."))
+	fmt.Fprintln(a.stderr, a.dim("Following chat "+pos[0]+" – Ctrl+C ends."))
 	err = follow(a.ctx, body, s, nil, false)
 	if a.ctx.Err() != nil {
 		return nil
 	}
 	if err == nil {
-		return errors.New("Der Server hat den Ereignisstrom beendet")
+		return errors.New("the server ended the event stream")
 	}
 	return err
 }
@@ -808,28 +808,28 @@ func (a *app) cmdRun(args []string) error {
 	var maxSub optInt
 	a.chatFlags(fs, &req, &inet, &maxSub)
 	o := approvalFlags(fs)
-	pos, err := a.parse(fs, args, 1, -1, "agw run [--model M] [--variant cli|mcp|api|beide] [--internet=true|false] [--max-subagents N] [--delegation datei.json] [--auto-approve|--auto-reject] [--thinking] [--verbose] \"<aufgabe>\"")
+	pos, err := a.parse(fs, args, 1, -1, "agw run [--model M] [--variant cli|mcp|api|both] [--internet=true|false] [--max-subagents N] [--delegation file.json] [--auto-approve|--auto-reject] [--thinking] [--verbose] \"<task>\"")
 	if err != nil {
 		return err
 	}
 	if *o.auto && *o.reject {
-		return usagef("--auto-approve und --auto-reject schließen sich aus")
+		return usagef("--auto-approve and --auto-reject are mutually exclusive")
 	}
 	task := strings.Join(pos, " ")
 	if strings.TrimSpace(task) == "" {
-		return usagef("Die Aufgabe ist leer")
+		return usagef("the task is empty")
 	}
 	if req.Title == "" {
 		req.Title = truncate(strings.Join(strings.Fields(task), " "), 60)
 	}
 	req.Internet = inet.ptr()
 	req.MaxSubagents = maxSub.ptr()
-	// Ohne message anlegen: erst abonnieren, dann senden – sonst gingen die ersten Ereignisse verloren.
+	// Create without a message: subscribe first, then send – otherwise the first events would be lost.
 	chat, err := a.c.CreateChat(a.ctx, req)
 	if err != nil {
 		return err
 	}
-	fmt.Fprintln(a.stderr, a.dim(fmt.Sprintf("Chat %s · Modell %s · Variante %s · Internet %s · Subagenten höchstens %d", chat.ID, chat.Model, chat.Variant, onOff(chat.Internet), chat.MaxSubagents)))
+	fmt.Fprintln(a.stderr, a.dim(fmt.Sprintf("chat %s · model %s · variant %s · internet %s · subagents at most %d", chat.ID, chat.Model, chat.Variant, onOff(chat.Internet), chat.MaxSubagents)))
 	s, err := a.newStreamer(chat.ID, o)
 	if err != nil {
 		return err
@@ -837,10 +837,10 @@ func (a *app) cmdRun(args []string) error {
 	return a.streamToEnd(chat.ID, task, s, false)
 }
 
-// cmdChatQueue zeigt die eingereihten Nachrichten; --send übergibt sie jetzt.
+// cmdChatQueue shows the queued messages; --send hands them over now.
 func (a *app) cmdChatQueue(args []string) error {
 	fs := a.flags("chat queue")
-	send := fs.Bool("send", false, "zurückgehaltene Nachrichten jetzt an den Agenten übergeben")
+	send := fs.Bool("send", false, "hand held-back messages to the agent now")
 	pos, err := a.parse(fs, args, 1, 1, "agw chat queue <id> [--send] [--json]")
 	if err != nil {
 		return err
@@ -853,7 +853,7 @@ func (a *app) cmdChatQueue(args []string) error {
 		if a.json {
 			return a.printJSON(res)
 		}
-		fmt.Fprintln(a.stdout, "Eingereihte Nachrichten übergeben.")
+		fmt.Fprintln(a.stdout, "Queued messages handed over.")
 		return nil
 	}
 	q, err := a.c.Queue(a.ctx, pos[0])
@@ -864,32 +864,32 @@ func (a *app) cmdChatQueue(args []string) error {
 		return a.printJSON(q)
 	}
 	if len(q) == 0 {
-		fmt.Fprintln(a.stdout, "Keine eingereihten Nachrichten.")
+		fmt.Fprintln(a.stdout, "No queued messages.")
 		return nil
 	}
 	tw := a.table()
-	fmt.Fprintln(tw, "EINTRAG\tZEIT\tTEXT\tANHÄNGE")
+	fmt.Fprintln(tw, "ENTRY\tTIME\tTEXT\tATTACHMENTS")
 	for _, e := range q {
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", e.ID, fmtTime(e.CreatedAt), truncateLine(e.Text, 60), strings.Join(e.Attachments, ", "))
 	}
 	return tw.Flush()
 }
 
-// cmdChatUnqueue entfernt eine eingereihte Nachricht, solange sie nicht übergeben ist.
+// cmdChatUnqueue removes a queued message as long as it has not been handed over.
 func (a *app) cmdChatUnqueue(args []string) error {
 	fs := a.flags("chat unqueue")
-	pos, err := a.parse(fs, args, 2, 2, "agw chat unqueue <id> <eintrag>")
+	pos, err := a.parse(fs, args, 2, 2, "agw chat unqueue <id> <entry>")
 	if err != nil {
 		return err
 	}
 	if err := a.c.Unqueue(a.ctx, pos[0], pos[1]); err != nil {
 		return err
 	}
-	fmt.Fprintln(a.stdout, "Aus der Warteschlange entfernt.")
+	fmt.Fprintln(a.stdout, "Removed from the queue.")
 	return nil
 }
 
-// truncateLine kürzt auf n Zeichen und macht Zeilenumbrüche zu Leerzeichen.
+// truncateLine truncates to n characters and turns line breaks into spaces.
 func truncateLine(s string, n int) string {
 	s = strings.Join(strings.Fields(s), " ")
 	if r := []rune(s); len(r) > n {
@@ -898,15 +898,15 @@ func truncateLine(s string, n int) string {
 	return s
 }
 
-// holdReasonText erklärt, warum Eingereihtes zurückgehalten ist (hold_reason am Chat).
+// holdReasonText explains why queued messages are held back (hold_reason on the chat).
 func holdReasonText(r string) string {
 	switch r {
 	case "abort":
-		return "angehalten nach Abbruch"
+		return "held after an abort"
 	case "wake_limit":
-		return "Grenze der Weckrufe je Stunde erreicht"
+		return "limit of wake-ups per hour reached"
 	case "auto_turns":
-		return "Grenze der Durchgänge ohne Nutzer erreicht"
+		return "limit of turns without the user reached"
 	}
 	return ""
 }

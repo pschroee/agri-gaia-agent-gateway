@@ -1,6 +1,6 @@
-// Package chat verwaltet Chats: Zuweisung eines Platzes aus dem Warm-Pool,
-// Weiterleitung der pi-Ereignisse, Sicherung der Sitzung, Ruhen und
-// Fortsetzen in einer frischen Sandbox (Zustände aktiv / ruhend / beendet).
+// Package chat manages chats: assigning a slot from the warm pool,
+// forwarding pi's events, saving the session, idling and
+// resuming in a fresh sandbox (states active / dormant / closed).
 package chat
 
 import (
@@ -31,27 +31,27 @@ import (
 	"agw/internal/titler"
 )
 
-// Agent ist die Sicht des Managers auf eine laufende Sandbox mit pi.
+// Agent is the manager's view of a running sandbox with pi.
 type Agent interface {
 	Call(ctx context.Context, cmd map[string]any) (rpc.Response, error)
 	Events() <-chan rpc.Event
 	ContainerID() string
 	ContainerName() string
 	Image() string
-	// Exec führt ein Kommando als Agent-Nutzer in der Ausführungs-Sandbox aus
-	// (Arbeitsbereich, Eingaben, Anzeige-Bilder; E9).
+	// Exec runs a command as the agent user in the execution sandbox
+	// (workspace, inputs, display images; E9).
 	Exec(ctx context.Context, cmd []string, stdin io.Reader) ([]byte, error)
-	// ExecPi führt ein Kommando im Container von pi aus (ohne Shell, nur
-	// agw-exec und coreutils): Sitzungen, Konfiguration, Subagenten.
+	// ExecPi runs a command in pi's container (no shell, only
+	// agw-exec and coreutils): sessions, configuration, subagents.
 	ExecPi(ctx context.Context, cmd []string, stdin io.Reader) ([]byte, error)
 	SetInternet(ctx context.Context, on bool) error
-	// IP ist die Adresse der Sandbox im Platz-Netz (Zuordnung am LLM-Proxy).
+	// IP is the sandbox's address in the slot network (attribution at the LLM proxy).
 	IP() string
-	// Notify schreibt einen Befehl an pi, ohne auf eine Antwort zu warten.
+	// Notify writes a command to pi without waiting for a response.
 	Notify(cmd map[string]any) error
 }
 
-// Blobs ist die Objektablage (RustFS).
+// Blobs is the object store (RustFS).
 type Blobs interface {
 	Put(ctx context.Context, key string, r io.Reader, size int64, contentType string) error
 	Get(ctx context.Context, key string) (io.ReadCloser, int64, error)
@@ -60,17 +60,17 @@ type Blobs interface {
 }
 
 var (
-	ErrInvalid         = errors.New("ungültige Angabe")
-	ErrTooManyPending  = errors.New("zu viele offene Bestätigungen in diesem Chat; erst die bestehenden abwarten")
-	ErrPendingApproval = errors.New("Chat hat eine offene Bestätigung")
-	ErrRunning         = errors.New("Agent arbeitet gerade")
-	ErrUnknownModel    = errors.New("unbekanntes Modell")
+	ErrInvalid         = errors.New("invalid input")
+	ErrTooManyPending  = errors.New("too many pending approvals in this chat; wait for the existing ones first")
+	ErrPendingApproval = errors.New("chat has a pending approval")
+	ErrRunning         = errors.New("agent is working")
+	ErrUnknownModel    = errors.New("unknown model")
 	ErrUnknownVariant  = pool.ErrUnknownVariant
 	ErrNoSlot          = pool.ErrNoIdleSlot
 	ErrNotFound        = store.ErrNotFound
 )
 
-// Event wird an die SSE-Abonnenten eines Chats verteilt.
+// Event is distributed to a chat's SSE subscribers.
 type Event struct {
 	Kind string `json:"kind"`
 	Data any    `json:"data"`
@@ -80,19 +80,19 @@ type ChatView struct {
 	store.Chat
 	Running bool   `json:"running"`
 	SlotID  string `json:"slot_id,omitempty"`
-	// Resuming: Der Chat wird gerade in einer frischen Sandbox fortgesetzt.
+	// Resuming: the chat is being resumed in a fresh sandbox.
 	Resuming bool `json:"resuming"`
-	// QueueHeld: Es gibt eingereihte Nachrichten, die nicht von selbst übergeben werden
-	// (nach einem Abbruch, bei ruhendem Chat); sie gehen mit der nächsten Nachricht mit.
+	// QueueHeld: there are queued messages that are not handed over on their own
+	// (after an abort, while the chat is idle); they go along with the next message.
 	QueueHeld bool `json:"queue_held"`
-	// RunningSince: Beginn des laufenden Durchgangs (nur, solange der Agent arbeitet).
+	// RunningSince: start of the current turn (only while the agent is working).
 	RunningSince *time.Time `json:"running_since,omitempty"`
-	// HoldReason: warum Eingereihtes zurückgehalten ist (HoldAbort, HoldWakeLimit, HoldAutoTurns);
-	// leer bei ruhendem Chat oder ohne Zurückhalten.
+	// HoldReason: why queued messages are held back (HoldAbort, HoldWakeLimit, HoldAutoTurns);
+	// empty for an idle chat or when nothing is held back.
 	HoldReason string `json:"hold_reason,omitempty"`
-	// ThinkingLevels: Denkstufen, die das Modell des Chats kennt (leer: noch nicht bekannt).
+	// ThinkingLevels: thinking levels the chat's model knows (empty: not known yet).
 	ThinkingLevels []string `json:"thinking_levels,omitempty"`
-	// PendingModel: Modell, zu dem nach der laufenden Kompaktierung gewechselt wird.
+	// PendingModel: model to switch to after the running compaction.
 	PendingModel string `json:"pending_model,omitempty"`
 }
 
@@ -104,32 +104,32 @@ type live struct {
 	stop    chan struct{}
 	stopped sync.Once
 
-	ip              string // Adresse im Platz-Netz
-	maxSub          int    // höchstens so viele Subagenten
-	limitEnforcedAt int    // bei dieser Zahl zuletzt eingegriffen
+	ip              string // address in the slot network
+	maxSub          int    // at most this many subagents
+	limitEnforcedAt int    // count at which we last intervened
 
 	runningSince time.Time
-	toolsRunning int        // laufende Werkzeuge (tool_execution_start bis _end); Zeitpunkt zum Einschleusen
-	compacting   bool       // manuelle Kompaktierung läuft; Ruhen gesperrt
-	bg           sync.Mutex // serialisiert Hintergrundarbeit (Sichern, Kontext lesen)
+	toolsRunning int        // running tools (tool_execution_start to _end); moment for steering
+	compacting   bool       // manual compaction running; idling blocked
+	bg           sync.Mutex // serializes background work (saving, reading the context)
 
-	wsNoSave    bool   // Einspielen gescheitert: nicht sichern (letzte Sicherung schützen)
-	wsSkippedFP string // zuletzt wegen der Grenze ausgelassener Stand (Hinweis nur einmal)
+	wsNoSave    bool   // restore failed: do not save (protect the last backup)
+	wsSkippedFP string // state last skipped because of the limit (notice only once)
 
-	holdQueue  bool   // nach Abbruch oder über einer Grenze: Warteschlange nicht von selbst übergeben
+	holdQueue  bool   // after an abort or above a limit: do not hand over the queue on its own
 	holdReason string // HoldAbort, HoldWakeLimit, HoldAutoTurns
 
-	activeAt time.Time // letzte Aktivität (Leerlauf)
+	activeAt time.Time // last activity (idle timeout)
 
-	// pendingTurns: an pi geschickte Aufträge, deren Nutzernachricht pi noch nicht gemeldet hat;
-	// turn: der Durchgang, zu dem die folgenden Antworten gehören (Review 3, H1).
+	// pendingTurns: requests sent to pi whose user message pi has not reported yet;
+	// turn: the turn the following responses belong to (Review 3, H1).
 	pendingTurns []*turnMeta
 	turn         *turnMeta
-	agentStartAt time.Time // Empfang des letzten agent_start
+	agentStartAt time.Time // receipt of the last agent_start
 }
 
-// Fristen für Aufrufe an pi. Ohne sie hängt ein Aufruf, wenn pi nicht mehr
-// antwortet, und mit ihm die Chat-Sperre (Review H4). Die Frist für prompt steht in promptTimeout.
+// Timeouts for calls to pi. Without them a call hangs when pi stops
+// responding, and with it the chat lock (Review H4). The timeout for prompt is in promptTimeout.
 const (
 	maxPendingPerChat = 3
 	callTimeout       = 20 * time.Second
@@ -148,16 +148,16 @@ func execT(a Agent, cmd []string, stdin io.Reader, d time.Duration) ([]byte, err
 	return a.Exec(ctx, cmd, stdin)
 }
 
-// execPiT: wie execT, aber im Container von pi.
+// execPiT: like execT, but in pi's container.
 func execPiT(a Agent, cmd []string, stdin io.Reader, d time.Duration) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), d)
 	defer cancel()
 	return a.ExecPi(ctx, cmd, stdin)
 }
 
-// background führt Arbeit außerhalb der Pump-Goroutine aus, je Chat der
-// Reihe nach. So liest die Pumpe weiter Ereignisse, während auf pi gewartet
-// wird (Review H1).
+// background runs work outside the pump goroutine, one after another per
+// chat. This way the pump keeps reading events while waiting for pi
+// (Review H1).
 func (m *Manager) background(l *live, f func()) {
 	go func() {
 		l.bg.Lock()
@@ -185,27 +185,27 @@ type Options struct {
 	MaxSubagentsDefault int
 	MaxSubagentsLimit   int
 
-	// ImageMaxBytes begrenzt Anzeige-Bilder (Standard DefaultImageMaxBytes).
+	// ImageMaxBytes limits display images (default DefaultImageMaxBytes).
 	ImageMaxBytes int64
 
-	// WorkspaceMaxBytes begrenzt die Sicherung von /workspace (Summe der
-	// Dateigrößen; 0 = DefaultWorkspaceMaxBytes, < 0 = keine Sicherung).
+	// WorkspaceMaxBytes limits the backup of /workspace (sum of the
+	// file sizes; 0 = DefaultWorkspaceMaxBytes, < 0 = no backup).
 	WorkspaceMaxBytes int64
 
-	// BgWakesPerHour: So oft darf das Ende einer Hintergrundaufgabe je Chat und Stunde einen neuen
-	// Durchgang starten (0 = DefaultBgWakesPerHour, < 0 = nie). BgKeepAlive: So lange nach der
-	// letzten Aktivität verschieben laufende Hintergrundaufgaben das Ruhen im Leerlauf
-	// (0 = DefaultBgKeepAlive, < 0 = gar nicht).
+	// BgWakesPerHour: how often per chat and hour the end of a background task may start a new
+	// turn (0 = DefaultBgWakesPerHour, < 0 = never). BgKeepAlive: for this long after the last
+	// activity, running background tasks postpone idling on idle timeout
+	// (0 = DefaultBgKeepAlive, < 0 = not at all).
 	BgWakesPerHour int
 	BgKeepAlive    time.Duration
-	// Titler formuliert nach der ersten Frage einen Titel (nil: der Titel bleibt die gekürzte Frage).
+	// Titler phrases a title after the first question (nil: the title stays the shortened question).
 	Titler Titler
 
-	// AutoTurnsMax: höchstens so viele Durchgänge ohne Nutzer (Weckrufe) hintereinander je Chat
-	// (0 = DefaultAutoTurnsMax, < 0 = keiner). Darüber hält der Manager an (Review 3, H2).
+	// AutoTurnsMax: at most this many turns without the user (wake-ups) in a row per chat
+	// (0 = DefaultAutoTurnsMax, < 0 = none). Above that the manager stops (Review 3, H2).
 	AutoTurnsMax int
 
-	// Platform spricht mit der Agri-Gaia-Plattform (nil: Anbindung aus).
+	// Platform talks to the Agri-Gaia platform (nil: binding off).
 	Platform *platform.Client
 }
 
@@ -220,26 +220,26 @@ type Manager struct {
 	mu   sync.Mutex
 	live map[string]*live
 	subs map[string]map[chan Event]struct{}
-	// chatMu serialisiert Zustandswechsel je Chat (Fortsetzen, Ruhen, Beenden).
+	// chatMu serializes state changes per chat (resuming, idling, closing).
 	chatMu map[string]*sync.Mutex
-	// imgMu serialisiert das Sichern der Anzeige-Bilder je Chat.
+	// imgMu serializes saving the display images per chat.
 	imgMu map[string]*sync.Mutex
-	// wsMu serialisiert Sichern und Einspielen des Arbeitsbereichs je Chat.
+	// wsMu serializes saving and restoring the workspace per chat.
 	wsMu map[string]*sync.Mutex
-	// qMu serialisiert die Entscheidung „sofort senden oder einreihen“ je Chat.
+	// qMu serializes the decision "send now or enqueue" per chat.
 	qMu map[string]*sync.Mutex
-	// sending: Ein Auftrag ist unterwegs (Fortsetzen oder prompt), neue Nachrichten werden eingereiht.
+	// sending: a request is on its way (resume or prompt); new messages are enqueued.
 	sending map[string]bool
-	// resuming: Der Chat wird gerade fortgesetzt (für die Anzeige).
+	// resuming: the chat is being resumed (for display).
 	resuming map[string]bool
-	// pendingModel: Modellwechsel, der auf das Ende einer Kompaktierung wartet (SetModel mit compactFirst).
+	// pendingModel: model switch waiting for the end of a compaction (SetModel with compactFirst).
 	pendingModel map[string]string
-	// levels: Denkstufen je Modell, wie pi sie zuletzt gemeldet hat (get_available_thinking_levels).
+	// levels: thinking levels per model, as pi last reported them (get_available_thinking_levels).
 	levels map[string][]string
-	// userAt: letzte Aktion des Nutzers je Chat (Senden, Abbrechen, Entfernen, Stoppen, Fortsetzen);
-	// maßgeblich für den Aufschub durch Hintergrundaufgaben (Review 3, M1).
+	// userAt: the user's last action per chat (send, abort, remove, stop, resume);
+	// decisive for the postponement by background tasks (Review 3, M1).
 	userAt map[string]time.Time
-	// aborts zählt die Abbrüche je Chat; ein Auftrag, währenddessen abgebrochen wurde, geht nicht an pi.
+	// aborts counts the aborts per chat; a request during which an abort happened does not go to pi.
 	aborts map[string]uint64
 }
 
@@ -271,7 +271,7 @@ func NewManager(st *store.Store, p *pool.Pool[Agent], cat *config.Catalog, blobs
 		sending: map[string]bool{}, resuming: map[string]bool{}, pendingModel: map[string]string{}, levels: map[string][]string{}, userAt: map[string]time.Time{}, aborts: map[string]uint64{}}
 }
 
-// userActive hält eine Aktion des Nutzers fest (Aufschub durch Hintergrundaufgaben, M1).
+// userActive records an action of the user (postponement by background tasks, M1).
 func (m *Manager) userActive(chatID string) {
 	m.mu.Lock()
 	m.userAt[chatID] = time.Now()
@@ -292,7 +292,7 @@ func (m *Manager) lock(chatID string) func() {
 
 func (m *Manager) Options() Options { return m.opt }
 
-// --- Abonnements ---
+// --- Subscriptions ---
 
 func (m *Manager) Subscribe(chatID string) (<-chan Event, func()) {
 	ch := make(chan Event, 512)
@@ -318,10 +318,10 @@ func (m *Manager) publish(chatID string, ev Event) {
 		case ch <- ev:
 		default:
 			if !important {
-				continue // langsamer Leser: Strom-Ereignis verwerfen statt den Chat aufzuhalten
+				continue // slow reader: drop the stream event instead of holding up the chat
 			}
-			// Bestätigungen und Zustandswechsel dürfen nicht verloren gehen: ältestes
-			// Ereignis verwerfen, um Platz zu schaffen.
+			// Approvals and state changes must not get lost: drop the oldest
+			// event to make room.
 			select {
 			case <-ch:
 			default:
@@ -340,7 +340,7 @@ func (m *Manager) publishChat(ctx context.Context, chatID string) {
 	}
 }
 
-// --- Abfragen ---
+// --- Queries ---
 
 func (m *Manager) View(ctx context.Context, chatID string) (ChatView, error) {
 	c, err := m.st.GetChat(ctx, chatID)
@@ -385,7 +385,7 @@ func (m *Manager) List(ctx context.Context) ([]ChatView, error) {
 	return out, nil
 }
 
-// SlotChat liefert die Kennung des Chats, dem ein Platz zugewiesen ist.
+// SlotChat returns the ID of the chat a slot is assigned to.
 func (m *Manager) SlotChat(slotID string) string {
 	s, ok := m.pool.Get(slotID)
 	if !ok {
@@ -394,7 +394,7 @@ func (m *Manager) SlotChat(slotID string) string {
 	return s.ChatID()
 }
 
-// slotOf liefert den Platz eines laufenden Chats (leer, wenn er ruht).
+// slotOf returns the slot of a running chat (empty if it is idle).
 func (m *Manager) slotOf(chatID string) string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -404,7 +404,7 @@ func (m *Manager) slotOf(chatID string) string {
 	return ""
 }
 
-// --- Anlegen, Senden, Fortsetzen ---
+// --- Creating, sending, resuming ---
 
 type NewChat struct {
 	Model        string `json:"model"`
@@ -414,13 +414,13 @@ type NewChat struct {
 	Internet     *bool  `json:"internet"`
 	AutoCompact  *bool  `json:"auto_compact"`
 	MaxSubagents *int   `json:"max_subagents"`
-	// Delegation: übertragene Rechte (delegation.Delegation als JSON); fehlt sie, verhält sich der
-	// Chat wie vor Schritt 1 (lesen frei, schreiben mit Bestätigung).
+	// Delegation: delegated rights (delegation.Delegation as JSON); without it the chat behaves
+	// as before step 1 (reading free, writing with approval).
 	Delegation json.RawMessage `json:"delegation,omitempty"`
-	// Owner setzt die API aus der Anmeldung (sub), nie aus dem Körper der Anfrage.
+	// Owner is set by the API from the login (sub), never from the request body.
 	Owner string `json:"-"`
-	// Language: bevorzugte Sprache des Nutzers laut Browser (BCP 47, etwa „en-US“); optional. Geht mit
-	// dem ersten Auftrag als Meldung an den Agenten (language.go).
+	// Language: the user's preferred language according to the browser (BCP 47, e.g. "en-US");
+	// optional. Goes to the agent as a note with the first request (language.go).
 	Language string `json:"language,omitempty"`
 }
 
@@ -441,8 +441,8 @@ func (m *Manager) Create(ctx context.Context, req NewChat) (ChatView, error) {
 	if req.Internet != nil {
 		internet = *req.Internet
 	}
-	// Ohne Titel gilt er als Platzhalter; Send ersetzt ihn mit der ersten Frage (sofort gekürzt,
-	// dann vom Modell), auch wenn die Frage gleich beim Anlegen kommt.
+	// Without a title it counts as a placeholder; Send replaces it with the first question
+	// (immediately shortened, then by the model), even if the question comes right at creation.
 	title, titleSrc := strings.TrimSpace(req.Title), store.TitleUser
 	if title == "" {
 		title, titleSrc = titleFrom(req.Message), store.TitleDefault
@@ -456,7 +456,7 @@ func (m *Manager) Create(ctx context.Context, req NewChat) (ChatView, error) {
 		maxSub = *req.MaxSubagents
 	}
 	if maxSub < 0 || maxSub > m.opt.MaxSubagentsLimit {
-		return ChatView{}, fmt.Errorf("%w: max_subagents muss zwischen 0 und %d liegen", ErrInvalid, m.opt.MaxSubagentsLimit)
+		return ChatView{}, fmt.Errorf("%w: max_subagents must be between 0 and %d", ErrInvalid, m.opt.MaxSubagentsLimit)
 	}
 	lang, err := NormalizeLanguage(req.Language)
 	if err != nil {
@@ -468,7 +468,7 @@ func (m *Manager) Create(ctx context.Context, req NewChat) (ChatView, error) {
 		if err != nil {
 			return ChatView{}, fmt.Errorf("%w: %v", ErrInvalid, err)
 		}
-		del, _ = json.Marshal(d) // gespeichert wird die geprüfte, einheitliche Form
+		del, _ = json.Marshal(d) // the checked, normalized form is stored
 	}
 	c, err := m.st.CreateChat(ctx, store.NewChat{Title: title, TitleSource: titleSrc, Model: req.Model, Variant: req.Variant, Internet: internet, AutoCompact: autoCompact, MaxSubagents: maxSub, Delegation: del, Owner: req.Owner, Language: lang})
 	if err != nil {
@@ -478,7 +478,7 @@ func (m *Manager) Create(ctx context.Context, req NewChat) (ChatView, error) {
 	err = m.attach(ctx, c, nil, nil)
 	unlock()
 	if err != nil {
-		// Ohne Sandbox ruht der Chat; die nächste Nachricht versucht es erneut.
+		// Without a sandbox the chat is idle; the next message tries again.
 		_ = m.st.SetState(context.WithoutCancel(ctx), c.ID, store.StateDormant)
 		m.publishChat(context.WithoutCancel(ctx), c.ID)
 		return ChatView{}, err
@@ -494,7 +494,7 @@ func (m *Manager) Create(ctx context.Context, req NewChat) (ChatView, error) {
 func titleFrom(msg string) string {
 	msg = strings.Join(strings.Fields(msg), " ")
 	if msg == "" {
-		return "Neuer Chat " + time.Now().Format("02.01. 15:04")
+		return "New chat " + time.Now().Format("2006-01-02 15:04")
 	}
 	r := []rune(msg)
 	if len(r) > 60 {
@@ -503,9 +503,9 @@ func titleFrom(msg string) string {
 	return msg
 }
 
-// attach holt einen Platz, setzt Modell, Internet, Eingaben und bei
-// session != nil die gesicherte Sitzung. Aufrufer hält die Chat-Sperre.
-// p meldet die Schritte beim Fortsetzen (nil beim Anlegen).
+// attach acquires a slot, sets model, internet, inputs and, with
+// session != nil, the saved session. The caller holds the chat lock.
+// p reports the steps when resuming (nil when creating).
 func (m *Manager) attach(ctx context.Context, c store.Chat, session []byte, p *resumeProgress) error {
 	p.run(PhaseAcquire)
 	slot, err := m.pool.AcquireWait(ctx, c.Variant, c.ID, m.opt.AcquireTimeout)
@@ -521,13 +521,13 @@ func (m *Manager) attach(ctx context.Context, c store.Chat, session []byte, p *r
 	p.run(PhaseSession)
 	prov, model, _ := m.cat.Lookup(c.Model)
 	if _, err := a.Call(ctx, map[string]any{"type": "set_model", "provider": prov.ID, "modelId": model.ID}); err != nil {
-		return fail(fmt.Errorf("Modell setzen: %w", err))
+		return fail(fmt.Errorf("set model: %w", err))
 	}
 	m.syncThinking(ctx, c.ID, c.Model, a, c.ThinkingLevel)
 	if session != nil {
 		sp := "/agent/sessions/" + c.ID + ".jsonl"
 		if _, err := a.ExecPi(ctx, []string{"agw-exec", "put", sp}, bytes.NewReader(session)); err != nil {
-			return fail(fmt.Errorf("Sitzung einspielen: %w", err))
+			return fail(fmt.Errorf("restore session: %w", err))
 		}
 		resp, err := a.Call(ctx, map[string]any{"type": "switch_session", "sessionPath": sp})
 		if err != nil {
@@ -538,46 +538,46 @@ func (m *Manager) attach(ctx context.Context, c store.Chat, session []byte, p *r
 		}
 		_ = json.Unmarshal(resp.Data, &d)
 		if d.Cancelled {
-			return fail(errors.New("switch_session wurde abgebrochen"))
+			return fail(errors.New("switch_session was cancelled"))
 		}
 		p.done(ResumeStep{Size: int64p(int64(len(session)))})
 	} else {
-		p.done(ResumeStep{Detail: "keine Sitzung gesichert"})
+		p.done(ResumeStep{Detail: "no session saved"})
 	}
 	p.run(PhaseSettings)
 	if err := a.SetInternet(ctx, c.Internet); err != nil {
-		return fail(fmt.Errorf("Internet setzen: %w", err))
+		return fail(fmt.Errorf("set internet: %w", err))
 	}
 	if _, err := a.Call(ctx, map[string]any{"type": "set_auto_compaction", "enabled": c.AutoCompact}); err != nil {
-		return fail(fmt.Errorf("Auto-Kompaktierung setzen: %w", err))
+		return fail(fmt.Errorf("set auto-compaction: %w", err))
 	}
 	p.done(ResumeStep{Detail: "Internet " + onOff(c.Internet)})
 	l := &live{slot: slot, stop: make(chan struct{}), ip: a.IP(), maxSub: c.MaxSubagents}
-	m.userActive(c.ID) // Anlegen und Fortsetzen gehen vom Nutzer aus
-	// Arbeitsbereich vor den Eingaben und vor dem ersten Auftrag einspielen
-	// (das Archiv enthält kein inputs/, beides kommt sich nicht in die Quere).
+	m.userActive(c.ID) // creating and resuming come from the user
+	// Restore the workspace before the inputs and before the first request
+	// (the archive contains no inputs/, the two do not get in each other's way).
 	p.run(PhaseWorkspace)
 	ws := m.restoreWorkspace(ctx, c.ID, l)
 	switch {
 	case ws.Disabled:
-		p.done(ResumeStep{Detail: "Sicherung abgeschaltet"})
+		p.done(ResumeStep{Detail: "backup disabled"})
 	case ws.Err != nil:
-		p.done(ResumeStep{Status: "warning", Detail: "nicht wiederhergestellt: " + ws.Err.Error(), Size: int64p(ws.Size), Files: intp(ws.Files)})
+		p.done(ResumeStep{Status: "warning", Detail: "not restored: " + ws.Err.Error(), Size: int64p(ws.Size), Files: intp(ws.Files)})
 	case !ws.Found:
-		p.done(ResumeStep{Detail: "keine Sicherung"})
+		p.done(ResumeStep{Detail: "no backup"})
 	default:
 		p.done(ResumeStep{Size: int64p(ws.Size), Files: intp(ws.Files)})
 	}
 	p.run(PhaseInputs)
 	if n, size, err := m.syncInputs(ctx, c.ID, a); err != nil {
-		slog.Warn("Eingaben nicht gespiegelt", "chat", c.ID, "fehler", err)
-		p.done(ResumeStep{Status: "warning", Detail: "nicht alle gespiegelt: " + err.Error(), Size: int64p(size), Files: intp(n)})
+		slog.Warn("inputs not mirrored", "chat", c.ID, "error", err)
+		p.done(ResumeStep{Status: "warning", Detail: "not all mirrored: " + err.Error(), Size: int64p(size), Files: intp(n)})
 	} else {
 		p.done(ResumeStep{Size: int64p(size), Files: intp(n)})
 	}
 	l.runID, _ = m.st.StartRun(ctx, c.ID, slot.ID, a.ContainerID())
 	if n, err := m.st.SubagentRunCount(ctx, c.ID); err == nil {
-		l.limitEnforcedAt = n // frühere Läufe lösen keinen neuen Eingriff aus
+		l.limitEnforcedAt = n // earlier runs do not trigger a new intervention
 	}
 	m.applySubagentConfig(l, c.MaxSubagents)
 	m.mu.Lock()
@@ -590,13 +590,13 @@ func (m *Manager) attach(ctx context.Context, c store.Chat, session []byte, p *r
 	go m.pump(c.ID, l)
 	m.armIdle(c.ID, l)
 	go m.refreshInfo(context.WithoutCancel(ctx), c.ID, a)
-	slog.Info("Chat zugewiesen", "chat", c.ID, "platz", slot.ID, "container", a.ContainerName(), "fortgesetzt", session != nil)
+	slog.Info("chat assigned", "chat", c.ID, "slot", slot.ID, "container", a.ContainerName(), "resumed", session != nil)
 	m.publishChat(ctx, c.ID)
 	return nil
 }
 
-// ensureLive liefert den aktiven Zustand des Chats und setzt einen ruhenden
-// Chat dabei in einer frischen Sandbox fort.
+// ensureLive returns the chat's active state, resuming an idle
+// chat in a fresh sandbox along the way.
 func (m *Manager) ensureLive(ctx context.Context, chatID string) (*live, bool, error) {
 	unlock := m.lock(chatID)
 	defer unlock()
@@ -636,11 +636,11 @@ func (m *Manager) ensureLive(ctx context.Context, chatID string) (*live, bool, e
 	return l, true, nil
 }
 
-// AttachmentsHeader leitet den Block ein, mit dem Anhänge an eine Nachricht
-// gehängt werden; die UI erkennt ihn und zeigt die Anhänge als Chips.
-const AttachmentsHeader = "[Anhänge unter /workspace/inputs/]"
+// AttachmentsHeader introduces the block with which attachments are appended
+// to a message; the UI recognizes it and shows the attachments as chips.
+const AttachmentsHeader = "[Attachments in /workspace/inputs/]"
 
-// AttachmentNote baut den Block für die genannten Dateien.
+// AttachmentNote builds the block for the given files.
 func AttachmentNote(names []string) string {
 	var b strings.Builder
 	b.WriteString(AttachmentsHeader)
@@ -654,17 +654,17 @@ func AttachmentNote(names []string) string {
 func (m *Manager) Abort(ctx context.Context, chatID string) (ChatView, error) {
 	m.mu.Lock()
 	m.userAt[chatID] = time.Now()
-	m.aborts[chatID]++ // ein Auftrag, der gerade unterwegs ist, geht nicht mehr an pi
+	m.aborts[chatID]++ // a request currently on its way no longer goes to pi
 	l := m.live[chatID]
 	if l != nil {
-		// Eingereihte Nachrichten nach einem Abbruch nicht von selbst übergeben: Der Nutzer hat
-		// angehalten; sie gehen mit der nächsten Nachricht oder über „jetzt senden“.
+		// Do not hand over queued messages on their own after an abort: the user has stopped;
+		// they go with the next message or via "send now".
 		l.holdQueue, l.holdReason = true, HoldAbort
 	}
 	m.mu.Unlock()
 	if l != nil {
-		// pi setzt nach abort fort, was eingereiht ist; Eingeschleustes deshalb vorher zurückholen
-		// (es bleibt zurückgehalten eingereiht).
+		// After abort pi continues with what is queued; so reclaim steered messages beforehand
+		// (they stay enqueued and held back).
 		m.reclaimSteered(ctx, chatID, l)
 		if _, err := callT(l.slot.Worker, map[string]any{"type": "abort"}, 10*time.Second); err != nil {
 			return ChatView{}, err
@@ -673,7 +673,7 @@ func (m *Manager) Abort(ctx context.Context, chatID string) (ChatView, error) {
 	return m.View(ctx, chatID)
 }
 
-// Suspend lässt den Chat ruhen: Sitzung sichern, Sandbox abbauen.
+// Suspend makes the chat idle: save the session, tear down the sandbox.
 func (m *Manager) Suspend(ctx context.Context, chatID string) (ChatView, error) {
 	unlock := m.lock(chatID)
 	defer unlock()
@@ -699,8 +699,8 @@ func (m *Manager) Suspend(ctx context.Context, chatID string) (ChatView, error) 
 	return m.View(ctx, chatID)
 }
 
-// SetInternet läuft unter der Chat-Sperre: Ein gleichzeitiges Fortsetzen
-// (attach) könnte sonst eine neue Sandbox mit einem veralteten Wert verbinden
+// SetInternet runs under the chat lock: a concurrent resume (attach)
+// could otherwise connect a new sandbox with a stale value
 // (Review H3).
 func (m *Manager) SetInternet(ctx context.Context, chatID string, on bool) (ChatView, error) {
 	unlock := m.lock(chatID)
@@ -720,31 +720,31 @@ func (m *Manager) SetInternet(ctx context.Context, chatID string, on bool) (Chat
 	if err := m.st.SetInternet(ctx, chatID, on); err != nil {
 		return ChatView{}, err
 	}
-	slog.Info("Internet umgeschaltet", "chat", chatID, "an", on, "sofort", l != nil)
+	slog.Info("internet toggled", "chat", chatID, "on", on, "immediate", l != nil)
 	m.publishChat(ctx, chatID)
 	return m.View(ctx, chatID)
 }
 
-// detach sichert die Sitzung (save) und den Arbeitsbereich (workspace) und
-// gibt den Platz zurück (Einmalvergabe).
+// detach saves the session (save) and the workspace (workspace) and
+// returns the slot (single use).
 func (m *Manager) detach(ctx context.Context, chatID string, l *live, save, workspace bool) {
-	// Das getauschte Plattform-Token gehört zur Sandbox-Sitzung; das Fortsetzen tauscht neu.
+	// The exchanged platform token belongs to the sandbox session; resuming exchanges anew.
 	m.opt.Platform.Forget(chatID)
-	m.setPendingModel(chatID, "") // ein vorgemerkter Modellwechsel gilt nur für diese Sandbox
-	// Hintergrundaufgaben sterben mit der Sandbox; vorher markieren, damit ihr Ende keinen
-	// Weckruf auslöst (Close und agentDied haben schon mit eigenem Zustand markiert).
-	m.endBackground(ctx, chatID, store.BgSuspended, "beim Ruhen des Chats mit der Sandbox beendet", true)
+	m.setPendingModel(chatID, "") // a scheduled model switch only applies to this sandbox
+	// Background tasks die with the sandbox; mark them beforehand so their end does not trigger
+	// a wake-up (Close and agentDied have already marked them with their own state).
+	m.endBackground(ctx, chatID, store.BgSuspended, "ended with the sandbox when the chat went idle", true)
 	if save {
 		if err := m.saveSession(ctx, chatID, l.slot.Worker); err != nil {
-			slog.Warn("Sitzung nicht gesichert", "chat", chatID, "fehler", err)
+			slog.Warn("session not saved", "chat", chatID, "error", err)
 		}
 		if workspace {
-			// Wartet auch eine laufende Sicherung nach agent_settled ab (Sperre je Chat).
+			// Also waits for a running backup after agent_settled (lock per chat).
 			if err := m.saveWorkspace(ctx, chatID, l); err != nil {
-				slog.Warn("Arbeitsbereich nicht gesichert", "chat", chatID, "fehler", err)
+				slog.Warn("workspace not saved", "chat", chatID, "error", err)
 			}
 		}
-		// Eine laufende Sicherung von Anzeige-Bildern abwarten, bevor die Sandbox verschwindet.
+		// Wait for a running backup of display images before the sandbox disappears.
 		m.imageLock(chatID)()
 	}
 	m.mu.Lock()
@@ -758,11 +758,11 @@ func (m *Manager) detach(ctx context.Context, chatID string, l *live, save, work
 	first := false
 	l.stopped.Do(func() { close(l.stop); first = true })
 	if !first {
-		return // schon abgebaut (etwa Ruhen und gleichzeitiges Ende des Stroms)
+		return // already torn down (e.g. idling and simultaneous end of the stream)
 	}
 	_ = m.st.EndRun(ctx, l.runID)
 	m.pool.Release(ctx, l.slot)
-	slog.Info("Platz zurückgegeben", "chat", chatID, "platz", l.slot.ID)
+	slog.Info("slot returned", "chat", chatID, "slot", l.slot.ID)
 }
 
 func (m *Manager) saveSession(ctx context.Context, chatID string, a Agent) error {
@@ -774,19 +774,19 @@ func (m *Manager) saveSession(ctx context.Context, chatID string, a Agent) error
 		SessionFile string `json:"sessionFile"`
 	}
 	if err := json.Unmarshal(resp.Data, &st); err != nil || st.SessionFile == "" {
-		return fmt.Errorf("keine Sitzungsdatei in get_state: %s", resp.Data)
+		return fmt.Errorf("no session file in get_state: %s", resp.Data)
 	}
 	data, err := execPiT(a, []string{"cat", st.SessionFile}, nil, callTimeout)
 	if err != nil {
 		return err
 	}
 	if len(data) == 0 {
-		return nil // pi schreibt die Datei erst nach der ersten Antwort
+		return nil // pi writes the file only after the first response
 	}
 	return m.st.SaveSession(context.WithoutCancel(ctx), chatID, data)
 }
 
-// --- Leerlauf ---
+// --- Idle timeout ---
 
 func (m *Manager) armIdle(chatID string, l *live) {
 	m.mu.Lock()
@@ -795,7 +795,7 @@ func (m *Manager) armIdle(chatID string, l *live) {
 	m.armIdleAfter(chatID, l, m.opt.IdleTimeout)
 }
 
-// armIdleAfter stellt den Leerlauf-Timer auf d, ohne die letzte Aktivität zu verschieben.
+// armIdleAfter sets the idle timer to d without moving the last activity.
 func (m *Manager) armIdleAfter(chatID string, l *live, d time.Duration) {
 	if m.opt.IdleTimeout <= 0 {
 		return
@@ -811,13 +811,13 @@ func (m *Manager) armIdleAfter(chatID string, l *live, d time.Duration) {
 		m.mu.Lock()
 		stuck := l.running && !l.runningSince.IsZero() && time.Since(l.runningSince) > maxRunTime
 		m.mu.Unlock()
-		if stuck { // Höchstdauer überschritten: abbrechen, dann ruhen lassen
-			slog.Warn("Durchgang zu lang, wird abgebrochen", "chat", chatID)
+		if stuck { // maximum duration exceeded: abort, then let it go idle
+			slog.Warn("turn too long, aborting", "chat", chatID)
 			_, _ = callT(l.slot.Worker, map[string]any{"type": "abort"}, 10*time.Second)
 			m.setRunning(l, false)
 		} else if wait, ok := m.keepAliveForBackground(chatID, l); ok {
-			// Laufende Hintergrundaufgaben halten den Chat wach, bis BgKeepAlive nach der letzten
-			// Aktivität; danach ruht er, und die Aufgaben enden mit der Sandbox.
+			// Running background tasks keep the chat awake until BgKeepAlive after the last
+			// activity; then it goes idle, and the tasks end with the sandbox.
 			m.armIdleAfter(chatID, l, wait)
 			return
 		}
@@ -827,7 +827,7 @@ func (m *Manager) armIdleAfter(chatID string, l *live, d time.Duration) {
 			}
 			return
 		}
-		slog.Info("Chat ruht nach Leerlauf", "chat", chatID)
+		slog.Info("chat idle after idle timeout", "chat", chatID)
 	})
 }
 
@@ -840,10 +840,10 @@ func (m *Manager) touchIdle(chatID string) {
 	}
 }
 
-// --- Ereignisse von pi ---
+// --- Events from pi ---
 
-// ExecWatcher meldet das Ende der Ausführungs-Sandbox eines Platzes (E9). Stirbt sie, endet
-// pis Ereignisstrom nicht; ohne diese Meldung liefen alle Werkzeugaufrufe ins Leere (H2).
+// ExecWatcher reports the end of a slot's execution sandbox (E9). If it dies, pi's event
+// stream does not end; without this signal all tool calls would go nowhere (H2).
 type ExecWatcher interface {
 	ExecDone() <-chan struct{}
 }
@@ -871,12 +871,12 @@ func (m *Manager) pump(chatID string, l *live) {
 	}
 }
 
-// agentDied behandelt das unerwartete Ende eines der beiden Container eines Platzes. cause:
-// "pi" (Ereignisstrom endete; die Ausführungs-Sandbox lebt noch, der Arbeitsbereich wird
-// gesichert) oder "exec" (Ausführungs-Sandbox beendet; pi lebt noch, die Sitzung wird gesichert).
+// agentDied handles the unexpected end of one of a slot's two containers. cause:
+// "pi" (event stream ended; the execution sandbox is still alive, the workspace is
+// saved) or "exec" (execution sandbox ended; pi is still alive, the session is saved).
 func (m *Manager) agentDied(chatID string, l *live, cause string) {
 	ctx := context.Background()
-	// Endet der Strom, weil der Platz gerade zurückgegeben wird, ist das kein Absturz.
+	// If the stream ends because the slot is being returned, that is not a crash.
 	select {
 	case <-l.stop:
 		return
@@ -888,12 +888,12 @@ func (m *Manager) agentDied(chatID string, l *live, cause string) {
 	if !current {
 		return
 	}
-	msg := "Die Sandbox ist unerwartet beendet worden. Der Chat ruht; eine neue Nachricht setzt ihn mit der zuletzt gesicherten Sitzung fort."
+	msg := "The sandbox ended unexpectedly. The chat is idle; a new message resumes it with the last saved session."
 	if cause == "exec" {
-		slog.Error("Ausführungs-Sandbox beendet", "chat", chatID, "platz", l.slot.ID)
-		msg = "Die Ausführungs-Sandbox ist unerwartet beendet worden. Der Chat ruht; eine neue Nachricht setzt ihn mit der Sitzung und dem zuletzt gesicherten Arbeitsbereich fort."
+		slog.Error("execution sandbox ended", "chat", chatID, "slot", l.slot.ID)
+		msg = "The execution sandbox ended unexpectedly. The chat is idle; a new message resumes it with the session and the last saved workspace."
 	} else {
-		slog.Error("pi beendet", "chat", chatID, "platz", l.slot.ID)
+		slog.Error("pi ended", "chat", chatID, "slot", l.slot.ID)
 	}
 	m.publish(chatID, Event{Kind: "error", Data: map[string]string{"message": msg}})
 	unlock := m.lock(chatID)
@@ -901,19 +901,19 @@ func (m *Manager) agentDied(chatID string, l *live, cause string) {
 	m.mu.Lock()
 	current = m.live[chatID] == l
 	m.mu.Unlock()
-	if !current { // inzwischen ruhen gelassen oder beendet
+	if !current { // made idle or closed in the meantime
 		return
 	}
-	m.rejectPending(ctx, chatID, "Sandbox beendet")
-	m.endBackground(ctx, chatID, store.BgLost, "Sandbox unerwartet beendet", true)
+	m.rejectPending(ctx, chatID, "sandbox ended")
+	m.endBackground(ctx, chatID, store.BgLost, "sandbox ended unexpectedly", true)
 	if cause == "exec" {
-		// pi lebt: Sitzung sichern (der Arbeitsbereich ist mit der Sandbox verloren).
+		// pi is alive: save the session (the workspace is lost with the sandbox).
 		if err := m.saveSession(ctx, chatID, l.slot.Worker); err != nil {
-			slog.Warn("Sitzung nicht gesichert", "chat", chatID, "fehler", err)
+			slog.Warn("session not saved", "chat", chatID, "error", err)
 		}
 	} else if err := m.saveWorkspace(ctx, chatID, l); err != nil {
-		// Die Ausführungs-Sandbox lebt noch (H1): Arbeitsbereich sichern, soweit möglich.
-		slog.Warn("Arbeitsbereich nicht gesichert", "chat", chatID, "fehler", err)
+		// The execution sandbox is still alive (H1): save the workspace as far as possible.
+		slog.Warn("workspace not saved", "chat", chatID, "error", err)
 	}
 	m.detach(ctx, chatID, l, false, false)
 	_ = m.st.SetState(ctx, chatID, store.StateDormant)
@@ -924,13 +924,13 @@ func (m *Manager) handle(chatID string, l *live, ev rpc.Event) {
 	ctx := context.Background()
 	switch ev.Type {
 	case rpc.TypeOverflow:
-		slog.Warn("Ereignisse verworfen (Flut im RPC-Strom)", "chat", chatID, "anzahl", string(ev.Raw))
-		m.publish(chatID, Event{Kind: "error", Data: map[string]string{"message": "Ereignisse im RPC-Strom verworfen (" + string(ev.Raw) + "); Zustand wird nachgeprüft"}})
+		slog.Warn("events dropped (flood in the RPC stream)", "chat", chatID, "count", string(ev.Raw))
+		m.publish(chatID, Event{Kind: "error", Data: map[string]string{"message": "Events dropped in the RPC stream (" + string(ev.Raw) + "); rechecking state"}})
 		m.background(l, func() { m.resync(chatID, l) })
 		return
 	case rpc.TypeOversized, rpc.TypeInvalid:
-		slog.Warn("auffällige Zeile im RPC-Strom", "chat", chatID, "art", ev.Type)
-		m.publish(chatID, Event{Kind: "error", Data: map[string]string{"message": "Auffällige Zeile im RPC-Strom (" + ev.Type + ")"}})
+		slog.Warn("suspicious line in the RPC stream", "chat", chatID, "kind", ev.Type)
+		m.publish(chatID, Event{Kind: "error", Data: map[string]string{"message": "Suspicious line in the RPC stream (" + ev.Type + ")"}})
 		return
 	}
 	if ev.Type == "extension_ui_request" {
@@ -940,7 +940,7 @@ func (m *Manager) handle(chatID string, l *live, ev rpc.Event) {
 	var userTurn *turnMeta
 	if ev.Type == "message_end" {
 		if text, ok := userMessageText(ev.Raw); ok {
-			// Herkunft vor der Nachricht verteilen: Die UI ordnet sie der nächsten Nutzernachricht zu.
+			// Distribute the origin before the message: the UI assigns it to the next user message.
 			if userTurn = m.takeTurn(l, text); userTurn != nil {
 				m.publish(chatID, Event{Kind: "user_meta", Data: UserMeta{TurnID: userTurn.id, Trigger: userTurn.trigger, Origin: userTurn.origin, Sources: userTurn.sources}})
 			}
@@ -951,13 +951,13 @@ func (m *Manager) handle(chatID string, l *live, ev rpc.Event) {
 	switch ev.Type {
 	case "agent_start":
 		m.mu.Lock()
-		// Läuft nichts, hat pi den Durchgang selbst begonnen (dispatch setzt running vor prompt;
-		// Wiederholungen innerhalb eines Laufs kommen vor agent_settled): etwa, weil ein Subagent im
-		// Hintergrund fertig ist (pi-subagents, triggerTurn).
+		// If nothing is running, pi started the turn itself (dispatch sets running before prompt;
+		// retries within a run come before agent_settled): e.g. because a subagent in the
+		// background has finished (pi-subagents, triggerTurn).
 		byPi := !l.running
 		for _, p := range l.pendingTurns {
 			if !p.isConsumed() {
-				byPi = false // ein Auftrag des Orchestrators ist unterwegs (etwa spät eingeschleust)
+				byPi = false // a request from the orchestrator is on its way (e.g. steered in late)
 			}
 		}
 		if !l.running || l.runningSince.IsZero() {
@@ -986,7 +986,7 @@ func (m *Manager) handle(chatID string, l *live, ev rpc.Event) {
 		case "text_start", "text_delta":
 			l.slot.SetActivity("writing", "")
 		case "toolcall_start":
-			// Das Modell schreibt einen Werkzeugaufruf (bei write mit großer Datei dauert das).
+			// The model is writing a tool call (with write and a large file this takes a while).
 			l.slot.SetActivity("preparing", p.E.ToolName)
 		}
 	case "tool_execution_start":
@@ -998,8 +998,8 @@ func (m *Manager) handle(chatID string, l *live, ev rpc.Event) {
 		m.mu.Lock()
 		l.toolsRunning++
 		m.mu.Unlock()
-		// Eingereihtes jetzt einschleusen: pi fügt es nach den laufenden Werkzeugen ein, vor dem
-		// nächsten Modellaufruf (wie Claude Code), statt bis zum Ende des Durchgangs zu warten.
+		// Steer queued messages in now: pi inserts them after the running tools, before the
+		// next model call (like Claude Code), instead of waiting until the end of the turn.
 		m.background(l, func() { m.steerQueue(chatID, l) })
 	case "tool_execution_end":
 		l.slot.SetActivity("thinking", "")
@@ -1025,8 +1025,8 @@ func (m *Manager) handle(chatID string, l *live, ev rpc.Event) {
 			}
 			var meta *store.MessageMeta
 			if role.Role == "custom" {
-				// Nachricht einer Erweiterung an den Agenten (etwa das Ende eines Subagenten im
-				// Hintergrund): gehört zum laufenden Durchgang, nicht vom Nutzer.
+				// Message from an extension to the agent (e.g. the end of a subagent in the
+				// background): belongs to the current turn, not from the user.
 				m.mu.Lock()
 				if t := l.turn; t != nil {
 					meta = &store.MessageMeta{TurnID: t.id, Trigger: t.trigger, Origin: store.OriginSystem, Sources: []store.Source{{Kind: store.QueueSystem, Type: NotePi}}}
@@ -1037,7 +1037,7 @@ func (m *Manager) handle(chatID string, l *live, ev rpc.Event) {
 					meta = &store.MessageMeta{TurnID: userTurn.id, Trigger: userTurn.trigger, Origin: userTurn.origin, Sources: userTurn.sources}
 				} else {
 					m.mu.Lock()
-					l.turn = nil // Nutzernachricht ohne Auftrag des Orchestrators: Herkunft unbekannt
+					l.turn = nil // user message without a request from the orchestrator: origin unknown
 					m.mu.Unlock()
 				}
 			} else {
@@ -1048,7 +1048,7 @@ func (m *Manager) handle(chatID string, l *live, ev rpc.Event) {
 				m.mu.Unlock()
 			}
 			if _, err := m.st.AppendTurnMessage(ctx, chatID, p.Message, bill, meta); err != nil {
-				slog.Error("Nachricht nicht gespeichert", "chat", chatID, "fehler", err)
+				slog.Error("message not saved", "chat", chatID, "error", err)
 			}
 			if role.Role == "assistant" {
 				m.publishChat(ctx, chatID)
@@ -1074,19 +1074,19 @@ func (m *Manager) handle(chatID string, l *live, ev rpc.Event) {
 		m.background(l, func() {
 			if !running {
 				if err := m.saveSession(ctx, chatID, l.slot.Worker); err != nil {
-					slog.Warn("Sitzung nicht gesichert", "chat", chatID, "fehler", err)
+					slog.Warn("session not saved", "chat", chatID, "error", err)
 				}
 			}
 			m.refreshInfo(ctx, chatID, l.slot.Worker)
 			m.applyPendingModel(ctx, chatID)
-			if !running { // manuelle Kompaktierung vorbei: Eingereihtes jetzt übergeben
+			if !running { // manual compaction over: hand over queued messages now
 				m.deliverQueue(chatID, l)
 			}
 		})
 	case "agent_settled":
 		m.mu.Lock()
-		// Aufträge von vor diesem Lauf, zu denen pi keine Nutzernachricht gemeldet hat (etwa
-		// Befehle einer Extension), ordnen keine spätere Nachricht mehr falsch zu.
+		// Requests from before this run for which pi reported no user message (e.g. commands
+		// of an extension) no longer misattribute a later message.
 		keep := l.pendingTurns[:0]
 		for _, p := range l.pendingTurns {
 			if p.at.After(l.agentStartAt) {
@@ -1099,16 +1099,16 @@ func (m *Manager) handle(chatID string, l *live, ev rpc.Event) {
 		m.setRunning(l, false)
 		l.slot.SetActivity("idle", "")
 		m.background(l, func() {
-			// Eingeschleustes, das pi nicht mehr eingefügt hat, zurückholen (vor deliverQueue).
+			// Reclaim steered messages that pi no longer inserted (before deliverQueue).
 			m.reclaimSteered(ctx, chatID, l)
 			if err := m.saveSession(ctx, chatID, l.slot.Worker); err != nil {
-				slog.Warn("Sitzung nicht gesichert", "chat", chatID, "fehler", err)
+				slog.Warn("session not saved", "chat", chatID, "error", err)
 			}
 			m.refreshInfo(ctx, chatID, l.slot.Worker)
 			if err := m.saveWorkspace(ctx, chatID, l); err != nil {
-				slog.Warn("Arbeitsbereich nicht gesichert", "chat", chatID, "fehler", err)
+				slog.Warn("workspace not saved", "chat", chatID, "error", err)
 			}
-			// Erst nach dem Sichern: Der nächste Auftrag beginnt auf einem gesicherten Stand.
+			// Only after saving: the next request starts from a saved state.
 			m.deliverQueue(chatID, l)
 		})
 		m.armIdle(chatID, l)
@@ -1116,13 +1116,13 @@ func (m *Manager) handle(chatID string, l *live, ev rpc.Event) {
 	}
 }
 
-// NotePi: Quelle einer Nachricht, die eine Erweiterung in pi selbst eingestellt hat (pi-subagents).
+// NotePi: source of a message that an extension inside pi posted itself (pi-subagents).
 const NotePi = "pi"
 
-// startPiTurn legt einen Durchgang an, den pi ohne Auftrag des Orchestrators begonnen hat (Weckruf ohne
-// Nutzer). Seine Antworten zählen so nicht zum vorigen Auftrag des Nutzers, und die Grenze für
-// Durchgänge ohne Nutzer (AGW_AUTO_TURNS_MAX, Review 3, H2) gilt auch hier: Ist sie erreicht, bricht
-// der Orchestrator den Durchgang ab und hält Eingereihtes zurück.
+// startPiTurn creates a turn that pi started without a request from the orchestrator (wake-up
+// without the user). Its responses thus do not count towards the user's previous request, and the
+// limit for turns without the user (AGW_AUTO_TURNS_MAX, Review 3, H2) applies here too: once it is
+// reached, the orchestrator aborts the turn and holds back queued messages.
 func (m *Manager) startPiTurn(ctx context.Context, chatID string, l *live) {
 	ev, limited := m.autoLimitTurns(ctx, chatID)
 	sources := []store.Source{{Kind: store.QueueSystem, Type: NotePi}}
@@ -1130,25 +1130,25 @@ func (m *Manager) startPiTurn(ctx context.Context, chatID string, l *live) {
 	if id, err := m.st.CreateTurn(ctx, chatID, store.TriggerWake, store.OriginSystem, sources, nil); err == nil {
 		tm.id = id
 	} else {
-		slog.Warn("Durchgang von pi nicht angelegt", "chat", chatID, "fehler", err)
+		slog.Warn("turn from pi not created", "chat", chatID, "error", err)
 	}
 	tm.markConsumed()
 	m.mu.Lock()
 	l.turn = tm
 	m.mu.Unlock()
-	slog.Info("pi beginnt einen Durchgang ohne Auftrag (Weckruf)", "chat", chatID, "durchgang", tm.id)
+	slog.Info("pi starts a turn without a request (wake-up)", "chat", chatID, "turn", tm.id)
 	if limited {
 		m.mu.Lock()
 		l.holdQueue, l.holdReason = true, ev.Reason
 		m.mu.Unlock()
-		slog.Warn("Grenze für Durchgänge ohne Nutzer erreicht, Durchgang von pi abgebrochen", "chat", chatID, "grenze", ev.Limit)
+		slog.Warn("limit for turns without the user reached, turn from pi aborted", "chat", chatID, "limit", ev.Limit)
 		m.publish(chatID, Event{Kind: "auto_held", Data: ev})
 		go func() { _, _ = callT(l.slot.Worker, map[string]any{"type": "abort"}, 10*time.Second) }()
 	}
 }
 
-// UserMeta ist das SSE-Ereignis „user_meta“: Herkunft der Nutzernachricht, die als nächstes
-// Ereignis „pi“ (message_end, role user) folgt.
+// UserMeta is the SSE event "user_meta": origin of the user message that follows as the next
+// "pi" event (message_end, role user).
 type UserMeta struct {
 	TurnID  int64          `json:"turn_id,omitempty"`
 	Trigger string         `json:"trigger"`
@@ -1156,7 +1156,7 @@ type UserMeta struct {
 	Sources []store.Source `json:"sources"`
 }
 
-// userMessageText liefert den Text einer Nutzernachricht aus message_end (ok nur bei role user).
+// userMessageText returns the text of a user message from message_end (ok only for role user).
 func userMessageText(raw json.RawMessage) (string, bool) {
 	var p struct {
 		Message struct {
@@ -1185,8 +1185,8 @@ func userMessageText(raw json.RawMessage) (string, bool) {
 	return b.String(), true
 }
 
-// bill rechnet die Kosten einer Antwort nach dem Tarif des Anbieters zum
-// Zeitpunkt der Antwort (Spitzen-/Nebenzeit). pi kennt nur einen Preis.
+// bill computes the cost of a response according to the provider's tariff at
+// the time of the response (peak / off-peak). pi knows only one price.
 func (m *Manager) bill(ctx context.Context, chatID string, msg json.RawMessage) *store.Billing {
 	var a struct {
 		Provider  string       `json:"provider"`
@@ -1216,7 +1216,7 @@ func (m *Manager) bill(ctx context.Context, chatID string, msg json.RawMessage) 
 	return &store.Billing{Cost: cost, Peak: peak}
 }
 
-// ContextUsage ist die Kontextauslastung, wie die API sie liefert.
+// ContextUsage is the context usage as the API returns it.
 type ContextUsage struct {
 	Tokens           *int64    `json:"tokens"`
 	Window           int64     `json:"window"`
@@ -1227,7 +1227,7 @@ type ContextUsage struct {
 	UpdatedAt        time.Time `json:"updated_at"`
 }
 
-// refreshInfo liest Kontextauslastung und Befehle von pi und speichert sie.
+// refreshInfo reads context usage and commands from pi and stores them.
 func (m *Manager) refreshInfo(ctx context.Context, chatID string, a Agent) {
 	if resp, err := callT(a, map[string]any{"type": "get_session_stats"}, callTimeout); err == nil {
 		var d struct {
@@ -1257,8 +1257,8 @@ func (m *Manager) refreshInfo(ctx context.Context, chatID string, a Agent) {
 	m.publishChat(ctx, chatID)
 }
 
-// storeCompaction legt eine Kompaktierung als eigenen Eintrag ab und rechnet
-// die Zusammenfassung ab (sie erscheint in keiner Antwort).
+// storeCompaction stores a compaction as its own entry and bills
+// the summary (it appears in no response).
 func (m *Manager) storeCompaction(ctx context.Context, chatID string, raw json.RawMessage) {
 	var ev struct {
 		Reason       string          `json:"reason"`
@@ -1270,7 +1270,7 @@ func (m *Manager) storeCompaction(ctx context.Context, chatID string, raw json.R
 		return
 	}
 	if len(ev.Result) == 0 || string(ev.Result) == "null" {
-		slog.Warn("Kompaktierung ohne Ergebnis", "chat", chatID, "abgebrochen", ev.Aborted, "fehler", ev.ErrorMessage)
+		slog.Warn("compaction without result", "chat", chatID, "aborted", ev.Aborted, "error", ev.ErrorMessage)
 		return
 	}
 	var res map[string]any
@@ -1292,19 +1292,19 @@ func (m *Manager) storeCompaction(ctx context.Context, chatID string, raw json.R
 		}
 	}
 	if _, err := m.st.AppendBilledMessage(ctx, chatID, msg, bill); err != nil {
-		slog.Error("Kompaktierung nicht gespeichert", "chat", chatID, "fehler", err)
+		slog.Error("compaction not saved", "chat", chatID, "error", err)
 		return
 	}
-	slog.Info("Kontext kompaktiert", "chat", chatID, "grund", ev.Reason)
+	slog.Info("context compacted", "chat", chatID, "reason", ev.Reason)
 }
 
-// Command ist ein Slash-Befehl für die UI.
+// Command is a slash command for the UI.
 type Command struct {
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
 	Source      string `json:"source"`
 	Args        string `json:"args,omitempty"`
-	// Options: mögliche Argumente zur Vervollständigung (/model, /effort).
+	// Options: possible arguments for completion (/model, /effort).
 	Options []CommandOption `json:"options,omitempty"`
 }
 
@@ -1314,19 +1314,19 @@ type CommandOption struct {
 	Current bool   `json:"current,omitempty"`
 }
 
-// compactLanguageHint steht vor den Anweisungen jeder manuellen Kompaktierung;
-// ohne ihn schreibt pi die Zusammenfassung auf Englisch.
-const compactLanguageHint = "Schreibe die Zusammenfassung auf Deutsch."
+// compactLanguageHint precedes the instructions of every manual compaction;
+// without it pi writes the summary in English, whatever language the chat is in.
+const compactLanguageHint = "Write the summary in the language of the conversation."
 
 var builtinCommands = []Command{
-	{Name: "compact", Description: "Kontext jetzt zusammenfassen; optional mit Anweisungen, worauf die Zusammenfassung achten soll", Source: "builtin", Args: "[Anweisungen]"},
-	{Name: "autocompact", Description: "Automatische Kompaktierung ein- oder ausschalten", Source: "builtin", Args: "on|off"},
-	{Name: "rename", Description: "Chat umbenennen", Source: "builtin", Args: "<Name>"},
-	{Name: "model", Description: "Modell wechseln; passt der Kontext nicht, erst kompaktieren", Source: "builtin", Args: "<anbieter/modell>"},
-	{Name: "effort", Description: "Denkstufe des Modells einstellen", Source: "builtin", Args: "<Stufe>"},
+	{Name: "compact", Description: "Summarize the context now; optionally with instructions on what the summary should focus on", Source: "builtin", Args: "[instructions]"},
+	{Name: "autocompact", Description: "Turn automatic compaction on or off", Source: "builtin", Args: "on|off"},
+	{Name: "rename", Description: "Rename the chat", Source: "builtin", Args: "<name>"},
+	{Name: "model", Description: "Switch the model; if the context does not fit, compact first", Source: "builtin", Args: "<provider/model>"},
+	{Name: "effort", Description: "Set the model's thinking level", Source: "builtin", Args: "<level>"},
 }
 
-// Commands liefert die eingebauten Befehle und die von pi (zuletzt bekannt).
+// Commands returns the built-in commands and those of pi (last known).
 func (m *Manager) Commands(ctx context.Context, chatID string) ([]Command, error) {
 	c, err := m.st.GetChat(ctx, chatID)
 	if err != nil {
@@ -1359,8 +1359,8 @@ func (m *Manager) Commands(ctx context.Context, chatID string) ([]Command, error
 	return append(out, pi...), nil
 }
 
-// RunCommand führt einen Slash-Befehl aus. Was kein eingebauter Befehl ist,
-// geht als Nachricht an pi (pi expandiert Skills und Prompt-Vorlagen).
+// RunCommand runs a slash command. Anything that is not a built-in command
+// goes to pi as a message (pi expands skills and prompt templates).
 func (m *Manager) RunCommand(ctx context.Context, chatID, line string) (SendResult, error) {
 	line = strings.TrimSpace(line)
 	if !strings.HasPrefix(line, "/") {
@@ -1381,11 +1381,11 @@ func (m *Manager) RunCommand(ctx context.Context, chatID, line string) (SendResu
 	case "autocompact":
 		var on bool
 		switch strings.ToLower(args) {
-		case "on", "an", "ein", "true":
+		case "on", "true":
 			on = true
-		case "off", "aus", "false":
+		case "off", "false":
 		default:
-			return SendResult{}, fmt.Errorf("/autocompact erwartet on oder off")
+			return SendResult{}, fmt.Errorf("/autocompact expects on or off")
 		}
 		_, err := m.SetAutoCompact(ctx, chatID, on)
 		return SendResult{}, err
@@ -1411,7 +1411,7 @@ func (m *Manager) RunCommand(ctx context.Context, chatID, line string) (SendResu
 		cmd := map[string]any{"type": "compact", "customInstructions": instr}
 		l.slot.SetActivity("compacting", "")
 		m.touchIdle(chatID)
-		// compact antwortet erst nach der Zusammenfassung; der Verlauf kommt über
+		// compact responds only after the summary; progress comes via
 		// compaction_start/compaction_end.
 		go func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
@@ -1420,16 +1420,16 @@ func (m *Manager) RunCommand(ctx context.Context, chatID, line string) (SendResu
 				m.mu.Lock()
 				l.compacting = false
 				m.mu.Unlock()
-				m.setPendingModel(chatID, "") // ein vorgemerkter Modellwechsel entfällt
-				m.publish(chatID, Event{Kind: "error", Data: map[string]string{"message": "Kompaktierung fehlgeschlagen: " + err.Error()}})
+				m.setPendingModel(chatID, "") // a scheduled model switch is dropped
+				m.publish(chatID, Event{Kind: "error", Data: map[string]string{"message": "Compaction failed: " + err.Error()}})
 				l.slot.SetActivity("idle", "")
 				return
 			}
-			// Meldet pi kein compaction_end (etwa, weil nichts zu kompaktieren war), bliebe ein
-			// vorgemerkter Modellwechsel sonst stehen; nach compaction_end ist er schon erledigt.
+			// If pi reports no compaction_end (e.g. because there was nothing to compact), a
+			// scheduled model switch would otherwise remain; after compaction_end it is already done.
 			m.background(l, func() {
 				m.mu.Lock()
-				pending := m.pendingModel[chatID] != "" && !l.compacting // sonst erledigt es compaction_end
+				pending := m.pendingModel[chatID] != "" && !l.compacting // otherwise compaction_end handles it
 				m.mu.Unlock()
 				if pending {
 					m.refreshInfo(context.Background(), chatID, l.slot.Worker)
@@ -1442,14 +1442,14 @@ func (m *Manager) RunCommand(ctx context.Context, chatID, line string) (SendResu
 	return m.Send(ctx, chatID, line)
 }
 
-// maxTitle: Länge eines Titels in Zeichen (Runen).
+// maxTitle: length of a title in characters (runes).
 const maxTitle = 120
 
-// Rename setzt den Titel (/rename); danach benennt der Orchestrator den Chat nicht mehr selbst.
+// Rename sets the title (/rename); afterwards the orchestrator no longer names the chat itself.
 func (m *Manager) Rename(ctx context.Context, chatID, title string) (ChatView, error) {
 	title = strings.Join(strings.Fields(title), " ")
 	if title == "" {
-		return ChatView{}, fmt.Errorf("%w: /rename erwartet einen Namen", ErrInvalid)
+		return ChatView{}, fmt.Errorf("%w: /rename expects a name", ErrInvalid)
 	}
 	if r := []rune(title); len(r) > maxTitle {
 		title = string(r[:maxTitle])
@@ -1461,22 +1461,22 @@ func (m *Manager) Rename(ctx context.Context, chatID, title string) (ChatView, e
 	return m.View(ctx, chatID)
 }
 
-// Titler formuliert einen Chattitel (Paket titler).
+// Titler phrases a chat title (package titler).
 type Titler interface {
 	Title(ctx context.Context, chatModel, text string) (titler.Result, error)
 }
 
-// autoTitle benennt einen Chat mit Platzhaltertitel nach der ersten Frage des Nutzers: sofort mit
-// der gekürzten Frage, dann (mit Titler) einmal mit einem Titel des Modells. Dessen Aufruf steht in
-// aux_llm_calls, nicht in llm_calls, damit Kosten und Aufrufzahlen je Chat nur die Arbeit des
-// Agenten zeigen.
+// autoTitle names a chat with a placeholder title after the user's first question: immediately with
+// the shortened question, then (with Titler) once with a title from the model. That call is recorded
+// in aux_llm_calls, not in llm_calls, so that cost and call counts per chat show only the agent's
+// work.
 func (m *Manager) autoTitle(ctx context.Context, chatID, text string) {
 	if strings.TrimSpace(text) == "" || strings.HasPrefix(strings.TrimSpace(text), "/") {
 		return
 	}
 	ok, err := m.st.AutoTitle(ctx, chatID, titleFrom(text))
 	if err != nil {
-		slog.Warn("Titel nicht gesetzt", "chat", chatID, "fehler", err)
+		slog.Warn("title not set", "chat", chatID, "error", err)
 		return
 	}
 	if !ok {
@@ -1505,16 +1505,16 @@ func (m *Manager) modelTitle(chatID, model, text string) {
 	}
 	if err != nil {
 		call.Error = err.Error()
-		slog.Warn("Titel des Modells nicht erhalten", "chat", chatID, "fehler", err)
+		slog.Warn("title from the model not received", "chat", chatID, "error", err)
 	}
 	if err := m.st.RecordAuxCall(ctx, call); err != nil {
-		slog.Warn("Titel-Aufruf nicht erfasst", "chat", chatID, "fehler", err)
+		slog.Warn("title call not recorded", "chat", chatID, "error", err)
 	}
 	if r.Title == "" {
 		return
 	}
 	if ok, err := m.st.ModelTitle(ctx, chatID, r.Title); err != nil {
-		slog.Warn("Titel des Modells nicht gesetzt", "chat", chatID, "fehler", err)
+		slog.Warn("title from the model not set", "chat", chatID, "error", err)
 	} else if ok {
 		m.publishChat(ctx, chatID)
 	}
@@ -1542,9 +1542,9 @@ func (m *Manager) SetAutoCompact(ctx context.Context, chatID string, on bool) (C
 	return m.View(ctx, chatID)
 }
 
-// answerExtensionUI beantwortet Rückfragen von Extensions (confirm, select,
-// input, editor) mit Abbruch. Ohne Antwort würde die Extension ewig warten;
-// Freigaben laufen in diesem PoC über den Orchestrator, nicht über pi.
+// answerExtensionUI answers queries from extensions (confirm, select,
+// input, editor) with a cancellation. Without an answer the extension would wait
+// forever; confirmations in this PoC go through the orchestrator, not through pi.
 func (m *Manager) answerExtensionUI(chatID string, l *live, raw json.RawMessage) {
 	var r struct {
 		ID     string `json:"id"`
@@ -1557,11 +1557,11 @@ func (m *Manager) answerExtensionUI(chatID string, l *live, raw json.RawMessage)
 	switch r.Method {
 	case "confirm", "select", "input", "editor":
 		_ = l.slot.Worker.Notify(map[string]any{"type": "extension_ui_response", "id": r.ID, "cancelled": true})
-		m.LogCall(l.slot.ID, chatID, "pi", "extension_ui", r.Method+": "+r.Title, "abgelehnt")
+		m.LogCall(l.slot.ID, chatID, "pi", "extension_ui", r.Method+": "+r.Title, "rejected")
 	}
 }
 
-// resync prüft nach verworfenen Ereignissen, ob pi noch arbeitet.
+// resync checks after dropped events whether pi is still working.
 func (m *Manager) resync(chatID string, l *live) {
 	resp, err := callT(l.slot.Worker, map[string]any{"type": "get_state"}, callTimeout)
 	if err != nil {
@@ -1588,7 +1588,7 @@ func (m *Manager) setRunning(l *live, v bool) {
 	m.mu.Unlock()
 }
 
-// --- Artefakte und Bestätigung (Backend des Sockets) ---
+// --- Artifacts and approval (backend of the socket) ---
 
 func (m *Manager) ChatForSlot(slotID string) string { return m.SlotChat(slotID) }
 
@@ -1596,16 +1596,16 @@ func (m *Manager) LogCall(slotID, chatID, via, op, detail, result string) {
 	m.LogCallBy(context.Background(), slotID, chatID, via, op, detail, result)
 }
 
-// LogCallBy protokolliert einen Socket-Aufruf samt Sitzung und Werkzeugaufruf aus dem Kontext
-// (sock.CallerLogger): So zeigt das Protokoll, ob der Hauptagent oder ein Subagent fragte.
+// LogCallBy logs a socket call together with session and tool call from the context
+// (sock.CallerLogger): this way the log shows whether the main agent or a subagent asked.
 func (m *Manager) LogCallBy(ctx context.Context, slotID, chatID, via, op, detail, result string) {
 	sc, err := m.st.AddSocketCall(context.WithoutCancel(ctx), store.SocketCall{ChatID: chatID, SlotID: slotID, Via: via, Op: op, Detail: detail, Result: result,
 		Session: store.SessionFrom(ctx), ToolCallID: store.ToolCallFrom(ctx)})
 	if err != nil {
-		slog.Error("Socket-Aufruf nicht protokolliert", "fehler", err)
+		slog.Error("socket call not logged", "error", err)
 		return
 	}
-	slog.Info("Socket-Aufruf", "platz", slotID, "chat", chatID, "weg", via, "op", op, "detail", detail, "ergebnis", result)
+	slog.Info("socket call", "slot", slotID, "chat", chatID, "via", via, "op", op, "detail", detail, "result", result)
 	if chatID != "" {
 		m.publish(chatID, Event{Kind: "socket_call", Data: sc})
 	}
@@ -1623,8 +1623,8 @@ func contentType(name string, head []byte) string {
 
 func objectKey(chatID, kind, name string) string { return path.Join(chatID, kind, name) }
 
-// Upload legt die Datei als ausstehend ab und wartet auf die Entscheidung des
-// Nutzers. Zeitüberschreitung und Abbruch gelten als Ablehnung.
+// Upload stores the file as pending and waits for the user's decision.
+// Timeout and cancellation count as rejection.
 func (m *Manager) Upload(ctx context.Context, chatID, slotID, via, name string, size int64, sha string, body io.Reader) (sock.UploadResult, error) {
 	data, err := io.ReadAll(body)
 	if err != nil {
@@ -1636,7 +1636,7 @@ func (m *Manager) Upload(ctx context.Context, chatID, slotID, via, name string, 
 	sum := sha256.Sum256(data)
 	got := hex.EncodeToString(sum[:])
 	if sha != "" && !strings.EqualFold(sha, got) {
-		return sock.UploadResult{Status: "rejected", Name: name, Size: int64(len(data)), SHA256: got, Message: "Prüfsumme stimmt nicht"}, nil
+		return sock.UploadResult{Status: "rejected", Name: name, Size: int64(len(data)), SHA256: got, Message: "checksum does not match"}, nil
 	}
 	ct := contentType(name, data)
 	preview := ""
@@ -1649,7 +1649,7 @@ func (m *Manager) Upload(ctx context.Context, chatID, slotID, via, name string, 
 	}
 	pendingKey := path.Join("pending", chatID, fmt.Sprintf("%d-%s", time.Now().UnixNano(), name))
 	if err := m.blobs.Put(ctx, pendingKey, bytes.NewReader(data), int64(len(data)), ct); err != nil {
-		return sock.UploadResult{}, fmt.Errorf("Ablage: %w", err)
+		return sock.UploadResult{}, fmt.Errorf("store: %w", err)
 	}
 	ap, err := m.st.CreateApproval(ctx, store.Approval{ChatID: chatID, Kind: "artifact_upload", Via: via, Name: name, Size: int64(len(data)), SHA256: got, ContentType: ct, PendingKey: pendingKey, Preview: preview,
 		Session: store.SessionFrom(ctx), ToolCallID: store.ToolCallFrom(ctx)})
@@ -1665,14 +1665,14 @@ func (m *Manager) Upload(ctx context.Context, chatID, slotID, via, name string, 
 	}
 	m.publish(chatID, Event{Kind: "approval", Data: ap})
 	m.publishChat(ctx, chatID)
-	slog.Info("Bestätigung angefragt", "chat", chatID, "freigabe", ap.ID, "name", name, "bytes", len(data), "weg", via)
+	slog.Info("approval requested", "chat", chatID, "approval", ap.ID, "name", name, "bytes", len(data), "via", via)
 
 	approved, werr := w.Wait(ctx, m.opt.ApprovalTimeout)
 	bg := context.WithoutCancel(ctx)
 	final := m.settle(bg, chatID, ap.ID, approved, werr)
-	msg := "vom Nutzer abgelehnt"
+	msg := "rejected by the user"
 	if final == store.ApprovalExpired {
-		msg = "keine Entscheidung innerhalb der Wartezeit"
+		msg = "no decision within the waiting time"
 	}
 	if s, ok := m.pool.Get(slotID); ok {
 		if prevAct != nil && prevAct.Kind == "tool" {
@@ -1690,7 +1690,7 @@ func (m *Manager) Upload(ctx context.Context, chatID, slotID, via, name string, 
 	}
 	key := objectKey(chatID, store.KindOutput, name)
 	if err := m.blobs.Move(bg, pendingKey, key); err != nil {
-		return res, fmt.Errorf("Ablage nach Bestätigung: %w", err)
+		return res, fmt.Errorf("store after approval: %w", err)
 	}
 	art := store.Artifact{ChatID: chatID, Kind: store.KindOutput, Name: name, Size: int64(len(data)), SHA256: got, ContentType: ct, Via: via, ObjectKey: key,
 		ToolCallID: store.ToolCallFrom(ctx)}
@@ -1704,16 +1704,16 @@ func (m *Manager) Upload(ctx context.Context, chatID, slotID, via, name string, 
 	return res, nil
 }
 
-// RequestInternet: Der Agent bittet um Internetzugang. Der Aufruf wartet auf
-// die Entscheidung des Nutzers; erst bei Zustimmung wird die Sandbox mit dem
-// Egress-Netz verbunden.
+// RequestInternet: the agent asks for internet access. The call waits for
+// the user's decision; only on approval is the sandbox connected to the
+// egress network.
 func (m *Manager) RequestInternet(ctx context.Context, chatID, slotID, via, reason string) (sock.UploadResult, error) {
 	c, err := m.st.GetChat(ctx, chatID)
 	if err != nil {
 		return sock.UploadResult{}, err
 	}
 	if c.Internet {
-		return sock.UploadResult{Status: "approved", Name: "internet", Message: "Internetzugang ist bereits freigegeben"}, nil
+		return sock.UploadResult{Status: "approved", Name: "internet", Message: "internet access is already granted"}, nil
 	}
 	if err := m.checkPendingLimit(ctx, chatID); err != nil {
 		return sock.UploadResult{}, err
@@ -1723,7 +1723,7 @@ func (m *Manager) RequestInternet(ctx context.Context, chatID, slotID, via, reas
 		reason = string(r[:500]) + " …"
 	}
 	if reason == "" {
-		reason = "(keine Begründung angegeben)"
+		reason = "(no reason given)"
 	}
 	ap, err := m.st.CreateApproval(ctx, store.Approval{ChatID: chatID, Kind: "internet_access", Via: via, Name: reason, ContentType: "text/plain", PendingKey: "-", Preview: reason,
 		Session: store.SessionFrom(ctx), ToolCallID: store.ToolCallFrom(ctx)})
@@ -1736,7 +1736,7 @@ func (m *Manager) RequestInternet(ctx context.Context, chatID, slotID, via, reas
 	}
 	m.publish(chatID, Event{Kind: "approval", Data: ap})
 	m.publishChat(ctx, chatID)
-	slog.Info("Internetzugang angefragt", "chat", chatID, "freigabe", ap.ID, "weg", via)
+	slog.Info("internet access requested", "chat", chatID, "approval", ap.ID, "via", via)
 	approved, werr := w.Wait(ctx, m.opt.ApprovalTimeout)
 	bg := context.WithoutCancel(ctx)
 	final := m.settle(bg, chatID, ap.ID, approved, werr)
@@ -1745,20 +1745,20 @@ func (m *Manager) RequestInternet(ctx context.Context, chatID, slotID, via, reas
 	}
 	if final == store.ApprovalExpired {
 		m.publishChat(bg, chatID)
-		return sock.UploadResult{Status: "rejected", Name: "internet", Message: "keine Entscheidung innerhalb der Wartezeit"}, nil
+		return sock.UploadResult{Status: "rejected", Name: "internet", Message: "no decision within the waiting time"}, nil
 	}
 	if final != store.ApprovalApproved {
 		m.publishChat(bg, chatID)
-		return sock.UploadResult{Status: "rejected", Name: "internet", Message: "vom Nutzer abgelehnt"}, nil
+		return sock.UploadResult{Status: "rejected", Name: "internet", Message: "rejected by the user"}, nil
 	}
 	if _, err := m.SetInternet(bg, chatID, true); err != nil {
 		return sock.UploadResult{}, err
 	}
-	return sock.UploadResult{Status: "approved", Name: "internet", Message: "Internetzugang freigegeben"}, nil
+	return sock.UploadResult{Status: "approved", Name: "internet", Message: "internet access granted"}, nil
 }
 
-// visibleControls schreibt Steuer- und Bidi-Zeichen als \u-Folge, damit die Vorschau einer
-// Bestätigung nichts optisch umstellt oder verbirgt (Review W1). Zeilenumbruch und Tab bleiben.
+// visibleControls writes control and bidi characters as \u sequences so that the preview of an
+// approval does not visually reorder or hide anything (Review W1). Newline and tab stay.
 func visibleControls(s string) string {
 	var b strings.Builder
 	for _, r := range s {
@@ -1774,36 +1774,36 @@ func visibleControls(s string) string {
 	return b.String()
 }
 
-// maxPlatformPreview begrenzt Methode, Pfad und eingerückten Körper eines schreibenden Plattform-Aufrufs.
+// maxPlatformPreview limits method, path and indented body of a writing platform call.
 const maxPlatformPreview = 16000
 
-// PlatformExchanged protokolliert einen Token-Austausch für einen Chat (platform.Client.OnExchange):
-// wer im Token steht (sub, azp, aud), bis wann es gilt und dass kein act-Claim kommt.
+// PlatformExchanged logs a token exchange for a chat (platform.Client.OnExchange):
+// who is in the token (sub, azp, aud), until when it is valid and that no act claim comes.
 func (m *Manager) PlatformExchanged(chatID string, cl platform.Claims) {
 	m.LogCall(m.slotOf(chatID), chatID, "orchestrator", "token_exchange", cl.String(), "ok")
 }
 
-// PlatformCall führt einen Aufruf der Agri-Gaia-Plattform aus. Lesende Aufrufe (GET)
-// gehen direkt durch; alles andere wartet auf die Bestätigung des Nutzers und wird
-// nur bei Zustimmung ausgeführt. Die Bestätigung zeigt Methode, Pfad und Körper.
+// PlatformCall performs a call to the Agri-Gaia platform. Reading calls (GET)
+// go straight through; everything else waits for the user's approval and is
+// only executed on approval. The approval shows method, path and body.
 func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, req platform.Request) (platform.Result, error) {
 	if m.opt.Platform == nil {
 		return platform.Result{Status: "error", Message: platform.ErrNotConfigured.Error()}, nil
 	}
-	// Prüfung auch hier, nicht nur beim Aufrufer: Writes() setzt eine normalisierte Methode voraus (Review W2).
+	// Check here too, not only at the caller: Writes() assumes a normalized method (Review W2).
 	req, err := platform.Normalize(req)
 	if err != nil {
 		return platform.Result{Status: "error", Message: err.Error()}, nil
 	}
 	del, err := m.delegationOf(ctx, chatID)
 	if err != nil {
-		// Eine unlesbare Delegation gewährt nichts.
+		// An unreadable delegation grants nothing.
 		return platform.Result{Status: "denied", Message: err.Error()}, nil
 	}
 	if req.Path == platform.RightsPath {
 		return platform.Result{Status: "ok", HTTPStatus: 200, Body: m.rightsText(ctx, chatID, del)}, nil
 	}
-	// Delegation (Schritt 1): Einordnung allein aus Methode und Pfad, Prüfung vor jeder Rückfrage.
+	// Delegation (step 1): classification from method and path alone, check before any confirmation.
 	access := delegation.Classify(req)
 	violation := ""
 	if del != nil {
@@ -1815,16 +1815,16 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 			if del.Enforcing() {
 				return platform.Result{Status: "denied", Message: dec.Reason}, nil
 			}
-			violation = dec.Reason // Stufe ohne Schutzmaßnahme: nur protokollieren
+			violation = dec.Reason // stage without protective measure: only log
 		}
 	}
 	if req.Writes() && (del == nil || del.ConfirmWrites()) {
 		if err := m.checkPendingLimit(ctx, chatID); err != nil {
 			return platform.Result{}, err
 		}
-		preview := req.String() + "\nEinordnung: " + access.String()
+		preview := req.String() + "\nClassification: " + access.String()
 		if del != nil && violation == "" {
-			preview += " (in den übertragenen Rechten)"
+			preview += " (within the delegated rights)"
 		}
 		if d := req.Describe(); d != "" {
 			preview += "\n\n" + d
@@ -1838,9 +1838,9 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 			}
 		}
 		preview = visibleControls(preview)
-		// Der Nutzer bestätigt nur, was er vollständig sieht: lieber abweisen als kürzen (Review W1).
+		// The user only approves what they see in full: better refuse than truncate (Review W1).
 		if n := len([]rune(preview)); n > maxPlatformPreview {
-			return platform.Result{Status: "error", Message: fmt.Sprintf("Aufruf zu groß für eine Bestätigung (%d Zeichen, höchstens %d); Körper verkleinern", n, maxPlatformPreview)}, nil
+			return platform.Result{Status: "error", Message: fmt.Sprintf("call too large for an approval (%d characters, at most %d); shrink the body", n, maxPlatformPreview)}, nil
 		}
 		size := int64(len(req.Body))
 		for _, u := range req.Uploads {
@@ -1857,7 +1857,7 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 		}
 		m.publish(chatID, Event{Kind: "approval", Data: ap})
 		m.publishChat(ctx, chatID)
-		slog.Info("Plattform-Aufruf angefragt", "chat", chatID, "freigabe", ap.ID, "aufruf", req.String(), "weg", via)
+		slog.Info("platform call requested", "chat", chatID, "approval", ap.ID, "call", req.String(), "via", via)
 		approved, werr := w.Wait(ctx, m.opt.ApprovalTimeout)
 		bg := context.WithoutCancel(ctx)
 		final := m.settle(bg, chatID, ap.ID, approved, werr)
@@ -1866,24 +1866,24 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 		}
 		m.publishChat(bg, chatID)
 		if final == store.ApprovalExpired {
-			return platform.Result{Status: "rejected", Message: "keine Entscheidung innerhalb der Wartezeit; nichts ausgeführt"}, nil
+			return platform.Result{Status: "rejected", Message: "no decision within the waiting time; nothing executed"}, nil
 		}
 		if final != store.ApprovalApproved {
-			return platform.Result{Status: "rejected", Message: "vom Nutzer abgelehnt; nichts ausgeführt"}, nil
+			return platform.Result{Status: "rejected", Message: "rejected by the user; nothing executed"}, nil
 		}
 		ctx = bg
-		// Während der Wartezeit kann die Delegation abgelaufen sein (Review 5, W3): frisch laden und erneut prüfen.
+		// The delegation may have expired during the waiting time (Review 5, W3): reload and check again.
 		if del != nil {
 			fresh, err := m.delegationOf(ctx, chatID)
 			if err != nil || fresh == nil {
-				return platform.Result{Status: "denied", Message: "Delegation nach der Bestätigung nicht mehr lesbar"}, nil
+				return platform.Result{Status: "denied", Message: "delegation no longer readable after the approval"}, nil
 			}
 			own := func(res, id string) bool {
 				ok, _ := m.st.IsDelegationObject(ctx, chatID, res, id)
 				return ok
 			}
 			if dec := fresh.Check(access, time.Now(), own); !dec.Allowed && fresh.Enforcing() {
-				return platform.Result{Status: "denied", Message: dec.Reason + " (nach der Bestätigung erneut geprüft)"}, nil
+				return platform.Result{Status: "denied", Message: dec.Reason + " (checked again after the approval)"}, nil
 			}
 		}
 	}
@@ -1895,16 +1895,16 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 	if del != nil {
 		if r, id, ok := delegation.Created(access, res); ok {
 			if err := m.st.AddDelegationObject(context.WithoutCancel(ctx), chatID, r, id); err != nil {
-				slog.Error("Herkunft nicht festgehalten", "chat", chatID, "objekt", r+" "+id, "fehler", err)
+				slog.Error("provenance not recorded", "chat", chatID, "object", r+" "+id, "error", err)
 			}
 		}
 	}
 	return res, nil
 }
 
-// PlatformPrecheck prüft einen Aufruf gegen die Delegation, ohne ihn auszuführen. Der Socket ruft
-// sie vor dem Lesen der Dateien eines Uploads auf, damit ein Übergriff keine 512 MB aus der Sandbox
-// liest (Review 5, M7). Maßgeblich bleibt die Prüfung in PlatformCall.
+// PlatformPrecheck checks a call against the delegation without executing it. The socket calls
+// it before reading the files of an upload so that a violation does not read 512 MB from the
+// sandbox (Review 5, M7). The check in PlatformCall remains authoritative.
 func (m *Manager) PlatformPrecheck(ctx context.Context, chatID string, req platform.Request) (platform.Result, bool) {
 	del, err := m.delegationOf(ctx, chatID)
 	if err != nil {
@@ -1923,7 +1923,7 @@ func (m *Manager) PlatformPrecheck(ctx context.Context, chatID string, req platf
 	return platform.Result{}, true
 }
 
-// delegationOf liest die Delegation eines Chats (nil: ohne Delegation).
+// delegationOf reads a chat's delegation (nil: without delegation).
 func (m *Manager) delegationOf(ctx context.Context, chatID string) (*delegation.Delegation, error) {
 	c, err := m.st.GetChat(ctx, chatID)
 	if err != nil {
@@ -1934,19 +1934,19 @@ func (m *Manager) delegationOf(ctx context.Context, chatID string) (*delegation.
 	}
 	d, err := delegation.Parse(c.Delegation)
 	if err != nil {
-		return nil, fmt.Errorf("Delegation des Chats unlesbar: %w", err)
+		return nil, fmt.Errorf("chat's delegation unreadable: %w", err)
 	}
 	return d, nil
 }
 
-// rightsText beschreibt dem Agenten seine Rechte samt den Objekten, die er angelegt hat.
+// rightsText describes to the agent its rights together with the objects it has created.
 func (m *Manager) rightsText(ctx context.Context, chatID string, del *delegation.Delegation) string {
 	if del == nil {
-		return "Für diesen Chat ist keine Delegation festgelegt: Lesen geht ohne Rückfrage, jeder schreibende Aufruf braucht die Bestätigung des Nutzers."
+		return "No delegation is set for this chat: reading works without confirmation, every writing call needs the user's approval."
 	}
 	s := del.Summary()
 	if objs, err := m.st.ListDelegationObjects(ctx, chatID); err == nil && len(objs) > 0 {
-		s += "\nIn diesem Chat angelegt:"
+		s += "\nCreated in this chat:"
 		for _, o := range objs {
 			s += "\n  " + o.Resource + " " + o.ObjectID
 		}
@@ -1954,7 +1954,7 @@ func (m *Manager) rightsText(ctx context.Context, chatID string, del *delegation
 	return s
 }
 
-// checkPendingLimit begrenzt offene Bestätigungen je Chat (Review H2).
+// checkPendingLimit limits pending approvals per chat (Review H2).
 func (m *Manager) checkPendingLimit(ctx context.Context, chatID string) error {
 	aps, err := m.st.ListApprovals(ctx, store.ApprovalPending, chatID)
 	if err != nil {
@@ -1966,9 +1966,9 @@ func (m *Manager) checkPendingLimit(ctx context.Context, chatID string) error {
 	return nil
 }
 
-// settle liefert den endgültigen Zustand einer Bestätigung. Läuft die
-// Wartezeit ab, während der Nutzer gerade entscheidet, gilt die Entscheidung
-// aus der Datenbank, nicht der Ablauf (Review M7).
+// settle returns the final state of an approval. If the waiting time
+// expires while the user is deciding, the decision from the database
+// applies, not the expiry (Review M7).
 func (m *Manager) settle(ctx context.Context, chatID, id string, approved bool, werr error) string {
 	if werr == nil {
 		if approved {
@@ -1986,7 +1986,7 @@ func (m *Manager) settle(ctx context.Context, chatID, id string, approved bool, 
 	return a.State
 }
 
-// Decide ist die Entscheidung des Nutzers aus der API.
+// Decide is the user's decision from the API.
 func (m *Manager) Decide(ctx context.Context, approvalID string, approve bool) (store.Approval, error) {
 	state := store.ApprovalRejected
 	if approve {
@@ -2000,7 +2000,7 @@ func (m *Manager) Decide(ctx context.Context, approvalID string, approve bool) (
 		m.broker.Resolve(approvalID, approve)
 		m.publish(ap.ChatID, Event{Kind: "approval", Data: ap})
 		m.publishChat(ctx, ap.ChatID)
-		slog.Info("Bestätigung entschieden", "freigabe", approvalID, "bestätigt", approve)
+		slog.Info("approval decided", "approval", approvalID, "approved", approve)
 	}
 	return ap, nil
 }
@@ -2014,7 +2014,7 @@ func (m *Manager) rejectPending(ctx context.Context, chatID, why string) {
 		if d, ok, _ := m.st.DecideApproval(ctx, a.ID, store.ApprovalRejected); ok {
 			m.broker.Resolve(a.ID, false)
 			m.publish(chatID, Event{Kind: "approval", Data: d})
-			slog.Info("offene Bestätigung abgelehnt", "freigabe", a.ID, "grund", why)
+			slog.Info("pending approval rejected", "approval", a.ID, "reason", why)
 		}
 	}
 }
@@ -2031,12 +2031,12 @@ func (m *Manager) OpenArtifact(ctx context.Context, chatID, kind, name string) (
 	return m.blobs.Get(ctx, a.ObjectKey)
 }
 
-// --- Eingaben des Nutzers ---
+// --- The user's inputs ---
 
 const inputsDir = "/workspace/inputs"
 
-// AddInput legt eine vom Nutzer hochgeladene Datei ab und spiegelt sie bei
-// aktivem Chat sofort in die Sandbox.
+// AddInput stores a file uploaded by the user and, for an active chat,
+// mirrors it into the sandbox immediately.
 func (m *Manager) AddInput(ctx context.Context, chatID, name string, data []byte) (store.Artifact, error) {
 	_, err := m.st.GetChat(ctx, chatID)
 	if err != nil {
@@ -2044,10 +2044,10 @@ func (m *Manager) AddInput(ctx context.Context, chatID, name string, data []byte
 	}
 	name = artifacts.SanitizeName(name)
 	if name == "" {
-		return store.Artifact{}, errors.New("ungültiger Dateiname")
+		return store.Artifact{}, errors.New("invalid file name")
 	}
 	if int64(len(data)) > m.opt.ArtifactMaxBytes {
-		return store.Artifact{}, fmt.Errorf("Datei größer als %d MB", m.opt.ArtifactMaxBytes>>20)
+		return store.Artifact{}, fmt.Errorf("file larger than %d MB", m.opt.ArtifactMaxBytes>>20)
 	}
 	sum := sha256.Sum256(data)
 	ct := contentType(name, data)
@@ -2065,7 +2065,7 @@ func (m *Manager) AddInput(ctx context.Context, chatID, name string, data []byte
 	m.mu.Unlock()
 	if l != nil {
 		if err := m.pushInput(ctx, l.slot.Worker, name, data); err != nil {
-			slog.Warn("Eingabe nicht in Sandbox gespiegelt", "chat", chatID, "name", name, "fehler", err)
+			slog.Warn("input not mirrored into the sandbox", "chat", chatID, "name", name, "error", err)
 		}
 	}
 	m.publish(chatID, Event{Kind: "artifact", Data: art})
@@ -2079,7 +2079,7 @@ func (m *Manager) pushInput(ctx context.Context, a Agent, name string, data []by
 	return err
 }
 
-// syncInputs spiegelt alle Eingaben des Chats in die Sandbox; liefert Zahl und Summe der Größen.
+// syncInputs mirrors all of the chat's inputs into the sandbox; returns count and total size.
 func (m *Manager) syncInputs(ctx context.Context, chatID string, a Agent) (files int, size int64, err error) {
 	arts, err := m.st.ListArtifacts(ctx, chatID)
 	if err != nil {
@@ -2107,10 +2107,10 @@ func (m *Manager) syncInputs(ctx context.Context, chatID string, a Agent) (files
 	return files, size, nil
 }
 
-// --- Start und Ende des Orchestrators ---
+// --- Start and end of the orchestrator ---
 
-// Recover setzt nach einem Neustart aktive Chats auf ruhend (ihre Sandboxen
-// existieren nicht mehr) und offene Bestätigungen auf abgelaufen.
+// Recover sets active chats to dormant after a restart (their sandboxes
+// no longer exist) and pending approvals to expired.
 func (m *Manager) Recover(ctx context.Context) error {
 	n, err := m.st.ExpirePendingApprovals(ctx)
 	if err != nil {
@@ -2123,19 +2123,19 @@ func (m *Manager) Recover(ctx context.Context) error {
 	for _, c := range active {
 		_ = m.st.SetState(ctx, c.ID, store.StateDormant)
 	}
-	// Hintergrundaufgaben sind mit den Sandboxen verschwunden; dem Agenten beim nächsten Auftrag sagen.
-	if nbg, err := m.st.EndAllRunningBackground(ctx, "Orchestrator neu gestartet"); err != nil {
+	// Background tasks have disappeared with the sandboxes; tell the agent with the next request.
+	if nbg, err := m.st.EndAllRunningBackground(ctx, "orchestrator restarted"); err != nil {
 		return err
 	} else if nbg > 0 {
-		slog.Info("Hintergrundaufgaben nach Neustart beendet", "anzahl", nbg)
+		slog.Info("background tasks ended after restart", "count", nbg)
 	}
 	if n > 0 || len(active) > 0 {
-		slog.Info("Neustart aufgeräumt", "abgelaufene_bestaetigungen", n, "ruhend_gesetzt", len(active))
+		slog.Info("cleaned up after restart", "expired_approvals", n, "set_dormant", len(active))
 	}
 	return nil
 }
 
-// Shutdown sichert die Sitzungen aller aktiven Chats und lässt sie ruhen.
+// Shutdown saves the sessions of all active chats and makes them idle.
 func (m *Manager) Shutdown(ctx context.Context) {
 	m.mu.Lock()
 	ids := make([]string, 0, len(m.live))
@@ -2144,7 +2144,7 @@ func (m *Manager) Shutdown(ctx context.Context) {
 	}
 	m.mu.Unlock()
 	for _, id := range ids {
-		m.rejectPending(ctx, id, "Orchestrator beendet")
+		m.rejectPending(ctx, id, "orchestrator stopped")
 		m.mu.Lock()
 		l := m.live[id]
 		m.mu.Unlock()
@@ -2156,17 +2156,17 @@ func (m *Manager) Shutdown(ctx context.Context) {
 	}
 }
 
-// Messages, Approvals und SocketCalls für die Chat-Ansicht.
+// Messages, Approvals and SocketCalls for the chat view.
 func (m *Manager) Messages(ctx context.Context, chatID string) ([]store.Message, error) {
 	return m.st.Messages(ctx, chatID)
 }
 
-// ChatOwner liefert den Besitzer eines Chats (leer: ohne Besitzer, token-Modus).
+// ChatOwner returns a chat's owner (empty: without owner, token mode).
 func (m *Manager) ChatOwner(ctx context.Context, chatID string) (string, error) {
 	return m.st.ChatOwner(ctx, chatID)
 }
 
-// ApprovalChat liefert den Chat einer Bestätigung.
+// ApprovalChat returns the chat of an approval.
 func (m *Manager) ApprovalChat(ctx context.Context, approvalID string) (string, error) {
 	ap, err := m.st.GetApproval(ctx, approvalID)
 	if err != nil {

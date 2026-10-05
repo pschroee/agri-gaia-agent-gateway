@@ -18,7 +18,7 @@ func TestParseToolArgs(t *testing.T) {
 		tool  string
 		args  []string
 		stdin string
-		want  string // gebauter Aufruf
+		want  string // built call
 	}{
 		{"datasets", []string{"--limit", "3"}, "", "GET /datasets?limit=3"},
 		{"dataset", []string{"7"}, "", "GET /datasets/7"},
@@ -37,27 +37,27 @@ func TestParseToolArgs(t *testing.T) {
 		raw, _ := json.Marshal(in)
 		r, err := tool.Build(raw)
 		if err != nil || r.String() != c.want {
-			t.Fatalf("%s %v: %q %v (Argumente %s)", c.tool, c.args, r.String(), err, raw)
+			t.Fatalf("%s %v: %q %v (arguments %s)", c.tool, c.args, r.String(), err, raw)
 		}
 	}
-	// Uploads: Dateiliste am Ende, relative Pfade werden absolut, Listen auch als wiederholte Option.
+	// Uploads: file list at the end, relative paths become absolute, lists also as a repeated option.
 	wd, _ := os.Getwd()
 	tool, _ := platform.Lookup("upload-dataset")
-	in, err := parseToolArgs(tool, []string{"ferkel", "Bilder", "a.png", "/workspace/b.png", "--annotation-labels", "0", "--annotation-labels", "1", "--annotation-file", "ann.xml"}, strings.NewReader(""))
+	in, err := parseToolArgs(tool, []string{"piglets", "images", "a.png", "/workspace/b.png", "--annotation-labels", "0", "--annotation-labels", "1", "--annotation-file", "ann.xml"}, strings.NewReader(""))
 	if err != nil {
 		t.Fatal(err)
 	}
 	raw, _ := json.Marshal(in)
 	r, err := tool.Build(raw)
-	if err != nil || r.String() != "POST /datasets (multipart, 3 Dateien)" || r.Files[0].Path != filepath.Join(wd, "a.png") || r.Files[2].Path != filepath.Join(wd, "ann.xml") ||
+	if err != nil || r.String() != "POST /datasets (multipart, 3 files)" || r.Files[0].Path != filepath.Join(wd, "a.png") || r.Files[2].Path != filepath.Join(wd, "ann.xml") ||
 		strings.Join(r.Form["annotation_labels"], ",") != "0,1" || r.Form["includes_annotation_file"][0] != "true" {
 		t.Fatalf("upload-dataset: %+v %v", r, err)
 	}
-	bad := [][]string{{"dataset"}, {"dataset", "1", "2"}, {"datasets", "--gibtsnicht", "1"}, {"create-training", "T", "E", "C", "2", "{kaputt"}, {"request", "GET", "/x", "--query", "ohneGleich"}}
+	bad := [][]string{{"dataset"}, {"dataset", "1", "2"}, {"datasets", "--doesnotexist", "1"}, {"create-training", "T", "E", "C", "2", "{broken"}, {"request", "GET", "/x", "--query", "noEquals"}}
 	for _, b := range bad {
 		tool, _ := platform.Lookup(b[0])
 		if _, err := parseToolArgs(tool, b[1:], strings.NewReader("")); err == nil {
-			t.Errorf("erwartet Fehler: %v", b)
+			t.Errorf("expected an error: %v", b)
 		}
 	}
 }

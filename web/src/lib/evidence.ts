@@ -1,45 +1,45 @@
-// Abgleich angeforderter und ausgeführter Werkzeugaufrufe (E9), wie auf dem Server
-// (internal/chat/reconcile.go). Angefordert: am LLM-Proxy in der Antwort des Anbieters gesehen.
-// Ausgeführt: vom Orchestrator in der Ausführungs-Sandbox ausgeführt (tool_executions). Beide
-// Quellen liegen außerhalb der Reichweite des Agenten. Reine Funktionen, ohne React.
+// Reconciliation of requested and executed tool calls (E9), as on the server
+// (internal/chat/reconcile.go). Requested: seen at the LLM proxy in the provider's response.
+// Executed: executed by the orchestrator in the execution sandbox (tool_executions). Both
+// sources are out of the agent's reach. Pure functions, without React.
 import type { LLMCall, SubagentEntry, ToolExecutionRecord } from "@/api/types"
 import type { ToolExecution } from "./stream"
 
 /**
- * aborted: Die Antwort des Modells brach ab (am Proxy ohne finish_reason); pi führt ihre
- * Werkzeugaufrufe nicht aus. rejected: laut Sitzung von pi abgewiesen (ungültige Argumente,
- * ausgeblendetes Werkzeug, Wächter); nicht fälschungssicher. Beide sind harmlose Ursachen für
- * „angefordert, nicht ausgeführt“ und gelten nicht als auffällig (M1).
+ * aborted: the model's response broke off (at the proxy without finish_reason); pi does not execute its
+ * tool calls. rejected: refused according to pi's session (invalid arguments,
+ * hidden tool, guard); not tamper-proof. Both are harmless causes of
+ * "requested, not executed" and do not count as suspicious (M1).
  */
 export type EvidenceState = "confirmed" | "unrequested" | "unexecuted" | "mismatch" | "internal" | "aborted" | "rejected"
-/** Für die Anzeige: dazu „pending“, solange ein Lauf noch nicht fertig ist. */
+/** For display: additionally "pending" while a run is not finished yet. */
 export type DisplayState = EvidenceState | "pending"
 
 export type Evidence = {
   toolCallId: string
   state: EvidenceState
-  /** angefordert, sonst ausgeführt */
+  /** requested, otherwise executed */
   tool: string
   executedTool?: string
   requested: boolean
   executed: boolean
-  /** Anforderung in einer Antwort der Hauptsitzung */
+  /** request in a response of the main session */
   main: boolean
-  /** aus der Ausführung: "main" oder Kennung des Subagenten-Laufs */
+  /** from the execution: "main" or ID of the subagent run */
   session?: string
   ops: string[]
   executions: ToolExecutionRecord[]
   exitCode?: number
   error?: string
   durationMs: number
-  /** bei „rejected“: Fehlermeldung aus der Sitzung (nicht fälschungssicher) */
+  /** for "rejected": error message from the session (not tamper-proof) */
   reason?: string
 }
 
 export type ReconcileOptions = {
-  /** Werkzeuge, deren Ausführung am Socket belegt wird: /api/config → executed_tools (L6). */
+  /** Tools whose execution is verified at the socket: /api/config → executed_tools (L6). */
   executedTools?: Iterable<string>
-  /** Fehlermeldungen aus den Sitzungen je toolCallId (rejectionsFrom). */
+  /** Error messages from the sessions per toolCallId (rejectionsFrom). */
   rejections?: Map<string, string>
 }
 
@@ -51,7 +51,7 @@ export function reconcile(llmCalls: LLMCall[], execs: ToolExecutionRecord[], opt
     for (const t of c.tool_calls ?? []) {
       if (!t.id || m.has(t.id)) continue
       m.set(t.id, { toolCallId: t.id, state: "internal", tool: t.name, requested: true, executed: false, main: c.main, ops: [], executions: [], durationMs: 0 })
-      // Ältere Einträge ohne das Feld gelten als vollständig (wie auf dem Server).
+      // Older entries without the field count as complete (as on the server).
       if (c.complete === false) incomplete.add(t.id)
     }
   }
@@ -88,9 +88,9 @@ export function reconcile(llmCalls: LLMCall[], execs: ToolExecutionRecord[], opt
 }
 
 /**
- * Fehlermeldungen je toolCallId aus der Hauptsitzung (Werkzeugergebnisse im Verlauf) und den
- * Sitzungen der Subagenten, wie store.ToolRejections auf dem Server. Quelle sind Sitzungsdateien
- * von pi, also nur ein Hinweis.
+ * Error messages per toolCallId from the main session (tool results in the history) and the
+ * subagents' sessions, like store.ToolRejections on the server. The source is pi's session files,
+ * so only a hint.
  */
 export function rejectionsFrom(tools: Record<string, ToolExecution>, subagentEntries: SubagentEntry[]): Map<string, string> {
   const m = new Map<string, string>()
@@ -117,9 +117,9 @@ export function evidenceSummary(m: Map<string, Evidence>): EvidenceSummary {
 }
 
 /**
- * Zustand für die Anzeige. Während eines Laufs können Anforderung (Proxy, nach dem Ende der
- * Antwort) und Ausführung (Socket) in beliebiger Reihenfolge eintreffen; ausgewertet wird deshalb
- * erst, wenn der Lauf fertig ist. Belegt ist sofort belegt.
+ * State for display. During a run, request (proxy, after the end of the
+ * response) and execution (socket) can arrive in any order; evaluation therefore happens
+ * only when the run is finished. Verified is verified right away.
  */
 export function displayState(ev: Evidence | undefined, { settled }: { settled: boolean }): DisplayState | undefined {
   if (!ev) return undefined
@@ -130,27 +130,27 @@ export function displayState(ev: Evidence | undefined, { settled }: { settled: b
 export function evidenceLabel(state: DisplayState): { label: string; tone: "ok" | "bad" | "muted"; title: string } {
   switch (state) {
     case "confirmed":
-      return { label: "belegt", tone: "ok", title: "vom Orchestrator ausgeführt: am Proxy angefordert und in der Ausführungs-Sandbox ausgeführt" }
+      return { label: "verified", tone: "ok", title: "executed by the orchestrator: requested at the proxy and executed in the execution sandbox" }
     case "unexecuted":
-      return { label: "nicht ausgeführt", tone: "bad", title: "am Proxy angefordert und vollständig geliefert, aber vom Orchestrator nie ausgeführt, ohne Hinweis auf eine Abweisung durch pi (etwa an der Umleitung vorbei)" }
+      return { label: "not executed", tone: "bad", title: "requested at the proxy and delivered completely, but never executed by the orchestrator, with no sign of a refusal by pi (e.g. bypassing the redirection)" }
     case "unrequested":
-      return { label: "nicht angefordert", tone: "bad", title: "vom Orchestrator ausgeführt, aber am Proxy nie angefordert" }
+      return { label: "not requested", tone: "bad", title: "executed by the orchestrator, but never requested at the proxy" }
     case "mismatch":
-      return { label: "abweichend", tone: "bad", title: "unter einem anderen Werkzeug ausgeführt als angefordert" }
+      return { label: "mismatch", tone: "bad", title: "executed under a different tool than requested" }
     case "internal":
-      return { label: "ohne Sandbox", tone: "muted", title: "Werkzeug läuft nicht in der Ausführungs-Sandbox (etwa todo, subagent oder ein MCP-Werkzeug am Socket)" }
+      return { label: "no sandbox", tone: "muted", title: "tool does not run in the execution sandbox (e.g. todo, subagent or an MCP tool at the socket)" }
     case "aborted":
-      return { label: "Antwort abgebrochen", tone: "muted", title: "die Antwort des Modells kam am Proxy nicht vollständig an (kein finish_reason); pi führt Aufrufe daraus nicht aus" }
+      return { label: "response aborted", tone: "muted", title: "the model's response did not arrive completely at the proxy (no finish_reason); pi does not execute calls from it" }
     case "rejected":
-      return { label: "von pi abgewiesen", tone: "muted", title: "laut Sitzung von pi abgewiesen, etwa wegen ungültiger Argumente oder eines ausgeblendeten Werkzeugs (Hinweis aus der Sitzung, nicht fälschungssicher)" }
+      return { label: "refused by pi", tone: "muted", title: "refused according to pi's session, e.g. because of invalid arguments or a hidden tool (hint from the session, not tamper-proof)" }
     case "pending":
-      return { label: "Abgleich läuft", tone: "muted", title: "Anforderung am Proxy und Ausführung werden nach dem Lauf abgeglichen" }
+      return { label: "reconciling", tone: "muted", title: "request at the proxy and execution are reconciled after the run" }
   }
 }
 
 export function sessionLabel(session: string | undefined): string {
   if (!session) return "–"
-  if (session === "main") return "Hauptagent"
+  if (session === "main") return "Main agent"
   const [run, n] = session.split("#")
   return `Subagent ${run.slice(0, 8)}${n ? ` #${n}` : ""}`
 }

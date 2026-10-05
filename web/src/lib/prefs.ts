@@ -1,5 +1,5 @@
-// Kleine Ansichtseinstellungen je Browser (etwa: Seitenleiste ein/aus). Der Speicher kann fehlen oder
-// gesperrt sein (privates Fenster); dann gilt der Standard und nichts bricht.
+// Small view settings per browser (e.g. sidebar on/off). The storage may be missing or
+// blocked (private window); then the default applies and nothing breaks.
 
 const PREFIX = "agw."
 
@@ -20,6 +20,6 @@ export function writeFlag(key: string, value: boolean, store: Store | undefined 
   try {
     store?.setItem(PREFIX + key, value ? "1" : "0")
   } catch {
-    // ohne Speicher gilt die Einstellung nur bis zum Neuladen
+    // without storage the setting only lasts until the next reload
   }
 }

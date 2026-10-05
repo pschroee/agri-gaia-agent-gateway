@@ -1,18 +1,18 @@
-# Verdaccio als reiner Zwischenspeicher für npm (Dienst npm-cache in compose.yaml).
-# Die Sandboxen erreichen ihn nur, solange ihr Chat Internet hat (siehe README,
-# „Paket-Zwischenspeicher“). Er liest nur: Niemand kann sich anmelden oder
-# veröffentlichen, sonst könnte ein Agent Pakete für andere Chats unterschieben.
+# Verdaccio as a pure cache for npm (service npm-cache in compose.yaml).
+# The sandboxes reach it only while their chat has internet (see docs/design.md,
+# "Package cache (npm, pip)"). It is read-only: nobody can log in or publish,
+# otherwise an agent could plant packages for other chats.
 storage: /verdaccio/storage/data
 plugins: /verdaccio/plugins
 
-# Keine Web-Oberfläche: weniger Angriffsfläche, nachsehen geht über die API.
+# No web interface: less attack surface; inspecting works through the API.
 web:
   enable: false
 
 auth:
   htpasswd:
     file: /verdaccio/storage/htpasswd
-    # -1 schaltet die Anmeldung neuer Nutzer ab (npm adduser schlägt fehl).
+    # -1 disables registering new users (npm adduser fails).
     max_users: -1
 
 uplinks:
@@ -22,24 +22,24 @@ uplinks:
     maxage: 10m
     cache: true
 
-# „agwpoc-niemand“ ist eine Gruppe, die es nicht gibt: Veröffentlichen und
-# Zurückziehen sind damit für alle gesperrt, auch für angemeldete Nutzer.
+# "agwpoc-nobody" is a group that does not exist: publishing and
+# unpublishing are thus blocked for everyone, including logged-in users.
 packages:
   '@*/*':
     access: $all
-    publish: agwpoc-niemand
-    unpublish: agwpoc-niemand
+    publish: agwpoc-nobody
+    unpublish: agwpoc-nobody
     proxy: npmjs
   '**':
     access: $all
-    publish: agwpoc-niemand
-    unpublish: agwpoc-niemand
+    publish: agwpoc-nobody
+    unpublish: agwpoc-nobody
     proxy: npmjs
 
 server:
   keepAliveTimeout: 60
 
-# npm install fragt nach Sicherheitsmeldungen; Verdaccio reicht das an npmjs weiter.
+# npm install asks for security advisories; Verdaccio forwards that to npmjs.
 middlewares:
   audit:
     enabled: true

@@ -1,9 +1,9 @@
-// Package bgtask verwaltet die Hintergrundaufgaben eines Platzes: Befehle, die der Agent mit
-// bash und run_in_background startet. Der Orchestrator führt sie wie jeden Befehl in der
-// Ausführungs-Sandbox aus (Operation bg von agw-exec), liest ihre Ausgabe bis zum Ende mit und
-// meldet Start, Fortschritt (gedrosselt) und Ende an den Manager. Die Verbindung zum Überwacher
-// trägt das Ende von selbst (Push): Kein Abfragen, und das Ende kommt von dem Prozess, der den
-// Befehl gestartet hat, nicht aus einer Datei, die der Agent verändern könnte.
+// Package bgtask manages the background tasks of a slot: commands the agent starts with
+// bash and run_in_background. The orchestrator runs them like any command in the
+// execution sandbox (operation bg of agw-exec), reads their output to the end and
+// reports start, progress (throttled) and end to the manager. The connection to the supervisor
+// carries the end by itself (push): no polling, and the end comes from the process that started
+// the command, not from a file the agent could modify.
 package bgtask
 
 import (
@@ -24,49 +24,49 @@ import (
 	"agw/internal/store"
 )
 
-// Runner führt eine Hintergrundaufgabe in der Ausführungs-Sandbox aus (execbox.Client).
+// Runner runs a background task in the execution sandbox (execbox.Client).
 type Runner interface {
 	RunBackground(ctx context.Context, req execproto.Request, onStart func(pgid int), onData func([]byte)) (execproto.Frame, error)
 }
 
-// Notifier ist der Manager: Er legt die Zeile an (Nummer im Chat), verteilt Fortschritt und Ende
-// und benachrichtigt den Agenten.
+// Notifier is the manager: it creates the row (number within the chat), distributes progress and end
+// and notifies the agent.
 type Notifier interface {
-	// BackgroundCreate legt die Aufgabe an und vergibt Nummer und Ausgabedatei.
+	// BackgroundCreate creates the task and assigns number and output file.
 	BackgroundCreate(ctx context.Context, t store.BackgroundTask) (store.BackgroundTask, error)
-	// BackgroundProgress: laufende Aufgabe mit neuer Ausgabe (höchstens alle ProgressEvery).
+	// BackgroundProgress: running task with new output (at most every ProgressEvery).
 	BackgroundProgress(t store.BackgroundTask)
-	// BackgroundEnded: Die Aufgabe ist geendet. notify=false: Sie ist gar nicht gestartet, der
-	// Agent erfährt das aus dem Werkzeugergebnis.
+	// BackgroundEnded: the task has ended. notify=false: it never started, the
+	// agent learns that from the tool result.
 	BackgroundEnded(t store.BackgroundTask, notify bool)
-	// BackgroundLookup: eine Aufgabe, die dieses Register nicht kennt (etwa vor dem Ruhen).
+	// BackgroundLookup: a task this registry does not know (e.g. from before idling).
 	BackgroundLookup(ctx context.Context, chatID string, seq int) (store.BackgroundTask, error)
 }
 
-// Grenzen und Takte.
+// Limits and intervals.
 var (
-	// TailBytes: So viel vom Ende der Ausgabe hält das Register (wie pis rollendes Ende, 2 × 50 KiB).
+	// TailBytes: this much of the end of the output is kept by the registry (like pi's rolling tail, 2 × 50 KiB).
 	TailBytes = 2 * execproto.PiMaxBytes
-	// ShortTailBytes: so viel vom Ende steht in der Datenbank und in den Ereignissen.
+	// ShortTailBytes: this much of the end is stored in the database and in the events.
 	ShortTailBytes = 4 << 10
-	// ProgressEvery: höchstens so oft ein Fortschritt je Aufgabe.
+	// ProgressEvery: at most this often a progress update per task.
 	ProgressEvery = 2 * time.Second
-	// StartWait: So lange wartet Start darauf, dass der Befehl läuft.
+	// StartWait: this long Start waits for the command to be running.
 	StartWait = 15 * time.Second
-	// StopWait: So lange wartet Stop auf das Ende.
+	// StopWait: this long Stop waits for the end.
 	StopWait = 15 * time.Second
-	// KeepEnded: So viele beendete Aufgaben behält das Register (volles Ende für bg_output); ältere
-	// gibt es frei, ihr Stand steht in background_tasks (Review 3, M2).
+	// KeepEnded: this many ended tasks are kept by the registry (full tail for bg_output); older ones
+	// are released, their state is in background_tasks (Review 3, M2).
 	KeepEnded = 4
 )
 
-// Fehler, die als Werkzeugergebnis beim Modell ankommen, sind englisch (L4).
+// Errors that reach the model as a tool result are in English (L4).
 var (
 	ErrUnknown = errors.New("unknown background task")
 	ErrLimit   = errors.New("too many background tasks")
 )
 
-// StartParams beschreibt einen Start.
+// StartParams describes a start.
 type StartParams struct {
 	ChatID     string
 	Session    string
@@ -82,19 +82,19 @@ type task struct {
 	t         store.BackgroundTask
 	cancel    context.CancelFunc
 	done      chan struct{}
-	tail      ring // rollendes Ende (TailBytes), Ringpuffer statt append und Kopie (Review 3, N3)
+	tail      ring // rolling tail (TailBytes), ring buffer instead of append and copy (Review 3, N3)
 	lastByte  byte
 	sum       hash.Hash
 	head      []byte
-	excerpt   ring // Ende für den Auszug (2 KiB)
+	excerpt   ring // tail for the excerpt (2 KiB)
 	stoppedBy string
 	lastProg  time.Time
 	progTimer *time.Timer
 	dirty     bool
 }
 
-// Registry: Hintergrundaufgaben eines Platzes. Ein Platz gehört genau einem Chat (Einmalvergabe);
-// die Kennung des Chats wird trotzdem bei jedem Zugriff geprüft.
+// Registry: background tasks of a slot. A slot belongs to exactly one chat (single assignment);
+// the chat ID is checked on every access nonetheless.
 type Registry struct {
 	slot string
 	run  Runner
@@ -106,8 +106,8 @@ type Registry struct {
 
 	mu       sync.Mutex
 	tasks    map[int]*task
-	reserved int   // Plätze, deren Start gerade läuft (Grenze atomar, Review 3, N2)
-	ended    []int // beendete Aufgaben im Register, älteste zuerst (höchstens KeepEnded)
+	reserved int   // reserved places whose start is in progress (atomic limit, Review 3, N2)
+	ended    []int // ended tasks in the registry, oldest first (at most KeepEnded)
 	wg       sync.WaitGroup
 }
 
@@ -119,17 +119,17 @@ func New(slot string, run Runner, n Notifier, max int) *Registry {
 	return &Registry{slot: slot, run: run, n: n, max: max, ctx: ctx, cancel: cancel, tasks: map[int]*task{}}
 }
 
-// Max ist die Grenze gleichzeitiger Aufgaben.
+// Max is the limit of concurrent tasks.
 func (r *Registry) Max() int { return r.max }
 
-// Running zählt laufende Aufgaben.
+// Running counts running tasks.
 func (r *Registry) Running() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.runningLocked()
 }
 
-// runningLocked: laufende Aufgaben; r.mu ist gesperrt.
+// runningLocked: running tasks; r.mu is locked.
 func (r *Registry) runningLocked() int {
 	n := 0
 	for _, t := range r.tasks {
@@ -142,13 +142,13 @@ func (r *Registry) runningLocked() int {
 	return n
 }
 
-// Start startet eine Aufgabe und kehrt zurück, sobald der Befehl läuft (oder gar nicht startet).
+// Start starts a task and returns as soon as the command is running (or does not start at all).
 func (r *Registry) Start(ctx context.Context, p StartParams) (store.BackgroundTask, error) {
 	if r.ctx.Err() != nil {
 		return store.BackgroundTask{}, errors.New("execution sandbox closed")
 	}
-	// Platz unter der Sperre reservieren: Prüfen und Belegen sind ein Schritt, auch wenn das
-	// Anlegen in der Datenbank dazwischen dauert.
+	// Reserve a place under the lock: checking and taking are one step, even if
+	// creating the row in the database takes time in between.
 	r.mu.Lock()
 	if r.runningLocked()+r.reserved >= r.max {
 		r.mu.Unlock()
@@ -196,7 +196,7 @@ func (r *Registry) Start(ctx context.Context, p StartParams) (store.BackgroundTa
 		s := t.snapshot()
 		return s, errors.New(strings.TrimSpace("background task not started: " + s.Error))
 	case <-timer.C:
-		// Startet der Helfer nicht (etwa bei erschöpftem Prozesslimit), nicht ewig warten.
+		// If the helper does not start (e.g. with an exhausted process limit), do not wait forever.
 		cancel()
 		<-t.done
 		s := t.snapshot()
@@ -204,17 +204,17 @@ func (r *Registry) Start(ctx context.Context, p StartParams) (store.BackgroundTa
 	}
 }
 
-// Adopted ist ein Vordergrundbefehl, den der Nutzer in eine Hintergrundaufgabe umgewandelt hat: Der
-// Befehl läuft weiter in seiner Operation (bash), deren Ausgabe und Ende der Aufrufer hierher leitet.
+// Adopted is a foreground command the user has turned into a background task: the
+// command keeps running in its operation (bash), whose output and end the caller forwards here.
 type Adopted struct {
 	Task store.BackgroundTask
-	// Write nimmt weitere Ausgabe entgegen; Finish das Ende der Operation (genau einmal).
+	// Write takes further output; Finish the end of the operation (exactly once).
 	Write  func([]byte)
 	Finish func(f execproto.Frame, err error)
 }
 
-// Adopt übernimmt einen laufenden Befehl als Hintergrundaufgabe. cancel bricht dessen Operation ab
-// (bg_stop, Stopp in der UI, Abbau des Platzes); soFar ist die bisherige Ausgabe.
+// Adopt takes over a running command as a background task. cancel aborts its operation
+// (bg_stop, stop in the UI, teardown of the slot); soFar is the output so far.
 func (r *Registry) Adopt(ctx context.Context, p StartParams, logPath string, soFar []byte, cancel context.CancelFunc) (*Adopted, error) {
 	if r.ctx.Err() != nil {
 		return nil, errors.New("execution sandbox closed")
@@ -239,7 +239,7 @@ func (r *Registry) Adopt(ctx context.Context, p StartParams, logPath string, soF
 	r.reserved--
 	r.mu.Unlock()
 	r.wg.Add(1)
-	stopWithSlot := context.AfterFunc(r.ctx, cancel) // Abbau des Platzes beendet auch diese Aufgabe
+	stopWithSlot := context.AfterFunc(r.ctx, cancel) // teardown of the slot also ends this task
 	write := t.write(r.n)
 	write(soFar)
 	var once sync.Once
@@ -255,8 +255,8 @@ func (r *Registry) Adopt(ctx context.Context, p StartParams, logPath string, soF
 	}}, nil
 }
 
-// release gibt eine beendete Aufgabe frei, sobald mehr als KeepEnded beendet im Register stehen
-// (ihr Stand ist dann in background_tasks; Output und Stop fragen den Manager).
+// release frees an ended task as soon as more than KeepEnded ended tasks are in the registry
+// (its state is then in background_tasks; Output and Stop ask the manager).
 func (r *Registry) release(seq int) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -267,9 +267,9 @@ func (r *Registry) release(seq int) {
 	}
 }
 
-// write sammelt die Ausgabe: Prüfsumme, Anfang, rollendes Ende, Fortschritt gedrosselt. Im
-// Dauerbetrieb legt ein Stück nichts neu an (Ringpuffer); den Durchsatz begrenzt agw-exec, das
-// nach execproto.BgThrottleAfter nur noch gedrosselt liest (Review 3, N3).
+// write collects the output: checksum, head, rolling tail, throttled progress. In
+// steady state a chunk allocates nothing new (ring buffer); throughput is limited by agw-exec, which
+// reads only throttled after execproto.BgThrottleAfter (Review 3, N3).
 func (t *task) write(n Notifier) func([]byte) {
 	return func(b []byte) {
 		if len(b) == 0 {
@@ -294,7 +294,7 @@ func (t *task) write(n Notifier) func([]byte) {
 		if due {
 			t.lastProg, t.dirty = now, false
 		} else if t.progTimer == nil {
-			// Nachzügler: Die letzte Ausgabe einer ruhigen Phase kommt nach spätestens ProgressEvery.
+			// Straggler: the last output of a quiet phase arrives after ProgressEvery at the latest.
 			t.progTimer = time.AfterFunc(ProgressEvery-now.Sub(t.lastProg), func() {
 				t.mu.Lock()
 				t.progTimer = nil
@@ -321,8 +321,8 @@ func (t *task) write(n Notifier) func([]byte) {
 
 var nl = []byte{'\n'}
 
-// Tail hält die letzten Bytes einer Ausgabe (Ringpuffer, im Dauerbetrieb ohne neue Speicherbelegung);
-// genutzt für die bisherige Ausgabe eines Vordergrundbefehls, der umgewandelt werden kann.
+// Tail keeps the last bytes of an output (ring buffer, no new allocation in steady state);
+// used for the output so far of a foreground command that can be converted.
 type Tail struct {
 	r    ring
 	size int
@@ -335,7 +335,7 @@ func (t *Tail) Write(b []byte) {
 	t.r.write(b)
 }
 
-// Bytes liefert eine Kopie des gehaltenen Endes.
+// Bytes returns a copy of the kept tail.
 func (t *Tail) Bytes() []byte {
 	if t.r.buf == nil {
 		return nil
@@ -343,14 +343,14 @@ func (t *Tail) Bytes() []byte {
 	return t.r.bytes()
 }
 
-// ring hält die letzten n Bytes; write kopiert nur das neue Stück.
+// ring keeps the last n bytes; write copies only the new chunk.
 type ring struct {
 	buf   []byte
-	start int // Anfang der Daten
-	n     int // Länge der Daten
+	start int // start of the data
+	n     int // length of the data
 }
 
-// init legt den Puffer beim ersten Gebrauch an.
+// init allocates the buffer on first use.
 func (r *ring) init(size int) {
 	if r.buf == nil {
 		r.buf = make([]byte, size)
@@ -374,7 +374,7 @@ func (r *ring) write(b []byte) {
 	}
 }
 
-// last liefert die letzten n Bytes in Reihenfolge (Kopie).
+// last returns the last n bytes in order (copy).
 func (r *ring) last(n int) []byte {
 	n = min(n, r.n)
 	out := make([]byte, n)
@@ -390,7 +390,7 @@ func (r *ring) last(n int) []byte {
 
 func (r *ring) bytes() []byte { return r.last(r.n) }
 
-// finish bestimmt den Endzustand aus dem letzten Rahmen.
+// finish determines the final state from the last frame.
 func (t *task) finish(f execproto.Frame, err error, started bool) store.BackgroundTask {
 	t.mu.Lock()
 	if t.progTimer != nil {
@@ -442,17 +442,17 @@ func (t *task) excerptText() string {
 	ex := t.excerpt.bytes()
 	omitted := t.t.OutputBytes - int64(len(t.head)) - int64(len(ex))
 	if omitted > 0 {
-		s += fmt.Sprintf("\n… [%d Bytes ausgelassen] …\n", omitted)
+		s += fmt.Sprintf("\n… [%d bytes omitted] …\n", omitted)
 		s += string(ex)
 	} else if t.t.OutputBytes > int64(len(t.head)) {
-		// Anfang und Ende überlappen: nur den Teil nach dem Anfang anhängen.
+		// Head and tail overlap: append only the part after the head.
 		rest := t.t.OutputBytes - int64(len(t.head))
 		s += string(ex[int64(len(ex))-rest:])
 	}
 	return strings.ToValidUTF8(s, "�")
 }
 
-// snapshot: Stand der Aufgabe; Tail ist das kurze Ende (ShortTailBytes).
+// snapshot: state of the task; Tail is the short tail (ShortTailBytes).
 func (t *task) snapshot() store.BackgroundTask {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -461,7 +461,7 @@ func (t *task) snapshot() store.BackgroundTask {
 	return s
 }
 
-// cleanTail: höchstens n Bytes vom Ende, an einer Zeichengrenze beginnend, gültiges UTF-8.
+// cleanTail: at most n bytes from the end, starting at a character boundary, valid UTF-8.
 func cleanTail(b []byte, n int) string {
 	if len(b) > n {
 		b = b[len(b)-n:]
@@ -486,8 +486,8 @@ func (r *Registry) get(chatID, id string) (*task, int, error) {
 	return t, seq, nil
 }
 
-// Output liefert Stand und Ende der Ausgabe (bis TailBytes) einer Aufgabe. Kennt das Register
-// sie nicht (etwa aus einer früheren Sandbox des Chats), fragt es den Manager.
+// Output returns the state and the tail of the output (up to TailBytes) of a task. If the registry
+// does not know it (e.g. from an earlier sandbox of the chat), it asks the manager.
 func (r *Registry) Output(ctx context.Context, chatID, id string) (store.BackgroundTask, string, error) {
 	t, seq, err := r.get(chatID, id)
 	if err != nil {
@@ -507,8 +507,8 @@ func (r *Registry) Output(ctx context.Context, chatID, id string) (store.Backgro
 	return s, full, nil
 }
 
-// Stop beendet eine Aufgabe (by: agent oder user) und wartet kurz auf ihr Ende. Ist sie schon
-// geendet, liefert Stop nur ihren Stand.
+// Stop stops a task (by: agent or user) and waits briefly for its end. If it has already
+// ended, Stop only returns its state.
 func (r *Registry) Stop(ctx context.Context, chatID, id, by string) (store.BackgroundTask, error) {
 	t, seq, err := r.get(chatID, id)
 	if err != nil {
@@ -540,7 +540,7 @@ func (r *Registry) Stop(ctx context.Context, chatID, id, by string) (store.Backg
 	return t.snapshot(), nil
 }
 
-// List liefert den Stand aller Aufgaben des Chats in diesem Register.
+// List returns the state of all tasks of the chat in this registry.
 func (r *Registry) List(chatID string) []store.BackgroundTask {
 	r.mu.Lock()
 	ts := make([]*task, 0, len(r.tasks))
@@ -558,7 +558,7 @@ func (r *Registry) List(chatID string) []store.BackgroundTask {
 	return out
 }
 
-// Close bricht alle Aufgaben ab (der Platz wird abgebaut) und wartet kurz auf ihr Ende.
+// Close aborts all tasks (the slot is being torn down) and waits briefly for their end.
 func (r *Registry) Close() {
 	r.cancel()
 	done := make(chan struct{})

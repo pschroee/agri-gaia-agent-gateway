@@ -1,6 +1,6 @@
-// Package oidctest bildet für Tests einen Keycloak-Realm nach: Discovery, JWKS, Anmeldeseite (ohne
-// Formular: angemeldet ist, wer mit Login gesetzt ist), Token-Endpunkt mit Code (PKCE S256),
-// refresh_token und Token-Austausch (RFC 8693, wie Keycloak 26: kein act, azp = anfragender Client).
+// Package oidctest simulates a Keycloak realm for tests: discovery, JWKS, login page (without
+// form: whoever is set with Login is logged in), token endpoint with code (PKCE S256),
+// refresh_token and token exchange (RFC 8693, like Keycloak 26: no act, azp = requesting client).
 package oidctest
 
 import (
@@ -22,26 +22,26 @@ import (
 	"time"
 )
 
-// User ist ein Konto im nachgebildeten Realm.
+// User is an account in the simulated realm.
 type User struct{ Sub, Username, Name string }
 
-// Exchange ist ein Austausch, wie ihn der Token-Endpunkt gesehen hat.
+// Exchange is an exchange as the token endpoint saw it.
 type Exchange struct {
-	SubjectSub string   // sub des subject_token
-	Audiences  []string // angefragte Zielgruppen
-	Token      string   // ausgestelltes Token
+	SubjectSub string   // sub of the subject_token
+	Audiences  []string // requested audiences
+	Token      string   // issued token
 }
 
-// Issuer ist der nachgebildete Realm.
+// Issuer is the simulated realm.
 type Issuer struct {
 	*httptest.Server
 	ClientID, ClientSecret string
-	AccessTTL              time.Duration // Lebensdauer der Zugangstokens (Standard 5 min)
+	AccessTTL              time.Duration // lifetime of access tokens (default 5 min)
 	Key                    *rsa.PrivateKey
 	Kid                    string
 
 	mu        sync.Mutex
-	current   *User // in Keycloak angemeldet (nil: niemand)
+	current   *User // logged in to Keycloak (nil: nobody)
 	codes     map[string]codeInfo
 	refresh   map[string]User
 	exchanges []Exchange
@@ -54,31 +54,31 @@ type codeInfo struct {
 	nonce, challenge, redirect string
 }
 
-// New startet den Realm; Issuer-URL ist Server.URL + "/realms/test".
+// New starts the realm; the issuer URL is Server.URL + "/realms/test".
 func New(t testing.TB) *Issuer {
 	t.Helper()
 	k, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		t.Fatal(err)
 	}
-	is := &Issuer{ClientID: "agw-agent", ClientSecret: "geheim", AccessTTL: 5 * time.Minute, Key: k, Kid: "k1",
+	is := &Issuer{ClientID: "agw-agent", ClientSecret: "secret", AccessTTL: 5 * time.Minute, Key: k, Kid: "k1",
 		codes: map[string]codeInfo{}, refresh: map[string]User{}}
 	is.Server = httptest.NewServer(is)
 	t.Cleanup(is.Close)
 	return is
 }
 
-// URL des Issuers (iss in den Tokens).
+// URL of the issuer (iss in the tokens).
 func (is *Issuer) IssuerURL() string { return is.Server.URL + "/realms/test" }
 
-// Login meldet einen Nutzer in Keycloak an (nil: abmelden).
+// Login logs a user in to Keycloak (nil: log out).
 func (is *Issuer) Login(u *User) {
 	is.mu.Lock()
 	defer is.mu.Unlock()
 	is.current = u
 }
 
-// Revoke beendet alle Sitzungen eines Nutzers: seine refresh_tokens gelten nicht mehr.
+// Revoke ends all sessions of a user: their refresh_tokens are no longer valid.
 func (is *Issuer) Revoke(sub string) {
 	is.mu.Lock()
 	defer is.mu.Unlock()
@@ -89,14 +89,14 @@ func (is *Issuer) Revoke(sub string) {
 	}
 }
 
-// Exchanges liefert die bisherigen Austausche.
+// Exchanges returns the exchanges so far.
 func (is *Issuer) Exchanges() []Exchange {
 	is.mu.Lock()
 	defer is.mu.Unlock()
 	return append([]Exchange(nil), is.exchanges...)
 }
 
-// Sign stellt ein JWT mit den Angaben aus (RS256, Schlüssel des Realms).
+// Sign issues a JWT with the given claims (RS256, the realm's key).
 func (is *Issuer) Sign(claims map[string]any) string {
 	return is.signWith(is.Key, is.Kid, claims)
 }
@@ -114,13 +114,13 @@ func (is *Issuer) signWith(k *rsa.PrivateKey, kid string, claims map[string]any)
 	return in + "." + enc.EncodeToString(sig)
 }
 
-// SignForeign stellt ein JWT mit einem fremden Schlüssel aus (für Tests der Signaturprüfung).
+// SignForeign issues a JWT with a foreign key (for tests of the signature check).
 func (is *Issuer) SignForeign(claims map[string]any) string {
 	k, _ := rsa.GenerateKey(rand.Reader, 2048)
 	return is.signWith(k, is.Kid, claims)
 }
 
-// AccessClaims sind die Angaben eines Zugangstokens für u, wie Keycloak sie an ClientID ausstellt.
+// AccessClaims are the claims of an access token for u, as Keycloak issues them to ClientID.
 func (is *Issuer) AccessClaims(u User) map[string]any {
 	return map[string]any{"iss": is.IssuerURL(), "sub": u.Sub, "preferred_username": u.Username, "name": u.Name,
 		"azp": is.ClientID, "aud": "account", "typ": "Bearer", "exp": time.Now().Add(is.AccessTTL).Unix(), "iat": time.Now().Unix()}
@@ -149,7 +149,7 @@ func (is *Issuer) auth(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	redirect, state := q.Get("redirect_uri"), q.Get("state")
 	if q.Get("client_id") != is.ClientID || redirect == "" || q.Get("response_type") != "code" || q.Get("code_challenge_method") != "S256" {
-		http.Error(w, "ungültige Anfrage", 400)
+		http.Error(w, "invalid request", 400)
 		return
 	}
 	is.mu.Lock()
@@ -159,7 +159,7 @@ func (is *Issuer) auth(w http.ResponseWriter, r *http.Request) {
 	v := url.Values{"state": {state}}
 	if cur == nil {
 		if q.Get("prompt") != "none" {
-			http.Error(w, "Anmeldeformular (im Test nicht nachgebildet)", 200)
+			http.Error(w, "login form (not simulated in the test)", 200)
 			return
 		}
 		v.Set("error", "login_required")
@@ -219,7 +219,7 @@ func (is *Issuer) token(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// checkOwn prüft ein subject_token: eigene Signatur, an ClientID ausgestellt, nicht abgelaufen.
+// checkOwn checks a subject_token: own signature, issued to ClientID, not expired.
 func (is *Issuer) checkOwn(tok string) (string, bool) {
 	parts := strings.Split(tok, ".")
 	if len(parts) != 3 {
@@ -245,7 +245,7 @@ func (is *Issuer) checkOwn(tok string) (string, bool) {
 	return c.Sub, true
 }
 
-// issue stellt Zugangs-, ID- und refresh_token aus (Aufrufer hält mu).
+// issue issues access, ID and refresh tokens (caller holds mu).
 func (is *Issuer) issue(w http.ResponseWriter, u User, nonce string) {
 	access := is.Sign(is.AccessClaims(u))
 	idc := map[string]any{"iss": is.IssuerURL(), "sub": u.Sub, "preferred_username": u.Username, "name": u.Name,
@@ -271,12 +271,12 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-// Browser folgt Weiterleitungen über Orchestrator und Realm und hält Cookies, wie ein Browser.
+// Browser follows redirects across orchestrator and realm and keeps cookies, like a browser.
 type Browser struct {
 	*http.Client
 }
 
-// NewBrowser liefert einen Client mit Cookie-Speicher, der Weiterleitungen folgt.
+// NewBrowser returns a client with a cookie jar that follows redirects.
 func NewBrowser(t testing.TB) *Browser {
 	t.Helper()
 	jar, _ := cookiejar.New(nil)

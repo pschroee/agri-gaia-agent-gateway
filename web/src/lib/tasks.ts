@@ -1,7 +1,7 @@
-// Aufgabenliste des Agenten aus den Aufrufen des Werkzeugs `todo` (pi-Erweiterung rpiv-todo)
-// rekonstruieren. Jedes Ergebnis trägt in `details.tasks` den vollständigen Stand nach dem Aufruf;
-// der letzte gewinnt. Fehlen die details (Subagenten-Einträge, alte Nachrichten), werden die
-// Argumente nachgespielt. Reine Funktionen, ohne React.
+// Reconstruct the agent's task list from the calls of the `todo` tool (pi extension rpiv-todo).
+// Every result carries the complete state after the call in `details.tasks`;
+// the last one wins. If the details are missing (subagent entries, old messages), the
+// arguments are replayed. Pure functions, without React.
 import type { SubagentEntry } from "@/api/types"
 import type { TranscriptState, ViewBlock } from "./stream"
 
@@ -13,7 +13,7 @@ export type Task = {
   subject: string
   status: TaskStatus
   description?: string
-  /** Beschriftung, solange die Aufgabe in Arbeit ist („schreibe Tests“). */
+  /** Label while the task is in progress ("writing tests"). */
   activeForm?: string
   blockedBy?: number[]
   owner?: string
@@ -38,7 +38,7 @@ function toTask(v: unknown): Task | undefined {
   return t
 }
 
-/** Stand aus dem `details` eines todo-Ergebnisses; undefined, wenn die Form nicht passt. */
+/** State from the `details` of a todo result; undefined if the shape does not match. */
 export function tasksFromDetails(details: unknown): Task[] | undefined {
   if (!isObj(details) || !Array.isArray(details.tasks) || typeof details.nextId !== "number") return undefined
   return details.tasks.map(toTask).filter((t): t is Task => t !== undefined)
@@ -56,8 +56,8 @@ function parseArgs(args: unknown): Obj | undefined {
 }
 
 /**
- * Wendet einen todo-Aufruf auf den Stand an (Rückfall, wenn kein Ergebnis mit details vorliegt).
- * Bildet nur das Nötige von rpiv-todo nach; ungültige Aufrufe lassen den Stand unverändert.
+ * Applies a todo call to the state (fallback when there is no result with details).
+ * Reproduces only what is needed of rpiv-todo; invalid calls leave the state unchanged.
  */
 export function applyTodoArgs(state: TaskState, rawArgs: unknown): TaskState {
   const a = parseArgs(rawArgs)
@@ -92,10 +92,10 @@ export function applyTodoArgs(state: TaskState, rawArgs: unknown): TaskState {
 
 export type TodoCall = {
   action: string
-  /** Stand vor und nach dem Aufruf. */
+  /** State before and after the call. */
   before: Task[]
   after: Task[]
-  /** Kurzbeschreibung der Änderung („#2 Tests: erledigt“). */
+  /** Short description of the change ("#2 Tests: done"). */
   change: string
   running: boolean
   error?: string
@@ -103,10 +103,10 @@ export type TodoCall = {
 export type TodoTimeline = { tasks: Task[]; calls: Record<string, TodoCall> }
 
 export const statusLabel: Record<TaskStatus, string> = {
-  pending: "offen",
-  in_progress: "in Arbeit",
-  completed: "erledigt",
-  deleted: "entfernt",
+  pending: "pending",
+  in_progress: "in progress",
+  completed: "done",
+  deleted: "removed",
 }
 
 function describe(action: string, args: Obj | undefined, before: Task[], after: Task[]): string {
@@ -115,29 +115,29 @@ function describe(action: string, args: Obj | undefined, before: Task[], after: 
   switch (action) {
     case "create": {
       const t = after.find((x) => !before.some((b) => b.id === x.id))
-      return `Neu: ${t ? name(t) : (str(args?.subject) ?? "Aufgabe")}`
+      return `New: ${t ? name(t) : (str(args?.subject) ?? "task")}`
     }
     case "update": {
       const t = find(after) ?? find(before)
       const was = find(before)
       if (t && was && t.status !== was.status) return `${name(t)}: ${statusLabel[t.status]}`
-      return `${name(t)} geändert`
+      return `${name(t)} changed`
     }
     case "delete":
-      return `Entfernt: ${name(find(before) ?? find(after))}`
+      return `Removed: ${name(find(before) ?? find(after))}`
     case "clear":
-      return "Liste geleert"
+      return "List cleared"
     case "get":
-      return `${name(find(after))} abgefragt`
+      return `${name(find(after))} queried`
     default:
-      return "Liste abgefragt"
+      return "List queried"
   }
 }
 
 /**
- * Geht die todo-Aufrufe in der Reihenfolge des Verlaufs durch (Blöcke der Antworten) und liefert
- * je Aufruf den Stand davor und danach sowie den aktuellen Stand. Ein Ergebnis mit details ist
- * maßgeblich; ohne details werden die Argumente eines erfolgreichen Aufrufs nachgespielt.
+ * Walks through the todo calls in the order of the history (blocks of the responses) and returns
+ * per call the state before and after as well as the current state. A result with details is
+ * authoritative; without details the arguments of a successful call are replayed.
  */
 export function todoTimeline(transcript: TranscriptState): TodoTimeline {
   let state: TaskState = { tasks: [], nextId: 1 }
@@ -153,7 +153,7 @@ export function todoTimeline(transcript: TranscriptState): TodoTimeline {
       const done = exec !== undefined && !exec.running && exec.result !== undefined
       const detailErr = isObj(exec?.details) ? str(exec.details.error) : undefined
       let error: string | undefined
-      if (done && exec.isError) error = exec.result || "Fehler"
+      if (done && exec.isError) error = exec.result || "Error"
       else if (detailErr) error = detailErr
       else if (done && /^Error:/.test(exec.result ?? "")) error = exec.result
       if (done) {
@@ -167,7 +167,7 @@ export function todoTimeline(transcript: TranscriptState): TodoTimeline {
         action,
         before,
         after: state.tasks,
-        change: error ? `Fehler: ${error.replace(/^Error:\s*/, "")}` : describe(action, args, before, state.tasks),
+        change: error ? `Error: ${error.replace(/^Error:\s*/, "")}` : describe(action, args, before, state.tasks),
         running: !done,
         error,
       }
@@ -178,7 +178,7 @@ export function todoTimeline(transcript: TranscriptState): TodoTimeline {
 
 export type TaskCounts = { total: number; completed: number; inProgress: number; pending: number }
 
-/** Sichtbare Aufgaben (ohne entfernte). */
+/** Visible tasks (without removed ones). */
 export const visibleTasks = (tasks: Task[]) => tasks.filter((t) => t.status !== "deleted")
 
 export function taskCounts(tasks: Task[]): TaskCounts {
@@ -191,32 +191,32 @@ export function taskCounts(tasks: Task[]): TaskCounts {
   }
 }
 
-/** „3/7 Aufgaben“. */
-export const taskCountLabel = (c: TaskCounts) => `${c.completed}/${c.total} ${c.total === 1 ? "Aufgabe" : "Aufgaben"}`
+/** "3/7 tasks". */
+export const taskCountLabel = (c: TaskCounts) => `${c.completed}/${c.total} ${c.total === 1 ? "task" : "tasks"}`
 
 function countsText(c: TaskCounts): string {
   const parts: string[] = []
-  if (c.completed) parts.push(`${c.completed} erledigt`)
-  if (c.inProgress) parts.push(`${c.inProgress} in Arbeit`)
-  if (c.pending) parts.push(`${c.pending} offen`)
+  if (c.completed) parts.push(`${c.completed} done`)
+  if (c.inProgress) parts.push(`${c.inProgress} in progress`)
+  if (c.pending) parts.push(`${c.pending} pending`)
   return parts.join(", ")
 }
 
-/** Zeile für eine Gruppe von todo-Aufrufen im Verlauf, mit dem Stand danach. */
+/** Line for a group of todo calls in the history, with the state afterwards. */
 export function todoGroupSummary(actions: string[], after: Task[]): string {
   const c = taskCounts(after)
-  if (c.total === 0) return actions.includes("clear") ? "Aufgabenliste geleert" : "Aufgabenliste leer"
+  if (c.total === 0) return actions.includes("clear") ? "Task list cleared" : "Task list empty"
   const verb = actions.every((a) => a === "create")
-    ? "angelegt"
+    ? "created"
     : actions.every((a) => a === "list" || a === "get")
-      ? "abgefragt"
-      : "aktualisiert"
-  return `Aufgaben ${verb}: ${countsText(c)}`
+      ? "queried"
+      : "updated"
+  return `Tasks ${verb}: ${countsText(c)}`
 }
 
 export type BlockGroup = { kind: "block"; index: number } | { kind: "todo"; indices: number[] }
 
-/** Fasst aufeinanderfolgende todo-Aufrufe einer Antwort zu einer Gruppe zusammen. */
+/** Combines consecutive todo calls of a response into one group. */
 export function groupTodoBlocks(blocks: ViewBlock[]): BlockGroup[] {
   const out: BlockGroup[] = []
   blocks.forEach((b, i) => {
@@ -230,9 +230,9 @@ export function groupTodoBlocks(blocks: ViewBlock[]): BlockGroup[] {
 }
 
 /**
- * Aufgaben eines Subagenten-Laufs aus seinen Einträgen. Die Einträge tragen nur Argumente und
- * Ergebnistext, deshalb werden die Argumente erfolgreicher Aufrufe nachgespielt. undefined, wenn
- * der Lauf kein todo aufgerufen hat.
+ * Tasks of a subagent run from its entries. The entries only carry arguments and
+ * result text, so the arguments of successful calls are replayed. undefined if
+ * the run did not call todo.
  */
 export function tasksFromSubagentEntries(entries: SubagentEntry[]): Task[] | undefined {
   const failed = new Set(

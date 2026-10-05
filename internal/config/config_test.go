@@ -14,7 +14,7 @@ const catalogJSON = `{
     "api_key_env": "DEEPSEEK_API_KEY",
     "models": [
       {"id": "deepseek-flash", "name": "DeepSeek V4.1 Flash", "reasoning": true, "context_window": 1048576, "max_tokens": 65536,
-       "pricing": {"input": 0.3, "output": 1.2, "cache_read": 0.006, "cache_write": 0, "note": "Spitze"}},
+       "pricing": {"input": 0.3, "output": 1.2, "cache_read": 0.006, "cache_write": 0, "note": "peak"}},
       {"id": "deepseek-v4-pro", "name": "Pro"}
     ]
   }]
@@ -30,13 +30,13 @@ func TestParseCatalogAndLookup(t *testing.T) {
 	}
 	p, m, ok := c.Lookup("deepseek/deepseek-flash")
 	if !ok || p.ID != "deepseek" || m.ID != "deepseek-flash" {
-		t.Fatalf("Lookup fehlgeschlagen: %v %v %v", p, m, ok)
+		t.Fatalf("Lookup failed: %v %v %v", p, m, ok)
 	}
-	if _, _, ok := c.Lookup("deepseek/gibtsnicht"); ok {
-		t.Fatal("unbekanntes Modell gefunden")
+	if _, _, ok := c.Lookup("deepseek/doesnotexist"); ok {
+		t.Fatal("unknown model found")
 	}
-	if _, _, ok := c.Lookup("ohne-slash"); ok {
-		t.Fatal("Kennung ohne Anbieter akzeptiert")
+	if _, _, ok := c.Lookup("no-slash"); ok {
+		t.Fatal("identifier without provider accepted")
 	}
 	ms := c.Models()
 	if len(ms) != 2 || !ms[0].Default || ms[1].Default || ms[0].Pricing == nil || ms[0].Pricing.Currency != "USD" {
@@ -47,21 +47,21 @@ func TestParseCatalogAndLookup(t *testing.T) {
 func TestParseCatalogRejectsUnknownDefault(t *testing.T) {
 	bad := strings.Replace(catalogJSON, `"default": "deepseek/deepseek-flash"`, `"default": "x/y"`, 1)
 	if _, err := ParseCatalog([]byte(bad)); err == nil {
-		t.Fatal("Fehler erwartet")
+		t.Fatal("error expected")
 	}
 }
 
-// Die models.json für pi darf keinen echten Schlüssel enthalten und muss auf
-// den Proxy des Orchestrators zeigen.
+// The models.json for pi must not contain a real key and must point to
+// the orchestrator's proxy.
 func TestPiModelsJSONPointsToProxyWithoutKey(t *testing.T) {
 	c, _ := ParseCatalog([]byte(catalogJSON))
-	t.Setenv("DEEPSEEK_API_KEY", "sk-geheim-123")
+	t.Setenv("DEEPSEEK_API_KEY", "sk-secret-123")
 	b, err := c.PiModelsJSON("http://orchestrator:18481")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(b), "sk-geheim") {
-		t.Fatal("Schlüssel in pi-Konfiguration")
+	if strings.Contains(string(b), "sk-secret") {
+		t.Fatal("key in pi configuration")
 	}
 	var doc struct {
 		Providers map[string]struct {
@@ -82,10 +82,10 @@ func TestPiModelsJSONPointsToProxyWithoutKey(t *testing.T) {
 	}
 	p := doc.Providers["deepseek"]
 	if p.BaseURL != "http://orchestrator:18481/llm/deepseek" || p.API != "openai-completions" || p.APIKey == "" {
-		t.Fatalf("Anbieter falsch: %+v", p)
+		t.Fatalf("wrong provider: %+v", p)
 	}
 	if len(p.Models) != 2 || p.Models[0].ID != "deepseek-flash" || !p.Models[0].Reasoning || p.Models[0].Cost.Output != 1.2 || p.Models[0].Cost.CacheRead != 0.006 {
-		t.Fatalf("Modelle falsch: %+v", p.Models)
+		t.Fatalf("wrong models: %+v", p.Models)
 	}
 }
 
@@ -94,7 +94,7 @@ func TestUpstreamKey(t *testing.T) {
 	t.Setenv("DEEPSEEK_API_KEY", "sk-x")
 	p, _, _ := c.Lookup("deepseek/deepseek-flash")
 	if p.APIKey() != "sk-x" {
-		t.Fatal("Schlüssel nicht aus Umgebung gelesen")
+		t.Fatal("key not read from the environment")
 	}
 }
 
@@ -104,20 +104,20 @@ func TestEnvDefaults(t *testing.T) {
 	t.Setenv("AGW_IDLE_TIMEOUT", "90s")
 	e := FromEnv()
 	if e.HTTPAddr != ":18480" || e.ProxyAddr != ":18481" {
-		t.Fatalf("Adressen: %q %q", e.HTTPAddr, e.ProxyAddr)
+		t.Fatalf("addresses: %q %q", e.HTTPAddr, e.ProxyAddr)
 	}
-	if e.PoolSizes["cli"] != 1 || e.PoolSizes["mcp"] != 3 || e.PoolSizes["beide"] != 0 {
-		t.Fatalf("Poolgrößen: %v", e.PoolSizes)
+	if e.PoolSizes["cli"] != 1 || e.PoolSizes["mcp"] != 3 || e.PoolSizes["both"] != 0 {
+		t.Fatalf("pool sizes: %v", e.PoolSizes)
 	}
 	if e.IdleTimeout.Seconds() != 90 || e.ApprovalTimeout.Minutes() != 10 || e.ArtifactMaxBytes != 50<<20 || e.ImageMaxBytes != 10<<20 {
-		t.Fatalf("Zeiten/Grenzen: %+v", e)
+		t.Fatalf("timeouts/limits: %+v", e)
 	}
 	if e.WorkspaceMaxBytes != 200<<20 {
-		t.Fatalf("Grenze Arbeitsbereich: %d", e.WorkspaceMaxBytes)
+		t.Fatalf("workspace limit: %d", e.WorkspaceMaxBytes)
 	}
 	t.Setenv("AGW_WORKSPACE_MAX_MB", "0")
 	if e := FromEnv(); e.WorkspaceMaxBytes != -1 {
-		t.Fatalf("AGW_WORKSPACE_MAX_MB=0 soll die Sicherung abschalten: %d", e.WorkspaceMaxBytes)
+		t.Fatalf("AGW_WORKSPACE_MAX_MB=0 should turn off the backup: %d", e.WorkspaceMaxBytes)
 	}
 }
 
@@ -125,16 +125,16 @@ const builtinCatalog = `{
   "default": "deepseek/deepseek-flash",
   "providers": [{
     "id": "deepseek", "upstream": "https://api.deepseek.com", "api": "openai-completions", "api_key_env": "DEEPSEEK_API_KEY",
-    "tariff": {"peak_windows_utc": [], "offpeak_factor": 1, "source": "https://example.org/preise", "retrieved": "2026-09-29"},
+    "tariff": {"peak_windows_utc": [], "offpeak_factor": 1, "source": "https://example.org/pricing", "retrieved": "2026-09-29"},
     "models": [
-      {"id": "deepseek-flash", "pi_builtin": true, "note": "Spitzentarif"},
-      {"id": "eigenes", "name": "Eigenes Modell", "pricing": {"input": 1, "output": 2}}
+      {"id": "deepseek-flash", "pi_builtin": true, "note": "peak tariff"},
+      {"id": "own", "name": "Own model", "pricing": {"input": 1, "output": 2}}
     ]
   }]
 }`
 
-// Modelle, die pi selbst kennt, werden nicht neu definiert: pi behält seine
-// compat-Einstellungen und Preise; umgeleitet werden nur baseUrl und Schlüssel.
+// Models that pi knows itself are not redefined: pi keeps its compat settings
+// and prices; only baseUrl and key are redirected.
 func TestBuiltinModelsAreNotRedefined(t *testing.T) {
 	c, err := ParseCatalog([]byte(builtinCatalog))
 	if err != nil {
@@ -153,10 +153,10 @@ func TestBuiltinModelsAreNotRedefined(t *testing.T) {
 	}
 	p := doc.Providers["deepseek"]
 	if p.BaseURL != "http://orchestrator:18481/llm/deepseek" || p.APIKey == "" {
-		t.Fatalf("Umleitung fehlt: %+v", p)
+		t.Fatalf("redirect missing: %+v", p)
 	}
-	if len(p.Models) != 1 || p.Models[0].ID != "eigenes" {
-		t.Fatalf("nur das eigene Modell darf definiert sein: %+v", p.Models)
+	if len(p.Models) != 1 || p.Models[0].ID != "own" {
+		t.Fatalf("only the own model may be defined: %+v", p.Models)
 	}
 }
 
@@ -164,30 +164,30 @@ func TestPricingFromPiRegistry(t *testing.T) {
 	c, _ := ParseCatalog([]byte(builtinCatalog))
 	ms := c.Models()
 	if ms[0].Pricing != nil {
-		t.Fatalf("ohne Register keine Preise: %+v", ms[0].Pricing)
+		t.Fatalf("no prices without registry: %+v", ms[0].Pricing)
 	}
 	c.SetRegistry("0.87.1", []RegistryModel{
 		{Provider: "deepseek", ID: "deepseek-flash", Name: "DeepSeek V4.1 Flash", ContextWindow: 1000000,
 			Cost: RegistryCost{Input: 0.3, Output: 1.2, CacheRead: 0.006}},
-		{Provider: "deepseek", ID: "eigenes", Cost: RegistryCost{Input: 9}},
-		{Provider: "anderer", ID: "x"},
+		{Provider: "deepseek", ID: "own", Cost: RegistryCost{Input: 9}},
+		{Provider: "other", ID: "x"},
 	})
 	ms = c.Models()
 	flash, own := ms[0], ms[1]
 	if flash.Name != "DeepSeek V4.1 Flash" || flash.Pricing == nil || flash.Pricing.Output != 1.2 || flash.Pricing.CacheRead != 0.006 {
-		t.Fatalf("Register nicht übernommen: %+v %+v", flash, flash.Pricing)
+		t.Fatalf("registry not taken over: %+v %+v", flash, flash.Pricing)
 	}
-	if flash.Pricing.Source != "https://example.org/preise" || flash.Pricing.Retrieved != "2026-09-29" {
-		t.Fatalf("Quelle fehlt: %+v", flash.Pricing)
+	if flash.Pricing.Source != "https://example.org/pricing" || flash.Pricing.Retrieved != "2026-09-29" {
+		t.Fatalf("source missing: %+v", flash.Pricing)
 	}
-	if !strings.Contains(flash.Pricing.Note, "Spitzentarif") || !strings.Contains(flash.Pricing.Note, "pi 0.87.1") {
-		t.Fatalf("Hinweis: %q", flash.Pricing.Note)
+	if !strings.Contains(flash.Pricing.Note, "peak tariff") || !strings.Contains(flash.Pricing.Note, "pi 0.87.1") {
+		t.Fatalf("note: %q", flash.Pricing.Note)
 	}
 	if own.Pricing.Input != 1 {
-		t.Fatalf("eigene Preise müssen Vorrang haben: %+v", own.Pricing)
+		t.Fatalf("own prices must take precedence: %+v", own.Pricing)
 	}
 	if len(ms) != 2 {
-		t.Fatalf("fremde Registermodelle dürfen nicht auftauchen: %d", len(ms))
+		t.Fatalf("foreign registry models must not appear: %d", len(ms))
 	}
 }
 
@@ -211,13 +211,13 @@ func TestCostWithPeakTariff(t *testing.T) {
 		at   string
 		peak bool
 	}{
-		{"2026-09-29T02:30:00Z", true},  // Dienstag, Spitze
-		{"2026-09-29T04:00:00Z", false}, // Ende exklusiv
+		{"2026-09-29T02:30:00Z", true},  // Tuesday, peak
+		{"2026-09-29T04:00:00Z", false}, // end exclusive
 		{"2026-09-29T05:59:59Z", false},
 		{"2026-09-29T06:00:00Z", true},
 		{"2026-09-29T12:00:00Z", false},
-		{"2026-10-03T02:00:00Z", false}, // Samstag
-		{"2026-10-05T09:59:00Z", true},  // Montag
+		{"2026-10-03T02:00:00Z", false}, // Saturday
+		{"2026-10-05T09:59:00Z", true},  // Monday
 	}
 	for _, tc := range cases {
 		at, _ := time.Parse(time.RFC3339, tc.at)
@@ -227,11 +227,11 @@ func TestCostWithPeakTariff(t *testing.T) {
 			want = full / 2
 		}
 		if !ok || peak != tc.peak || cost < want-1e-9 || cost > want+1e-9 {
-			t.Errorf("%s: Kosten %v Spitze %v, erwartet %v %v", tc.at, cost, peak, want, tc.peak)
+			t.Errorf("%s: cost %v peak %v, expected %v %v", tc.at, cost, peak, want, tc.peak)
 		}
 	}
 	if _, _, ok := c.Cost("x/y", u, time.Now()); ok {
-		t.Fatal("unbekanntes Modell berechnet")
+		t.Fatal("unknown model billed")
 	}
 }
 
@@ -239,25 +239,25 @@ func TestCostWithoutTariffIsFlat(t *testing.T) {
 	c, _ := ParseCatalog([]byte(catalogJSON))
 	cost, peak, ok := c.Cost("deepseek/deepseek-flash", Usage{Output: 1_000_000}, time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC))
 	if !ok || cost != 1.2 || peak {
-		t.Fatalf("ohne Tarif: %v %v %v", cost, peak, ok)
+		t.Fatalf("without tariff: %v %v %v", cost, peak, ok)
 	}
 }
 
 func TestBadTariffRejected(t *testing.T) {
-	bad := strings.Replace(tariffCatalog, `"from": "01:00"`, `"from": "1 Uhr"`, 1)
+	bad := strings.Replace(tariffCatalog, `"from": "01:00"`, `"from": "1 o'clock"`, 1)
 	if _, err := ParseCatalog([]byte(bad)); err == nil {
-		t.Fatal("ungültige Zeitangabe akzeptiert")
+		t.Fatal("invalid time accepted")
 	}
 	overnight := strings.Replace(tariffCatalog, `"from": "01:00", "to": "04:00"`, `"from": "22:00", "to": "02:00"`, 1)
 	if _, err := ParseCatalog([]byte(overnight)); err == nil {
-		t.Fatal("Fenster über Mitternacht akzeptiert")
+		t.Fatal("window across midnight accepted")
 	}
 }
 
 func TestBackgroundEnv(t *testing.T) {
 	e := FromEnv()
 	if e.BgMax != 5 || e.BgWakesPerHour != 10 || e.BgKeepAlive != time.Hour || e.AutoTurnsMax != 5 {
-		t.Fatalf("Vorgaben: %d %d %v", e.BgMax, e.BgWakesPerHour, e.BgKeepAlive)
+		t.Fatalf("defaults: %d %d %v", e.BgMax, e.BgWakesPerHour, e.BgKeepAlive)
 	}
 	t.Setenv("AGW_BG_MAX", "0")
 	t.Setenv("AGW_BG_WAKES_PER_HOUR", "0")
@@ -265,7 +265,7 @@ func TestBackgroundEnv(t *testing.T) {
 	t.Setenv("AGW_AUTO_TURNS_MAX", "0")
 	e = FromEnv()
 	if e.BgMax != 1 || e.BgWakesPerHour != -1 || e.BgKeepAlive != -1 {
-		t.Fatalf("abgeschaltet: %d %d %v", e.BgMax, e.BgWakesPerHour, e.BgKeepAlive)
+		t.Fatalf("turned off: %d %d %v", e.BgMax, e.BgWakesPerHour, e.BgKeepAlive)
 	}
 	if e.AutoTurnsMax != -1 {
 		t.Fatalf("AGW_AUTO_TURNS_MAX=0: %d", e.AutoTurnsMax)
@@ -276,7 +276,7 @@ func TestBackgroundEnv(t *testing.T) {
 	t.Setenv("AGW_AUTO_TURNS_MAX", "2")
 	e = FromEnv()
 	if e.BgMax != 3 || e.BgWakesPerHour != 4 || e.BgKeepAlive != 30*time.Minute || e.AutoTurnsMax != 2 {
-		t.Fatalf("gesetzt: %d %d %v", e.BgMax, e.BgWakesPerHour, e.BgKeepAlive)
+		t.Fatalf("set: %d %d %v", e.BgMax, e.BgWakesPerHour, e.BgKeepAlive)
 	}
 }
 
@@ -289,13 +289,13 @@ func TestCheckAuth(t *testing.T) {
 		ok   bool
 	}{
 		{"token", Env{AuthMode: AuthToken, APIToken: tok}, true},
-		{"token zu kurz", Env{AuthMode: AuthToken, APIToken: "kurz"}, false},
-		{"oidc ohne Token", oidc, true},
-		{"oidc ohne Issuer", func() Env { e := oidc; e.OIDCIssuer = ""; return e }(), false},
-		{"oidc ohne Secret", func() Env { e := oidc; e.OIDCClientSecret = ""; return e }(), false},
-		{"oidc mit Einbettung", func() Env { e := oidc; e.FrameAncestors = []string{"https://app.example"}; return e }(), true},
-		{"oidc mit kaputter Herkunft", func() Env { e := oidc; e.FrameAncestors = []string{"app.example;"}; return e }(), false},
-		{"unbekannt", Env{AuthMode: "basic"}, false},
+		{"token too short", Env{AuthMode: AuthToken, APIToken: "short"}, false},
+		{"oidc without token", oidc, true},
+		{"oidc without issuer", func() Env { e := oidc; e.OIDCIssuer = ""; return e }(), false},
+		{"oidc without secret", func() Env { e := oidc; e.OIDCClientSecret = ""; return e }(), false},
+		{"oidc with embedding", func() Env { e := oidc; e.FrameAncestors = []string{"https://app.example"}; return e }(), true},
+		{"oidc with broken origin", func() Env { e := oidc; e.FrameAncestors = []string{"app.example;"}; return e }(), false},
+		{"unknown", Env{AuthMode: "basic"}, false},
 	}
 	for _, c := range cases {
 		if err := c.env.CheckAuth(); (err == nil) != c.ok {
@@ -306,11 +306,11 @@ func TestCheckAuth(t *testing.T) {
 
 func TestOIDCEnvDefaults(t *testing.T) {
 	t.Setenv("AGW_AUTH_MODE", "OIDC")
-	t.Setenv("AGW_PLATFORM_CLIENT_SECRET", "plattform")
+	t.Setenv("AGW_PLATFORM_CLIENT_SECRET", "platform")
 	t.Setenv("AGW_FRAME_ANCESTORS", "https://app.a  https://app.b")
 	t.Setenv("AGW_PUBLIC_URL", "https://agent.example/")
 	e := FromEnv()
-	if e.AuthMode != AuthOIDC || e.OIDCClientID != "agw-agent" || e.OIDCClientSecret != "plattform" || e.PublicURL != "https://agent.example" {
+	if e.AuthMode != AuthOIDC || e.OIDCClientID != "agw-agent" || e.OIDCClientSecret != "platform" || e.PublicURL != "https://agent.example" {
 		t.Fatalf("%+v", e)
 	}
 	if len(e.FrameAncestors) != 2 || e.FrameAncestors[1] != "https://app.b" {
@@ -328,12 +328,12 @@ func TestBasePath(t *testing.T) {
 		"http://localhost:8080/a/b": "/a/b",
 	} {
 		if got, err := BasePath(in); err != nil || got != want {
-			t.Errorf("BasePath(%q) = %q, %v; erwartet %q", in, got, err, want)
+			t.Errorf("BasePath(%q) = %q, %v; expected %q", in, got, err, want)
 		}
 	}
 	for _, in := range []string{"https://app.x/a/../b", "https://app.x//agent", "https://app.x/a%20b", "https://app.x/a%2Fb", "https://app.x/./a"} {
 		if got, err := BasePath(in); err == nil {
-			t.Errorf("BasePath(%q) angenommen: %q", in, got)
+			t.Errorf("BasePath(%q) accepted: %q", in, got)
 		}
 	}
 }
@@ -344,7 +344,7 @@ func TestEnvPublicURLWithPath(t *testing.T) {
 	if e.PublicURL != "https://app.agri-gaia.localhost/agent" || e.BasePath != "/agent" {
 		t.Fatalf("PublicURL/BasePath: %q %q", e.PublicURL, e.BasePath)
 	}
-	// Der Host gilt als erlaubt, auch wenn die Adresse einen Pfad trägt.
+	// The host counts as allowed even if the address carries a path.
 	if h := e.PublicHost(); h != "app.agri-gaia.localhost" {
 		t.Fatalf("PublicHost: %q", h)
 	}
@@ -355,10 +355,10 @@ func TestEnvPublicURLWithPath(t *testing.T) {
 	}
 	e.PublicURL = "https://app.agri-gaia.localhost/a/../b"
 	if err := e.CheckAuth(); err == nil {
-		t.Fatal("ungültiger Pfad angenommen")
+		t.Fatal("invalid path accepted")
 	}
 	t.Setenv("AGW_PUBLIC_URL", "")
 	if e := FromEnv(); e.BasePath != "" || e.PublicHost() != "" {
-		t.Fatalf("ohne AGW_PUBLIC_URL: %q %q", e.BasePath, e.PublicHost())
+		t.Fatalf("without AGW_PUBLIC_URL: %q %q", e.BasePath, e.PublicHost())
 	}
 }

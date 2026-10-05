@@ -28,19 +28,19 @@ data: [DONE]
 
 func TestParseSSE(t *testing.T) {
 	m := newMeter("openai-completions")
-	m.Write([]byte(deepseekSSE[:100])) // in Stücken, wie beim Streamen
+	m.Write([]byte(deepseekSSE[:100])) // in chunks, as when streaming
 	m.Write([]byte(deepseekSSE[100:]))
 	r := m.Result()
 	if r.ResponseID != "resp-1" || r.Usage.Input != 200 || r.Usage.CacheRead != 800 || r.Usage.Output != 50 {
-		t.Fatalf("Ergebnis: %+v", r)
+		t.Fatalf("result: %+v", r)
 	}
 	if len(r.ToolCalls) != 1 || r.ToolCalls[0].Name != "bash" || r.ToolCalls[0].Arguments != `{"command":"ls"}` || r.ToolCalls[0].ID != "call_1" {
-		t.Fatalf("Werkzeugaufrufe: %+v", r.ToolCalls)
+		t.Fatalf("tool calls: %+v", r.ToolCalls)
 	}
 }
 
-// Zwei parallele Aufrufe: IDs kommen nur im ersten Stück je Index; spätere
-// Stücke ohne ID überschreiben sie nicht.
+// Two parallel calls: IDs come only in the first chunk per index; later
+// chunks without ID do not overwrite them.
 func TestParseSSEParallelToolCallIDs(t *testing.T) {
 	m := newMeter("openai-completions")
 	m.Write([]byte(`data: {"id":"r","choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_00_a","function":{"name":"read","arguments":""}},{"index":1,"id":"call_01_b","function":{"name":"bash","arguments":"{}"}}]}}]}` + "\n"))
@@ -109,7 +109,7 @@ func meteredProxy(t *testing.T, rec *fakeRecorder) (*httptest.Server, *int) {
 	return s, &hits
 }
 
-// Jeder Aufruf wird dem Chat des Platzes zugeordnet und nach Tarif abgerechnet.
+// Every call is attributed to the slot's chat and billed per tariff.
 func TestRecordsCallWithCost(t *testing.T) {
 	rec := &fakeRecorder{chat: "chat-1"}
 	s, _ := meteredProxy(t, rec)
@@ -132,30 +132,30 @@ func TestRecordsCallWithCost(t *testing.T) {
 	rec.mu.Lock()
 	defer rec.mu.Unlock()
 	if len(rec.calls) != 1 {
-		t.Fatalf("Aufrufe: %d", len(rec.calls))
+		t.Fatalf("calls: %d", len(rec.calls))
 	}
 	c := rec.calls[0]
 	want := (200*1.0 + 50*2.0 + 800*0.5) / 1e6
 	if c.ChatID != "chat-1" || c.SlotID != "p-1" || c.Model != "p/m1" || c.ResponseID != "resp-1" || c.Status != 200 || c.Cost < want-1e-12 || c.Cost > want+1e-12 {
-		t.Fatalf("Aufruf: %+v (erwartet Kosten %v)", c, want)
+		t.Fatalf("call: %+v (expected cost %v)", c, want)
 	}
 	if len(c.ToolCalls) != 1 || c.ToolCalls[0].Name != "bash" {
-		t.Fatalf("Werkzeugaufrufe: %+v", c.ToolCalls)
+		t.Fatalf("tool calls: %+v", c.ToolCalls)
 	}
 }
 
-// Aufrufe, die keinem zugewiesenen Platz gehören, werden abgewiesen.
+// Calls that belong to no assigned slot are refused.
 func TestRejectsUnattributedCaller(t *testing.T) {
 	rec := &fakeRecorder{chat: ""}
 	s, hits := meteredProxy(t, rec)
 	resp, _ := http.Post(s.URL+"/llm/p/chat/completions", "application/json", strings.NewReader(`{"model":"m1"}`))
 	if resp.StatusCode != http.StatusForbidden || *hits != 0 {
-		t.Fatalf("unzugeordnet: %d, Upstream %d", resp.StatusCode, *hits)
+		t.Fatalf("unattributed: %d, upstream %d", resp.StatusCode, *hits)
 	}
 }
 
-// Harte Grenze: höchstens MaxConcurrent gleichzeitige Aufrufe je Chat
-// (Hauptagent plus erlaubte Subagenten), unabhängig von der Sandbox.
+// Hard limit: at most MaxConcurrent concurrent calls per chat
+// (main agent plus allowed subagents), independent of the sandbox.
 func TestConcurrencyLimitPerChat(t *testing.T) {
 	release := make(chan struct{})
 	var mu sync.Mutex
@@ -189,35 +189,35 @@ func TestConcurrencyLimitPerChat(t *testing.T) {
 			codes <- resp.StatusCode
 		}()
 	}
-	// Der dritte Aufruf muss sofort mit 429 zurückkommen, die zwei anderen hängen noch.
+	// The third call must return immediately with 429, the other two are still pending.
 	select {
 	case c := <-codes:
 		if c != http.StatusTooManyRequests {
-			t.Fatalf("erster fertiger Aufruf: %d, erwartet 429", c)
+			t.Fatalf("first finished call: %d, expected 429", c)
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("Grenze greift nicht")
+		t.Fatal("limit does not take effect")
 	}
 	close(release)
 	for i := 0; i < 2; i++ {
 		if c := <-codes; c != 200 {
-			t.Fatalf("erlaubter Aufruf: %d", c)
+			t.Fatalf("allowed call: %d", c)
 		}
 	}
 	rec.mu.Lock()
 	defer rec.mu.Unlock()
 	if len(rec.limit) != 1 {
-		t.Fatalf("Grenzverletzung nicht gemeldet: %v", rec.limit)
+		t.Fatalf("limit violation not reported: %v", rec.limit)
 	}
-	// Nach dem Ende ist wieder Platz.
+	// After the end there is room again.
 	resp, _ := http.Post(s.URL+"/llm/p/chat/completions", "application/json", strings.NewReader(`{"model":"m1"}`))
 	if resp.StatusCode != 200 {
-		t.Fatalf("nach Freigabe: %d", resp.StatusCode)
+		t.Fatalf("after release: %d", resp.StatusCode)
 	}
 }
 
-// L9: Stücke ohne index (manche Anbieter) werden über die id zugeordnet; ein Stück ganz ohne
-// index und id gehört zum zuletzt begonnenen Aufruf.
+// L9: chunks without index (some providers) are matched by id; a chunk without both
+// index and id belongs to the most recently started call.
 func TestParseSSEToolCallsWithoutIndex(t *testing.T) {
 	m := newMeter("openai-completions")
 	m.Write([]byte(`data: {"id":"r","choices":[{"delta":{"tool_calls":[{"id":"call_a","function":{"name":"read","arguments":"{\"pa"}}]}}]}` + "\n"))
@@ -226,23 +226,23 @@ func TestParseSSEToolCallsWithoutIndex(t *testing.T) {
 	m.Write([]byte(`data: {"id":"r","choices":[{"delta":{"tool_calls":[{"id":"call_a","function":{"arguments":""}}]}}]}` + "\n"))
 	r := m.Result()
 	if len(r.ToolCalls) != 2 || r.ToolCalls[0].ID != "call_a" || r.ToolCalls[0].Arguments != `{"path":1}` || r.ToolCalls[1].ID != "call_b" || r.ToolCalls[1].Name != "bash" {
-		t.Fatalf("ohne index: %+v", r.ToolCalls)
+		t.Fatalf("without index: %+v", r.ToolCalls)
 	}
 }
 
-// M1: Der Proxy hält fest, ob die Antwort vollständig ankam (finish_reason). Ein abgebrochener
-// Strom enthält Werkzeugaufrufe, die pi nie ausführt; sie sind keine Umgehung.
+// M1: the proxy records whether the response arrived completely (finish_reason). An aborted
+// stream contains tool calls that pi never executes; they are no bypass.
 func TestMeterFinishReasonAndCompleteness(t *testing.T) {
 	m := newMeter("openai-completions")
 	m.Write([]byte(deepseekSSE))
 	if r := m.Result(); r.FinishReason != "tool_calls" || !r.Complete {
-		t.Fatalf("vollständig: %q %v", r.FinishReason, r.Complete)
+		t.Fatalf("complete: %q %v", r.FinishReason, r.Complete)
 	}
 	cut := deepseekSSE[:strings.Index(deepseekSSE, `"finish_reason"`)-40]
 	m = newMeter("openai-completions")
 	m.Write([]byte(cut))
 	if r := m.Result(); r.Complete || r.FinishReason != "" || len(r.ToolCalls) != 1 {
-		t.Fatalf("abgebrochen: %+v", r)
+		t.Fatalf("aborted: %+v", r)
 	}
 	m = newMeter("openai-completions")
 	m.Write([]byte(`{"id":"r2","choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"hi"}}]}`))

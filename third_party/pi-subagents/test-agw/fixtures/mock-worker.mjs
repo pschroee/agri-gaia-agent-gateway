@@ -1,9 +1,9 @@
-// Attrappe für PI_SUBAGENTS_WORKFLOW_WORKER: protokolliert jede Instanziierung in die Datei
-// aus AGW_MOCK_LOG und bricht dann ab, damit runWorkflowScript sofort mit einem
-// erkennbaren Fehler endet, ohne einen echten Worker zu starten.
+// Mock for PI_SUBAGENTS_WORKFLOW_WORKER: logs every instantiation to the file
+// from AGW_MOCK_LOG and then aborts, so that runWorkflowScript ends at once with a
+// recognisable error without starting a real worker.
 import { appendFileSync } from "node:fs";
 
-export const MOCK_MARKER = "agw-attrappe";
+export const MOCK_MARKER = "agw-mock";
 
 export class Worker {
 	constructor(source, options) {

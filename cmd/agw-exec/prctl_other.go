@@ -2,5 +2,5 @@
 
 package main
 
-// notDumpable gibt es nur unter Linux; auf anderen Systemen laufen nur die Unit-Tests.
+// notDumpable exists only on Linux; on other systems only the unit tests run.
 func notDumpable() error { return nil }

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 
-/** Fragt `fn` alle `intervalMs` ab; Fehler werden gemeldet, die letzten Daten bleiben stehen. */
+/** Polls `fn` every `intervalMs`; errors are reported, the last data stays. */
 export function usePolling<T>(fn: () => Promise<T>, intervalMs: number) {
   const [data, setData] = useState<T | undefined>(undefined)
   const [error, setError] = useState<string | undefined>(undefined)

@@ -1,24 +1,24 @@
-// Stellvertreter für den Worker-Thread, in dem pi-subagents das Skript eines Workflows
-// (workflowScript) ausführt (E9, Entscheidung des Verfassers zu P4b). Die Kopie von pi-subagents
-// im Repo (third_party/pi-subagents, siehe VENDORED.md) nimmt `Worker` aus dem Modul in
-// PI_SUBAGENTS_WORKFLOW_WORKER; das pi-Abbild setzt die Variable auf diese Datei
-// (images/agw-basis/Dockerfile). pi-subagents benutzt den Worker nur über
-// postMessage, terminate und die Ereignisse message, error und exit; diese Klasse bietet genau
-// das und führt den Worker in der Ausführungs-Sandbox aus (POST /tool/workflow am Socket).
+// Stand-in for the worker thread in which pi-subagents runs a workflow's script
+// (workflowScript) (E9, the author's decision on P4b). The copy of pi-subagents in the
+// repo (third_party/pi-subagents, see VENDORED.md) takes `Worker` from the module in
+// PI_SUBAGENTS_WORKFLOW_WORKER; the pi image sets the variable to this file
+// (images/agw-basis/Dockerfile). pi-subagents uses the worker only through
+// postMessage, terminate and the events message, error and exit; this class offers exactly
+// that and runs the worker in the execution sandbox (POST /tool/workflow at the socket).
 //
-// Was von dort zurückkommt, ist Ausgabe von Code des Agenten. Bevor pi-subagents eine Nachricht
-// sieht, prüft der Wächter aus exec-bridge.ts sie (checkWorkflowMessage): runs.host ist gesperrt,
-// jeder Lauf (runs.run, runs.all) unterliegt denselben Regeln wie ein einzelner Subagent. Die
-// Läufe selbst startet pi-subagents weiter im pi-Prozess; sie laden die Umleitung, ihre
-// Werkzeuge laufen also ebenfalls in der Ausführungs-Sandbox.
+// What comes back from there is output of the agent's code. Before pi-subagents sees a message,
+// the guard from exec-bridge.ts checks it (checkWorkflowMessage): runs.host is blocked, every
+// run (runs.run, runs.all) is subject to the same rules as a single subagent. pi-subagents
+// still starts the runs themselves in the pi process; they load the redirection, so their
+// tools also run in the execution sandbox.
 //
-// Nur Node-Bordmittel: pi-subagents lädt diese Datei direkt, ohne die Auflösung von pi.
+// Node built-ins only: pi-subagents loads this file directly, without pi's resolution.
 import { EventEmitter } from "node:events";
 import { request } from "node:http";
 
 const SOCKET = process.env.AGW_SOCKET || "/run/agw/agw.sock";
-// Von exec-bridge.ts gesetzt: claim(script) → {toolCallId, sessionFile} für ein vom Wächter
-// freigegebenes Skript, checkMessage(msg) → Grund zum Sperren oder undefined.
+// Set by exec-bridge.ts: claim(script) → {toolCallId, sessionFile} for a script approved by
+// the guard, checkMessage(msg) → reason to block or undefined.
 const REGISTRY = Symbol.for("agw.exec-bridge.workflow");
 
 export class Worker extends EventEmitter {
@@ -30,8 +30,8 @@ export class Worker extends EventEmitter {
 		this._exited = false;
 		this._buf = "";
 		if (!(options && options.eval === true && options.workerData && typeof options.workerData.acornPath === "string")) {
-			// Nur der Workflow-Worker von pi-subagents wird umgeleitet; andere Worker gibt es in pi
-			// nicht über diesen Import.
+			// Only the workflow worker of pi-subagents is redirected; pi has no other workers
+			// through this import.
 			queueMicrotask(() => this._fail(new Error("agw: unsupported worker")));
 		}
 	}
@@ -46,9 +46,9 @@ export class Worker extends EventEmitter {
 		else this._queue.push(msg);
 	}
 
-	// pi-subagents beendet den Worker nach „complete“ mit terminate(). Das Ende der Anfrage sagt
-	// der Sandbox, dass keine Nachrichten mehr kommen; der Runner endet dann regulär. Hängt er,
-	// bricht das Schließen der Verbindung ihn nach fünf Sekunden ab.
+	// pi-subagents ends the worker after "complete" with terminate(). The end of the request tells
+	// the sandbox that no more messages are coming; the runner then ends normally. If it hangs,
+	// closing the connection aborts it after five seconds.
 	terminate() {
 		const req = this._req;
 		if (req && !req.destroyed) {
@@ -117,7 +117,7 @@ export class Worker extends EventEmitter {
 			const reg = globalThis[REGISTRY];
 			const reason = reg && typeof reg.checkMessage === "function" ? reg.checkMessage(msg) : "guard unavailable";
 			if (reason) {
-				// Anfrage des Skripts gesperrt: Antwort direkt an den Worker, pi-subagents sieht sie nicht.
+				// Script request blocked: reply directly to the worker, pi-subagents does not see it.
 				if (msg.type === "call" && typeof msg.callId === "number") this._send({ type: "response", callId: msg.callId, ok: false, error: reason });
 				return;
 			}

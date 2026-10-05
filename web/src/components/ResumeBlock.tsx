@@ -7,8 +7,8 @@ import type { ResumeItem, ResumeStepView } from "@/lib/stream"
 import { cn } from "@/lib/utils"
 
 /**
- * Fortsetzen eines ruhenden Chats im Verlauf: Während es läuft (oder scheitert) ein Block mit den
- * Schritten live; danach eine Zeile, die sich wieder aufklappen lässt.
+ * Resuming an idle chat in the history: while it runs (or fails), a block with the steps live;
+ * afterwards a line that can be expanded again.
  */
 export function ResumeBlock({ item }: { item: ResumeItem }) {
   const [open, setOpen] = useState(false)
@@ -51,15 +51,15 @@ export function ResumeBlock({ item }: { item: ResumeItem }) {
         <span className="min-w-0 break-words">{resumeSummary(item)}</span>
       </div>
       {!failed && (
-        <p className="mt-0.5 text-muted-foreground">Der Chat ruhte; die Sandbox wird neu aufgebaut.</p>
+        <p className="mt-0.5 text-muted-foreground">The chat was idle; the sandbox is being rebuilt.</p>
       )}
       <div className="mt-2">
         <Steps steps={item.steps} />
       </div>
       {failed && (
         <p className="mt-2">
-          Die Nachricht wurde nicht gesendet und ist nicht verloren: Sie steht wieder im Eingabefeld und lässt sich
-          erneut senden.
+          The message was not sent and is not lost: it is back in the input field and can be sent
+          again.
         </p>
       )}
     </div>
@@ -76,7 +76,7 @@ function Steps({ steps }: { steps: ResumeStepView[] }) {
           <li
             key={s.phase}
             className={cn("flex min-w-0 items-start gap-2", s.status === "pending" && "text-muted-foreground/70")}
-            title={s.phase === "acquire" && s.detail ? `Platz ${s.detail}` : undefined}
+            title={s.phase === "acquire" && s.detail ? `Slot ${s.detail}` : undefined}
           >
             <StepIcon status={s.status} />
             <span className="min-w-0 flex-1 break-words">
@@ -99,14 +99,14 @@ function StepIcon({ status }: { status: ResumeStepView["status"] }) {
   const cls = "mt-px size-3.5 shrink-0"
   switch (status) {
     case "running":
-      return <Loader2Icon className={cn(cls, "animate-spin text-sky-600")} aria-label="läuft" />
+      return <Loader2Icon className={cn(cls, "animate-spin text-sky-600")} aria-label="running" />
     case "done":
-      return <CheckIcon className={cn(cls, "text-emerald-600")} aria-label="fertig" />
+      return <CheckIcon className={cn(cls, "text-emerald-600")} aria-label="done" />
     case "warning":
-      return <TriangleAlertIcon className={cn(cls, "text-amber-600")} aria-label="mit Hinweis" />
+      return <TriangleAlertIcon className={cn(cls, "text-amber-600")} aria-label="with warning" />
     case "error":
-      return <XIcon className={cn(cls, "text-red-600")} aria-label="gescheitert" />
+      return <XIcon className={cn(cls, "text-red-600")} aria-label="failed" />
     default:
-      return <CircleIcon className={cn(cls, "text-muted-foreground/40")} aria-label="ausstehend" />
+      return <CircleIcon className={cn(cls, "text-muted-foreground/40")} aria-label="pending" />
   }
 }

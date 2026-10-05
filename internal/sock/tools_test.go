@@ -24,7 +24,7 @@ import (
 type fakeRunner struct {
 	mu   sync.Mutex
 	reqs []execproto.Request
-	// bash: Stücke, die nacheinander kommen; block hält bis zum Abbruch.
+	// bash: chunks that arrive one after another; block holds until the abort.
 	chunks []string
 	block  bool
 	file   []byte
@@ -129,7 +129,7 @@ func TestToolRequestsValidated(t *testing.T) {
 	c := startPi(t, b, run, rec)
 	ok := map[string]any{"toolCallId": "call_00_a", "tool": "read", "req": map[string]any{"op": "read", "path": "/workspace/a"}}
 	if resp, body := postJSON(t, c, "/tool/op", ok); resp.StatusCode != http.StatusConflict {
-		t.Fatalf("nicht zugewiesen: %d %s", resp.StatusCode, body)
+		t.Fatalf("not assigned: %d %s", resp.StatusCode, body)
 	}
 	b.chat = "chat-1"
 	bad := []map[string]any{
@@ -137,8 +137,8 @@ func TestToolRequestsValidated(t *testing.T) {
 		{"toolCallId": "a b", "tool": "read", "req": map[string]any{"op": "read", "path": "/a"}},
 		{"toolCallId": "c", "tool": "todo", "req": map[string]any{"op": "read", "path": "/a"}},
 		{"toolCallId": "c", "tool": "read", "req": map[string]any{"op": "write", "path": "/a"}},
-		{"toolCallId": "c", "tool": "read", "req": map[string]any{"op": "read", "path": "relativ"}},
-		{"toolCallId": "c", "tool": "bash", "req": map[string]any{"op": "bash", "command": "ls", "cwd": "/workspace"}}, // bash nur über /tool/bash
+		{"toolCallId": "c", "tool": "read", "req": map[string]any{"op": "read", "path": "relative"}},
+		{"toolCallId": "c", "tool": "bash", "req": map[string]any{"op": "bash", "command": "ls", "cwd": "/workspace"}}, // bash only via /tool/bash
 	}
 	for _, r := range bad {
 		if resp, body := postJSON(t, c, "/tool/op", r); resp.StatusCode != http.StatusBadRequest {
@@ -146,16 +146,16 @@ func TestToolRequestsValidated(t *testing.T) {
 		}
 	}
 	if resp, _ := postJSON(t, c, "/tool/bash", ok); resp.StatusCode != http.StatusBadRequest {
-		t.Error("read über /tool/bash angenommen")
+		t.Error("read accepted via /tool/bash")
 	}
 	if len(run.reqs) != 0 || len(rec.all()) != 0 {
-		t.Fatalf("abgewiesene Anfragen ausgeführt: %v %v", run.reqs, rec.all())
+		t.Fatalf("refused requests executed: %v %v", run.reqs, rec.all())
 	}
 }
 
 func TestToolOpRecorded(t *testing.T) {
 	b := &fakeBackend{chat: "chat-1"}
-	run, rec := &fakeRunner{file: []byte("Inhalt")}, &fakeRecorder{}
+	run, rec := &fakeRunner{file: []byte("sample")}, &fakeRecorder{}
 	c := startPi(t, b, run, rec)
 	resp, body := postJSON(t, c, "/tool/op", map[string]any{"toolCallId": "call_00_a", "tool": "read",
 		"sessionFile": "/agent/sessions/m/9017da63-d08d-43ab-b978-e86cb7afc45b/run-0/session.jsonl",
@@ -164,52 +164,52 @@ func TestToolOpRecorded(t *testing.T) {
 	_ = json.Unmarshal([]byte(body), &f)
 	var rr execproto.ReadResult
 	_ = json.Unmarshal(f.Result, &rr)
-	if resp.StatusCode != 200 || string(rr.Data) != "Inhalt" {
+	if resp.StatusCode != 200 || string(rr.Data) != "sample" {
 		t.Fatalf("read: %d %s", resp.StatusCode, body)
 	}
 	if run.reqs[0].Path != "/workspace/a.txt" {
-		t.Fatalf("Pfad nicht bereinigt: %q", run.reqs[0].Path)
+		t.Fatalf("path not cleaned: %q", run.reqs[0].Path)
 	}
 	postJSON(t, c, "/tool/op", map[string]any{"toolCallId": "call_00_b", "tool": "write",
-		"req": map[string]any{"op": "write", "path": "/workspace/b.txt", "data": base64.StdEncoding.EncodeToString([]byte("geheim"))}})
+		"req": map[string]any{"op": "write", "path": "/workspace/b.txt", "data": base64.StdEncoding.EncodeToString([]byte("secret"))}})
 	recs := rec.all()
 	if len(recs) != 2 {
-		t.Fatalf("Einträge: %+v", recs)
+		t.Fatalf("entries: %+v", recs)
 	}
-	sum := sha256.Sum256([]byte("Inhalt"))
+	sum := sha256.Sum256([]byte("sample"))
 	r0 := recs[0]
 	if r0.ChatID != "chat-1" || r0.SlotID != "p-test" || r0.ToolCallID != "call_00_a" || r0.Tool != "read" || r0.Op != "read" ||
-		r0.Session != "9017da63-d08d-43ab-b978-e86cb7afc45b" || r0.OutputSHA256 != hex.EncodeToString(sum[:]) || r0.OutputExcerpt != "Inhalt" || r0.OutputBytes != 6 {
-		t.Fatalf("read-Eintrag: %+v", r0)
+		r0.Session != "9017da63-d08d-43ab-b978-e86cb7afc45b" || r0.OutputSHA256 != hex.EncodeToString(sum[:]) || r0.OutputExcerpt != "sample" || r0.OutputBytes != 6 {
+		t.Fatalf("read entry: %+v", r0)
 	}
-	if strings.Contains(string(recs[1].Args), "geheim") || !strings.Contains(string(recs[1].Args), `"bytes":6`) || recs[1].Session != "main" {
-		t.Fatalf("write-Argumente: %s", recs[1].Args)
+	if strings.Contains(string(recs[1].Args), "secret") || !strings.Contains(string(recs[1].Args), `"bytes":6`) || recs[1].Session != "main" {
+		t.Fatalf("write arguments: %s", recs[1].Args)
 	}
 }
 
 func TestToolBashStreamAndAbort(t *testing.T) {
 	b := &fakeBackend{chat: "chat-1"}
-	run, rec := &fakeRunner{chunks: []string{"eins\n", "zwei\n"}}, &fakeRecorder{}
+	run, rec := &fakeRunner{chunks: []string{"four\n", "five\n"}}, &fakeRecorder{}
 	c := startPi(t, b, run, rec)
 	bash := map[string]any{"toolCallId": "call_01", "tool": "bash", "req": map[string]any{"op": "bash", "command": "echo x", "cwd": "/workspace",
 		"env": map[string]string{"PI_SESSION_ID": "s"}}}
 	resp, body := postJSON(t, c, "/tool/bash", bash)
 	lines := strings.Split(strings.TrimSpace(body), "\n")
-	if resp.StatusCode != 200 || len(lines) != 3 || !strings.Contains(lines[0], base64.StdEncoding.EncodeToString([]byte("eins\n"))) ||
+	if resp.StatusCode != 200 || len(lines) != 3 || !strings.Contains(lines[0], base64.StdEncoding.EncodeToString([]byte("four\n"))) ||
 		!strings.Contains(lines[2], `"done":true`) || !strings.Contains(lines[2], `"exit":0`) {
-		t.Fatalf("Strom: %d %q", resp.StatusCode, lines)
+		t.Fatalf("stream: %d %q", resp.StatusCode, lines)
 	}
 	r := rec.all()[0]
-	if r.OutputExcerpt != "eins\nzwei\n" || r.OutputBytes != 10 || r.ExitCode == nil || *r.ExitCode != 0 || !strings.Contains(string(r.Args), `"command":"echo x"`) {
-		t.Fatalf("bash-Eintrag: %+v", r)
+	if r.OutputExcerpt != "four\nfive\n" || r.OutputBytes != 10 || r.ExitCode == nil || *r.ExitCode != 0 || !strings.Contains(string(r.Args), `"command":"echo x"`) {
+		t.Fatalf("bash entry: %+v", r)
 	}
-	// Eine fremde Umgebungsvariable wird abgewiesen.
+	// A foreign environment variable is refused.
 	bad := map[string]any{"toolCallId": "call_02", "tool": "bash", "req": map[string]any{"op": "bash", "command": "echo", "cwd": "/workspace",
 		"env": map[string]string{"LD_PRELOAD": "/x"}}}
 	if resp, _ := postJSON(t, c, "/tool/bash", bad); resp.StatusCode != 400 {
 		t.Fatalf("LD_PRELOAD: %d", resp.StatusCode)
 	}
-	// Abbruch: Die Verbindung wird geschlossen, die Operation endet, der Eintrag nennt es.
+	// Abort: the connection is closed, the operation ends, the entry says so.
 	run.block = true
 	ctx, cancel := context.WithCancel(context.Background())
 	body2, _ := json.Marshal(map[string]any{"toolCallId": "call_03", "tool": "bash", "req": map[string]any{"op": "bash", "command": "sleep 99", "cwd": "/workspace"}})
@@ -219,7 +219,7 @@ func TestToolBashStreamAndAbort(t *testing.T) {
 		t.Fatal(err)
 	}
 	br := bufio.NewReader(resp.Body)
-	_, _ = br.ReadString('\n') // erstes Stück da: Befehl läuft
+	_, _ = br.ReadString('\n') // first chunk arrived: command is running
 	cancel()
 	resp.Body.Close()
 	deadline := time.Now().Add(5 * time.Second)
@@ -228,7 +228,7 @@ func TestToolBashStreamAndAbort(t *testing.T) {
 	}
 	recs := rec.all()
 	if len(recs) != 2 || recs[1].ToolCallID != "call_03" || !strings.Contains(recs[1].Error, "aborted") {
-		t.Fatalf("Abbruch nicht protokolliert: %+v", recs)
+		t.Fatalf("abort not logged: %+v", recs)
 	}
 }
 
@@ -236,47 +236,47 @@ func TestToolUploadFromExecSandbox(t *testing.T) {
 	b := &fakeBackend{chat: "chat-1", decide: "approved"}
 	run, rec := &fakeRunner{file: []byte("MCP")}, &fakeRecorder{}
 	c := startPi(t, b, run, rec)
-	_, body := postJSON(t, c, "/tool/upload", map[string]any{"toolCallId": "call_u", "tool": "mcp_upload_artifact", "path": "/workspace/notiz.txt"})
+	_, body := postJSON(t, c, "/tool/upload", map[string]any{"toolCallId": "call_u", "tool": "mcp_upload_artifact", "path": "/workspace/note.txt"})
 	var res UploadResult
 	_ = json.Unmarshal([]byte(body), &res)
-	if res.Status != "approved" || res.Name != "notiz.txt" || len(b.uploads) != 1 || b.uploads[0] != "chat-1|mcp|notiz.txt|MCP" {
+	if res.Status != "approved" || res.Name != "note.txt" || len(b.uploads) != 1 || b.uploads[0] != "chat-1|mcp|note.txt|MCP" {
 		t.Fatalf("Upload: %s %v", body, b.uploads)
 	}
 	if b.calls2[0] != "call_u" {
-		t.Fatalf("Kennung des Werkzeugaufrufs: %q", b.calls2)
+		t.Fatalf("tool call ID: %q", b.calls2)
 	}
 	if r := rec.all(); len(r) != 1 || r[0].Tool != "mcp_upload_artifact" || r[0].Op != "read" {
-		t.Fatalf("Eintrag: %+v", r)
+		t.Fatalf("entry: %+v", r)
 	}
 	if !strings.Contains(strings.Join(b.calls, " "), "mcp:upload:approved") {
-		t.Fatalf("Socket-Protokoll: %v", b.calls)
+		t.Fatalf("socket log: %v", b.calls)
 	}
 	run.file = nil
-	_, body = postJSON(t, c, "/tool/upload", map[string]any{"toolCallId": "call_v", "tool": "mcp_upload_artifact", "path": "/workspace/fehlt.txt"})
+	_, body = postJSON(t, c, "/tool/upload", map[string]any{"toolCallId": "call_v", "tool": "mcp_upload_artifact", "path": "/workspace/missing.txt"})
 	if !strings.Contains(body, "no such file") {
-		t.Fatalf("fehlende Datei: %s", body)
+		t.Fatalf("missing file: %s", body)
 	}
 	if resp, _ := postJSON(t, c, "/tool/upload", map[string]any{"toolCallId": "call_w", "tool": "read", "path": "/workspace/x"}); resp.StatusCode != 400 {
-		t.Fatalf("Upload unter fremdem Werkzeug: %d", resp.StatusCode)
+		t.Fatalf("upload under a foreign tool: %d", resp.StatusCode)
 	}
 }
 
 func TestDigestExcerpt(t *testing.T) {
 	d := newDigest(8)
 	d.Write([]byte("abcdefghijklmnop"))
-	if got := d.Excerpt(); !strings.HasPrefix(got, "abcd") || !strings.HasSuffix(got, "mnop") || !strings.Contains(got, "8 Bytes ausgelassen") {
-		t.Fatalf("Auszug: %q", got)
+	if got := d.Excerpt(); !strings.HasPrefix(got, "abcd") || !strings.HasSuffix(got, "mnop") || !strings.Contains(got, "8 bytes omitted") {
+		t.Fatalf("excerpt: %q", got)
 	}
 	d = newDigest(8)
 	d.Write([]byte("abc"))
 	d.Write([]byte("de"))
 	if d.Excerpt() != "abcde" || d.n != 5 {
-		t.Fatalf("kurz: %q", d.Excerpt())
+		t.Fatalf("short: %q", d.Excerpt())
 	}
 }
 
-// K1: Binärausgabe (printf '\0', read einer PNG-Datei) landet ohne NUL im Protokoll, auch in
-// Fehlermeldung und Argumenten. Postgres lehnte den Eintrag sonst ab.
+// K1: binary output (printf '\0', read of a PNG file) ends up in the log without NUL, also in
+// the error message and arguments. Postgres would otherwise reject the entry.
 func TestToolBinaryOutputRecordedWithoutNUL(t *testing.T) {
 	b := &fakeBackend{chat: "chat-1"}
 	png := []byte("\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x10")
@@ -284,27 +284,27 @@ func TestToolBinaryOutputRecordedWithoutNUL(t *testing.T) {
 	c := startPi(t, b, run, rec)
 	postJSON(t, c, "/tool/bash", map[string]any{"toolCallId": "call_nul", "tool": "bash",
 		"req": map[string]any{"op": "bash", "command": "printf 'a\\0b\\n'", "cwd": "/workspace"}})
-	postJSON(t, c, "/tool/op", map[string]any{"toolCallId": "call_png", "tool": "read", "req": map[string]any{"op": "read", "path": "/workspace/bild.png"}})
+	postJSON(t, c, "/tool/op", map[string]any{"toolCallId": "call_png", "tool": "read", "req": map[string]any{"op": "read", "path": "/workspace/image.png"}})
 	recs := rec.all()
 	if len(recs) != 2 {
-		t.Fatalf("Einträge: %+v", recs)
+		t.Fatalf("entries: %+v", recs)
 	}
 	for _, r := range recs {
 		if strings.ContainsRune(r.OutputExcerpt, 0) || strings.ContainsRune(r.Error, 0) || strings.Contains(string(r.Args), `\u0000`) {
-			t.Errorf("NUL im Eintrag: %q %q %s", r.OutputExcerpt, r.Error, r.Args)
+			t.Errorf("NUL in the entry: %q %q %s", r.OutputExcerpt, r.Error, r.Args)
 		}
 	}
 	if recs[0].OutputExcerpt != "a␀b\n" || recs[0].OutputBytes != 4 || !strings.Contains(recs[1].OutputExcerpt, "IHDR") || recs[1].OutputBytes != int64(len(png)) {
-		t.Fatalf("Auszüge: %q %q", recs[0].OutputExcerpt, recs[1].OutputExcerpt)
+		t.Fatalf("excerpts: %q %q", recs[0].OutputExcerpt, recs[1].OutputExcerpt)
 	}
-	// Prüfsumme über die echten Bytes, nicht über den bereinigten Auszug.
+	// Checksum over the real bytes, not over the cleaned excerpt.
 	sum := sha256.Sum256(png)
 	if recs[1].OutputSHA256 != hex.EncodeToString(sum[:]) {
-		t.Fatalf("Prüfsumme: %s", recs[1].OutputSHA256)
+		t.Fatalf("checksum: %s", recs[1].OutputSHA256)
 	}
 }
 
-// gateRunner zählt gleichzeitig laufende Operationen und hält jede bis zur Freigabe.
+// gateRunner counts concurrently running operations and holds each one until it is released.
 type gateRunner struct {
 	mu      sync.Mutex
 	active  int
@@ -326,8 +326,8 @@ func (g *gateRunner) Run(ctx context.Context, req execproto.Request, onData func
 	return execproto.Frame{Done: true, Result: b}, nil
 }
 
-// N4: Viele gleichzeitige große reads eines Chats belegen den Orchestrator nicht mit mehreren GB;
-// je Platz laufen höchstens zwei Operationen mit großem Inhalt zugleich, der Rest wartet.
+// N4: many concurrent large reads of a chat do not tie up several GB in the orchestrator;
+// per slot at most two operations with large content run at once, the rest waits.
 func TestToolConcurrencyBoundedPerSlot(t *testing.T) {
 	b := &fakeBackend{chat: "chat-1"}
 	g := &gateRunner{release: make(chan struct{})}
@@ -360,12 +360,12 @@ func TestToolConcurrencyBoundedPerSlot(t *testing.T) {
 	close(g.release)
 	wg.Wait()
 	if seen > 2 || seen == 0 {
-		t.Fatalf("%d gleichzeitige reads", seen)
+		t.Fatalf("%d concurrent reads", seen)
 	}
 }
 
-// H1: Den Pfad der ganzen Ausgabe bestimmt der Orchestrator aus der toolCallId; was die Bridge
-// mitschickt, zählt nicht. Der Pfad kommt im letzten Rahmen zurück.
+// H1: the orchestrator derives the path of the full output from the toolCallId; what the bridge
+// sends along does not count. The path comes back in the last frame.
 func TestToolBashSpillPathFromToolCallID(t *testing.T) {
 	b := &fakeBackend{chat: "chat-1"}
 	run, rec := &fakeRunner{chunks: []string{"x"}}, &fakeRecorder{}
@@ -377,11 +377,11 @@ func TestToolBashSpillPathFromToolCallID(t *testing.T) {
 		t.Fatalf("Spill: %+v", run.reqs)
 	}
 	if !strings.Contains(body, `"fullOutputPath":"`+want+`"`) {
-		t.Fatalf("Pfad nicht zurückgemeldet: %s", body)
+		t.Fatalf("path not reported back: %s", body)
 	}
 }
 
-// echoDuplex spielt den Worker: Jede Eingabe kommt als Nachricht zurück; Ende der Eingaben beendet.
+// echoDuplex plays the worker: every input comes back as a message; the end of the input ends it.
 type echoDuplex struct{ fakeRunner }
 
 func (e *echoDuplex) RunDuplex(ctx context.Context, req execproto.Request, input <-chan []byte, onData func([]byte)) (execproto.Frame, error) {
@@ -392,8 +392,8 @@ func (e *echoDuplex) RunDuplex(ctx context.Context, req execproto.Request, input
 	return execproto.Frame{Done: true, Exit: &code}, nil
 }
 
-// C: workflowScript über /tool/workflow, Nachrichten in beiden Richtungen, protokolliert unter
-// subagent/workflow mit dem Skript aus der Nachricht „start“.
+// C: workflowScript via /tool/workflow, messages in both directions, logged under
+// subagent/workflow with the script from the message "start".
 func TestToolWorkflowDuplex(t *testing.T) {
 	b := &fakeBackend{chat: "chat-1"}
 	rec := &fakeRecorder{}
@@ -411,14 +411,14 @@ func TestToolWorkflowDuplex(t *testing.T) {
 		lines = append(lines, sc.Text())
 	}
 	if len(lines) != 3 || !strings.Contains(lines[0], `"start"`) || !strings.Contains(lines[2], `"done":true`) {
-		t.Fatalf("Antwort: %q", lines)
+		t.Fatalf("response: %q", lines)
 	}
 	r := rec.all()
 	if len(r) != 1 || r[0].Tool != "subagent" || r[0].Op != "workflow" || !strings.Contains(string(r[0].Args), "return 42") || r[0].ToolCallID != "call_wf" {
-		t.Fatalf("Eintrag: %+v", r)
+		t.Fatalf("entry: %+v", r)
 	}
 	bad, _ := c.Post("http://agw/tool/workflow", "application/x-ndjson", strings.NewReader(`{"toolCallId":"x","tool":"bash","source":"s"}`+"\n"))
 	if bad.StatusCode != 400 {
-		t.Fatalf("fremdes Werkzeug: %d", bad.StatusCode)
+		t.Fatalf("foreign tool: %d", bad.StatusCode)
 	}
 }

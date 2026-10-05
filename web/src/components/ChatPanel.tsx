@@ -72,14 +72,14 @@ import { cn } from "@/lib/utils"
 
 type Props = {
   chatId: string
-  /** Offene Detailansicht eines Subagenten-Laufs; sonst der Hauptverlauf. */
+  /** Open detail view of a subagent run; otherwise the main history. */
   runId?: string
   config?: Config
   modelName: (id: string) => string
   onChanged: () => void
-  /** Meldet den Beginn des laufenden Durchgangs (ms) für die Chatliste; undefined, wenn nichts läuft. */
+  /** Reports the start of the running turn (ms) for the chat list; undefined when nothing is running. */
   onRunSince?: (since: number | undefined) => void
-  /** Eingebettet ins Seitenpanel der Plattform: ohne Zurück-Knopf (die Chatliste ist eine Auswahl). */
+  /** Embedded in the platform's side panel: without back button (the chat list is a select). */
   embed?: boolean
 }
 
@@ -97,9 +97,9 @@ export function ChatPanel({ chatId, runId, config, modelName, onChanged, onRunSi
   const [uploading, setUploading] = useState(false)
   const [staged, setStaged] = useState<Artifact[]>([])
   const [sheetOpen, setSheetOpen] = useState(false)
-  const [sideOpen, setSideOpen] = useFlag("seitenleiste", true)
-  // Zähler im Chatkopf und Karten im Verlauf öffnen den Reiter „Hintergrund“ (n ändert sich je Klick,
-  // id: Aufgabe im Blick, fresh: bis das Seitenblatt wieder zu ist, siehe ChatSidePanel).
+  const [sideOpen, setSideOpen] = useFlag("sidebar", true)
+  // The counter in the chat header and cards in the history open the "Background" tab (n changes with each
+  // click, id: task in focus, fresh: until the side sheet is closed again, see ChatSidePanel).
   const [bgFocus, setBgFocus] = useState<{ n: number; id?: string; fresh: boolean }>({ n: 0, fresh: false })
   const openBackground = useCallback(
     (id?: string) => {
@@ -117,7 +117,7 @@ export function ChatPanel({ chatId, runId, config, modelName, onChanged, onRunSi
     () => new Set(s.llmCalls.map((c) => c.response_id).filter((id): id is string => !!id)),
     [s.llmCalls],
   )
-  // Abgleich angefordert (Proxy) ↔ ausgeführt (Orchestrator) je toolCallId (E9)
+  // Matching requested (proxy) ↔ executed (orchestrator) per toolCallId (E9)
   const rejections = useMemo(() => rejectionsFrom(s.transcript.tools, s.subagentEntries), [s.transcript.tools, s.subagentEntries])
   const evidence = useMemo(
     () => reconcile(s.llmCalls, s.toolExecs, { executedTools: config?.executed_tools, rejections }),
@@ -145,7 +145,7 @@ export function ChatPanel({ chatId, runId, config, modelName, onChanged, onRunSi
     if (maxMb) {
       const tooBig = files.filter((f) => f.size > maxMb * 1024 * 1024)
       if (tooBig.length) {
-        toast.error(`Zu groß (höchstens ${maxMb} MB je Datei): ${tooBig.map((f) => f.name).join(", ")}`)
+        toast.error(`Too large (at most ${maxMb} MB per file): ${tooBig.map((f) => f.name).join(", ")}`)
         files = files.filter((f) => !tooBig.includes(f))
         if (files.length === 0) return
       }
@@ -154,10 +154,10 @@ export function ChatPanel({ chatId, runId, config, modelName, onChanged, onRunSi
     try {
       const list = await api.uploadFiles(chat.id, files)
       s.mergeArtifacts(list)
-      // Hochgeladene Dateien hängen an der Nachricht, die gerade geschrieben wird.
+      // Uploaded files are attached to the message currently being written.
       setStaged((prev) => [...prev.filter((p) => !list.some((a) => a.name === p.name)), ...list])
     } catch (e) {
-      toast.error(`Hochladen fehlgeschlagen: ${errText(e)}`)
+      toast.error(`Upload failed: ${errText(e)}`)
     } finally {
       setUploading(false)
     }
@@ -187,7 +187,7 @@ export function ChatPanel({ chatId, runId, config, modelName, onChanged, onRunSi
   if (!chat) {
     return (
       <div className="flex flex-1 items-center justify-center p-6 text-sm text-muted-foreground">
-        {s.loadError ? `Chat konnte nicht geladen werden: ${s.loadError}` : "Lade Chat …"}
+        {s.loadError ? `Chat could not be loaded: ${s.loadError}` : "Loading chat …"}
       </div>
     )
   }
@@ -199,8 +199,8 @@ export function ChatPanel({ chatId, runId, config, modelName, onChanged, onRunSi
       {dragging && (
         <div className="pointer-events-none absolute inset-2 z-20 flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-sky-400 bg-sky-50/90 text-sky-800">
           <UploadIcon className="size-8" />
-          <p className="font-medium">Dateien hier ablegen</p>
-          <p className="text-sm">Sie liegen danach in der Sandbox unter /workspace/inputs/</p>
+          <p className="font-medium">Drop files here</p>
+          <p className="text-sm">They will be in the sandbox under /workspace/inputs/</p>
         </div>
       )}
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
@@ -238,8 +238,8 @@ export function ChatPanel({ chatId, runId, config, modelName, onChanged, onRunSi
               size="icon-sm"
               variant="ghost"
               className="hidden lg:inline-flex"
-              title={sideOpen ? "Chat vergrößern (Seitenleiste ausblenden)" : "Chat verkleinern (Seitenleiste einblenden)"}
-              aria-label={sideOpen ? "Seitenleiste ausblenden" : "Seitenleiste einblenden"}
+              title={sideOpen ? "Enlarge chat (hide sidebar)" : "Shrink chat (show sidebar)"}
+              aria-label={sideOpen ? "Hide sidebar" : "Show sidebar"}
               aria-pressed={!sideOpen}
               onClick={() => setSideOpen(!sideOpen)}
             >
@@ -257,11 +257,11 @@ export function ChatPanel({ chatId, runId, config, modelName, onChanged, onRunSi
                   size="sm"
                   variant="outline"
                   className="lg:hidden"
-                  title="Artefakte, Socket-Protokoll, Subagenten und Modellaufrufe"
-                  aria-label={`Artefakte (${s.artifacts.length}), Socket-Protokoll (${s.socketCalls.length}), Subagenten (${runs.length}) und Modellaufrufe (${s.llmCalls.length}) öffnen`}
+                  title="Artifacts, socket log, subagents and model calls"
+                  aria-label={`Open artifacts (${s.artifacts.length}), socket log (${s.socketCalls.length}), subagents (${runs.length}) and model calls (${s.llmCalls.length})`}
                 >
                   <FolderOpenIcon />
-                  <span className="hidden sm:inline">Artefakte & Protokolle</span>
+                  <span className="hidden sm:inline">Artifacts & logs</span>
                   <span className="sm:hidden" aria-hidden>
                     {s.artifacts.length}/{s.socketCalls.length}
                   </span>
@@ -269,9 +269,9 @@ export function ChatPanel({ chatId, runId, config, modelName, onChanged, onRunSi
               </SheetTrigger>
               <SheetContent side="right" className="w-[90vw] gap-0 p-0 sm:max-w-sm">
                 <SheetHeader className="border-b pr-10">
-                  <SheetTitle>Artefakte & Protokolle</SheetTitle>
+                  <SheetTitle>Artifacts & logs</SheetTitle>
                   <SheetDescription className="sr-only">
-                    Dateien, Socket-Aufrufe, Subagenten und Modellaufrufe dieses Chats
+                    Files, socket calls, subagents and model calls of this chat
                   </SheetDescription>
                 </SheetHeader>
                 <div className="min-h-0 flex-1">
@@ -316,8 +316,8 @@ export function ChatPanel({ chatId, runId, config, modelName, onChanged, onRunSi
             evidence={evidence}
             artifacts={s.artifacts}
             footer={
-              // Offene Bestätigungen gelten dem ganzen Chat; auch hier entscheidbar, damit eine Frage
-              // (etwa eines Subagenten) nicht unbemerkt wartet.
+              // Pending approvals apply to the whole chat; they can be decided here too, so that a question
+              // (e.g. from a subagent) does not wait unnoticed.
               pending.length > 0 && (
                 <div className="flex max-h-[45vh] flex-col gap-2 overflow-y-auto border-t bg-background p-3">
                   {pending.map((a) => (
@@ -398,7 +398,7 @@ export function ChatPanel({ chatId, runId, config, modelName, onChanged, onRunSi
   )
 }
 
-/** Delegation und Übergriffe auf einen Blick, auch in schmaler Ansicht (Details im Seitenblatt). */
+/** Delegation and violations at a glance, also in the narrow view (details in the side sheet). */
 function DelegationStrip({ chat, violations, onOpen }: { chat: Chat; violations: number; onOpen: () => void }) {
   const d = chat.delegation
   const now = useNow(30_000, !!d?.expires_at)
@@ -412,21 +412,21 @@ function DelegationStrip({ chat, violations, onOpen }: { chat: Chat; violations:
         "flex w-full flex-wrap items-center gap-x-2 border-b px-3 py-1 text-left text-xs lg:pointer-events-none",
         violations > 0 ? "border-red-200 bg-red-50 text-red-800" : "bg-muted/40 text-muted-foreground",
       )}
-      title="Delegation und Socket-Protokoll öffnen"
+      title="Open delegation and socket log"
     >
       {d ? (
         <span>
-          Delegation: {d.rules.length} {d.rules.length === 1 ? "Regel" : "Regeln"}
-          {d.expires_at && (expired ? ", abgelaufen" : `, bis ${new Date(d.expires_at).toLocaleString("de-DE", { dateStyle: "short", timeStyle: "short" })}`)}
-          {d.enforce === false && ", nur protokolliert"}
+          Delegation: {d.rules.length} {d.rules.length === 1 ? "rule" : "rules"}
+          {d.expires_at && (expired ? ", expired" : `, until ${new Date(d.expires_at).toLocaleString("en-US", { dateStyle: "short", timeStyle: "short", hourCycle: "h23" })}`)}
+          {d.enforce === false && ", logged only"}
         </span>
       ) : (
-        <span>Ohne Delegation</span>
+        <span>No delegation</span>
       )}
       {violations > 0 && (
         <span className="font-medium">
-          · {violations} {violations === 1 ? "Übergriff" : "Übergriffe"}
-          {d?.enforce === false ? " protokolliert" : " abgewiesen"}
+          · {violations} {violations === 1 ? "violation" : "violations"}
+          {d?.enforce === false ? " logged" : " refused"}
         </span>
       )}
     </button>
@@ -452,11 +452,11 @@ function ChatHeader({
   config?: Config
   answersCost: number
   connected: boolean
-  /** Beginn des laufenden Durchgangs (ms) für die Laufzeit neben „Läuft“. */
+  /** Start of the running turn (ms) for the run time next to "Running". */
   runSince?: number
-  /** Klappmenü der Subagenten neben dem Titel (nur mit Läufen sichtbar). */
+  /** Subagent dropdown next to the title (only visible with runs). */
   subagentsMenu: React.ReactNode
-  /** Fortschritt der Aufgabenliste (nur mit Aufgaben sichtbar). */
+  /** Progress of the task list (only visible with tasks). */
   tasksMenu: React.ReactNode
   onChat: (c: Chat) => void
   sidePanel: React.ReactNode
@@ -467,20 +467,20 @@ function ChatHeader({
     try {
       onChat(await fn())
     } catch (e) {
-      toast.error(`${label} fehlgeschlagen: ${errText(e)}`)
+      toast.error(`${label} failed: ${errText(e)}`)
     } finally {
       setBusy(undefined)
     }
   }
   const compact = async () => {
-    setBusy("Kompaktieren")
+    setBusy("Compact")
     try {
       await api.runCommand(chat.id, "/compact")
     } catch (e) {
       toast.error(
         e instanceof ApiError && e.status === 409
-          ? "pi arbeitet gerade; kompaktieren geht erst danach."
-          : `Kompaktieren fehlgeschlagen: ${errText(e)}`,
+          ? "pi is working right now; compaction is only possible afterwards."
+          : `Compaction failed: ${errText(e)}`,
       )
     } finally {
       setBusy(undefined)
@@ -491,11 +491,11 @@ function ChatHeader({
     <header className="border-b px-3 py-2.5 sm:px-4">
       <div className="flex flex-wrap items-center gap-2">
         <Button size="icon-sm" variant="ghost" className={embed ? "hidden" : "md:hidden"} asChild>
-          <a href="#/chats" title="Zurück zur Chatliste" aria-label="Zurück zur Chatliste">
+          <a href="#/chats" title="Back to the chat list" aria-label="Back to the chat list">
             <ArrowLeftIcon />
           </a>
         </Button>
-        <h2 className="min-w-0 flex-1 basis-48 truncate text-base font-semibold sm:flex-none sm:basis-auto">{chat.title || "Ohne Titel"}</h2>
+        <h2 className="min-w-0 flex-1 basis-48 truncate text-base font-semibold sm:flex-none sm:basis-auto">{chat.title || "Untitled"}</h2>
         {subagentsMenu}
         {tasksMenu}
         <ChatStateBadge state={chat.state} resuming={chat.resuming} />
@@ -503,37 +503,37 @@ function ChatHeader({
         {chat.running && <RunningIndicator since={runSince} />}
         {!connected && (
           <span className="inline-flex items-center gap-1 text-xs text-amber-700">
-            <WifiOffIcon className="size-3.5" /> <span className="hidden sm:inline">Live-Verbindung getrennt, verbinde neu …</span>
-            <span className="sm:hidden">getrennt</span>
+            <WifiOffIcon className="size-3.5" /> <span className="hidden sm:inline">Live connection lost, reconnecting …</span>
+            <span className="sm:hidden">disconnected</span>
           </span>
         )}
         <div className="ml-auto flex flex-wrap items-center gap-1.5">
           <ContextIndicator
             chat={chat}
             busy={busy}
-            onAutoCompact={(v) => void run("Auto-Kompaktierung", () => api.setAutoCompact(chat.id, v))}
+            onAutoCompact={(v) => void run("Auto-compaction", () => api.setAutoCompact(chat.id, v))}
             onCompact={() => void compact()}
           />
           {sidePanel}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button size="icon-sm" variant="ghost" disabled={!!busy} title="Weitere Aktionen" aria-label="Weitere Aktionen">
+              <Button size="icon-sm" variant="ghost" disabled={!!busy} title="More actions" aria-label="More actions">
                 <EllipsisIcon />
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-60">
               {chat.state === "active" && (
-                <DropdownMenuItem onSelect={() => void run("Ruhen lassen", () => api.suspend(chat.id))}>
+                <DropdownMenuItem onSelect={() => void run("Idle", () => api.suspend(chat.id))}>
                   <MoonIcon />
                   <div>
-                    <div>Ruhen lassen</div>
-                    <div className="text-xs text-muted-foreground">Sandbox freigeben, später fortsetzen</div>
+                    <div>Let idle</div>
+                    <div className="text-xs text-muted-foreground">Release the sandbox, resume later</div>
                   </div>
                 </DropdownMenuItem>
               )}
               <DropdownMenuItem asChild>
                 <a href={urls.session(chat.id)} target="_blank" rel="noreferrer">
-                  <FileTextIcon /> Sitzung als JSONL öffnen
+                  <FileTextIcon /> Open session as JSONL
                 </a>
               </DropdownMenuItem>
             </DropdownMenuContent>
@@ -542,27 +542,27 @@ function ChatHeader({
       </div>
       <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
         <span className="text-foreground">{modelName(chat.model)}</span>
-        <span className="font-mono" title="Platz im Warm-Pool">
-          {chat.slot_id ?? "kein Platz"}
+        <span className="font-mono" title="Slot in the warm pool">
+          {chat.slot_id ?? "no slot"}
         </span>
         <span
-          title={`${formatTokens(chat.tokens?.input)} ein · ${formatTokens(chat.tokens?.output)} aus · ${formatTokens(chat.tokens?.cache_read)} aus dem Cache`}
+          title={`${formatTokens(chat.tokens?.input)} in · ${formatTokens(chat.tokens?.output)} out · ${formatTokens(chat.tokens?.cache_read)} from cache`}
         >
-          <span className="text-foreground">{formatTokens(chat.tokens?.total)}</span> Tokens
+          <span className="text-foreground">{formatTokens(chat.tokens?.total)}</span> tokens
         </span>
         <CostInfo chat={chat} answersCost={answersCost} />
         <SubagentLimit
           chat={chat}
           limit={config?.max_subagents_limit}
-          busy={busy === "Subagenten-Grenze"}
-          onChange={(max) => void run("Subagenten-Grenze", () => api.setMaxSubagents(chat.id, max))}
+          busy={busy === "Subagent limit"}
+          onChange={(max) => void run("Subagent limit", () => api.setMaxSubagents(chat.id, max))}
         />
         <span
           className={cn("inline-flex items-center gap-1.5 sm:ml-auto", chat.internet && "text-sky-700")}
           title={
             chat.internet
-              ? "Internetzugang an. Sprachmodell und Orchestrator sind immer erreichbar."
-              : "Internetzugang aus. Sprachmodell und Orchestrator sind trotzdem erreichbar; der Agent kann Internet erbitten."
+              ? "Internet access on. The language model and the orchestrator are always reachable."
+              : "Internet access off. The language model and the orchestrator are still reachable; the agent can request internet."
           }
         >
           <GlobeIcon className="size-3" aria-hidden />
@@ -582,7 +582,7 @@ function ChatHeader({
   )
 }
 
-/** Gesamtkosten; die Aufteilung öffnet sich beim Klicken. */
+/** Total cost; the breakdown opens on click. */
 function CostInfo({ chat, answersCost }: { chat: Chat; answersCost: number }) {
   const c = costSplit(chat)
   return (
@@ -591,34 +591,34 @@ function CostInfo({ chat, answersCost }: { chat: Chat; answersCost: number }) {
         <button
           type="button"
           className="rounded underline decoration-dotted underline-offset-2 hover:text-foreground"
-          aria-label="Kosten im Einzelnen"
+          aria-label="Cost breakdown"
         >
-          Kosten: <span className="font-medium text-foreground">{formatUsd(c.total)}</span>
+          Cost: <span className="font-medium text-foreground">{formatUsd(c.total)}</span>
         </button>
       </PopoverTrigger>
       <PopoverContent align="start" collisionPadding={12} className="w-80 max-w-[calc(100vw-1.5rem)] text-xs">
-        <div className="mb-2 text-sm font-semibold">Kosten {formatUsd(c.total)}</div>
+        <div className="mb-2 text-sm font-semibold">Cost {formatUsd(c.total)}</div>
         <dl className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-3 gap-y-1 tabular-nums">
-          <dt className="text-muted-foreground">Hauptantworten</dt>
+          <dt className="text-muted-foreground">Main responses</dt>
           <dd className="text-right">{formatUsd(c.main)}</dd>
-          <dt className="text-muted-foreground">davon außerhalb der Hauptantworten (Subagenten, Kompaktierung)</dt>
+          <dt className="text-muted-foreground">of which outside the main responses (subagents, compaction)</dt>
           <dd className="text-right">{formatUsd(c.other)}</dd>
-          <dt className="text-muted-foreground">Modellaufrufe am Proxy</dt>
+          <dt className="text-muted-foreground">Model calls at the proxy</dt>
           <dd className="text-right">{c.calls}</dd>
-          <dt className="text-muted-foreground">Summe der Antworten im Verlauf</dt>
+          <dt className="text-muted-foreground">Sum of the responses in the history</dt>
           <dd className="text-right">{formatUsd(answersCost)}</dd>
         </dl>
         <p className="mt-2 border-t pt-2 text-muted-foreground">
-          Die Gesamtkosten stammen vom LLM-Proxy und umfassen jeden Modellaufruf des Chats, auch die von Subagenten und
-          Kompaktierungen. Die Kosten je Antwort im Verlauf zählen nur die Antworten der Hauptsitzung; ihre Summe kann
-          deshalb kleiner sein.
+          The total cost comes from the LLM proxy and covers every model call of the chat, including those of subagents
+          and compactions. The cost per response in the history counts only the responses of the main session; their
+          sum can therefore be smaller.
         </p>
       </PopoverContent>
     </Popover>
   )
 }
 
-/** „Subagenten x / y“ mit Stepper zum Ändern der Grenze; bei beendetem Chat gesperrt. */
+/** "Subagents x / y" with a stepper to change the limit; locked for an ended chat. */
 function SubagentLimit({
   chat,
   limit,
@@ -642,20 +642,20 @@ function SubagentLimit({
             "inline-flex items-center gap-1 rounded underline decoration-dotted underline-offset-2 hover:text-foreground",
             over && "font-medium text-red-700",
           )}
-          aria-label={`${subagentLimitLabel(chat)}, Grenze ändern`}
+          aria-label={`${subagentLimitLabel(chat)}, change limit`}
         >
           <BotIcon className="size-3.5" /> {subagentLimitLabel(chat)}
         </button>
       </PopoverTrigger>
       <PopoverContent align="start" collisionPadding={12} className="w-72 max-w-[calc(100vw-1.5rem)] text-xs">
-        <div className="text-sm font-semibold">Grenze für Subagenten</div>
+        <div className="text-sm font-semibold">Subagent limit</div>
         <p className="mt-1 text-muted-foreground">
-          Bisher {used} gestartet, erlaubt {max}. Hart durchgesetzt am Proxy (höchstens {max + 1} gleichzeitige
-          Modellaufrufe) und durch Abbruch, sobald mehr Subagenten starten.
+          {used} started so far, {max} allowed. Enforced strictly at the proxy (at most {max + 1} concurrent model
+          calls) and by aborting as soon as more subagents start.
         </p>
         <div className="mt-2 flex items-center justify-between gap-2">
           <Label htmlFor={`maxsub-${chat.id}`} className="text-xs">
-            Max. Subagenten
+            Max. subagents
           </Label>
           <NumberStepper
             id={`maxsub-${chat.id}`}
@@ -664,10 +664,10 @@ function SubagentLimit({
             max={Math.max(limit ?? max, max)}
             disabled={busy}
             onChange={onChange}
-            aria-label="Max. Subagenten"
+            aria-label="Max. subagents"
           />
         </div>
-        {limit !== undefined && <p className="mt-2 text-muted-foreground">Höchstens {limit}. Wirkt sofort.</p>}
+        {limit !== undefined && <p className="mt-2 text-muted-foreground">At most {limit}. Takes effect immediately.</p>}
       </PopoverContent>
     </Popover>
   )
@@ -698,10 +698,10 @@ function Composer({
   staged: Artifact[]
   onUnstage: (name: string) => void
   onSent: () => void
-  /** Anhänge nach einem gescheiterten Senden wieder ins Eingabefeld legen. */
+  /** Put attachments back into the input field after a failed send. */
   onRestoreStaged: (list: Artifact[]) => void
   onChat: (c: Chat) => void
-  /** Etwas hat sich am Chat geändert (Chatliste neu laden). */
+  /** Something about the chat changed (reload the chat list). */
   onActivity: () => void
   queue: QueueRow[]
   outbox: Outbox
@@ -725,14 +725,14 @@ function Composer({
     try {
       onChat(await api.abort(chat.id))
     } catch (e) {
-      toast.error(`Abbrechen fehlgeschlagen: ${errText(e)}`)
+      toast.error(`Abort failed: ${errText(e)}`)
     } finally {
       setStopping(false)
     }
   }
 
-  // Senden zeigt die Nachricht sofort: im Verlauf, oder in der Warteschlange über dem Eingabefeld,
-  // wenn der Agent gerade arbeitet. Die Antwort des Servers entscheidet endgültig (queued).
+  // Sending shows the message right away: in the history, or in the queue above the input field when
+  // the agent is working. The server's response decides finally (queued).
   const send = async () => {
     const t = text.trim()
     const slashCmd = isSlashCommand(t)
@@ -757,17 +757,17 @@ function Composer({
       const r = slashCmd ? await api.runCommand(chat.id, t) : await api.sendMessage(chat.id, t, names)
       if (shown !== undefined) {
         outbox.dropLocalQueued(key)
-        if (r.queued) outbox.dropPending(key) // steht in der Warteschlange (SSE „queue“)
-        else if (guessQueued) outbox.addPending(key, shown) // doch sofort gesendet
+        if (r.queued) outbox.dropPending(key) // is in the queue (SSE "queue")
+        else if (guessQueued) outbox.addPending(key, shown) // sent right away after all
       }
-      // /compact meldet sich über die Trennlinie im Verlauf; /autocompact hat sonst keine sichtbare Rückmeldung
+      // /compact reports through the divider in the history; /autocompact has no visible feedback otherwise
       const ac = autoCompactSwitch(t)
-      if (ac !== undefined) toast.success(`Auto-Kompaktierung ${ac ? "an" : "aus"}`)
-      if (/^\/(model|effort)\s/i.test(t)) toast.success(/^\/model/i.test(t) ? "Modell gewechselt" : "Denkstufe gesetzt")
+      if (ac !== undefined) toast.success(`Auto-compaction ${ac ? "on" : "off"}`)
+      if (/^\/(model|effort)\s/i.test(t)) toast.success(/^\/model/i.test(t) ? "Model switched" : "Thinking level set")
       const renamed = renameTitle(t)
       if (renamed !== undefined) {
         onChat({ ...chat, title: renamed })
-        toast.success("Chat umbenannt")
+        toast.success("Chat renamed")
       }
     } catch (e) {
       if (shown !== undefined) {
@@ -775,19 +775,19 @@ function Composer({
         outbox.failPending(key)
       }
       const tooLarge = contextTooLarge(e)
-      // Nichts geht verloren: Text und Anhänge kommen zurück ins Eingabefeld. Bei zu vollem Kontext
-      // übernimmt der Dialog (erst kompaktieren, dann wechseln).
+      // Nothing is lost: text and attachments go back into the input field. If the context is too full,
+      // the dialog takes over (compact first, then switch).
       if (!tooLarge) setText((cur) => (cur.trim() ? `${t}\n\n${cur}` : t))
       if (!slashCmd && attachments.length > 0) onRestoreStaged(attachments)
       if (tooLarge) {
         modelSwitch.showTooLarge(tooLarge)
       } else if (slashCmd && isBuiltinCommand(t) && e instanceof ApiError && e.status !== 409) {
-        toast.error(`Befehl fehlgeschlagen: ${errText(e)}`)
+        toast.error(`Command failed: ${errText(e)}`)
       } else if (e instanceof ApiError && e.status === 409 && slashCmd) {
-        toast.error(`Befehl gerade nicht möglich: ${errText(e)}`)
+        toast.error(`Command not possible right now: ${errText(e)}`)
       } else if (!resuming) {
-        // Beim Fortsetzen steht der Grund im Block im Verlauf
-        toast.error(`Senden fehlgeschlagen: ${errText(e)}`)
+        // When resuming, the reason is shown in the block in the history
+        toast.error(`Sending failed: ${errText(e)}`)
       }
     } finally {
       inFlight.current--
@@ -800,7 +800,7 @@ function Composer({
       <div className="mx-auto flex max-w-3xl flex-col gap-2">
         {chat.state === "dormant" && !chat.resuming && queue.length === 0 && (
           <Alert>
-            <AlertDescription>Der Chat ruht. Eine Nachricht setzt ihn in einer frischen Sandbox fort.</AlertDescription>
+            <AlertDescription>The chat is idle. A message resumes it in a fresh sandbox.</AlertDescription>
           </Alert>
         )}
         {queue.length > 0 && (
@@ -814,7 +814,7 @@ function Composer({
             )}
           >
             {staged.length > 0 && (
-              <ul className="flex flex-wrap gap-2 px-1" aria-label="Anhänge der Nachricht">
+              <ul className="flex flex-wrap gap-2 px-1" aria-label="Message attachments">
                 {staged.map((a) => (
                   <StagedTile key={a.name} chatId={chat.id} artifact={a} onRemove={() => onUnstage(a.name)} />
                 ))}
@@ -823,8 +823,8 @@ function Composer({
             <Textarea
               value={text}
               rows={1}
-              aria-label="Nachricht"
-              placeholder={busy ? "Weitere Nachricht einreihen …" : "Nachricht an den Agenten … („/“ für Befehle)"}
+              aria-label="Message"
+              placeholder={busy ? "Queue another message …" : "Message to the agent … (type / for commands)"}
               onChange={(e) => setText(e.target.value)}
               onKeyDown={(e) => {
                 if (slash.onKeyDown(e)) return
@@ -852,13 +852,13 @@ function Composer({
                 variant="ghost"
                 className="rounded-full"
                 disabled={uploading}
-                title="Dateien anhängen (liegen unter /workspace/inputs/)"
-                aria-label="Dateien für den Agenten hochladen"
+                title="Attach files (placed under /workspace/inputs/)"
+                aria-label="Upload files for the agent"
                 onClick={() => fileRef.current?.click()}
               >
                 {uploading ? <LoaderCircleIcon className="animate-spin" /> : <PlusIcon />}
               </Button>
-              {uploading && <span className="text-xs text-muted-foreground">Lade hoch …</span>}
+              {uploading && <span className="text-xs text-muted-foreground">Uploading …</span>}
               <ModelEffortPicker
                 chat={chat}
                 commands={liveCommands}
@@ -874,8 +874,8 @@ function Composer({
                     className="rounded-full"
                     variant={buttons.stop ? "outline" : "default"}
                     disabled={!buttons.sendEnabled}
-                    title={busy ? "Nachricht einreihen (geht an der nächsten passenden Stelle an den Agenten, spätestens nach dem laufenden Werkzeug)" : "Senden (Enter)"}
-                    aria-label={busy ? "Nachricht einreihen" : "Senden"}
+                    title={busy ? "Queue message (goes to the agent at the next suitable point, at the latest after the running tool)" : "Send (Enter)"}
+                    aria-label={busy ? "Queue message" : "Send"}
                     onClick={() => void send()}
                   >
                     <ArrowUpIcon />
@@ -886,8 +886,8 @@ function Composer({
                     size="icon"
                     className="rounded-full"
                     disabled={stopping}
-                    title="Laufende Antwort abbrechen (Eingereihtes bleibt stehen)"
-                    aria-label="Laufende Antwort abbrechen"
+                    title="Abort the running response (queued messages stay)"
+                    aria-label="Abort the running response"
                     onClick={() => void stop()}
                   >
                     <SquareIcon className="fill-current" />
@@ -899,8 +899,8 @@ function Composer({
         </SlashCommandPopover>
         <ContextTooLargeDialog sw={modelSwitch} modelName={modelName} />
         <p className="hidden text-center text-xs text-muted-foreground sm:block">
-          Enter sendet, Umschalt+Enter neue Zeile · Dateien auch hierher ziehen
-          {config?.artifact_max_mb ? ` (höchstens ${config.artifact_max_mb} MB)` : ""}
+          Enter sends, Shift+Enter for a new line · you can also drag files here
+          {config?.artifact_max_mb ? ` (at most ${config.artifact_max_mb} MB)` : ""}
         </p>
       </div>
     </div>
@@ -908,9 +908,9 @@ function Composer({
 }
 
 /**
- * Eingereihte Nachrichten über dem Eingabefeld (wie in Claude Code): gekürzt, Anhänge als Chips,
- * mit X zu entfernen, solange sie nicht übergeben sind. Nach einem Abbruch oder bei ruhendem Chat
- * gehen sie erst mit der nächsten Nachricht mit, oder sofort über „Jetzt senden“.
+ * Queued messages above the input field (as in Claude Code): shortened, attachments as chips,
+ * removable with X as long as they have not been handed over. After an abort or with an idle chat
+ * they go along only with the next message, or right away via "Send now".
  */
 function QueueList({ chat, rows, busy, onActivity }: { chat: Chat; rows: QueueRow[]; busy: boolean; onActivity: () => void }) {
   const [flushing, setFlushing] = useState(false)
@@ -920,7 +920,7 @@ function QueueList({ chat, rows, busy, onActivity }: { chat: Chat; rows: QueueRo
       await api.unqueue(chat.id, id)
     } catch (e) {
       toast.error(
-        e instanceof ApiError && e.status === 409 ? "Schon an den Agenten übergeben." : `Entfernen fehlgeschlagen: ${errText(e)}`,
+        e instanceof ApiError && e.status === 409 ? "Already handed to the agent." : `Removing failed: ${errText(e)}`,
       )
     }
   }
@@ -929,26 +929,26 @@ function QueueList({ chat, rows, busy, onActivity }: { chat: Chat; rows: QueueRo
     try {
       await api.flushQueue(chat.id)
     } catch (e) {
-      toast.error(`Senden fehlgeschlagen: ${errText(e)}`)
+      toast.error(`Sending failed: ${errText(e)}`)
     } finally {
       setFlushing(false)
       onActivity()
     }
   }
   return (
-    <section aria-label="Eingereihte Nachrichten" className="rounded-2xl border bg-muted/30 px-3 py-2 text-xs">
+    <section aria-label="Queued messages" className="rounded-2xl border bg-muted/30 px-3 py-2 text-xs">
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-muted-foreground">
         <ListOrderedIcon className="size-3.5 shrink-0" />
-        <span className="font-medium text-foreground">Eingereiht ({rows.length})</span>
+        <span className="font-medium text-foreground">Queued ({rows.length})</span>
         <span className="min-w-0">
           {held
-            ? `· ${holdReasonText(chat.hold_reason) ? `${holdReasonText(chat.hold_reason)}, ` : ""}geht mit der nächsten Nachricht mit`
-            : "· geht an der nächsten passenden Stelle an den Agenten (nach dem laufenden Werkzeug)"}
+            ? `· ${holdReasonText(chat.hold_reason) ? `${holdReasonText(chat.hold_reason)}, ` : ""}goes along with the next message`
+            : "· goes to the agent at the next suitable point (after the running tool)"}
         </span>
         {held && (
           <Button size="xs" variant="outline" className="ml-auto" disabled={flushing} onClick={() => void flush()}>
             {flushing ? <LoaderCircleIcon className="animate-spin" /> : <SendHorizontalIcon />}
-            Jetzt senden
+            Send now
           </Button>
         )}
       </div>
@@ -964,14 +964,14 @@ function QueueList({ chat, rows, busy, onActivity }: { chat: Chat; rows: QueueRo
             {r.system && (
               <span
                 className="inline-flex shrink-0 items-center gap-1 text-[11px] font-medium"
-                title="Meldung des Orchestrators an den Agenten (kind „system“), nicht vom Nutzer"
+                title="Orchestrator note to the agent (kind 'system'), not from the user"
               >
                 <BellIcon className="size-3.5" />
-                <span>Systemhinweis</span>
+                <span>System note</span>
               </span>
             )}
             <span className="min-w-0 flex-1 truncate" title={r.text}>
-              {(r.system && r.label) || queuePreview(r.text) || <span className="text-muted-foreground italic">nur Anhänge</span>}
+              {(r.system && r.label) || queuePreview(r.text) || <span className="text-muted-foreground italic">attachments only</span>}
             </span>
             {r.attachments.length > 0 && (
               <span
@@ -979,25 +979,25 @@ function QueueList({ chat, rows, busy, onActivity }: { chat: Chat; rows: QueueRo
                 title={r.attachments.join(", ")}
               >
                 <PaperclipIcon className="size-3 shrink-0" />
-                <span className="truncate">{r.attachments.length === 1 ? r.attachments[0] : `${r.attachments.length} Dateien`}</span>
+                <span className="truncate">{r.attachments.length === 1 ? r.attachments[0] : `${r.attachments.length} files`}</span>
               </span>
             )}
             {r.id ? (
               <button
                 type="button"
                 className="shrink-0 rounded-full p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
-                aria-label={r.system ? "Systemhinweis entfernen" : "Eingereihte Nachricht entfernen"}
+                aria-label={r.system ? "Remove system note" : "Remove queued message"}
                 title={
                   r.system
-                    ? "Entfernen (noch nicht übergeben); der Agent erfährt dann nicht von dieser Meldung"
-                    : "Entfernen (noch nicht übergeben)"
+                    ? "Remove (not handed over yet); the agent will then not learn about this note"
+                    : "Remove (not handed over yet)"
                 }
                 onClick={() => void remove(r.id!)}
               >
                 <XIcon className="size-3.5" />
               </button>
             ) : (
-              <LoaderCircleIcon className="size-3.5 shrink-0 animate-spin text-muted-foreground" aria-label="wird eingereiht" />
+              <LoaderCircleIcon className="size-3.5 shrink-0 animate-spin text-muted-foreground" aria-label="queueing" />
             )}
           </li>
         ))}
@@ -1006,11 +1006,11 @@ function QueueList({ chat, rows, busy, onActivity }: { chat: Chat; rows: QueueRo
   )
 }
 
-/** Anhang im Eingabefeld: Bilder als Vorschau, andere Dateien als Kachel mit Name und Größe. */
+/** Attachment in the input field: images as thumbnails, other files as a tile with name and size. */
 function StagedTile({ chatId, artifact: a, onRemove }: { chatId: string; artifact: Artifact; onRemove: () => void }) {
   const image = isPreviewImage(a.name)
   return (
-    <li className="group relative" title={`liegt in der Sandbox unter /workspace/inputs/${a.name}`}>
+    <li className="group relative" title={`in the sandbox under /workspace/inputs/${a.name}`}>
       {image ? (
         <img
           src={urls.artifact(chatId, a.name, "input")}
@@ -1031,8 +1031,8 @@ function StagedTile({ chatId, artifact: a, onRemove }: { chatId: string; artifac
       <button
         type="button"
         className="absolute -top-1.5 -right-1.5 rounded-full border bg-background p-0.5 text-muted-foreground shadow-xs hover:text-foreground"
-        aria-label={`Anhang ${a.name} entfernen`}
-        title="Nicht an diese Nachricht hängen (die Datei bleibt unter Eingaben)"
+        aria-label={`Remove attachment ${a.name}`}
+        title="Do not attach to this message (the file stays under inputs)"
         onClick={onRemove}
       >
         <XIcon className="size-3" />

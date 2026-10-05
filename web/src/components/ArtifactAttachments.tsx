@@ -7,17 +7,17 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle, DialogTrigger } 
 import { formatBytes } from "@/lib/format"
 import { previewKind } from "@/lib/artifactPreview"
 
-// pdf.js erst beim ersten Öffnen eines PDFs laden (eigener Chunk).
+// Load pdf.js only when a PDF is first opened (own chunk).
 const PdfViewer = lazy(() => import("@/components/PdfViewer"))
 
 /**
- * Ergebnisse eines Werkzeugaufrufs im Verlauf, direkt unter dem Aufruf, der sie hochgeladen hat:
- * Bilder als Vorschau (Klick vergrößert), PDFs mit Vorschau per Klick, alles mit Download.
+ * Results of a tool call in the history, right below the call that uploaded them: images as
+ * thumbnails (click enlarges), PDFs with a preview on click, everything with download.
  */
 export function ArtifactAttachments({ chatId, artifacts }: { chatId: string; artifacts: Artifact[] }) {
   if (artifacts.length === 0) return null
   return (
-    <div className="mt-1.5 flex flex-col gap-1.5" aria-label="Hochgeladene Ergebnisse">
+    <div className="mt-1.5 flex flex-col gap-1.5" aria-label="Uploaded results">
       {artifacts.map((a) => (
         <ArtifactItem key={a.name} chatId={chatId} artifact={a} />
       ))}
@@ -61,9 +61,9 @@ function DownloadLink({ url, name }: { url: string; name: string }) {
       href={url}
       download={name}
       className="inline-flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-xs text-sky-700 hover:bg-muted hover:underline"
-      title={`${name} herunterladen`}
+      title={`Download ${name}`}
     >
-      <DownloadIcon className="size-3.5" /> Herunterladen
+      <DownloadIcon className="size-3.5" /> Download
     </a>
   )
 }
@@ -71,16 +71,16 @@ function DownloadLink({ url, name }: { url: string; name: string }) {
 function Loading() {
   return (
     <div className="m-auto flex items-center text-sm text-muted-foreground">
-      <LoaderCircleIcon className="mr-2 size-4 animate-spin" /> Lade …
+      <LoaderCircleIcon className="mr-2 size-4 animate-spin" /> Loading …
     </div>
   )
 }
 
 /**
- * PDF-Vorschau im Dialog: Klick auf die Karte öffnet das PDF groß (eigener Betrachter mit pdf.js,
- * scrollbar, mit Zoom), mit Download oben rechts wie in der Großansicht der Bilder. Der Orchestrator
- * liefert Artefakte nur zum Herunterladen aus (attachment); die UI lädt die Datei selbst und zeichnet
- * sie mit pdf.js auf Canvas, so dass kein Inhalt des Agenten als Seite dieser Anwendung geöffnet wird.
+ * PDF preview in a dialog: a click on the card opens the PDF large (own viewer with pdf.js, scrollable,
+ * with zoom), with download at the top right as in the large image view. The orchestrator serves
+ * artifacts only for download (attachment); the UI fetches the file itself and renders it with pdf.js
+ * on a canvas, so no content of the agent is opened as a page of this application.
  */
 function PdfPreview({ url, name, size }: { url: string; name: string; size: number }) {
   const [open, setOpen] = useState(false)
@@ -114,12 +114,12 @@ function PdfPreview({ url, name, size }: { url: string; name: string; size: numb
           <button
             type="button"
             className="flex min-w-0 flex-1 cursor-zoom-in items-center gap-2 px-3 py-2 text-left text-xs"
-            title={`${name} ansehen`}
+            title={`View ${name}`}
           >
             <FileTextIcon className="size-5 shrink-0 text-red-700" aria-hidden />
             <span className="min-w-0 truncate font-mono text-foreground">{name}</span>
             <span className="shrink-0 text-muted-foreground tabular-nums">{formatBytes(size)}</span>
-            <span className="shrink-0 text-muted-foreground">· PDF ansehen</span>
+            <span className="shrink-0 text-muted-foreground">· view PDF</span>
           </button>
         </DialogTrigger>
         <DownloadLink url={url} name={name} />
@@ -137,11 +137,11 @@ function PdfPreview({ url, name, size }: { url: string; name: string; size: numb
             className="inline-flex shrink-0 items-center gap-1 rounded-md border px-2 py-1 text-xs hover:bg-muted"
           >
             <DownloadIcon className="size-3" />
-            Herunterladen
+            Download
           </a>
         </div>
         {error ? (
-          <p className="m-auto text-sm text-red-700">PDF nicht geladen: {error}</p>
+          <p className="m-auto text-sm text-red-700">PDF not loaded: {error}</p>
         ) : data ? (
           <Suspense fallback={<Loading />}>
             <PdfViewer data={data} name={name} />

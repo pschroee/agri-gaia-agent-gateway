@@ -13,15 +13,18 @@ This repository is the agent gateway of the master's thesis (see `README.md`). I
 ## Origin
 
 Imported on 2026-10-05 from `poc/` of the thesis repository (private, HS GitLab) at commit `a2962bc`. The
-history before that point lives there. The German design notes came along under `docs/`
-(`entwurf.md` was `poc/README.md`); paths like `poc/…` in those notes refer to this repository.
+history before that point lives there. The design notes came along under `docs/` and
+have since been translated to English (`docs/design.md` was `poc/README.md`); paths like `poc/…` in those notes
+refer to this repository.
 
 ## Conventions
 
 - **Branches:** `main` is the integration branch; feature branches (`feat/…`, `fix/…`) come back by pull
   request (`gh pr create --base main`). The platform's submodule pointer on `ki-agents` is moved after a merge.
 - **Commit messages in English**, short, one line, like the platform (`added …`, `fixed …`).
-- **Code comments stay German** as written so far; new code follows the language of the file it is in.
+- **Everything in English:** code, comments, log and error messages, UI texts, skills, prompts and docs. Only
+  test inputs that deliberately check German user input stay German. The agent still replies in the user's
+  language.
 - **Licensing:** MIT. `REUSE.toml` annotates all files; third-party copies keep their own `LICENSE`.
 - **Own and foreign code apart:** anything taken from elsewhere lands unchanged in its own commit under
   `third_party/`, own changes in a separate commit and listed in that directory's `VENDORED.md`. Never put
@@ -41,4 +44,4 @@ history before that point lives there. The German design notes came along under 
   `sandbox.CreateTestNetwork`.
 
 Further pitfalls (Docker Desktop on macOS, pi, pi-subagents, token exchange, Agri-Gaia backend quirks) are
-collected in `docs/entwurf.md`, section *Was beim Bau aufgefallen ist*.
+collected in `docs/design.md`, section *Pitfalls found while building*.

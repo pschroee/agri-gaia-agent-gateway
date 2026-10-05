@@ -9,13 +9,13 @@ import (
 	"agw/internal/platform"
 )
 
-// Konformitätsprüfung ohne Sprachmodell (Gliederung 7.3.1): jeder verbotene Aufruf mit feindlichen
-// Argumenten direkt an den Autorisierungsdienst, auch in Varianten, die ein Parser anders verstehen
-// könnte; dazu erlaubte Kontrollaufrufe, damit eine Prüfung, die alles abweist, nicht als korrekt
-// durchgeht. Soll: alle verbotenen abgewiesen, alle erlaubten durchgelassen.
+// Conformance check without a language model (outline 7.3.1): every forbidden call with hostile
+// arguments sent straight to the authorization service, also in variants a parser might read
+// differently; plus allowed control calls, so that a check that refuses everything does not pass as
+// correct. Expected: all forbidden calls refused, all allowed calls let through.
 
-// ConformanceDelegation ist die Delegation, gegen die geprüft wird: Datensätze lesen und anlegen,
-// eigene ändern; Trainingscontainer 7 lesen und starten; eigene Aufgaben lesen; Vorlagen lesen.
+// ConformanceDelegation is the delegation checked against: read and create datasets, change own
+// ones; read and start training container 7; read own tasks; read templates.
 const ConformanceDelegation = `{
   "rules": [
     {"action": "read",   "resource": "dataset", "ids": ["*"]},
@@ -29,120 +29,120 @@ const ConformanceDelegation = `{
   "confirm": "none"
 }`
 
-// OwnInConformance sind die Objekte, die in der geprüften Delegation entstanden sind.
+// OwnInConformance are the objects that were created under the checked delegation.
 var OwnInConformance = []string{"dataset:12", "task:40"}
 
-// Case ist ein Prüffall: entweder ein Werkzeug mit Argumenten oder ein Rohaufruf.
+// Case is a test case: either a tool with arguments or a raw call.
 type Case struct {
 	Name    string
-	Tool    string // Werkzeug aus platform.Tools (leer: Req)
+	Tool    string // tool from platform.Tools (empty: Req)
 	Args    string
 	Req     platform.Request
-	Expired bool // Delegation abgelaufen
-	Allowed bool // Soll
+	Expired bool // delegation expired
+	Allowed bool // expected
 	Group   string
-	Rules   string // eigene Delegation statt ConformanceDelegation (leer: diese)
+	Rules   string // own delegation instead of ConformanceDelegation (empty: that one)
 }
 
-// ConformanceCases liefert die Prüffälle.
+// ConformanceCases returns the test cases.
 func ConformanceCases() []Case {
 	req := func(m, p string) platform.Request { return platform.Request{Method: m, Path: p} }
 	body := func(m, p, b string) platform.Request {
 		return platform.Request{Method: m, Path: p, Body: json.RawMessage(b)}
 	}
 	return []Case{
-		// Erlaubte Kontrollaufrufe
-		{Name: "Datensätze auflisten", Tool: "list_datasets", Allowed: true, Group: "Kontrolle"},
-		{Name: "fremden Datensatz lesen (read *)", Tool: "get_dataset", Args: `{"dataset_id":5}`, Allowed: true, Group: "Kontrolle"},
-		{Name: "Datensatz anlegen", Req: platform.Request{Method: "POST", Path: "/datasets", Form: map[string][]string{"name": {"x"}}}, Allowed: true, Group: "Kontrolle"},
-		{Name: "eigenen Datensatz ändern", Req: body("PATCH", "/datasets/12", `{"description":"neu"}`), Allowed: true, Group: "Kontrolle"},
-		{Name: "Protokoll von Container 7", Tool: "training_logs", Args: `{"train_container_id":7}`, Allowed: true, Group: "Kontrolle"},
-		{Name: "Container 7 starten", Tool: "start_training", Args: `{"train_container_id":7}`, Allowed: true, Group: "Kontrolle"},
-		{Name: "eigene Aufgabe lesen", Tool: "task_status", Args: `{"task_id":40}`, Allowed: true, Group: "Kontrolle"},
-		{Name: "Vorlagen lesen", Tool: "train_options", Args: `{"provider":"Torchvision"}`, Allowed: true, Group: "Kontrolle"},
-		{Name: "API-Beschreibung lesen", Tool: "api_paths", Allowed: true, Group: "Kontrolle"},
+		// Allowed control calls
+		{Name: "list datasets", Tool: "list_datasets", Allowed: true, Group: "control"},
+		{Name: "read another user's dataset (read *)", Tool: "get_dataset", Args: `{"dataset_id":5}`, Allowed: true, Group: "control"},
+		{Name: "create dataset", Req: platform.Request{Method: "POST", Path: "/datasets", Form: map[string][]string{"name": {"x"}}}, Allowed: true, Group: "control"},
+		{Name: "change own dataset", Req: body("PATCH", "/datasets/12", `{"description":"new"}`), Allowed: true, Group: "control"},
+		{Name: "log of container 7", Tool: "training_logs", Args: `{"train_container_id":7}`, Allowed: true, Group: "control"},
+		{Name: "start container 7", Tool: "start_training", Args: `{"train_container_id":7}`, Allowed: true, Group: "control"},
+		{Name: "read own task", Tool: "task_status", Args: `{"task_id":40}`, Allowed: true, Group: "control"},
+		{Name: "read templates", Tool: "train_options", Args: `{"provider":"Torchvision"}`, Allowed: true, Group: "control"},
+		{Name: "read API description", Tool: "api_paths", Allowed: true, Group: "control"},
 
-		// Aktion oder Ressource nicht übertragen
-		{Name: "fremden Datensatz löschen", Req: body("DELETE", "/datasets/5", `{"key":"-","csrftoken":"-","sessionid":"-"}`), Group: "Aktion"},
-		{Name: "fremden Datensatz ändern", Req: body("PATCH", "/datasets/5", `{"owner":"test"}`), Group: "Aktion"},
-		{Name: "fremden Datensatz öffentlich schalten", Req: req("PATCH", "/datasets/5/toggle-public"), Group: "Aktion"},
-		{Name: "fremden Datensatz annotieren", Req: req("POST", "/datasets/5/annotate"), Group: "Aktion"},
-		{Name: "Modelle auflisten (keine Regel)", Tool: "list_models", Group: "Ressource"},
-		{Name: "Modell hochladen (keine Regel)", Req: platform.Request{Method: "POST", Path: "/models", Form: map[string][]string{"name": {"m"}}}, Group: "Ressource"},
-		{Name: "Training anlegen (keine Regel)", Tool: "create_training", Args: `{"provider":"T","architecture":"E","category":"C","dataset_id":12,"train_config":{}}`, Group: "Ressource"},
-		{Name: "Container 8 starten", Tool: "start_training", Args: `{"train_container_id":8}`, Group: "Objekt"},
-		{Name: "fremde Aufgabe löschen", Req: req("DELETE", "/tasks/3"), Group: "Objekt"},
-		{Name: "fremde Aufgabe lesen", Tool: "task_status", Args: `{"task_id":3}`, Group: "Objekt"},
-		{Name: "Edge-Geräte auflisten (keine Regel)", Tool: "list_edge_devices", Group: "Ressource"},
+		// Action or resource not delegated
+		{Name: "delete another user's dataset", Req: body("DELETE", "/datasets/5", `{"key":"-","csrftoken":"-","sessionid":"-"}`), Group: "action"},
+		{Name: "change another user's dataset", Req: body("PATCH", "/datasets/5", `{"owner":"test"}`), Group: "action"},
+		{Name: "make another user's dataset public", Req: req("PATCH", "/datasets/5/toggle-public"), Group: "action"},
+		{Name: "annotate another user's dataset", Req: req("POST", "/datasets/5/annotate"), Group: "action"},
+		{Name: "list models (no rule)", Tool: "list_models", Group: "resource"},
+		{Name: "upload model (no rule)", Req: platform.Request{Method: "POST", Path: "/models", Form: map[string][]string{"name": {"m"}}}, Group: "resource"},
+		{Name: "create training (no rule)", Tool: "create_training", Args: `{"provider":"T","architecture":"E","category":"C","dataset_id":12,"train_config":{}}`, Group: "resource"},
+		{Name: "start container 8", Tool: "start_training", Args: `{"train_container_id":8}`, Group: "object"},
+		{Name: "delete another user's task", Req: req("DELETE", "/tasks/3"), Group: "object"},
+		{Name: "read another user's task", Tool: "task_status", Args: `{"task_id":3}`, Group: "object"},
+		{Name: "list edge devices (no rule)", Tool: "list_edge_devices", Group: "resource"},
 
-		// Varianten, die ein Parser anders verstehen könnte
-		{Name: "Kennung mit führender Null (08)", Req: req("POST", "/train/containers/08/run"), Group: "Parser"},
-		{Name: "Kennung mit Leerzeichen ( 5)", Req: body("PATCH", "/datasets/ 5", `{}`), Group: "Parser"},
-		{Name: "angehängter Schrägstrich", Req: body("PATCH", "/datasets/5/", `{}`), Group: "Parser"},
-		{Name: "Großschreibung im Pfad", Req: body("PATCH", "/Datasets/5", `{}`), Group: "Parser"},
-		{Name: "Methode klein geschrieben über request", Tool: "request", Args: `{"method":"patch","path":"/datasets/5","body":{"name":"x"}}`, Group: "Parser"},
-		{Name: "doppelte Methode im JSON (letzte gilt)", Tool: "request", Args: `{"method":"GET","method":"DELETE","path":"/datasets/5"}`, Group: "Parser"},
-		{Name: "doppelte container_id, fremde zuletzt", Req: body("PUT", "/train/config", `{"container_id":7,"container_id":8,"train_config":{},"export_config":null,"dataset_id":12}`), Group: "Parser"},
-		{Name: "container_id als Text", Req: body("PUT", "/train/config", `{"container_id":"8","train_config":{},"export_config":null,"dataset_id":12}`), Group: "Parser"},
-		{Name: "Prozentkodierung im Pfad", Req: req("DELETE", "/datasets/5%2F"), Group: "Parser"},
-		{Name: "Pfad mit ..", Req: req("GET", "/datasets/../models/1"), Group: "Parser"},
-		{Name: "doppelter Schrägstrich", Req: req("GET", "//models"), Group: "Parser"},
-		{Name: "absolute URL als Pfad", Req: req("GET", "https://evil.example/models"), Group: "Parser"},
-		{Name: "Abfrage im Pfad", Req: req("GET", "/models?skip=0"), Group: "Parser"},
+		// Variants a parser might read differently
+		{Name: "identifier with leading zero (08)", Req: req("POST", "/train/containers/08/run"), Group: "parser"},
+		{Name: "identifier with space ( 5)", Req: body("PATCH", "/datasets/ 5", `{}`), Group: "parser"},
+		{Name: "trailing slash", Req: body("PATCH", "/datasets/5/", `{}`), Group: "parser"},
+		{Name: "upper case in path", Req: body("PATCH", "/Datasets/5", `{}`), Group: "parser"},
+		{Name: "lower-case method via request", Tool: "request", Args: `{"method":"patch","path":"/datasets/5","body":{"name":"x"}}`, Group: "parser"},
+		{Name: "duplicate method in JSON (last one wins)", Tool: "request", Args: `{"method":"GET","method":"DELETE","path":"/datasets/5"}`, Group: "parser"},
+		{Name: "duplicate container_id, foreign one last", Req: body("PUT", "/train/config", `{"container_id":7,"container_id":8,"train_config":{},"export_config":null,"dataset_id":12}`), Group: "parser"},
+		{Name: "container_id as text", Req: body("PUT", "/train/config", `{"container_id":"8","train_config":{},"export_config":null,"dataset_id":12}`), Group: "parser"},
+		{Name: "percent encoding in path", Req: req("DELETE", "/datasets/5%2F"), Group: "parser"},
+		{Name: "path with ..", Req: req("GET", "/datasets/../models/1"), Group: "parser"},
+		{Name: "double slash", Req: req("GET", "//models"), Group: "parser"},
+		{Name: "absolute URL as path", Req: req("GET", "https://evil.example/models"), Group: "parser"},
+		{Name: "query in path", Req: req("GET", "/models?skip=0"), Group: "parser"},
 
-		// Schreibende GETs und gesperrte Bereiche
-		{Name: "GET legt Modell aus Container 7 an", Req: req("GET", "/train/containers/7/model"), Group: "Schreibendes GET"},
-		{Name: "GET startet Lizenzanalyse", Req: platform.Request{Method: "GET", Path: "/licenses/", Query: map[string]string{"return_cached": "false"}}, Group: "Schreibendes GET"},
-		{Name: "Fuseki-Administratorzugang", Req: req("GET", "/urls/basic-auth"), Group: "Gesperrt"},
-		{Name: "EDC-Passwort", Req: req("GET", "/network/info"), Group: "Gesperrt"},
-		{Name: "Profil des Kontos", Req: req("GET", "/users/me"), Group: "Gesperrt"},
-		{Name: "Rückruf der Registry", Req: req("POST", "/service/registry-event"), Group: "Gesperrt"},
+		// Writing GETs and blocked areas
+		{Name: "GET creates model from container 7", Req: req("GET", "/train/containers/7/model"), Group: "writing GET"},
+		{Name: "GET starts license analysis", Req: platform.Request{Method: "GET", Path: "/licenses/", Query: map[string]string{"return_cached": "false"}}, Group: "writing GET"},
+		{Name: "Fuseki administrator access", Req: req("GET", "/urls/basic-auth"), Group: "blocked"},
+		{Name: "EDC password", Req: req("GET", "/network/info"), Group: "blocked"},
+		{Name: "account profile", Req: req("GET", "/users/me"), Group: "blocked"},
+		{Name: "registry callback", Req: req("POST", "/service/registry-event"), Group: "blocked"},
 
-		// Ablauf und Herkunft
-		{Name: "lesen nach Ablauf der Delegation", Tool: "list_datasets", Expired: true, Group: "Ablauf"},
-		{Name: "eigenen Datensatz ändern nach Ablauf", Req: body("PATCH", "/datasets/12", `{}`), Expired: true, Group: "Ablauf"},
-		{Name: "Datensatz 13 als eigen ausgeben (nicht im Register)", Req: body("PATCH", "/datasets/13", `{}`), Group: "Herkunft"},
-		{Name: "Container 7 ändern (nur lesen und starten erlaubt)", Req: body("PATCH", "/train/containers/7", `{}`), Group: "Herkunft"},
+		// Expiry and provenance
+		{Name: "read after the delegation expired", Tool: "list_datasets", Expired: true, Group: "expiry"},
+		{Name: "change own dataset after expiry", Req: body("PATCH", "/datasets/12", `{}`), Expired: true, Group: "expiry"},
+		{Name: "pass off dataset 13 as own (not in the register)", Req: body("PATCH", "/datasets/13", `{}`), Group: "provenance"},
+		{Name: "change container 7 (only read and start allowed)", Req: body("PATCH", "/train/containers/7", `{}`), Group: "provenance"},
 
-		// Felder und Kennungen im Körper (Review 5: K1, K2, W1, W2)
-		{Name: "eigenen Datensatz umbenennen (erlaubtes Feld)", Req: body("PATCH", "/datasets/12", `{"name":"neu","description":"x"}`), Allowed: true, Group: "Feld"},
-		{Name: "eigener Datensatz: bucket_name setzen", Req: body("PATCH", "/datasets/12", `{"bucket_name":"x; id #"}`), Group: "Feld"},
-		{Name: "eigener Datensatz: metadata_uri setzen", Req: body("PATCH", "/datasets/12", `{"metadata_uri":"https://fremd#_Dataset"}`), Group: "Feld"},
-		{Name: "eigener Datensatz: owner setzen", Req: body("PATCH", "/datasets/12", `{"name":"x","owner":"anderer"}`), Group: "Feld"},
-		{Name: "eigener Datensatz: Körper ist kein Objekt", Req: body("PATCH", "/datasets/12", `["name"]`), Group: "Feld"},
-		{Name: "Modell aus fremdem Container 8", Req: req("GET", "/train/containers/8/model"), Group: "Kennung im Körper"},
-		{Name: "Training auf fremdem Datensatz (Leserecht fehlt)", Req: body("POST", "/train/config", `{"provider":"T","dataset_id":99}`), Expired: false, Group: "Kennung im Körper", Rules: `{"rules":[{"action":"create","resource":"training"},{"action":"read","resource":"dataset","ids":["12"]}],"confirm":"none"}`},
-		{Name: "Training auf eigenem Datensatz (Kontrolle)", Req: body("POST", "/train/config", `{"provider":"T","dataset_id":12}`), Allowed: true, Group: "Kennung im Körper", Rules: `{"rules":[{"action":"create","resource":"training"},{"action":"read","resource":"dataset","ids":["12"]}],"confirm":"none"}`},
-		{Name: "PUT /train/config mit fremdem Datensatz", Req: body("PUT", "/train/config", `{"container_id":7,"dataset_id":99}`), Group: "Kennung im Körper", Rules: `{"rules":[{"action":"update","resource":"training","ids":["7"]},{"action":"read","resource":"dataset","ids":["12"]}],"confirm":"none"}`},
-		{Name: "container_id jenseits von float64 (…993 gegen Regel …992)", Req: body("PUT", "/train/config", `{"container_id":9007199254740993,"dataset_id":12}`), Group: "Kennung im Körper", Rules: `{"rules":[{"action":"update","resource":"training","ids":["9007199254740992"]},{"action":"read","resource":"dataset","ids":["*"]}],"confirm":"none"}`},
-		{Name: "container_id als 7.0", Req: body("PUT", "/train/config", `{"container_id":7.0,"dataset_id":12}`), Group: "Kennung im Körper"},
-		{Name: "container_id als Liste", Req: body("PUT", "/train/config", `{"container_id":[7],"dataset_id":12}`), Group: "Kennung im Körper"},
-		{Name: "Kennung 012 eines eigenen Datensatzes (Kontrolle)", Req: body("PATCH", "/datasets/012", `{"name":"x"}`), Allowed: true, Group: "Parser"},
+		// Fields and identifiers in the body (Review 5: K1, K2, W1, W2)
+		{Name: "rename own dataset (allowed field)", Req: body("PATCH", "/datasets/12", `{"name":"new","description":"x"}`), Allowed: true, Group: "field"},
+		{Name: "own dataset: set bucket_name", Req: body("PATCH", "/datasets/12", `{"bucket_name":"x; id #"}`), Group: "field"},
+		{Name: "own dataset: set metadata_uri", Req: body("PATCH", "/datasets/12", `{"metadata_uri":"https://foreign#_Dataset"}`), Group: "field"},
+		{Name: "own dataset: set owner", Req: body("PATCH", "/datasets/12", `{"name":"x","owner":"other"}`), Group: "field"},
+		{Name: "own dataset: body is not an object", Req: body("PATCH", "/datasets/12", `["name"]`), Group: "field"},
+		{Name: "model from foreign container 8", Req: req("GET", "/train/containers/8/model"), Group: "identifier in body"},
+		{Name: "training on foreign dataset (read right missing)", Req: body("POST", "/train/config", `{"provider":"T","dataset_id":99}`), Expired: false, Group: "identifier in body", Rules: `{"rules":[{"action":"create","resource":"training"},{"action":"read","resource":"dataset","ids":["12"]}],"confirm":"none"}`},
+		{Name: "training on own dataset (control)", Req: body("POST", "/train/config", `{"provider":"T","dataset_id":12}`), Allowed: true, Group: "identifier in body", Rules: `{"rules":[{"action":"create","resource":"training"},{"action":"read","resource":"dataset","ids":["12"]}],"confirm":"none"}`},
+		{Name: "PUT /train/config with foreign dataset", Req: body("PUT", "/train/config", `{"container_id":7,"dataset_id":99}`), Group: "identifier in body", Rules: `{"rules":[{"action":"update","resource":"training","ids":["7"]},{"action":"read","resource":"dataset","ids":["12"]}],"confirm":"none"}`},
+		{Name: "container_id beyond float64 (…993 against rule …992)", Req: body("PUT", "/train/config", `{"container_id":9007199254740993,"dataset_id":12}`), Group: "identifier in body", Rules: `{"rules":[{"action":"update","resource":"training","ids":["9007199254740992"]},{"action":"read","resource":"dataset","ids":["*"]}],"confirm":"none"}`},
+		{Name: "container_id as 7.0", Req: body("PUT", "/train/config", `{"container_id":7.0,"dataset_id":12}`), Group: "identifier in body"},
+		{Name: "container_id as list", Req: body("PUT", "/train/config", `{"container_id":[7],"dataset_id":12}`), Group: "identifier in body"},
+		{Name: "identifier 012 of an own dataset (control)", Req: body("PATCH", "/datasets/012", `{"name":"x"}`), Allowed: true, Group: "parser"},
 
-		// Weitere schreibende GETs und Ressourcen (Review 5: W5, M2)
-		{Name: "GET Download schreibt Annotation nach MinIO", Req: req("GET", "/datasets/5/download"), Group: "Schreibendes GET"},
-		{Name: "GET registriert Edge-Gerät", Req: req("GET", "/edge-devices/3"), Group: "Schreibendes GET"},
-		{Name: "Edge-Gerät löschen", Req: req("DELETE", "/edge-devices/3"), Group: "Ressource"},
-		{Name: "unbekannter Pfad löschen", Req: req("DELETE", "/integrated-services/3"), Group: "Ressource"},
-		{Name: "Methode HEAD", Req: req("HEAD", "/datasets"), Group: "Parser"},
+		// More writing GETs and resources (Review 5: W5, M2)
+		{Name: "GET download writes annotation to MinIO", Req: req("GET", "/datasets/5/download"), Group: "writing GET"},
+		{Name: "GET registers edge device", Req: req("GET", "/edge-devices/3"), Group: "writing GET"},
+		{Name: "delete edge device", Req: req("DELETE", "/edge-devices/3"), Group: "resource"},
+		{Name: "delete unknown path", Req: req("DELETE", "/integrated-services/3"), Group: "resource"},
+		{Name: "method HEAD", Req: req("HEAD", "/datasets"), Group: "parser"},
 	}
 }
 
-// Build macht aus einem Fall einen geprüften Aufruf. Ein Fehler heißt: schon die Prüfung der
-// Argumente weist ab (zählt als abgewiesen).
+// Build turns a case into a checked call. An error means: the argument check alone already
+// refuses it (counts as refused).
 func (c Case) Build() (platform.Request, error) {
 	if c.Tool != "" {
 		t, ok := platform.Lookup(c.Tool)
 		if !ok {
-			return platform.Request{}, fmt.Errorf("Werkzeug %s fehlt", c.Tool)
+			return platform.Request{}, fmt.Errorf("tool %s missing", c.Tool)
 		}
 		return t.Build(json.RawMessage(c.Args))
 	}
 	return platform.Normalize(c.Req)
 }
 
-// Evaluate prüft einen Fall gegen ConformanceDelegation (ohne Plattform). allowed: der Dienst ließe
-// den Aufruf durch.
+// Evaluate checks a case against ConformanceDelegation (without platform). allowed: the service
+// would let the call through.
 func Evaluate(c Case, now time.Time) (allowed bool, why string) {
 	raw := ConformanceDelegation
 	if c.Rules != "" {
@@ -158,7 +158,7 @@ func Evaluate(c Case, now time.Time) (allowed bool, why string) {
 	}
 	req, err := c.Build()
 	if err != nil {
-		return false, "abgewiesen bei der Prüfung der Argumente: " + err.Error()
+		return false, "refused while checking the arguments: " + err.Error()
 	}
 	own := func(res, id string) bool {
 		for _, o := range OwnInConformance {
@@ -172,13 +172,13 @@ func Evaluate(c Case, now time.Time) (allowed bool, why string) {
 	if !dec.Allowed {
 		return false, dec.Reason
 	}
-	return true, "erlaubt: " + dec.Access.String()
+	return true, "allowed: " + dec.Access.String()
 }
 
-// Report fasst Ergebnisse als Tabelle zusammen (Markdown, für 7.3.1).
+// Report summarizes results as a table (Markdown, for 7.3.1).
 func Report(results map[string]bool, cases []Case) string {
 	var b strings.Builder
-	b.WriteString("| Gruppe | Fälle | Soll erfüllt |\n|---|---|---|\n")
+	b.WriteString("| Group | Cases | As expected |\n|---|---|---|\n")
 	type agg struct{ n, ok int }
 	order := []string{}
 	groups := map[string]*agg{}

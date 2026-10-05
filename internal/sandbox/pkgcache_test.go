@@ -16,20 +16,20 @@ import (
 	"github.com/moby/moby/client"
 )
 
-// TestPkgCacheIntegration prüft die Paket-Zwischenspeicher mit eigenen Netzen
-// und eigenen Verdaccio-/proxpi-Containern (Abbilder wie in compose.yaml):
+// TestPkgCacheIntegration checks the package caches with their own networks
+// and their own Verdaccio/proxpi containers (images as in compose.yaml):
 //
-//	(a) ohne Internet sind npm-cache und pip-cache aus der Sandbox nicht erreichbar,
-//	(b) mit Internet gehen pip install und npm install über die Zwischenspeicher,
-//	(c) ein zweiter Abruf kommt aus dem Zwischenspeicher: Die Zwischenspeicher
-//	    verlieren dafür ihr Internet und die Sandbox ihr Egress-Netz,
-//	(d) nach dem Abschalten ist wieder nichts erreichbar, und ein Platz-Netz mit
-//	    angehängtem Zwischenspeicher lässt sich abbauen.
+//	(a) without internet npm-cache and pip-cache are not reachable from the sandbox,
+//	(b) with internet pip install and npm install go through the caches,
+//	(c) a second fetch comes from the cache: for this the caches
+//	    lose their internet and the sandbox its egress network,
+//	(d) after switching off nothing is reachable again, and a slot network with
+//	    an attached cache can be torn down.
 //
-// Läuft nur mit AGW_DOCKER_TESTS=1 und braucht Internet am Host.
+// Runs only with AGW_DOCKER_TESTS=1 and needs internet on the host.
 func TestPkgCacheIntegration(t *testing.T) {
 	if os.Getenv("AGW_DOCKER_TESTS") != "1" {
-		t.Skip("AGW_DOCKER_TESTS=1 setzen, um gegen Docker zu testen")
+		t.Skip("set AGW_DOCKER_TESTS=1 to test against Docker")
 	}
 	image := os.Getenv("AGW_IMAGE")
 	if image == "" {
@@ -55,7 +55,7 @@ func TestPkgCacheIntegration(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := rt.EnsureEgressNetwork(ctx, TestSubnet()); err != nil { // ohne ICC wie im Betrieb
+	if err := rt.EnsureEgressNetwork(ctx, TestSubnet()); err != nil { // without ICC as in production
 		t.Fatal(err)
 	}
 	defer func() {
@@ -64,7 +64,7 @@ func TestPkgCacheIntegration(t *testing.T) {
 		}
 	}()
 
-	// Zwischenspeicher wie in compose.yaml, aber mit eigenen Volumes.
+	// Caches as in compose.yaml, but with their own volumes.
 	cfg, err := filepath.Abs("../../pkgcache/verdaccio.yaml")
 	if err != nil {
 		t.Fatal(err)
@@ -82,8 +82,8 @@ func TestPkgCacheIntegration(t *testing.T) {
 	inst, err := rt.Start(ctx, Spec{
 		Name: "agwpoc-test-pkg-" + suffix, Image: image, NoAttach: true, Tmpfs: ExecTmpfs,
 		Env: rt.PkgCacheEnv(),
-		// Nicht "true": Ein Neustart des Orchestrators (Hot Reload) räumte die
-		// Test-Sandbox sonst mitten im Test ab (RemoveManaged).
+		// Not "true": a restart of the orchestrator (hot reload) would otherwise clean up the
+		// test sandbox in the middle of the test (RemoveManaged).
 		Labels:      map[string]string{LabelSlot: "test-pkg", LabelManaged: "test"},
 		InternalNet: slotNet, MemoryMB: 1024, CPUs: 1, Pids: 256,
 	})
@@ -103,51 +103,51 @@ func TestPkgCacheIntegration(t *testing.T) {
 	unreachable := func(when string) {
 		t.Helper()
 		for _, u := range []string{"http://npm-cache:4873/-/ping", "http://pip-cache:5000/"} {
-			if out, err := sh("curl -fsS -m 5 -o /dev/null " + u + " && echo erreichbar"); err == nil {
-				t.Fatalf("%s: %s erreichbar (%s)", when, u, out)
+			if out, err := sh("curl -fsS -m 5 -o /dev/null " + u + " && echo reachable"); err == nil {
+				t.Fatalf("%s: %s reachable (%s)", when, u, out)
 			}
 		}
 		start := time.Now()
-		// pip download und ein leerer npm-Cache: Beides muss den Index fragen,
-		// auch wenn das Paket schon installiert ist.
+		// pip download and an empty npm cache: both must ask the index,
+		// even if the package is already installed.
 		if out, err := sh("pip download --no-deps --no-cache-dir -d $(mktemp -d) iniconfig==2.0.0 2>&1"); err == nil {
-			t.Fatalf("%s: pip download gelang ohne Internet: %s", when, out)
+			t.Fatalf("%s: pip download succeeded without internet: %s", when, out)
 		}
-		t.Logf("%s: pip download scheitert nach %.1f s", when, time.Since(start).Seconds())
+		t.Logf("%s: pip download fails after %.1f s", when, time.Since(start).Seconds())
 		start = time.Now()
 		if out, err := sh("rm -rf ~/.npm && cd $(mktemp -d) && npm install --no-audit --no-fund is-number@7.0.0 2>&1"); err == nil {
-			t.Fatalf("%s: npm install gelang ohne Internet: %s", when, out)
+			t.Fatalf("%s: npm install succeeded without internet: %s", when, out)
 		}
-		t.Logf("%s: npm install scheitert nach %.1f s", when, time.Since(start).Seconds())
+		t.Logf("%s: npm install fails after %.1f s", when, time.Since(start).Seconds())
 	}
 
-	// (a) Ohne Internet: kein Weg zu den Zwischenspeichern.
+	// (a) Without internet: no way to the caches.
 	if err := rt.SetInternet(ctx, inst.ID, false); err != nil {
 		t.Fatal(err)
 	}
-	unreachable("(a) ohne Internet")
+	unreachable("(a) without internet")
 
-	// (b) Mit Internet: Installation über die Zwischenspeicher.
+	// (b) With internet: installation through the caches.
 	if err := rt.SetInternet(ctx, inst.ID, true); err != nil {
 		t.Fatal(err)
 	}
 	if out, err := sh(`for i in $(seq 1 60); do curl -fsS -m 2 -o /dev/null http://npm-cache:4873/-/ping && curl -fsS -m 2 -o /dev/null http://pip-cache:5000/ && exit 0; sleep 0.5; done; exit 1`); err != nil {
-		t.Fatalf("(b) Zwischenspeicher nicht erreichbar: %v %s", err, out)
+		t.Fatalf("(b) caches not reachable: %v %s", err, out)
 	}
 	start := time.Now()
 	out, err := sh("pip install --no-deps --no-cache-dir iniconfig==2.0.0 2>&1")
 	if err != nil || !strings.Contains(out, "pip-cache:5000") {
 		t.Fatalf("(b) pip install: %v\n%s", err, out)
 	}
-	t.Logf("(b) pip install über pip-cache: %.1f s", time.Since(start).Seconds())
+	t.Logf("(b) pip install through pip-cache: %.1f s", time.Since(start).Seconds())
 	start = time.Now()
 	if out, err := sh("mkdir -p /workspace/p && cd /workspace/p && npm install --no-audit --no-fund is-number@7.0.0 2>&1 && grep -o 'npm-cache:4873[^\"]*' package-lock.json"); err != nil {
 		t.Fatalf("(b) npm install: %v\n%s", err, out)
 	}
-	t.Logf("(b) npm install über npm-cache: %.1f s", time.Since(start).Seconds())
+	t.Logf("(b) npm install through npm-cache: %.1f s", time.Since(start).Seconds())
 
-	// (c) Zweiter Abruf: Zwischenspeicher ohne Upstream, Sandbox ohne Egress.
-	// Gelingt die Installation dann noch, kam sie aus dem Zwischenspeicher.
+	// (c) Second fetch: caches without upstream, sandbox without egress.
+	// If the installation still succeeds, it came from the cache.
 	for _, c := range []string{npmName, pipName} {
 		if _, err := cli.NetworkDisconnect(ctx, upstream, client.NetworkDisconnectOptions{Container: c, Force: true}); err != nil {
 			t.Fatal(err)
@@ -156,21 +156,21 @@ func TestPkgCacheIntegration(t *testing.T) {
 	if _, err := cli.NetworkDisconnect(ctx, egress, client.NetworkDisconnectOptions{Container: inst.ID, Force: true}); err != nil {
 		t.Fatal(err)
 	}
-	if out, err := sh("curl -fsS -m 5 -o /dev/null https://pypi.org/simple/ && echo erreichbar"); err == nil {
-		t.Fatalf("(c) Sandbox erreicht pypi.org noch direkt: %s", out)
+	if out, err := sh("curl -fsS -m 5 -o /dev/null https://pypi.org/simple/ && echo reachable"); err == nil {
+		t.Fatalf("(c) sandbox still reaches pypi.org directly: %s", out)
 	}
 	start = time.Now()
 	if out, err := sh("pip uninstall -y iniconfig >/dev/null && pip install --no-deps --no-cache-dir iniconfig==2.0.0 2>&1 && python3 -c 'import iniconfig'"); err != nil {
-		t.Fatalf("(c) pip install aus dem Zwischenspeicher: %v\n%s", err, out)
+		t.Fatalf("(c) pip install from the cache: %v\n%s", err, out)
 	}
-	t.Logf("(c) pip install aus pip-cache ohne Upstream: %.1f s", time.Since(start).Seconds())
+	t.Logf("(c) pip install from pip-cache without upstream: %.1f s", time.Since(start).Seconds())
 	start = time.Now()
 	if out, err := sh("rm -rf ~/.npm /workspace/p && mkdir -p /workspace/p && cd /workspace/p && npm install --no-audit --no-fund is-number@7.0.0 2>&1 && node -e 'require(\"is-number\")'"); err != nil {
-		t.Fatalf("(c) npm install aus dem Zwischenspeicher: %v\n%s", err, out)
+		t.Fatalf("(c) npm install from the cache: %v\n%s", err, out)
 	}
-	t.Logf("(c) npm install aus npm-cache ohne Upstream: %.1f s", time.Since(start).Seconds())
+	t.Logf("(c) npm install from npm-cache without upstream: %.1f s", time.Since(start).Seconds())
 
-	// (d) Abschalten löst die Zwischenspeicher vom Platz-Netz.
+	// (d) Switching off detaches the caches from the slot network.
 	if err := rt.SetInternet(ctx, inst.ID, false); err != nil {
 		t.Fatal(err)
 	}
@@ -179,11 +179,11 @@ func TestPkgCacheIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	if n := len(ins.Network.Containers); n != 1 {
-		t.Fatalf("(d) Platz-Netz hat nach dem Abschalten %d Teilnehmer, erwartet 1 (nur die Sandbox)", n)
+		t.Fatalf("(d) slot network has %d members after switching off, expected 1 (only the sandbox)", n)
 	}
-	unreachable("(d) nach dem Abschalten")
+	unreachable("(d) after switching off")
 
-	// Abbau mit angehängtem Zwischenspeicher: RemoveSlotNetwork löst ihn.
+	// Teardown with an attached cache: RemoveSlotNetwork detaches it.
 	if err := rt.SetInternet(ctx, inst.ID, true); err != nil {
 		t.Fatal(err)
 	}
@@ -192,12 +192,12 @@ func TestPkgCacheIntegration(t *testing.T) {
 	}
 	removed = true
 	if err := rt.RemoveSlotNetwork(ctx, slotNet); err != nil {
-		t.Fatalf("Platz-Netz mit angehängtem Zwischenspeicher nicht abbaubar: %v", err)
+		t.Fatalf("slot network with attached cache cannot be torn down: %v", err)
 	}
 }
 
-// composeImage liest die Abbild-Angabe eines Dienstes aus compose.yaml, damit
-// der Test dieselbe Fassung prüft wie der Betrieb.
+// composeImage reads a service's image from compose.yaml so that
+// the test checks the same version as production.
 func composeImage(t *testing.T, repo string) string {
 	t.Helper()
 	b, err := os.ReadFile("../../compose.yaml")
@@ -206,7 +206,7 @@ func composeImage(t *testing.T, repo string) string {
 	}
 	m := regexp.MustCompile(`(?m)^\s+image:\s+(` + regexp.QuoteMeta(repo) + `\S+)`).FindSubmatch(b)
 	if m == nil {
-		t.Fatalf("kein Abbild %s in compose.yaml", repo)
+		t.Fatalf("no image %s in compose.yaml", repo)
 	}
 	return string(m[1])
 }
@@ -243,6 +243,6 @@ func startCache(ctx context.Context, t *testing.T, cli *client.Client, name, ima
 		}
 	})
 	if _, err := cli.ContainerStart(ctx, res.ID, client.ContainerStartOptions{}); err != nil {
-		t.Fatal(fmt.Errorf("%s starten: %w", name, err))
+		t.Fatal(fmt.Errorf("starting %s: %w", name, err))
 	}
 }

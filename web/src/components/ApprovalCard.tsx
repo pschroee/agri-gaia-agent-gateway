@@ -13,17 +13,17 @@ import { cn } from "@/lib/utils"
 type Props = {
   approval: Approval
   onDecided?: (a: Approval) => void
-  /** Kurzform ohne Vorschau, etwa für die Statusseite. */
+  /** Short form without preview, e.g. for the status page. */
   compact?: boolean
   chatLabel?: React.ReactNode
-  /** Läufe des Chats, um einen fragenden Subagenten beim Namen zu nennen. */
+  /** Runs of the chat, to name an asking subagent. */
   runs?: SubagentRun[]
 }
 
 export function ApprovalCard({ approval: a, onDecided, compact, chatLabel, runs }: Props) {
   const [busy, setBusy] = useState(false)
   const pending = a.state === "pending"
-  const who = isSubagentSession(a.session) ? "Ein Subagent" : "Der Agent"
+  const who = isSubagentSession(a.session) ? "A subagent" : "The agent"
   const origin = <AgentOrigin chatId={a.chat_id} session={a.session} runs={runs} />
 
   const decide = async (approve: boolean) => {
@@ -31,7 +31,7 @@ export function ApprovalCard({ approval: a, onDecided, compact, chatLabel, runs 
     try {
       onDecided?.(await api.decide(a.id, approve))
     } catch (e) {
-      toast.error(`Entscheidung fehlgeschlagen: ${e instanceof Error ? e.message : String(e)}`)
+      toast.error(`Decision failed: ${e instanceof Error ? e.message : String(e)}`)
     } finally {
       setBusy(false)
     }
@@ -47,7 +47,7 @@ export function ApprovalCard({ approval: a, onDecided, compact, chatLabel, runs 
       >
         <div className="flex flex-wrap items-center gap-2">
           <GlobeIcon className={cn("size-4", pending ? "text-sky-600" : "text-muted-foreground")} />
-          <span className="font-medium">{who} bittet um Internetzugang</span>
+          <span className="font-medium">{who} asks for internet access</span>
           <ApprovalStateBadge state={a.state} />
           {origin}
           {chatLabel}
@@ -58,16 +58,16 @@ export function ApprovalCard({ approval: a, onDecided, compact, chatLabel, runs 
           </blockquote>
         )}
         <div className="mt-2 text-xs text-muted-foreground">
-          <span className="font-mono uppercase">{a.via}</span> · {pending ? "angefragt" : "entschieden"}{" "}
+          <span className="font-mono uppercase">{a.via}</span> · {pending ? "requested" : "decided"}{" "}
           {formatTime(pending ? a.created_at : (a.decided_at ?? a.created_at))}
         </div>
         {pending && (
           <div className="mt-3 flex flex-wrap gap-2">
             <Button size="sm" disabled={busy} onClick={() => void decide(true)}>
-              <GlobeIcon /> Internet freigeben
+              <GlobeIcon /> Allow internet
             </Button>
             <Button size="sm" variant="destructive" disabled={busy} onClick={() => void decide(false)}>
-              <XIcon /> Ablehnen
+              <XIcon /> Reject
             </Button>
           </div>
         )}
@@ -85,7 +85,7 @@ export function ApprovalCard({ approval: a, onDecided, compact, chatLabel, runs 
       >
         <div className="flex flex-wrap items-center gap-2">
           <ServerIcon className={cn("size-4", pending ? "text-violet-600" : "text-muted-foreground")} />
-          <span className="font-medium">{who} möchte auf der Agri-Gaia-Plattform schreiben</span>
+          <span className="font-medium">{who} wants to write to the Agri-Gaia platform</span>
           <ApprovalStateBadge state={a.state} />
           {origin}
           {chatLabel}
@@ -97,16 +97,16 @@ export function ApprovalCard({ approval: a, onDecided, compact, chatLabel, runs 
           </pre>
         )}
         <div className="mt-2 text-xs text-muted-foreground">
-          <span className="font-mono uppercase">{a.via}</span> · {pending ? "angefragt" : "entschieden"}{" "}
+          <span className="font-mono uppercase">{a.via}</span> · {pending ? "requested" : "decided"}{" "}
           {formatTime(pending ? a.created_at : (a.decided_at ?? a.created_at))}
         </div>
         {pending && (
           <div className="mt-3 flex flex-wrap gap-2">
             <Button size="sm" disabled={busy} onClick={() => void decide(true)}>
-              <CheckIcon /> Ausführen
+              <CheckIcon /> Execute
             </Button>
             <Button size="sm" variant="destructive" disabled={busy} onClick={() => void decide(false)}>
-              <XIcon /> Ablehnen
+              <XIcon /> Reject
             </Button>
           </div>
         )}
@@ -123,7 +123,7 @@ export function ApprovalCard({ approval: a, onDecided, compact, chatLabel, runs 
     >
       <div className="flex flex-wrap items-center gap-2">
         <ShieldAlertIcon className={cn("size-4", pending ? "text-amber-600" : "text-muted-foreground")} />
-        <span className="font-medium">{who} möchte ein Artefakt hochladen</span>
+        <span className="font-medium">{who} wants to upload an artifact</span>
         <ApprovalStateBadge state={a.state} />
         {origin}
         {chatLabel}
@@ -131,7 +131,7 @@ export function ApprovalCard({ approval: a, onDecided, compact, chatLabel, runs 
       <dl className="mt-2 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-0.5 text-xs">
         <dt className="text-muted-foreground">Name</dt>
         <dd className="font-mono break-all">{a.name}</dd>
-        <dt className="text-muted-foreground">Größe</dt>
+        <dt className="text-muted-foreground">Size</dt>
         <dd>
           {formatBytes(a.size)} · {a.content_type}
         </dd>
@@ -139,9 +139,9 @@ export function ApprovalCard({ approval: a, onDecided, compact, chatLabel, runs 
         <dd className="font-mono" title={a.sha256}>
           {shortHash(a.sha256, 16)}
         </dd>
-        <dt className="text-muted-foreground">Weg</dt>
+        <dt className="text-muted-foreground">Via</dt>
         <dd className="font-mono uppercase">{a.via}</dd>
-        <dt className="text-muted-foreground">{pending ? "Angefragt" : "Entschieden"}</dt>
+        <dt className="text-muted-foreground">{pending ? "Requested" : "Decided"}</dt>
         <dd>{formatTime(pending ? a.created_at : (a.decided_at ?? a.created_at))}</dd>
       </dl>
       {!compact && a.preview !== undefined && a.preview !== "" && (
@@ -152,10 +152,10 @@ export function ApprovalCard({ approval: a, onDecided, compact, chatLabel, runs 
       {pending && (
         <div className="mt-3 flex gap-2">
           <Button size="sm" disabled={busy} onClick={() => void decide(true)}>
-            <CheckIcon /> Bestätigen
+            <CheckIcon /> Approve
           </Button>
           <Button size="sm" variant="destructive" disabled={busy} onClick={() => void decide(false)}>
-            <XIcon /> Ablehnen
+            <XIcon /> Reject
           </Button>
         </div>
       )}

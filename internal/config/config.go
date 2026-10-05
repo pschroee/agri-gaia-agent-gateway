@@ -1,4 +1,4 @@
-// Package config liest die Umgebung des Orchestrators und den Modellkatalog.
+// Package config reads the orchestrator's environment and the model catalog.
 package config
 
 import (
@@ -22,13 +22,13 @@ type Pricing struct {
 	CacheWrite float64 `json:"cache_write"`
 	Currency   string  `json:"currency"`
 	Note       string  `json:"note,omitempty"`
-	Source     string  `json:"source,omitempty"`    // URL der Preisangabe
-	Retrieved  string  `json:"retrieved,omitempty"` // Abrufdatum (ISO)
+	Source     string  `json:"source,omitempty"`    // URL of the price source
+	Retrieved  string  `json:"retrieved,omitempty"` // retrieval date (ISO)
 }
 
 type Model struct {
 	ID            string   `json:"id"`
-	PiBuiltin     bool     `json:"pi_builtin"` // pi kennt das Modell; nicht neu definieren
+	PiBuiltin     bool     `json:"pi_builtin"` // pi knows the model; do not redefine it
 	Note          string   `json:"note,omitempty"`
 	Name          string   `json:"name"`
 	Reasoning     bool     `json:"reasoning"`
@@ -43,13 +43,13 @@ type Provider struct {
 	API       string          `json:"api"`
 	APIKeyEnv string          `json:"api_key_env"`
 	Compat    json.RawMessage `json:"compat,omitempty"`
-	// TitleRequest: Felder, die der Titel-Aufruf des Orchestrators (Paket titler) zusätzlich sendet.
+	// TitleRequest: extra fields the orchestrator's title call (package titler) sends.
 	TitleRequest json.RawMessage `json:"title_request,omitempty"`
 	Tariff       *Tariff         `json:"tariff,omitempty"`
 	Models       []Model         `json:"models"`
 }
 
-// APIKey liest den Schlüssel aus der Umgebung des Orchestrators.
+// APIKey reads the key from the orchestrator's environment.
 func (p Provider) APIKey() string { return os.Getenv(p.APIKeyEnv) }
 
 type Catalog struct {
@@ -57,11 +57,11 @@ type Catalog struct {
 	Providers []Provider `json:"providers"`
 
 	regMu     sync.RWMutex
-	registry  map[string]RegistryModel // "anbieter/modell" aus get_available_models
+	registry  map[string]RegistryModel // "provider/model" from get_available_models
 	piVersion string
 }
 
-// RegistryModel ist ein Modell aus pis eigenem Register (get_available_models).
+// RegistryModel is a model from pi's own registry (get_available_models).
 type RegistryModel struct {
 	Provider      string       `json:"provider"`
 	ID            string       `json:"id"`
@@ -78,7 +78,7 @@ type RegistryCost struct {
 	CacheWrite float64 `json:"cacheWrite"`
 }
 
-// SetRegistry übernimmt pis Register. Nur Modelle des Katalogs zählen.
+// SetRegistry takes over pi's registry. Only models in the catalog count.
 func (c *Catalog) SetRegistry(piVersion string, models []RegistryModel) {
 	m := map[string]RegistryModel{}
 	for _, r := range models {
@@ -95,7 +95,7 @@ func (c *Catalog) HasRegistry() bool {
 	return c.registry != nil
 }
 
-// EffectivePricing: eigene Preise des Katalogs vor pis Register.
+// EffectivePricing: the catalog's own prices take precedence over pi's registry.
 func (c *Catalog) EffectivePricing(id string) *Pricing {
 	_, m, ok := c.Lookup(id)
 	if !ok {
@@ -112,19 +112,19 @@ func (c *Catalog) EffectivePricing(id string) *Pricing {
 	if !ok {
 		return nil
 	}
-	note := "aus dem Modellregister von pi " + ver
+	note := "from the model registry of pi " + ver
 	if m.Note != "" {
 		note = m.Note + "; " + note
 	}
 	p := &Pricing{Input: r.Cost.Input, Output: r.Cost.Output, CacheRead: r.Cost.CacheRead, CacheWrite: r.Cost.CacheWrite, Currency: "USD", Note: note}
-	// Als Beleg dient die Preisseite des Anbieters, soweit der Tarif sie nennt.
+	// The provider's pricing page serves as the source, if the tariff names it.
 	if prov, _, ok := c.Lookup(id); ok && prov.Tariff != nil {
 		p.Source, p.Retrieved = prov.Tariff.Source, prov.Tariff.Retrieved
 	}
 	return p
 }
 
-// ModelInfo ist die Sicht der API auf ein Modell.
+// ModelInfo is the API's view of a model.
 type ModelInfo struct {
 	ID       string   `json:"id"`
 	Provider string   `json:"provider"`
@@ -133,8 +133,8 @@ type ModelInfo struct {
 	Default  bool     `json:"default"`
 	Pricing  *Pricing `json:"pricing,omitempty"`
 	Tariff   *Tariff  `json:"tariff,omitempty"`
-	PeakNow  *bool    `json:"peak_now,omitempty"` // gilt gerade der Spitzentarif?
-	// ContextWindow in Tokens (0 = unbekannt); für die Prüfung beim Modellwechsel.
+	PeakNow  *bool    `json:"peak_now,omitempty"` // is the peak tariff in effect right now?
+	// ContextWindow in tokens (0 = unknown); for the check when switching models.
 	ContextWindow int64 `json:"context_window,omitempty"`
 }
 
@@ -149,12 +149,12 @@ func LoadCatalog(path string) (*Catalog, error) {
 func ParseCatalog(b []byte) (*Catalog, error) {
 	var c Catalog
 	if err := json.Unmarshal(b, &c); err != nil {
-		return nil, fmt.Errorf("Modellkatalog: %w", err)
+		return nil, fmt.Errorf("model catalog: %w", err)
 	}
 	for i := range c.Providers {
 		if t := c.Providers[i].Tariff; t != nil {
 			if err := t.validate(); err != nil {
-				return nil, fmt.Errorf("Modellkatalog, Tarif von %s: %w", c.Providers[i].ID, err)
+				return nil, fmt.Errorf("model catalog, tariff of %s: %w", c.Providers[i].ID, err)
 			}
 		}
 		for j := range c.Providers[i].Models {
@@ -164,12 +164,12 @@ func ParseCatalog(b []byte) (*Catalog, error) {
 		}
 	}
 	if _, _, ok := c.Lookup(c.Default); !ok {
-		return nil, fmt.Errorf("Modellkatalog: Standardmodell %q nicht im Katalog", c.Default)
+		return nil, fmt.Errorf("model catalog: default model %q is not in the catalog", c.Default)
 	}
 	return &c, nil
 }
 
-// Lookup nimmt eine Kennung der Form "anbieter/modell".
+// Lookup takes an identifier of the form "provider/model".
 func (c *Catalog) Lookup(id string) (Provider, Model, bool) {
 	prov, model, ok := strings.Cut(id, "/")
 	if !ok {
@@ -188,7 +188,7 @@ func (c *Catalog) Lookup(id string) (Provider, Model, bool) {
 	return Provider{}, Model{}, false
 }
 
-// ContextWindow: Kontextfenster eines Modells in Tokens (Katalog, sonst pis Register; 0 = unbekannt).
+// ContextWindow: a model's context window in tokens (catalog, otherwise pi's registry; 0 = unknown).
 func (c *Catalog) ContextWindow(id string) int64 {
 	if _, m, ok := c.Lookup(id); ok && m.ContextWindow > 0 {
 		return int64(m.ContextWindow)
@@ -233,8 +233,8 @@ func (c *Catalog) Models() []ModelInfo {
 	return out
 }
 
-// PiModelsJSON erzeugt die models.json für pi in der Sandbox. Jeder Anbieter
-// zeigt auf den Proxy des Orchestrators; der Schlüssel ist ein Platzhalter.
+// PiModelsJSON produces the models.json for pi in the sandbox. Every provider
+// points to the orchestrator's proxy; the key is a placeholder.
 func (c *Catalog) PiModelsJSON(proxyBase string) ([]byte, error) {
 	type piCost struct {
 		Input      float64 `json:"input"`
@@ -265,7 +265,7 @@ func (c *Catalog) PiModelsJSON(proxyBase string) ([]byte, error) {
 		pp := piProvider{BaseURL: base + "/llm/" + p.ID, API: p.API, APIKey: "agw-proxy", Compat: p.Compat}
 		for _, m := range p.Models {
 			if m.PiBuiltin {
-				continue // pi behält Modell, compat und Preise aus seinem Register
+				continue // pi keeps model, compat and prices from its registry
 			}
 			pm := piModel{ID: m.ID, Name: m.Name, Reasoning: m.Reasoning, ContextWindow: m.ContextWindow, MaxTokens: m.MaxTokens}
 			if m.Pricing != nil {
@@ -278,86 +278,86 @@ func (c *Catalog) PiModelsJSON(proxyBase string) ([]byte, error) {
 	return json.MarshalIndent(doc, "", "  ")
 }
 
-// Env sind die Einstellungen aus der Umgebung.
+// Env holds the settings from the environment.
 type Env struct {
 	HTTPAddr             string
 	ProxyAddr            string
-	WebProxyAddr         string // Web-Proxy für web_search/web_extract aus dem Container von pi
-	WebProxyURL          string // wie der Container von pi den Web-Proxy erreicht
-	SearxURL             string // eigener SearXNG-Dienst aus Sicht des Orchestrators (leer: keiner)
-	ProxyBaseURL         string // wie die Sandbox den Proxy erreicht
+	WebProxyAddr         string // web proxy for web_search/web_extract from pi's container
+	WebProxyURL          string // how pi's container reaches the web proxy
+	SearxURL             string // own SearXNG service as seen from the orchestrator (empty: none)
+	ProxyBaseURL         string // how the sandbox reaches the proxy
 	CatalogPath          string
 	DatabaseURL          string
 	S3Endpoint           string
 	S3AccessKey          string
 	S3SecretKey          string
 	S3Bucket             string
-	Image                string // Ausführungs-Sandbox (E9): Werkzeuge, Python, Typst …
-	PiImage              string // Container von pi (E9): ohne Shell, ohne Python
+	Image                string // execution sandbox (E9): tools, Python, Typst …
+	PiImage              string // pi's container (E9): no shell, no Python
 	SandboxNetwork       string
 	EgressNetwork        string
 	EgressSubnet         string
 	BlockedSubnets       string
-	NpmCache             string // Container des npm-Zwischenspeichers, leer = keiner
-	PipCache             string // Container des pip-Zwischenspeichers, leer = keiner
+	NpmCache             string // container of the npm package cache, empty = none
+	PipCache             string // container of the pip package cache, empty = none
 	InternetDefault      bool
 	AutoCompactDefault   bool
 	CompactReserveTokens int
 	CompactKeepRecent    int
-	SocketVolume         string // benanntes Volume mit den Socket-Verzeichnissen
-	SocketRoot           string // Einhängepunkt dieses Volumes im Orchestrator
+	SocketVolume         string // named volume holding the socket directories
+	SocketRoot           string // mount point of this volume in the orchestrator
 	PoolSizes            map[string]int
 	IdleTimeout          time.Duration
 	ApprovalTimeout      time.Duration
 	ArtifactMaxBytes     int64
-	ImageMaxBytes        int64 // Anzeige-Bilder in Antworten (AGW_IMAGE_MAX_MB)
-	WorkspaceMaxBytes    int64 // Sicherung von /workspace je Chat (AGW_WORKSPACE_MAX_MB; 0 = aus → -1)
-	SandboxMemoryMB      int64 // Container von pi (pi und bis zu vier Subagenten)
+	ImageMaxBytes        int64 // display images in responses (AGW_IMAGE_MAX_MB)
+	WorkspaceMaxBytes    int64 // backup of /workspace per chat (AGW_WORKSPACE_MAX_MB; 0 = off → -1)
+	SandboxMemoryMB      int64 // pi's container (pi and up to four subagents)
 	SandboxCPUs          float64
 	SandboxPids          int64
-	ExecMemoryMB         int64 // Ausführungs-Sandbox
+	ExecMemoryMB         int64 // execution sandbox
 	ExecCPUs             float64
 	ExecPids             int64
 	DefaultModel         string
-	TitleModel           string // Modell für Chattitel ("anbieter/modell"; leer: das des Chats, "off": keine)
+	TitleModel           string // model for chat titles ("provider/model"; empty: the chat's, "off": none)
 	APIToken             string
 	MaxSubagentsDefault  int
 	MaxSubagentsLimit    int
 	AllowedHosts         []string
-	// Hintergrundaufgaben: höchstens BgMax gleichzeitig je Platz (AGW_BG_MAX), höchstens
-	// BgWakesPerHour Weckrufe je Chat und Stunde (AGW_BG_WAKES_PER_HOUR, 0 = nie), laufende Aufgaben
-	// halten den Chat bis BgKeepAlive nach der letzten Aktivität wach (AGW_BG_KEEPALIVE).
+	// Background tasks: at most BgMax at a time per slot (AGW_BG_MAX), at most
+	// BgWakesPerHour wake-ups per chat and hour (AGW_BG_WAKES_PER_HOUR, 0 = never); running tasks
+	// keep the chat awake until BgKeepAlive after the last activity (AGW_BG_KEEPALIVE).
 	BgMax          int
 	BgWakesPerHour int
 	BgKeepAlive    time.Duration
-	// AutoTurnsMax: höchstens so viele Durchgänge ohne Nutzer hintereinander je Chat
-	// (AGW_AUTO_TURNS_MAX, Standard 5, 0 = keiner; Review 3, H2).
+	// AutoTurnsMax: at most this many consecutive turns without the user per chat
+	// (AGW_AUTO_TURNS_MAX, default 5, 0 = none; Review 3, H2).
 	AutoTurnsMax int
-	// Plattform-Anbindung (direkt, festes Konto per Passwort-Grant). Ohne PlatformAPIURL aus.
+	// Platform binding (direct, fixed account via password grant). Off without PlatformAPIURL.
 	PlatformAPIURL   string
 	PlatformTokenURL string
 	PlatformClientID string
 	PlatformUser     string
 	PlatformPassword string
-	// Token-Austausch je Chat (RFC 8693) über einen vertraulichen Client, etwa agw-agent.
+	// Token exchange per chat (RFC 8693) via a confidential client, e.g. agw-agent.
 	PlatformClientSecret string
 	PlatformExchange     bool
 	PlatformAudiences    []string
-	// Anmeldung an der API: AuthMode "token" (AGW_API_TOKEN, Standard) oder "oidc" (Anmeldung über
-	// den Keycloak der Plattform, Authorization Code mit PKCE; Chats gehören dann dem Nutzer).
+	// Login to the API: AuthMode "token" (AGW_API_TOKEN, default) or "oidc" (login through the
+	// platform's Keycloak, authorization code with PKCE; chats then belong to the user).
 	AuthMode         string
-	OIDCIssuer       string // https://keycloak.<basis>/realms/<realm>
-	OIDCClientID     string // Standard agw-agent
-	OIDCClientSecret string // Standard: AGW_PLATFORM_CLIENT_SECRET
-	PublicURL        string // https://app.<basis>/agent oder https://agent.<basis>; Redirect-URI = PublicURL + "/oidc/callback"
-	// BasePath: Pfad von PublicURL ("" oder etwa "/agent"); die UI liegt unter BasePath + "/". Der Proxy
-	// schneidet ihn ab, Adressen für den Browser brauchen ihn trotzdem.
+	OIDCIssuer       string // https://keycloak.<base>/realms/<realm>
+	OIDCClientID     string // default agw-agent
+	OIDCClientSecret string // default: AGW_PLATFORM_CLIENT_SECRET
+	PublicURL        string // https://app.<base>/agent or https://agent.<base>; redirect URI = PublicURL + "/oidc/callback"
+	// BasePath: path of PublicURL ("" or e.g. "/agent"); the UI lives under BasePath + "/". The proxy
+	// strips it, but addresses for the browser still need it.
 	BasePath string
-	// FrameAncestors: Herkünfte, die die UI einbetten dürfen (leer: frame-ancestors 'none').
+	// FrameAncestors: origins allowed to embed the UI (empty: frame-ancestors 'none').
 	FrameAncestors []string
 }
 
-// Anmeldearten der API (AGW_AUTH_MODE).
+// Login modes of the API (AGW_AUTH_MODE).
 const (
 	AuthToken = "token"
 	AuthOIDC  = "oidc"
@@ -381,7 +381,7 @@ func FromEnv() Env {
 		PiImage:              str("AGW_PI_IMAGE", "agwpoc/agw-pi:dev"),
 		SandboxNetwork:       str("AGW_SANDBOX_NETWORK", "agwpoc_sandbox"),
 		EgressNetwork:        str("AGW_EGRESS_NETWORK", "agwpoc_egress"),
-		EgressSubnet:         str("AGW_EGRESS_SUBNET", "10.231.20.0/24"), // nie Dockers 172.x (verdeckt sonst VPN-Ziele)
+		EgressSubnet:         str("AGW_EGRESS_SUBNET", "10.231.20.0/24"), // never Docker's 172.x (would otherwise hide VPN destinations)
 		BlockedSubnets:       str("AGW_BLOCKED_SUBNETS", ""),
 		NpmCache:             str("AGW_NPM_CACHE", ""),
 		PipCache:             str("AGW_PIP_CACHE", ""),
@@ -392,10 +392,10 @@ func FromEnv() Env {
 		SocketVolume:         str("AGW_SOCKET_VOLUME", "agwpoc_sockets"),
 		SocketRoot:           str("AGW_SOCKET_ROOT", "/run/agw"),
 		PoolSizes: map[string]int{
-			"cli":   num("AGW_POOL_SIZE_CLI", 1),
-			"mcp":   num("AGW_POOL_SIZE_MCP", 1),
-			"beide": num("AGW_POOL_SIZE_BEIDE", 0),
-			"api":   num("AGW_POOL_SIZE_API", 0),
+			"cli":  num("AGW_POOL_SIZE_CLI", 1),
+			"mcp":  num("AGW_POOL_SIZE_MCP", 1),
+			"both": num("AGW_POOL_SIZE_BOTH", 0),
+			"api":  num("AGW_POOL_SIZE_API", 0),
 		},
 		IdleTimeout:          dur("AGW_IDLE_TIMEOUT", 10*time.Minute),
 		ApprovalTimeout:      dur("AGW_APPROVAL_TIMEOUT", 10*time.Minute),
@@ -436,7 +436,7 @@ func FromEnv() Env {
 	}
 }
 
-// orEmpty: ein ungültiger Wert fällt auf "" zurück; CheckAuth meldet den Fehler.
+// orEmpty: an invalid value falls back to ""; CheckAuth reports the error.
 func orEmpty(s string, err error) string {
 	if err != nil {
 		return ""
@@ -444,16 +444,16 @@ func orEmpty(s string, err error) string {
 	return s
 }
 
-// BasePath liefert den Pfad von AGW_PUBLIC_URL ohne Schrägstrich am Ende: "" für https://host,
-// "/agent" für https://host/agent/. Ein Proxy schneidet ihn vor dem Orchestrator ab; Adressen für den
-// Browser (Weiterleitungen, Cookies, Anmeldelinks) brauchen ihn trotzdem.
+// BasePath returns the path of AGW_PUBLIC_URL without a trailing slash: "" for https://host,
+// "/agent" for https://host/agent/. A proxy strips it before the orchestrator; addresses for the
+// browser (redirects, cookies, login links) still need it.
 func BasePath(publicURL string) (string, error) {
 	if publicURL == "" {
 		return "", nil
 	}
 	u, err := url.Parse(publicURL)
 	if err != nil {
-		return "", fmt.Errorf("AGW_PUBLIC_URL ungültig: %q", publicURL)
+		return "", fmt.Errorf("AGW_PUBLIC_URL invalid: %q", publicURL)
 	}
 	p := strings.TrimRight(u.Path, "/")
 	if p == "" {
@@ -466,13 +466,13 @@ func BasePath(publicURL string) (string, error) {
 		}
 	}
 	if !ok {
-		return "", fmt.Errorf("AGW_PUBLIC_URL: Pfad %q ungültig (erlaubt etwa /agent)", u.Path)
+		return "", fmt.Errorf("AGW_PUBLIC_URL: path %q invalid (allowed e.g. /agent)", u.Path)
 	}
 	return p, nil
 }
 
-// PublicHost liefert den Host von AGW_PUBLIC_URL (mit Port, ohne Pfad), "" ohne Angabe. Die UI wird
-// unter dieser Adresse aufgerufen; der Host gehört deshalb zu den erlaubten Host-Kopfzeilen.
+// PublicHost returns the host of AGW_PUBLIC_URL (with port, without path), "" if unset. The UI is
+// opened at this address, so the host belongs to the allowed Host headers.
 func (e Env) PublicHost() string {
 	if u, err := url.Parse(e.PublicURL); err == nil {
 		return u.Host
@@ -480,7 +480,7 @@ func (e Env) PublicHost() string {
 	return ""
 }
 
-// CheckAuth prüft die Einstellungen der gewählten Anmeldeart.
+// CheckAuth checks the settings of the chosen login mode.
 func (e Env) CheckAuth() error {
 	if _, err := BasePath(e.PublicURL); err != nil {
 		return err
@@ -488,35 +488,35 @@ func (e Env) CheckAuth() error {
 	switch e.AuthMode {
 	case AuthToken:
 		if len(e.APIToken) < 32 {
-			return errors.New("AGW_API_TOKEN fehlt oder ist kürzer als 32 Zeichen (./dev.sh init legt ihn an)")
+			return errors.New("AGW_API_TOKEN is missing or shorter than 32 characters (./dev.sh init creates it)")
 		}
 	case AuthOIDC:
 		var missing []string
 		for k, v := range map[string]string{"AGW_OIDC_ISSUER": e.OIDCIssuer, "AGW_OIDC_CLIENT_ID": e.OIDCClientID,
-			"AGW_OIDC_CLIENT_SECRET (oder AGW_PLATFORM_CLIENT_SECRET)": e.OIDCClientSecret, "AGW_PUBLIC_URL": e.PublicURL} {
+			"AGW_OIDC_CLIENT_SECRET (or AGW_PLATFORM_CLIENT_SECRET)": e.OIDCClientSecret, "AGW_PUBLIC_URL": e.PublicURL} {
 			if v == "" {
 				missing = append(missing, k)
 			}
 		}
 		if len(missing) > 0 {
 			sort.Strings(missing)
-			return fmt.Errorf("AGW_AUTH_MODE=oidc verlangt %s", strings.Join(missing, ", "))
+			return fmt.Errorf("AGW_AUTH_MODE=oidc requires %s", strings.Join(missing, ", "))
 		}
 		for _, o := range e.FrameAncestors {
 			if !strings.HasPrefix(o, "https://") && !strings.HasPrefix(o, "http://") && o != "'self'" {
-				return fmt.Errorf("AGW_FRAME_ANCESTORS: %q ist keine Herkunft (https://…)", o)
+				return fmt.Errorf("AGW_FRAME_ANCESTORS: %q is not an origin (https://…)", o)
 			}
 			if strings.ContainsAny(o, ";,") {
-				return fmt.Errorf("AGW_FRAME_ANCESTORS: %q enthält ; oder ,", o)
+				return fmt.Errorf("AGW_FRAME_ANCESTORS: %q contains ; or ,", o)
 			}
 		}
 	default:
-		return fmt.Errorf("AGW_AUTH_MODE muss token oder oidc sein, nicht %q", e.AuthMode)
+		return fmt.Errorf("AGW_AUTH_MODE must be token or oidc, not %q", e.AuthMode)
 	}
 	return nil
 }
 
-// keepAlive: AGW_BG_KEEPALIVE=0 heißt „Leerlauf nicht verschieben“ (-1 für den Manager).
+// keepAlive: AGW_BG_KEEPALIVE=0 means "do not postpone idling" (-1 for the manager).
 func keepAlive(d time.Duration) time.Duration {
 	if d <= 0 {
 		return -1
@@ -524,8 +524,8 @@ func keepAlive(d time.Duration) time.Duration {
 	return d
 }
 
-// wakes: AGW_BG_WAKES_PER_HOUR=0 (ebenso AGW_AUTO_TURNS_MAX=0) heißt „nie wecken“ (-1 für den
-// Manager, dessen 0 die Vorgabe ist).
+// wakes: AGW_BG_WAKES_PER_HOUR=0 (likewise AGW_AUTO_TURNS_MAX=0) means "never wake" (-1 for the
+// manager, whose 0 is the default).
 func wakes(n int) int {
 	if n <= 0 {
 		return -1
@@ -533,8 +533,8 @@ func wakes(n int) int {
 	return n
 }
 
-// workspaceMax: AGW_WORKSPACE_MAX_MB=0 (oder negativ) schaltet die Sicherung des
-// Arbeitsbereichs ab (-1).
+// workspaceMax: AGW_WORKSPACE_MAX_MB=0 (or negative) turns off the backup of the
+// workspace (-1).
 func workspaceMax(mb int) int64 {
 	if mb <= 0 {
 		return -1

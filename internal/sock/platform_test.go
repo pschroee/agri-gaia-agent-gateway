@@ -15,8 +15,8 @@ import (
 	"agw/internal/platform"
 )
 
-// platformBackend ist fakeBackend mit Plattform: GET geht durch, Schreibendes
-// entscheidet decide.
+// platformBackend is fakeBackend with a platform: GET goes through, decide
+// decides on writing calls.
 type platformBackend struct {
 	fakeBackend
 	reqs []string
@@ -27,7 +27,7 @@ func (p *platformBackend) PlatformCall(_ context.Context, chatID, slotID, via st
 	defer p.mu.Unlock()
 	p.reqs = append(p.reqs, chatID+"|"+via+"|"+req.String()+"|"+string(req.Body))
 	if req.Writes() && p.decide != "approved" {
-		return platform.Result{Status: "rejected", Message: "vom Nutzer abgelehnt"}, nil
+		return platform.Result{Status: "rejected", Message: "rejected by the user"}, nil
 	}
 	return platform.Result{Status: "ok", HTTPStatus: 200, Body: `[{"id":1}]`}, nil
 }
@@ -49,34 +49,34 @@ func TestPlatformViaCLI(t *testing.T) {
 	c := start(t, b)
 	code, r := cliPlatform(t, c, "datasets", `{"limit":2}`)
 	if code != 200 || r.Status != "ok" || r.Body != `[{"id":1}]` {
-		t.Fatalf("lesend: %d %+v", code, r)
+		t.Fatalf("reading: %d %+v", code, r)
 	}
 	code, r = cliPlatform(t, c, "start-training", `{"train_container_id":3}`)
 	if code != 200 || r.Status != "rejected" {
-		t.Fatalf("schreibend abgelehnt: %d %+v", code, r)
+		t.Fatalf("writing rejected: %d %+v", code, r)
 	}
 	code, r = cliPlatform(t, c, "request", `{"method":"GET","path":"/urls/basic-auth"}`)
-	if code != 200 || r.Status != "error" || !strings.Contains(r.Message, "gesperrt") {
-		t.Fatalf("gesperrter Pfad: %d %+v", code, r)
+	if code != 200 || r.Status != "error" || !strings.Contains(r.Message, "blocked") {
+		t.Fatalf("blocked path: %d %+v", code, r)
 	}
-	if code, _ := cliPlatform(t, c, "gibtsnicht", `{}`); code != 404 {
-		t.Fatalf("unbekanntes Werkzeug: %d", code)
+	if code, _ := cliPlatform(t, c, "doesnotexist", `{}`); code != 404 {
+		t.Fatalf("unknown tool: %d", code)
 	}
 	want := []string{"chat-p|cli|GET /datasets?limit=2|", "chat-p|cli|POST /train/containers/3/run|"}
 	if strings.Join(b.reqs, ";") != strings.Join(want, ";") {
-		t.Fatalf("an das Backend: %v", b.reqs)
+		t.Fatalf("to the backend: %v", b.reqs)
 	}
 	joined := strings.Join(b.calls, ";")
-	for _, w := range []string{"cli:platform:ok 200", "cli:platform:rejected", "cli:platform:abgewiesen: "} {
+	for _, w := range []string{"cli:platform:ok 200", "cli:platform:rejected", "cli:platform:refused: "} {
 		if !strings.Contains(joined, w) {
-			t.Fatalf("Protokoll ohne %q: %v", w, b.calls)
+			t.Fatalf("log without %q: %v", w, b.calls)
 		}
 	}
 	b.mu.Lock()
 	b.chat = ""
 	b.mu.Unlock()
 	if code, _ := cliPlatform(t, c, "datasets", `{}`); code != http.StatusConflict || len(b.reqs) != 2 {
-		t.Fatalf("unzugewiesen: %d %v", code, b.reqs)
+		t.Fatalf("unassigned: %d %v", code, b.reqs)
 	}
 }
 
@@ -91,11 +91,11 @@ func TestPlatformViaMCP(t *testing.T) {
 	}
 	for _, tool := range platform.Tools {
 		if names[tool.MCPName()] == nil {
-			t.Fatalf("MCP-Werkzeug %s fehlt", tool.MCPName())
+			t.Fatalf("MCP tool %s missing", tool.MCPName())
 		}
 	}
 	if d := names["platform_get_dataset"]["description"].(string); d != mustTool(t, "get_dataset").Desc {
-		t.Fatalf("Beschreibung weicht von der Tabelle ab: %s", d)
+		t.Fatalf("description differs from the table: %s", d)
 	}
 	res = mcpCall(t, c, "tools/call", map[string]any{"name": "platform_create_training", "arguments": map[string]any{
 		"provider": "Torchvision", "architecture": "EfficientNet", "category": "Classification", "dataset_id": 2, "train_config": map[string]any{"epochs": 1}}})
@@ -104,10 +104,10 @@ func TestPlatformViaMCP(t *testing.T) {
 	}
 	res = mcpCall(t, c, "tools/call", map[string]any{"name": "platform_get_dataset", "arguments": map[string]any{}})
 	if res["isError"] != true {
-		t.Fatalf("fehlendes Argument muss Fehler sein: %v", res)
+		t.Fatalf("missing argument must be an error: %v", res)
 	}
 	if len(b.reqs) != 1 || !strings.HasPrefix(b.reqs[0], "chat-m|mcp|POST /train/config|{") {
-		t.Fatalf("an das Backend: %v", b.reqs)
+		t.Fatalf("to the backend: %v", b.reqs)
 	}
 }
 
@@ -115,8 +115,8 @@ func TestPlatformNotConfigured(t *testing.T) {
 	b := &fakeBackend{chat: "chat-x"}
 	c := start(t, b)
 	_, r := cliPlatform(t, c, "datasets", `{}`)
-	if r.Status != "error" || !strings.Contains(r.Message, "nicht eingerichtet") {
-		t.Fatalf("ohne PlatformBackend: %+v", r)
+	if r.Status != "error" || !strings.Contains(r.Message, platform.ErrNotConfigured.Error()) {
+		t.Fatalf("without PlatformBackend: %+v", r)
 	}
 }
 
@@ -129,7 +129,7 @@ func mustTool(t *testing.T, name string) platform.Tool {
 	return tool
 }
 
-// recordingBackend merkt sich die gelesenen Dateien, die beim Backend ankommen.
+// uploadBackend remembers the files read that arrive at the backend.
 type uploadBackend struct {
 	platformBackend
 	uploads []platform.Upload
@@ -144,7 +144,7 @@ func (u *uploadBackend) PlatformCall(ctx context.Context, chatID, slotID, via st
 
 func startRun(t *testing.T, b Backend, run ToolRunner) *http.Client {
 	t.Helper()
-	dir, err := os.MkdirTemp("", "agwsock") // kurzer Pfad: Unix-Sockets höchstens 104 Zeichen (macOS)
+	dir, err := os.MkdirTemp("", "agwsock") // short path: Unix sockets at most 104 characters (macOS)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,36 +165,36 @@ func TestPlatformUploadReadsFromSandbox(t *testing.T) {
 	c := startRun(t, b, run)
 	code, r := cliPlatform(t, c, "upload-dataset", `{"name":"n","description":"d","files":["/workspace/a.png","/workspace/b.png"]}`)
 	if code != 200 || r.Status != "ok" {
-		t.Fatalf("CLI-Upload: %d %+v", code, r)
+		t.Fatalf("CLI upload: %d %+v", code, r)
 	}
 	res := mcpCall(t, c, "tools/call", map[string]any{"name": "platform_upload_model", "arguments": map[string]any{
 		"name": "m", "description": "d", "format": "onnx", "model_file": "/workspace/m.onnx"}})
 	if res["isError"] == true {
-		t.Fatalf("MCP-Upload: %v", res)
+		t.Fatalf("MCP upload: %v", res)
 	}
 	if len(b.uploads) != 3 || b.uploads[0].Name != "a.png" || string(b.uploads[2].Data) != "PNGDATA" || b.uploads[2].Field != "modelfile" || len(b.uploads[0].SHA256) != 64 {
-		t.Fatalf("gelesene Dateien: %+v", b.uploads)
+		t.Fatalf("files read: %+v", b.uploads)
 	}
 	var paths []string
 	for _, rq := range run.reqs {
 		paths = append(paths, rq.Op+":"+rq.Path)
 	}
 	if strings.Join(paths, ",") != "read:/workspace/a.png,read:/workspace/b.png,read:/workspace/m.onnx" {
-		t.Fatalf("Lesevorgänge in der Sandbox: %v", paths)
+		t.Fatalf("reads in the sandbox: %v", paths)
 	}
 }
 
 func TestPlatformUploadMissingFile(t *testing.T) {
 	b := &uploadBackend{platformBackend: platformBackend{fakeBackend: fakeBackend{chat: "chat-u", decide: "approved"}}}
 	c := startRun(t, b, &fakeRunner{}) // file nil: ENOENT
-	_, r := cliPlatform(t, c, "upload-model", `{"name":"m","description":"d","format":"onnx","model_file":"/workspace/fehlt.onnx"}`)
-	if r.Status != "error" || !strings.Contains(r.Message, "/workspace/fehlt.onnx") || len(b.reqs) != 0 {
-		t.Fatalf("fehlende Datei: %+v %v", r, b.reqs)
+	_, r := cliPlatform(t, c, "upload-model", `{"name":"m","description":"d","format":"onnx","model_file":"/workspace/missing.onnx"}`)
+	if r.Status != "error" || !strings.Contains(r.Message, "/workspace/missing.onnx") || len(b.reqs) != 0 {
+		t.Fatalf("missing file: %+v %v", r, b.reqs)
 	}
-	// Ohne Runner (alter Socket) keine Uploads.
+	// Without a runner (old socket) no uploads.
 	c2 := start(t, b)
-	if _, r := cliPlatform(t, c2, "upload-model", `{"name":"m","description":"d","format":"onnx","model_file":"/workspace/m.onnx"}`); r.Status != "error" || !strings.Contains(r.Message, "nicht möglich") {
-		t.Fatalf("ohne Runner: %+v", r)
+	if _, r := cliPlatform(t, c2, "upload-model", `{"name":"m","description":"d","format":"onnx","model_file":"/workspace/m.onnx"}`); r.Status != "error" || !strings.Contains(r.Message, "not possible") {
+		t.Fatalf("without runner: %+v", r)
 	}
 }
 
@@ -217,17 +217,17 @@ func apiCall(t *testing.T, c *http.Client, method, path, ctype, body string, hdr
 	return resp.StatusCode, b.String(), resp.Header
 }
 
-// Schritt 2: REST-Endpunkt am Socket.
+// Step 2: REST endpoint at the socket.
 func TestPlatformAPIEndpoint(t *testing.T) {
 	b := &platformBackend{fakeBackend: fakeBackend{chat: "chat-r", decide: "rejected"}}
-	c := start(t, b) // Socket der Ausführungs-Sandbox: Weg cli
-	code, body, _ := apiCall(t, c, "GET", "/platform-api/datasets?limit=2", "", "", map[string]string{"Authorization": "Bearer gestohlen"})
+	c := start(t, b) // socket of the execution sandbox: channel cli
+	code, body, _ := apiCall(t, c, "GET", "/platform-api/datasets?limit=2", "", "", map[string]string{"Authorization": "Bearer stolen"})
 	if code != 200 || body != `[{"id":1}]` {
 		t.Fatalf("GET: %d %s", code, body)
 	}
 	code, body, hdr := apiCall(t, c, "PATCH", "/platform-api/datasets/5", "application/json", `{"name":"x"}`, nil)
-	if code != 403 || hdr.Get("X-Agw-Outcome") != "rejected" || !strings.Contains(body, "abgelehnt") {
-		t.Fatalf("schreibend abgelehnt: %d %s", code, body)
+	if code != 403 || hdr.Get("X-Agw-Outcome") != "rejected" || !strings.Contains(body, "rejected") {
+		t.Fatalf("writing rejected: %d %s", code, body)
 	}
 	for _, bad := range []struct {
 		m, p, ct, body string
@@ -240,20 +240,20 @@ func TestPlatformAPIEndpoint(t *testing.T) {
 		{"POST", "/platform-api/datasets", "multipart/form-data; boundary=x", "--x--", 415},
 	} {
 		if code, body, _ := apiCall(t, c, bad.m, bad.p, bad.ct, bad.body, nil); code != bad.want {
-			t.Errorf("%s %s: %d %s, erwartet %d", bad.m, bad.p, code, body, bad.want)
+			t.Errorf("%s %s: %d %s, expected %d", bad.m, bad.p, code, body, bad.want)
 		}
 	}
 	want := []string{"chat-r|cli|GET /datasets?limit=2|", "chat-r|cli|PATCH /datasets/5|{\"name\":\"x\"}"}
 	if strings.Join(b.reqs, ";") != strings.Join(want, ";") {
-		t.Fatalf("an das Backend: %v", b.reqs)
+		t.Fatalf("to the backend: %v", b.reqs)
 	}
 }
 
-// Ein Übergriff kommt als 403 mit X-Agw-Outcome: denied zurück.
+// A violation comes back as 403 with X-Agw-Outcome: denied.
 type denyBackend struct{ fakeBackend }
 
 func (d *denyBackend) PlatformCall(context.Context, string, string, string, platform.Request) (platform.Result, error) {
-	return platform.Result{Status: "denied", Message: "nicht in den übertragenen Rechten: delete dataset 5"}, nil
+	return platform.Result{Status: "denied", Message: "not in the delegated rights: delete dataset 5"}, nil
 }
 
 func TestPlatformAPIDenied(t *testing.T) {
@@ -261,43 +261,43 @@ func TestPlatformAPIDenied(t *testing.T) {
 	c := start(t, b)
 	code, body, hdr := apiCall(t, c, "DELETE", "/platform-api/datasets/5", "", "", nil)
 	if code != 403 || hdr.Get("X-Agw-Outcome") != "denied" || !strings.Contains(body, "delete dataset 5") {
-		t.Fatalf("Übergriff: %d %s", code, body)
+		t.Fatalf("violation: %d %s", code, body)
 	}
 	found := false
 	for _, l := range b.calls {
-		if strings.HasPrefix(l, "cli:platform:übergriff abgewiesen") {
+		if strings.HasPrefix(l, "cli:platform:violation blocked") {
 			found = true
 		}
 	}
 	if !found {
-		t.Fatalf("Übergriff nicht protokolliert: %v", b.calls)
+		t.Fatalf("violation not logged: %v", b.calls)
 	}
 }
 
-// Review 5, M4 und M5: Pfadvarianten erreichen die Prüfung (und das Protokoll) statt einer
-// Weiterleitung der ServeMux; %20 ist die einzige erlaubte Kodierung.
+// Review 5, M4 and M5: path variants reach the check (and the log) instead of a
+// redirect by the ServeMux; %20 is the only allowed encoding.
 func TestPlatformAPIPathVariants(t *testing.T) {
 	b := &platformBackend{fakeBackend: fakeBackend{chat: "chat-v", decide: "approved"}}
 	c := start(t, b)
 	for _, p := range []string{"/platform-api/datasets/../models/1", "/platform-api//models", "/platform-api/./datasets"} {
 		code, body, _ := apiCall(t, c, "GET", p, "", "", nil)
 		if code != 400 {
-			t.Errorf("%s: %d %s, erwartet 400", p, code, body)
+			t.Errorf("%s: %d %s, expected 400", p, code, body)
 		}
 	}
 	logged := 0
 	for _, l := range b.calls {
-		if strings.HasPrefix(l, "cli:platform:abgewiesen") {
+		if strings.HasPrefix(l, "cli:platform:refused") {
 			logged++
 		}
 	}
 	if logged != 3 {
-		t.Fatalf("Pfadvarianten nicht protokolliert: %v", b.calls)
+		t.Fatalf("path variants not logged: %v", b.calls)
 	}
 	if code, body, _ := apiCall(t, c, "GET", "/platform-api/train/config/Torchvision/Mask%20R-CNN", "", "", nil); code != 200 {
 		t.Fatalf("%%20: %d %s", code, body)
 	}
 	if !strings.Contains(strings.Join(b.reqs, ";"), "GET /train/config/Torchvision/Mask R-CNN") {
-		t.Fatalf("Leerzeichen nicht dekodiert: %v", b.reqs)
+		t.Fatalf("spaces not decoded: %v", b.reqs)
 	}
 }

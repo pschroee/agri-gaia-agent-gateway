@@ -3,10 +3,10 @@ import type { Command } from "@/api/types"
 import { autoCompactSwitch, filterCommands, isBuiltinCommand, isSlashCommand, renameTitle, slashQuery } from "./commands"
 
 const cmds: Command[] = [
-  { name: "compact", description: "Kontext zusammenfassen", source: "builtin", args: "[Anweisungen]" },
-  { name: "autocompact", description: "Automatik ein/aus", source: "builtin", args: "on|off" },
-  { name: "skill:review", description: "Code prüfen", source: "skill" },
-  { name: "commit", description: "Git-Commit vorbereiten", source: "prompt" },
+  { name: "compact", description: "Summarize context", source: "builtin", args: "[instructions]" },
+  { name: "autocompact", description: "Automatic on/off", source: "builtin", args: "on|off" },
+  { name: "skill:review", description: "Review code", source: "skill" },
+  { name: "commit", description: "Prepare git commit", source: "prompt" },
 ]
 
 describe("slashQuery", () => {
@@ -17,13 +17,13 @@ describe("slashQuery", () => {
   ])("%s → %s", (text, q) => {
     expect(slashQuery(text)).toBe(q)
   })
-  it.each(["", "hallo /co", " /co", "/compact jetzt", "/compact\n"])("kein Popover bei %j", (text) => {
+  it.each(["", "hello /co", " /co", "/compact now", "/compact\n"])("no popover for %j", (text) => {
     expect(slashQuery(text)).toBeUndefined()
   })
 })
 
 describe("filterCommands", () => {
-  it("blendet Befehle aus, die nur in pis Terminal wirken (/todos)", () => {
+  it("hides commands that only work in pi's terminal (/todos)", () => {
     const list = [
       { name: "todos", source: "extension" },
       { name: "compact", source: "builtin" },
@@ -31,17 +31,17 @@ describe("filterCommands", () => {
     expect(filterCommands(list, "").map((c) => c.name)).toEqual(["compact"])
     expect(filterCommands(list, "todo").map((c) => c.name)).toEqual([])
   })
-  it("zeigt bei leerer Eingabe alle", () => {
+  it("shows all for empty input", () => {
     expect(filterCommands(cmds, "").map((c) => c.name)).toEqual(["compact", "autocompact", "skill:review", "commit"])
   })
-  it("stellt Präfixtreffer vor Teiltreffer", () => {
+  it("puts prefix matches before partial matches", () => {
     expect(filterCommands(cmds, "comp").map((c) => c.name)).toEqual(["compact", "autocompact"])
     expect(filterCommands(cmds, "co").map((c) => c.name)).toEqual(["compact", "commit", "autocompact"])
   })
-  it("sucht auch in der Beschreibung, nachrangig", () => {
-    expect(filterCommands(cmds, "prüfen").map((c) => c.name)).toEqual(["skill:review"])
+  it("also searches the description, with lower priority", () => {
+    expect(filterCommands(cmds, "review c").map((c) => c.name)).toEqual(["skill:review"])
   })
-  it("ignoriert Groß- und Kleinschreibung", () => {
+  it("ignores case", () => {
     expect(filterCommands(cmds, "SKILL").map((c) => c.name)).toEqual(["skill:review"])
   })
 })
@@ -49,10 +49,10 @@ describe("filterCommands", () => {
 describe("isSlashCommand", () => {
   it.each([
     ["/compact", true],
-    ["  /compact Fokus", true],
+    ["  /compact focus", true],
     ["/", false],
-    ["Pfad /workspace", false],
-    ["//kommentar", false],
+    ["path /workspace", false],
+    ["//comment", false],
   ])("%j → %s", (text, yes) => {
     expect(isSlashCommand(text)).toBe(yes)
   })
@@ -61,11 +61,12 @@ describe("isSlashCommand", () => {
 describe("autoCompactSwitch", () => {
   it.each([
     ["/autocompact on", true],
-    ["  /autocompact AUS ", false],
-    ["/autocompact ein", true],
+    ["  /autocompact OFF ", false],
+    ["/autocompact true", true],
+    ["/autocompact aus", undefined],
     ["/autocompact off", false],
     ["/autocompact", undefined],
-    ["/autocompact vielleicht", undefined],
+    ["/autocompact maybe", undefined],
     ["/compact", undefined],
   ])("%j → %s", (text, want) => {
     expect(autoCompactSwitch(text)).toBe(want)
@@ -73,20 +74,20 @@ describe("autoCompactSwitch", () => {
 })
 
 describe("isBuiltinCommand", () => {
-  it("erkennt nur /compact und /autocompact", () => {
+  it("recognises only the built-in commands", () => {
     expect(isBuiltinCommand("/compact")).toBe(true)
-    expect(isBuiltinCommand("/compact Fokus")).toBe(true)
+    expect(isBuiltinCommand("/compact focus")).toBe(true)
     expect(isBuiltinCommand("/autocompact off")).toBe(true)
     expect(isBuiltinCommand("/compactor")).toBe(false)
-    expect(isBuiltinCommand("/skill:bericht")).toBe(false)
-    expect(isBuiltinCommand("/rename Neuer Name")).toBe(true)
+    expect(isBuiltinCommand("/skill:report")).toBe(false)
+    expect(isBuiltinCommand("/rename New name")).toBe(true)
     expect(isBuiltinCommand("/renamed")).toBe(false)
   })
 })
 
 describe("renameTitle", () => {
-  it("liest den Namen aus /rename", () => {
-    expect(renameTitle("/rename  Schwanzbeißen:  Klassen ")).toBe("Schwanzbeißen: Klassen")
+  it("reads the name from /rename", () => {
+    expect(renameTitle("/rename  Tail biting:  classes ")).toBe("Tail biting: classes")
     expect(renameTitle("/rename")).toBeUndefined()
     expect(renameTitle("/compact x")).toBeUndefined()
   })

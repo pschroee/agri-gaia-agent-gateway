@@ -1,5 +1,5 @@
-// Meldungen des Orchestrators im Verlauf (Ende einer Hintergrundaufgabe, Hinweis auf mit der Sandbox
-// beendete Aufgaben): schmale graue Zeile statt Nutzerblase, aufklappbar. Erkennung in lib/systemnote.
+// Orchestrator notes in the history (end of a background task, notice about tasks ended with the
+// sandbox): narrow grey line instead of a user bubble, expandable. Detection in lib/systemnote.
 import { useState } from "react"
 import { BellIcon, ChevronRightIcon, SquareArrowOutUpRightIcon } from "lucide-react"
 import type { TurnTrigger } from "@/api/types"
@@ -15,7 +15,7 @@ export function SystemNoteLine({
   onOpenBackground,
 }: {
   part: SystemPart
-  /** Auslöser des Durchgangs laut Server (wake: ohne Zutun des Nutzers) */
+  /** Trigger of the turn according to the server (wake: without the user's doing) */
   trigger?: TurnTrigger
   onOpenBackground?: (id?: string) => void
 }) {
@@ -23,9 +23,9 @@ export function SystemNoteLine({
   const note = part.note
   const label = note.label
   const woke = trigger === "wake"
-  const title = `Meldung des Orchestrators an den Agenten, nicht vom Nutzer (laut Server)${
-    woke ? "; Weckruf: hat einen Durchgang ohne Nutzer gestartet" : ""
-  }. Befehl und Ausgabe stammen aus der Sandbox und gingen eingezäunt an den Agenten.`
+  const title = `Orchestrator note to the agent, not from the user (according to the server)${
+    woke ? "; wake-up: started a turn without the user" : ""
+  }. Command and output come from the sandbox and were passed to the agent fenced.`
   const bgId = note.refs[0]
   return (
     <Collapsible open={open} onOpenChange={setOpen} className="min-w-0 text-xs text-muted-foreground" role="note">
@@ -37,14 +37,14 @@ export function SystemNoteLine({
           <ChevronRightIcon className={cn("size-3 shrink-0 transition-transform", open && "rotate-90")} />
           <BellIcon className="size-3 shrink-0" />
           <span className="min-w-0 truncate">{label}</span>
-          {woke && <span className="hidden shrink-0 sm:inline">· Weckruf</span>}
+          {woke && <span className="hidden shrink-0 sm:inline">· wake-up</span>}
         </CollapsibleTrigger>
         {onOpenBackground && bgId && (
           <button
             type="button"
             className="shrink-0 rounded p-0.5 hover:bg-muted hover:text-foreground"
-            title="Im Reiter „Hintergrund“ zeigen"
-            aria-label={`${bgId} im Reiter „Hintergrund“ zeigen`}
+            title="Show in the Background tab"
+            aria-label={`Show ${bgId} in the Background tab`}
             onClick={() => onOpenBackground(bgId)}
           >
             <SquareArrowOutUpRightIcon className="size-3" />
@@ -67,20 +67,20 @@ export function SystemNoteLine({
           ) : (
             <>
               {note.command !== undefined && (
-                <div className="font-mono break-all" title="Befehl">
+                <div className="font-mono break-all" title="Command">
                   {note.command}
                 </div>
               )}
-              {note.error && <div className="mt-1 break-words">Fehler: {note.error}</div>}
+              {note.error && <div className="mt-1 break-words">Error: {note.error}</div>}
               {note.lines.length > 0 ? (
                 <>
-                  <div className="mt-1">Letzte Zeilen{note.totalLines !== undefined ? ` (von ${note.totalLines})` : ""}</div>
+                  <div className="mt-1">Last lines{note.totalLines !== undefined ? ` (of ${note.totalLines})` : ""}</div>
                   <pre className="mt-0.5 max-h-48 overflow-auto rounded bg-muted p-1.5 font-mono text-[11px] leading-snug whitespace-pre-wrap break-all text-foreground/80">
                     {note.lines.join("\n")}
                   </pre>
                 </>
               ) : (
-                note.noOutput && <div className="mt-1">Keine Ausgabe.</div>
+                note.noOutput && <div className="mt-1">No output.</div>
               )}
               {note.logPath && <div className="mt-0.5 font-mono break-all">{note.logPath}</div>}
             </>
@@ -92,26 +92,26 @@ export function SystemNoteLine({
 }
 
 /**
- * Nachricht einer Erweiterung in pi an den Agenten, etwa „Subagent fertig“ von pi-subagents: schmale
- * graue Zeile, aufklappbar mit dem vollen Text. Nicht vom Nutzer; mit „Weckruf“, wenn sie einen
- * Durchgang ohne Nutzer begonnen hat.
+ * Message from an extension in pi to the agent, e.g. "subagent done" from pi-subagents: narrow grey
+ * line, expandable to the full text. Not from the user; marked "wake-up" if it started a turn
+ * without the user.
  */
 export function PiNoticeLine({ text, customType, trigger }: { text: string; customType?: string; trigger?: TurnTrigger }) {
   const [open, setOpen] = useState(false)
   const first = text.split("\n").find((l) => l.trim()) ?? ""
-  const from = customType?.startsWith("subagent") ? "Subagenten" : "Erweiterung"
+  const from = customType?.startsWith("subagent") ? "subagents" : "extension"
   const woke = trigger === "wake"
   return (
     <Collapsible open={open} onOpenChange={setOpen} className="min-w-0 text-xs text-muted-foreground" role="note">
       <CollapsibleTrigger
         className="flex w-full min-w-0 items-center gap-1.5 rounded-md py-0.5 text-left hover:text-foreground"
-        title={`Meldung von ${from === "Subagenten" ? "pi-subagents" : "einer Erweiterung in pi"} an den Agenten, nicht vom Nutzer${woke ? "; Weckruf: hat einen Durchgang ohne Nutzer begonnen" : ""}${customType ? ` (${customType})` : ""}`}
+        title={`Message from ${from === "subagents" ? "pi-subagents" : "an extension in pi"} to the agent, not from the user${woke ? "; wake-up: started a turn without the user" : ""}${customType ? ` (${customType})` : ""}`}
       >
         <ChevronRightIcon className={cn("size-3 shrink-0 transition-transform", open && "rotate-90")} />
         <BellIcon className="size-3 shrink-0" />
-        <span className="shrink-0">Meldung der {from}:</span>
+        <span className="shrink-0">Message from {from}:</span>
         <span className="min-w-0 truncate">{first}</span>
-        {woke && <span className="hidden shrink-0 sm:inline">· Weckruf</span>}
+        {woke && <span className="hidden shrink-0 sm:inline">· wake-up</span>}
       </CollapsibleTrigger>
       <CollapsibleContent>
         <pre className="mt-1 ml-4.5 max-h-64 overflow-auto border-l-2 pl-2.5 font-sans text-xs whitespace-pre-wrap break-words">{text}</pre>

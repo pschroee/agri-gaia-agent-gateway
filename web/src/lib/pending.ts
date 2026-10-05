@@ -14,7 +14,7 @@ export type PendingItem = {
 
 const MAX_DETAIL = 80
 
-/** Einträge der Klappliste „Offene Bestätigungen“: nur offene, älteste zuerst. */
+/** Entries of the "Pending approvals" drop-down: only pending ones, oldest first. */
 export function pendingMenuItems(approvals: Approval[], titles: Record<string, string>): PendingItem[] {
   return approvals
     .filter((a) => a.state === "pending")
@@ -28,7 +28,7 @@ export function pendingMenuItems(approvals: Approval[], titles: Record<string, s
         id: a.id,
         chatId: a.chat_id,
         chatTitle: titles[a.chat_id] ?? `Chat ${a.chat_id.slice(0, 8)}`,
-        label: internet ? "Internetzugang" : plattform ? "Plattform-Aufruf" : "Artefakt hochladen",
+        label: internet ? "Internet access" : plattform ? "Platform call" : "Upload artifact",
         detail,
         createdAt: a.created_at,
         href: `#/chats/${a.chat_id}`,

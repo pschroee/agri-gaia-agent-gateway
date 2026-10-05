@@ -1,11 +1,11 @@
-// Package oidc meldet Nutzer über den Keycloak der Plattform an: Authorization Code Flow mit PKCE
-// (S256) und state, vertraulicher Client (agw-agent). Die Tokens des Nutzers bleiben im
-// Orchestrator; der Browser bekommt nur ein Sitzungs-Cookie mit einer zufälligen Kennung.
+// Package oidc logs users in through the platform's Keycloak: authorization code flow with PKCE
+// (S256) and state, confidential client (agw-agent). The user's tokens stay in the
+// orchestrator; the browser only gets a session cookie with a random identifier.
 //
-// Sitzungen liegen im Speicher und gehen mit einem Neustart verloren; die UI meldet sich dann mit
-// prompt=none still neu an, solange die Keycloak-Sitzung in der Plattform besteht. Das Zugangstoken
-// des Nutzers ist das subject_token für den Token-Austausch je Chat (Paket platform): Keycloak
-// tauscht Tokens, die an agw-agent selbst ausgestellt sind.
+// Sessions live in memory and are lost on a restart; the UI then logs in again silently with
+// prompt=none, as long as the Keycloak session in the platform exists. The user's access token
+// is the subject_token for the token exchange per chat (package platform): Keycloak
+// exchanges tokens that were issued to agw-agent itself.
 package oidc
 
 import (
@@ -33,38 +33,38 @@ import (
 	"agw/internal/config"
 )
 
-// Config sind die Einstellungen aus der Umgebung (AGW_OIDC_*, AGW_PUBLIC_URL).
+// Config holds the settings from the environment (AGW_OIDC_*, AGW_PUBLIC_URL).
 type Config struct {
-	Issuer       string // https://keycloak.<basis>/realms/<realm>
+	Issuer       string // https://keycloak.<base>/realms/<realm>
 	ClientID     string
 	ClientSecret string
-	// PublicURL: öffentliche Adresse der UI, auch mit Pfad (https://app.<basis>/agent), wenn ein Proxy
-	// den Pfad vorher abschneidet. Redirect-URI = PublicURL + CallbackPath.
+	// PublicURL: public address of the UI, possibly with a path (https://app.<base>/agent) if a proxy
+	// strips the path beforehand. Redirect URI = PublicURL + CallbackPath.
 	PublicURL string
 	HTTP      *http.Client
-	Now       func() time.Time // für Tests
+	Now       func() time.Time // for tests
 }
 
 const (
-	// SessionCookie trägt die Kennung der Sitzung (32 Zufallsbytes, base64url).
+	// SessionCookie carries the session identifier (32 random bytes, base64url).
 	SessionCookie = "agw_session"
-	statePrefix   = "agw_oidc_" // + state: je Anmeldung ein eigenes Cookie, zwei Tabs stören sich nicht
+	statePrefix   = "agw_oidc_" // + state: one cookie per login, two tabs do not interfere
 	LoginPath     = "/oidc/login"
 	CallbackPath  = "/oidc/callback"
 	LogoutPath    = "/oidc/logout"
 
-	// MaxSession: So lange gilt eine Sitzung höchstens, auch wenn Keycloak weiter erneuert.
+	// MaxSession: a session is valid at most this long, even if Keycloak keeps renewing.
 	MaxSession = 12 * time.Hour
 	stateTTL   = 10 * time.Minute
-	refreshAt  = 30 * time.Second // Zugangstoken früher erneuern
-	leeway     = 60 * time.Second // Uhrenabweichung bei exp
+	refreshAt  = 30 * time.Second // renew the access token earlier
+	leeway     = 60 * time.Second // clock skew for exp
 )
 
-// ErrNoSession: Der Nutzer hat keine gültige Sitzung (mehr) am Orchestrator. Der Text geht als
-// Fehler eines Plattform-Aufrufs an den Agenten und in die UI.
-var ErrNoSession = errors.New("Anmeldung des Nutzers abgelaufen; Chat in der Plattform öffnen")
+// ErrNoSession: the user has no valid session (any more) at the orchestrator. The text goes to the
+// agent as the error of a platform call and into the UI.
+var ErrNoSession = errors.New("user login expired; open the chat in the platform")
 
-// User ist der angemeldete Nutzer.
+// User is the logged-in user.
 type User struct {
 	Sub      string `json:"sub"`
 	Username string `json:"username"`
@@ -72,19 +72,19 @@ type User struct {
 }
 
 type session struct {
-	mu        sync.Mutex // eine Erneuerung zur Zeit
+	mu        sync.Mutex // one renewal at a time
 	user      User
 	access    string
 	refresh   string
-	expiresAt time.Time // des Zugangstokens
+	expiresAt time.Time // of the access token
 	created   time.Time
 	dropped   bool
 }
 
-// Service hält Sitzungen, Discovery und Schlüssel des Issuers.
+// Service holds sessions, discovery and the issuer's keys.
 type Service struct {
 	cfg      Config
-	base     string // Pfad von PublicURL ("" oder /agent)
+	base     string // path of PublicURL ("" or /agent)
 	redirect string
 	secure   bool
 
@@ -103,29 +103,29 @@ type discovery struct {
 	JWKS          string `json:"jwks_uri"`
 }
 
-// New prüft die Einstellungen; Keycloak wird erst bei der ersten Anmeldung gefragt, damit der
-// Orchestrator auch startet, wenn Keycloak gerade nicht erreichbar ist.
+// New checks the settings; Keycloak is only asked at the first login, so that the
+// orchestrator also starts when Keycloak is currently unreachable.
 func New(cfg Config) (*Service, error) {
 	cfg.Issuer = strings.TrimRight(cfg.Issuer, "/")
 	cfg.PublicURL = strings.TrimRight(cfg.PublicURL, "/")
 	iu, err := url.Parse(cfg.Issuer)
 	if err != nil || (iu.Scheme != "https" && iu.Scheme != "http") || iu.Host == "" {
-		return nil, fmt.Errorf("AGW_OIDC_ISSUER ungültig: %q", cfg.Issuer)
+		return nil, fmt.Errorf("AGW_OIDC_ISSUER invalid: %q", cfg.Issuer)
 	}
 	pu, err := url.Parse(cfg.PublicURL)
 	if err != nil || (pu.Scheme != "https" && pu.Scheme != "http") || pu.Host == "" || pu.RawQuery != "" || pu.Fragment != "" || pu.User != nil {
-		return nil, fmt.Errorf("AGW_PUBLIC_URL ungültig (https://host oder https://host/pfad): %q", cfg.PublicURL)
+		return nil, fmt.Errorf("AGW_PUBLIC_URL invalid (https://host or https://host/path): %q", cfg.PublicURL)
 	}
 	base, err := config.BasePath(cfg.PublicURL)
 	if err != nil {
 		return nil, err
 	}
 	if cfg.ClientID == "" || cfg.ClientSecret == "" {
-		return nil, errors.New("OIDC: Client-Kennung und Secret müssen gesetzt sein")
+		return nil, errors.New("OIDC: client ID and secret must be set")
 	}
 	local := pu.Hostname() == "localhost" || pu.Hostname() == "127.0.0.1"
 	if pu.Scheme == "http" && !local {
-		slog.Warn("AGW_PUBLIC_URL ohne TLS: Browser speichern das Sitzungs-Cookie (Secure) dort nicht", "url", cfg.PublicURL)
+		slog.Warn("AGW_PUBLIC_URL without TLS: browsers do not store the session cookie (Secure) there", "url", cfg.PublicURL)
 	}
 	if cfg.HTTP == nil {
 		tr := http.DefaultTransport.(*http.Transport).Clone()
@@ -133,7 +133,7 @@ func New(cfg Config) (*Service, error) {
 		cfg.HTTP = &http.Client{Timeout: 20 * time.Second, Transport: tr}
 	}
 	hc := *cfg.HTTP
-	// Weiterleitungen folgt kein Aufruf an Keycloak: Code und Secret gehen nur an den Token-Endpunkt.
+	// No call to Keycloak follows redirects: code and secret only go to the token endpoint.
 	hc.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	cfg.HTTP = &hc
 	if cfg.Now == nil {
@@ -143,7 +143,7 @@ func New(cfg Config) (*Service, error) {
 		sessions: map[string]*session{}, keys: map[string]*rsa.PublicKey{}}, nil
 }
 
-// Handler bedient /oidc/login, /oidc/callback und /oidc/logout.
+// Handler serves /oidc/login, /oidc/callback and /oidc/logout.
 func (s *Service) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET "+LoginPath, s.login)
@@ -154,9 +154,9 @@ func (s *Service) Handler() http.Handler {
 	return mux
 }
 
-// SessionUser liefert den Nutzer zum Sitzungs-Cookie der Anfrage. Ein Zugangstoken kurz vor
-// Ablauf wird dabei erneuert; das hält zugleich die Keycloak-Sitzung am Leben, solange die UI offen
-// ist. Weist Keycloak die Erneuerung ab, endet die Sitzung.
+// SessionUser returns the user for the request's session cookie. An access token close to
+// expiry is renewed on the way; this also keeps the Keycloak session alive while the UI is
+// open. If Keycloak refuses the renewal, the session ends.
 func (s *Service) SessionUser(r *http.Request) (User, bool) {
 	c, err := r.Cookie(SessionCookie)
 	if err != nil || c.Value == "" {
@@ -174,8 +174,8 @@ func (s *Service) SessionUser(r *http.Request) (User, bool) {
 	return ss.user, true
 }
 
-// AccessToken liefert ein gültiges Zugangstoken des Nutzers sub aus seiner jüngsten Sitzung,
-// bei Bedarf erneuert. Ohne lebende Sitzung: ErrNoSession.
+// AccessToken returns a valid access token of user sub from their most recent session,
+// renewed if needed. Without a live session: ErrNoSession.
 func (s *Service) AccessToken(ctx context.Context, sub string) (string, error) {
 	if sub == "" {
 		return "", ErrNoSession
@@ -190,9 +190,9 @@ func (s *Service) AccessToken(ctx context.Context, sub string) (string, error) {
 			return tok, nil
 		}
 		if !errors.Is(err, ErrNoSession) {
-			return "", err // Keycloak nicht erreichbar o. Ä.: die Sitzung bleibt
+			return "", err // Keycloak unreachable or similar: the session stays
 		}
-		// Diese Sitzung ist verworfen; eine ältere kann noch gelten.
+		// This session has been discarded; an older one may still be valid.
 	}
 }
 
@@ -213,8 +213,8 @@ func (s *Service) newestSession(sub string) (string, *session) {
 	return bestID, best
 }
 
-// fresh liefert das Zugangstoken der Sitzung und erneuert es kurz vor Ablauf. ErrNoSession heißt:
-// Sitzung verworfen (abgelaufen, von Keycloak abgewiesen).
+// fresh returns the session's access token and renews it shortly before expiry. ErrNoSession means:
+// session discarded (expired, refused by Keycloak).
 func (s *Service) fresh(ctx context.Context, id string, ss *session) (string, error) {
 	ss.mu.Lock()
 	defer ss.mu.Unlock()
@@ -233,14 +233,14 @@ func (s *Service) fresh(ctx context.Context, id string, ss *session) (string, er
 	t, status, err := s.token(ctx, url.Values{"grant_type": {"refresh_token"}, "refresh_token": {ss.refresh}})
 	if err != nil {
 		if status == http.StatusBadRequest || status == http.StatusUnauthorized {
-			slog.Info("Sitzung beendet: Keycloak weist die Erneuerung ab", "nutzer", ss.user.Username, "fehler", err)
+			slog.Info("session ended: Keycloak refuses the renewal", "user", ss.user.Username, "error", err)
 			s.drop(id)
 			return "", ErrNoSession
 		}
 		if ss.expiresAt.After(now) {
-			return ss.access, nil // noch gültig; beim nächsten Mal erneut versuchen
+			return ss.access, nil // still valid; try again next time
 		}
-		return "", fmt.Errorf("Zugangstoken erneuern: %w", err)
+		return "", fmt.Errorf("renew access token: %w", err)
 	}
 	cl, err := s.verify(ctx, t.Access)
 	if err == nil {
@@ -248,7 +248,7 @@ func (s *Service) fresh(ctx context.Context, id string, ss *session) (string, er
 	}
 	if err != nil {
 		s.drop(id)
-		return "", fmt.Errorf("%w (erneuertes Token ungültig: %v)", ErrNoSession, err)
+		return "", fmt.Errorf("%w (renewed token invalid: %v)", ErrNoSession, err)
 	}
 	ss.access, ss.expiresAt = t.Access, s.expiry(t, cl)
 	if t.Refresh != "" {
@@ -266,14 +266,14 @@ func (s *Service) drop(id string) {
 	}
 }
 
-// Sessions zählt die lebenden Sitzungen (Tests, Protokoll).
+// Sessions counts the live sessions (tests, log).
 func (s *Service) Sessions() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return len(s.sessions)
 }
 
-// --- Anmeldung -------------------------------------------------------------------------------
+// --- Login -------------------------------------------------------------------------------------
 
 type loginState struct {
 	State    string `json:"s"`
@@ -285,8 +285,8 @@ type loginState struct {
 func (s *Service) login(w http.ResponseWriter, r *http.Request) {
 	d, err := s.discovery(r.Context())
 	if err != nil {
-		slog.Error("OIDC: Discovery gescheitert", "fehler", err)
-		s.page(w, http.StatusBadGateway, "Anmeldung nicht möglich: Keycloak ist nicht erreichbar.", "")
+		slog.Error("OIDC: discovery failed", "error", err)
+		s.page(w, http.StatusBadGateway, "Login not possible: Keycloak is unreachable.", "")
 		return
 	}
 	st := loginState{State: randomString(16), Verifier: randomString(32), Nonce: randomString(16), Return: s.safeReturn(r.URL.Query().Get("return"))}
@@ -315,7 +315,7 @@ func (s *Service) login(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, d.Authorization+sep+q.Encode(), http.StatusFound)
 }
 
-// silentErrors: Antworten auf prompt=none, wenn in Keycloak niemand angemeldet ist.
+// silentErrors: responses to prompt=none when nobody is logged in to Keycloak.
 var silentErrors = map[string]bool{"login_required": true, "interaction_required": true, "consent_required": true, "account_selection_required": true}
 
 func (s *Service) callback(w http.ResponseWriter, r *http.Request) {
@@ -328,53 +328,53 @@ func (s *Service) callback(w http.ResponseWriter, r *http.Request) {
 			ret = st.Return
 		}
 		if silentErrors[e] {
-			s.page(w, http.StatusUnauthorized, "Nicht angemeldet. Bitte in der Plattform anmelden.", ret)
+			s.page(w, http.StatusUnauthorized, "Not logged in. Please log in to the platform.", ret)
 			return
 		}
-		slog.Warn("OIDC: Keycloak meldet einen Fehler", "fehler", e, "beschreibung", q.Get("error_description"))
-		s.page(w, http.StatusUnauthorized, "Anmeldung fehlgeschlagen: "+e, ret)
+		slog.Warn("OIDC: Keycloak reports an error", "error", e, "description", q.Get("error_description"))
+		s.page(w, http.StatusUnauthorized, "Login failed: "+e, ret)
 		return
 	}
 	if !ok {
-		s.page(w, http.StatusBadRequest, "Anmeldung abgelaufen oder ungültig. Bitte erneut anmelden.", s.base+"/")
+		s.page(w, http.StatusBadRequest, "Login expired or invalid. Please log in again.", s.base+"/")
 		return
 	}
 	code := q.Get("code")
 	if code == "" {
-		s.page(w, http.StatusBadRequest, "Anmeldung fehlgeschlagen: kein Code.", st.Return)
+		s.page(w, http.StatusBadRequest, "Login failed: no code.", st.Return)
 		return
 	}
 	ctx := r.Context()
 	t, _, err := s.token(ctx, url.Values{"grant_type": {"authorization_code"}, "code": {code}, "redirect_uri": {s.redirect}, "code_verifier": {st.Verifier}})
 	if err != nil {
-		slog.Warn("OIDC: Code-Tausch gescheitert", "fehler", err)
-		s.page(w, http.StatusBadGateway, "Anmeldung fehlgeschlagen: Keycloak hat den Code nicht angenommen.", st.Return)
+		slog.Warn("OIDC: code exchange failed", "error", err)
+		s.page(w, http.StatusBadGateway, "Login failed: Keycloak did not accept the code.", st.Return)
 		return
 	}
 	user, access, err := s.checkLogin(ctx, t, st.Nonce)
 	if err != nil {
-		slog.Warn("OIDC: Token abgewiesen", "fehler", err)
-		s.page(w, http.StatusUnauthorized, "Anmeldung fehlgeschlagen: Token ungültig.", st.Return)
+		slog.Warn("OIDC: token refused", "error", err)
+		s.page(w, http.StatusUnauthorized, "Login failed: invalid token.", st.Return)
 		return
 	}
 	id := randomString(32)
 	now := s.cfg.Now()
 	s.mu.Lock()
-	for k, ss := range s.sessions { // aufräumen: abgelaufene Sitzungen
+	for k, ss := range s.sessions { // clean up: expired sessions
 		if now.Sub(ss.created) > MaxSession {
 			delete(s.sessions, k)
 		}
 	}
 	s.sessions[id] = &session{user: user, access: t.Access, refresh: t.Refresh, expiresAt: s.expiry(t, access), created: now}
 	s.mu.Unlock()
-	slog.Info("Nutzer angemeldet", "nutzer", user.Username, "sub", user.Sub)
+	slog.Info("user logged in", "user", user.Username, "sub", user.Sub)
 	http.SetCookie(w, &http.Cookie{Name: SessionCookie, Value: id, Path: s.base + "/", MaxAge: int(MaxSession.Seconds()),
 		HttpOnly: true, Secure: s.secure, SameSite: http.SameSiteLaxMode})
 	w.Header().Set("Cache-Control", "no-store")
 	http.Redirect(w, r, st.Return, http.StatusSeeOther)
 }
 
-// takeState liest das Cookie der Anmeldung zum state-Parameter, prüft es und löscht es.
+// takeState reads the login cookie for the state parameter, checks it and deletes it.
 func (s *Service) takeState(w http.ResponseWriter, r *http.Request, state string) (loginState, bool) {
 	if state == "" || len(state) > 64 || strings.ContainsAny(state, "=;, ") {
 		return loginState{}, false
@@ -404,11 +404,11 @@ func (s *Service) logout(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// Base ist der Pfad von AGW_PUBLIC_URL ("" oder etwa "/agent").
+// Base is the path of AGW_PUBLIC_URL ("" or e.g. "/agent").
 func (s *Service) Base() string { return s.base }
 
-// safeReturn lässt nur Pfade unter der eigenen Basis auf diesem Host zu (kein //host, kein Schema,
-// nicht …/oidc/…, kein Ausbruch per ..). Sonst geht es zur Startseite der UI.
+// safeReturn only allows paths under our own base on this host (no //host, no scheme,
+// not …/oidc/…, no escape via ..). Otherwise it goes to the UI's start page.
 func (s *Service) safeReturn(p string) string {
 	home := s.base + "/"
 	if p == "" || len(p) > 512 || !strings.HasPrefix(p, home) || strings.HasPrefix(p, "//") || strings.HasPrefix(p, s.base+"/oidc/") ||
@@ -419,14 +419,14 @@ func (s *Service) safeReturn(p string) string {
 	if err != nil || u.Scheme != "" || u.Host != "" {
 		return home
 	}
-	// Der Browser löst ./ und ../ (auch %2e%2e) auf; das Ziel muss danach noch unter der Basis liegen.
+	// The browser resolves ./ and ../ (also %2e%2e); the target must still be under the base afterwards.
 	if c := path.Clean(u.Path); c != s.base && !strings.HasPrefix(c, home) || strings.HasPrefix(c, s.base+"/oidc/") || c == s.base+"/oidc" {
 		return home
 	}
 	return p
 }
 
-// page zeigt eine kleine Seite statt der UI (abgewiesene oder gescheiterte Anmeldung).
+// page shows a small page instead of the UI (refused or failed login).
 func (s *Service) page(w http.ResponseWriter, code int, msg, ret string) {
 	link := s.base + LoginPath
 	if ret != "" && ret != s.base+"/" {
@@ -436,10 +436,10 @@ func (s *Service) page(w http.ResponseWriter, code int, msg, ret string) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(code)
 	fmt.Fprintf(w, `<!doctype html>
-<html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Agent: Anmeldung</title>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent: login</title>
 <style>body{font-family:system-ui,sans-serif;margin:2rem 1rem;color:#1f2937;line-height:1.5}a{color:#0f5432}</style>
-</head><body><p>%s</p><p><a href="%s" target="_blank" rel="noopener">Anmelden</a></p></body></html>
+</head><body><p>%s</p><p><a href="%s" target="_blank" rel="noopener">Log in</a></p></body></html>
 `, html.EscapeString(msg), html.EscapeString(link))
 }
 
@@ -454,7 +454,7 @@ type tokenResp struct {
 	Description string `json:"error_description"`
 }
 
-// token schickt ein Formular an den Token-Endpunkt (client_secret_post) und liefert auch den Status.
+// token sends a form to the token endpoint (client_secret_post) and also returns the status.
 func (s *Service) token(ctx context.Context, form url.Values) (tokenResp, int, error) {
 	d, err := s.discovery(ctx)
 	if err != nil {
@@ -474,10 +474,10 @@ func (s *Service) token(ctx context.Context, form url.Values) (tokenResp, int, e
 	defer resp.Body.Close()
 	var t tokenResp
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&t); err != nil {
-		return tokenResp{}, resp.StatusCode, fmt.Errorf("Token-Antwort %d unlesbar", resp.StatusCode)
+		return tokenResp{}, resp.StatusCode, fmt.Errorf("token response %d unreadable", resp.StatusCode)
 	}
 	if resp.StatusCode != http.StatusOK || t.Access == "" {
-		return tokenResp{}, resp.StatusCode, fmt.Errorf("Keycloak antwortet %d: %s %s", resp.StatusCode, t.Error, t.Description)
+		return tokenResp{}, resp.StatusCode, fmt.Errorf("Keycloak responds %d: %s %s", resp.StatusCode, t.Error, t.Description)
 	}
 	return t, resp.StatusCode, nil
 }
@@ -495,10 +495,10 @@ func (s *Service) discovery(ctx context.Context) (*discovery, error) {
 		return nil, err
 	}
 	if strings.TrimRight(d.Issuer, "/") != s.cfg.Issuer {
-		return nil, fmt.Errorf("Discovery nennt Issuer %q, eingestellt ist %q", d.Issuer, s.cfg.Issuer)
+		return nil, fmt.Errorf("discovery names issuer %q, configured is %q", d.Issuer, s.cfg.Issuer)
 	}
 	if d.Authorization == "" || d.Token == "" || d.JWKS == "" {
-		return nil, errors.New("Discovery unvollständig (authorization_endpoint, token_endpoint, jwks_uri)")
+		return nil, errors.New("discovery incomplete (authorization_endpoint, token_endpoint, jwks_uri)")
 	}
 	s.mu.Lock()
 	s.disc, s.discAt = &d, s.cfg.Now()
@@ -518,14 +518,14 @@ func (s *Service) getJSON(ctx context.Context, u string, v any) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("%s antwortet %d", u, resp.StatusCode)
+		return fmt.Errorf("%s responds %d", u, resp.StatusCode)
 	}
 	return json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(v)
 }
 
-// --- Prüfung der Tokens ------------------------------------------------------------------------
+// --- Token checks ------------------------------------------------------------------------------
 
-// Claims sind die geprüften Angaben eines Tokens.
+// Claims are the verified details of a token.
 type Claims struct {
 	Iss      string   `json:"iss"`
 	Sub      string   `json:"sub"`
@@ -565,31 +565,31 @@ func (a audience) has(s string) bool {
 	return false
 }
 
-// checkLogin prüft ID-Token (Signatur, iss, aud, azp, exp, nonce) und Zugangstoken (Signatur, iss,
-// azp, exp, gleicher sub) der Antwort auf den Code-Tausch.
+// checkLogin checks the ID token (signature, iss, aud, azp, exp, nonce) and the access token (signature, iss,
+// azp, exp, same sub) of the response to the code exchange.
 func (s *Service) checkLogin(ctx context.Context, t tokenResp, nonce string) (User, Claims, error) {
 	if t.ID == "" {
-		return User{}, Claims{}, errors.New("kein ID-Token (scope openid?)")
+		return User{}, Claims{}, errors.New("no ID token (scope openid?)")
 	}
 	id, err := s.verify(ctx, t.ID)
 	if err != nil {
-		return User{}, Claims{}, fmt.Errorf("ID-Token: %w", err)
+		return User{}, Claims{}, fmt.Errorf("ID token: %w", err)
 	}
 	if !id.Aud.has(s.cfg.ClientID) {
-		return User{}, Claims{}, fmt.Errorf("ID-Token: aud %v ohne %s", []string(id.Aud), s.cfg.ClientID)
+		return User{}, Claims{}, fmt.Errorf("ID token: aud %v without %s", []string(id.Aud), s.cfg.ClientID)
 	}
 	if (id.Azp != "" || len(id.Aud) > 1) && id.Azp != s.cfg.ClientID {
-		return User{}, Claims{}, fmt.Errorf("ID-Token: azp %q", id.Azp)
+		return User{}, Claims{}, fmt.Errorf("ID token: azp %q", id.Azp)
 	}
 	if subtle.ConstantTimeCompare([]byte(id.Nonce), []byte(nonce)) != 1 {
-		return User{}, Claims{}, errors.New("ID-Token: nonce passt nicht")
+		return User{}, Claims{}, errors.New("ID token: nonce does not match")
 	}
 	if id.Sub == "" {
-		return User{}, Claims{}, errors.New("ID-Token ohne sub")
+		return User{}, Claims{}, errors.New("ID token without sub")
 	}
 	ac, err := s.verify(ctx, t.Access)
 	if err != nil {
-		return User{}, Claims{}, fmt.Errorf("Zugangstoken: %w", err)
+		return User{}, Claims{}, fmt.Errorf("access token: %w", err)
 	}
 	if err := s.checkAccess(ac, id.Sub); err != nil {
 		return User{}, Claims{}, err
@@ -604,14 +604,14 @@ func (s *Service) checkLogin(ctx context.Context, t tokenResp, nonce string) (Us
 	return u, ac, nil
 }
 
-// checkAccess: Das Zugangstoken muss an diesen Client ausgestellt sein (azp), sonst taugt es nicht
-// als subject_token für den Austausch.
+// checkAccess: the access token must have been issued to this client (azp), otherwise it is no good
+// as a subject_token for the exchange.
 func (s *Service) checkAccess(c Claims, sub string) error {
 	if c.Azp != s.cfg.ClientID {
-		return fmt.Errorf("Zugangstoken: azp %q statt %s", c.Azp, s.cfg.ClientID)
+		return fmt.Errorf("access token: azp %q instead of %s", c.Azp, s.cfg.ClientID)
 	}
 	if c.Sub != sub {
-		return fmt.Errorf("Zugangstoken: sub %q passt nicht zum ID-Token", c.Sub)
+		return fmt.Errorf("access token: sub %q does not match the ID token", c.Sub)
 	}
 	return nil
 }
@@ -626,25 +626,25 @@ func (s *Service) expiry(t tokenResp, c Claims) time.Time {
 	return exp
 }
 
-// verify prüft ein JWT mit RS256 gegen die Schlüssel des Issuers sowie iss und exp.
+// verify checks a JWT with RS256 against the issuer's keys, plus iss and exp.
 func (s *Service) verify(ctx context.Context, tok string) (Claims, error) {
 	parts := strings.Split(tok, ".")
 	if len(parts) != 3 {
-		return Claims{}, errors.New("kein JWT")
+		return Claims{}, errors.New("not a JWT")
 	}
 	hb, err := base64.RawURLEncoding.DecodeString(parts[0])
 	if err != nil {
-		return Claims{}, errors.New("Kopf unlesbar")
+		return Claims{}, errors.New("header unreadable")
 	}
 	var h struct {
 		Alg string `json:"alg"`
 		Kid string `json:"kid"`
 	}
 	if json.Unmarshal(hb, &h) != nil {
-		return Claims{}, errors.New("Kopf unlesbar")
+		return Claims{}, errors.New("header unreadable")
 	}
 	if h.Alg != "RS256" {
-		return Claims{}, fmt.Errorf("Algorithmus %q nicht erlaubt (nur RS256)", h.Alg)
+		return Claims{}, fmt.Errorf("algorithm %q not allowed (RS256 only)", h.Alg)
 	}
 	key, err := s.key(ctx, h.Kid)
 	if err != nil {
@@ -652,31 +652,31 @@ func (s *Service) verify(ctx context.Context, tok string) (Claims, error) {
 	}
 	sig, err := base64.RawURLEncoding.DecodeString(parts[2])
 	if err != nil {
-		return Claims{}, errors.New("Signatur unlesbar")
+		return Claims{}, errors.New("signature unreadable")
 	}
 	sum := sha256.Sum256([]byte(parts[0] + "." + parts[1]))
 	if err := rsa.VerifyPKCS1v15(key, crypto.SHA256, sum[:], sig); err != nil {
-		return Claims{}, errors.New("Signatur ungültig")
+		return Claims{}, errors.New("signature invalid")
 	}
 	pb, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil {
-		return Claims{}, errors.New("Nutzlast unlesbar")
+		return Claims{}, errors.New("payload unreadable")
 	}
 	var c Claims
 	if err := json.Unmarshal(pb, &c); err != nil {
-		return Claims{}, fmt.Errorf("Nutzlast unlesbar: %w", err)
+		return Claims{}, fmt.Errorf("payload unreadable: %w", err)
 	}
 	if strings.TrimRight(c.Iss, "/") != s.cfg.Issuer {
-		return Claims{}, fmt.Errorf("iss %q statt %q", c.Iss, s.cfg.Issuer)
+		return Claims{}, fmt.Errorf("iss %q instead of %q", c.Iss, s.cfg.Issuer)
 	}
 	if c.Exp == 0 || s.cfg.Now().After(time.Unix(c.Exp, 0).Add(leeway)) {
-		return Claims{}, errors.New("abgelaufen")
+		return Claims{}, errors.New("expired")
 	}
 	return c, nil
 }
 
-// key liefert den Schlüssel zur kid; eine unbekannte kid lädt die JWKS neu (höchstens alle 10 s,
-// Schlüsselwechsel in Keycloak).
+// key returns the key for the kid; an unknown kid reloads the JWKS (at most every 10 s,
+// key rotation in Keycloak).
 func (s *Service) key(ctx context.Context, kid string) (*rsa.PublicKey, error) {
 	s.mu.Lock()
 	k, ok := s.keys[kid]
@@ -686,7 +686,7 @@ func (s *Service) key(ctx context.Context, kid string) (*rsa.PublicKey, error) {
 		return k, nil
 	}
 	if !stale {
-		return nil, fmt.Errorf("unbekannter Schlüssel %q", kid)
+		return nil, fmt.Errorf("unknown key %q", kid)
 	}
 	d, err := s.discovery(ctx)
 	if err != nil {
@@ -730,13 +730,13 @@ func (s *Service) key(ctx context.Context, kid string) (*rsa.PublicKey, error) {
 	if k, ok := keys[kid]; ok {
 		return k, nil
 	}
-	return nil, fmt.Errorf("unbekannter Schlüssel %q", kid)
+	return nil, fmt.Errorf("unknown key %q", kid)
 }
 
 func randomString(n int) string {
 	b := make([]byte, n)
 	if _, err := rand.Read(b); err != nil {
-		panic(err) // crypto/rand scheitert nicht
+		panic(err) // crypto/rand does not fail
 	}
 	return base64.RawURLEncoding.EncodeToString(b)
 }

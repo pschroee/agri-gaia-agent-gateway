@@ -6,7 +6,7 @@ import (
 	"agw/internal/agwclient"
 )
 
-// ---- Subagenten und Modellaufrufe -----------------------------------------------------------
+// ---- subagents and model calls --------------------------------------------------------------
 
 func (a *app) cmdChatSubagents(args []string) error {
 	fs := a.flags("chat subagents")
@@ -19,7 +19,7 @@ func (a *app) cmdChatSubagents(args []string) error {
 	if len(pos) == 2 {
 		n, err := parseCount(pos[1])
 		if err != nil {
-			return usagef("%v – Aufruf: %s", err, usage)
+			return usagef("%v – usage: %s", err, usage)
 		}
 		c, err := a.c.SetMaxSubagents(a.ctx, id, n)
 		if err != nil {
@@ -28,7 +28,7 @@ func (a *app) cmdChatSubagents(args []string) error {
 		if a.json {
 			return a.printJSON(c)
 		}
-		fmt.Fprintf(a.stdout, "Grenze für Subagenten in Chat %s: %d (bisher gestartet %d; wirkt sofort).\n", c.ID, c.MaxSubagents, c.Subagents)
+		fmt.Fprintf(a.stdout, "Subagent limit in chat %s: %d (started so far %d; takes effect immediately).\n", c.ID, c.MaxSubagents, c.Subagents)
 		return nil
 	}
 	det, err := a.c.Chat(a.ctx, id)
@@ -43,14 +43,14 @@ func (a *app) cmdChatSubagents(args []string) error {
 		return a.printJSON(map[string]any{"max_subagents": det.Chat.MaxSubagents, "subagents": det.Chat.Subagents, "entries": entries})
 	}
 	w := a.stdout
-	fmt.Fprintf(w, "Subagenten: Grenze %d, gestartet %d\n", det.Chat.MaxSubagents, det.Chat.Subagents)
+	fmt.Fprintf(w, "Subagents: limit %d, started %d\n", det.Chat.MaxSubagents, det.Chat.Subagents)
 	if len(entries) == 0 {
-		fmt.Fprintln(w, "Noch keine Subagenten-Läufe.")
+		fmt.Fprintln(w, "No subagent runs yet.")
 		return nil
 	}
 	for _, r := range groupRuns(entries) {
-		fmt.Fprintf(w, "\nLauf %s · Agent %s\n", r.id, orDefault(r.agent, "(unbekannt)"))
-		// Ergebnisse den Aufrufen der Reihe nach je Werkzeugname zuordnen.
+		fmt.Fprintf(w, "\nrun %s · agent %s\n", r.id, orDefault(r.agent, "(unknown)"))
+		// Match results to the calls in order, per tool name.
 		pending := map[string][]int{}
 		type call struct {
 			e      agwclient.SubagentEntry
@@ -85,29 +85,29 @@ func (a *app) cmdChatSubagents(args []string) error {
 				if v.result != nil {
 					fmt.Fprintf(w, "    %s %s\n", resultMark(v.result.Payload.IsError), a.dim(firstLine(v.result.Payload.Text, 160)))
 				} else {
-					fmt.Fprintf(w, "    %s\n", a.dim("(noch kein Ergebnis)"))
+					fmt.Fprintf(w, "    %s\n", a.dim("(no result yet)"))
 				}
 			case agwclient.SubagentEntry:
 				switch v.Kind {
 				case "task":
-					fmt.Fprintf(w, "  Auftrag: %s\n", truncate(oneLine(v.Payload.Text), 100))
+					fmt.Fprintf(w, "  task: %s\n", truncate(oneLine(v.Payload.Text), 100))
 				case "text":
-					fmt.Fprintf(w, "  Text: %s  [%s]\n", truncate(oneLine(v.Payload.Text), 140), confirmedLabel(v.Confirmed))
+					fmt.Fprintf(w, "  text: %s  [%s]\n", truncate(oneLine(v.Payload.Text), 140), confirmedLabel(v.Confirmed))
 				case "tool_result":
 					fmt.Fprintf(w, "  %s %s: %s\n", resultMark(v.Payload.IsError), v.Payload.Name, a.dim(firstLine(v.Payload.Text, 160)))
 				}
 			}
 		}
 	}
-	fmt.Fprintln(w, a.dim("\nQuelle ist die Sitzungsdatei in der Sandbox. „belegt“: die Antwort ist am LLM-Proxy erfasst; „nur Sandbox“: nicht gegengeprüft."))
+	fmt.Fprintln(w, a.dim("\nThe source is the session file in the sandbox. \"confirmed\": the reply was recorded at the LLM proxy; \"sandbox only\": not cross-checked."))
 	return nil
 }
 
 func confirmedLabel(ok bool) string {
 	if ok {
-		return "belegt"
+		return "confirmed"
 	}
-	return "nur Sandbox"
+	return "sandbox only"
 }
 
 type subRun struct {
@@ -115,7 +115,7 @@ type subRun struct {
 	entries   []agwclient.SubagentEntry
 }
 
-// groupRuns fasst die Einträge je Lauf zusammen, in der Reihenfolge des ersten Auftretens.
+// groupRuns groups the entries per run, in order of first appearance.
 func groupRuns(es []agwclient.SubagentEntry) []*subRun {
 	var out []*subRun
 	idx := map[string]*subRun{}
@@ -151,10 +151,10 @@ func (a *app) cmdChatCalls(args []string) error {
 		return a.printJSON(calls)
 	}
 	if len(calls) == 0 {
-		fmt.Fprintln(a.stdout, "Keine Modellaufrufe erfasst.")
+		fmt.Fprintln(a.stdout, "No model calls recorded.")
 		return nil
 	}
-	// Tarif nur nennen, wenn das Modell einen hat; ohne Tarif wäre „Nebentarif“ irreführend.
+	// Name the tariff only if the model has one; without a tariff "off-peak tariff" would be misleading.
 	hasTariff := map[string]bool{}
 	if ms, err := a.c.Models(a.ctx); err == nil {
 		for _, m := range ms {
@@ -169,14 +169,14 @@ func (a *app) cmdChatCalls(args []string) error {
 		return tariffLabel(c.Peak)
 	}
 	tw := a.table()
-	fmt.Fprintln(tw, "Zeit\tArt\tein\taus\tCache\tKosten\tTarif\tWerkzeuge\tStatus\tDauer")
+	fmt.Fprintln(tw, "Time\tKind\tin\tout\tCache\tCost\tTariff\tTools\tStatus\tDuration")
 	var sum, sumSub float64
 	var in, out, cache int64
 	var sub int
 	for _, c := range calls {
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s s\n", fmtClock(c.StartedAt), mainLabel(c.Main),
 			fmtInt(c.Input), fmtInt(c.Output), fmtInt(c.CacheRead), fmtCost(c.Cost), tariff(c),
-			orDefault(llmToolNames(c), "–"), fmtStatus(c.Status), deNum(float64(c.DurationMs)/1000, 1, 1))
+			orDefault(llmToolNames(c), "–"), fmtStatus(c.Status), fmtNum(float64(c.DurationMs)/1000, 1, 1))
 		sum += c.Cost
 		in, out, cache = in+c.Input, out+c.Output, cache+c.CacheRead
 		if !c.Main {
@@ -187,8 +187,8 @@ func (a *app) cmdChatCalls(args []string) error {
 	if err := tw.Flush(); err != nil {
 		return err
 	}
-	fmt.Fprintf(a.stdout, "Summe: %d Modellaufrufe · ein %s, aus %s, Cache %s · %s (davon Sub/sonstige %d Aufrufe, %s)\n",
+	fmt.Fprintf(a.stdout, "Total: %d model calls · in %s, out %s, cache %s · %s (of which sub/other %d calls, %s)\n",
 		len(calls), fmtInt(in), fmtInt(out), fmtInt(cache), fmtCost(sum), sub, fmtCost(sumSub))
-	fmt.Fprintln(a.stdout, a.dim("Gemessen am LLM-Proxy außerhalb der Sandbox. Haupt: Antwort der Hauptsitzung; Sub: Subagenten, Kompaktierung u. Ä."))
+	fmt.Fprintln(a.stdout, a.dim("Measured at the LLM proxy outside the sandbox. main: reply of the main session; sub: subagents, compaction and the like."))
 	return nil
 }

@@ -15,52 +15,52 @@ import (
 	"agw/internal/store"
 )
 
-// Senden und Warteschlange.
+// Sending and queue.
 //
-// Läuft nichts, geht eine Nachricht sofort an pi (ein ruhender Chat wird dabei fortgesetzt).
-// Arbeitet pi, wird der Chat gerade fortgesetzt oder ist ein anderer Auftrag unterwegs, reiht der
-// Orchestrator sie ein (Postgres, übersteht einen Neustart). Beim nächsten Laufende übergibt er
-// alle offenen Einträge gemeinsam als einen Auftrag. Nach einem Abbruch hält er sie zurück; sie
-// gehen dann mit der nächsten Nachricht oder über FlushQueue mit.
+// If nothing is running, a message goes to pi right away (an idle chat is resumed on the way).
+// If pi is working, the chat is being resumed or another message is on its way, the orchestrator
+// enqueues it (Postgres, survives a restart). At the end of the next run it delivers all open
+// entries together as one message. After an abort it holds them back; they then go along with the
+// next message or via FlushQueue.
 
-// promptTimeout: Frist für den Aufruf prompt (Tests verkürzen sie).
+// promptTimeout: deadline for the prompt call (tests shorten it).
 var promptTimeout atomic.Int64
 
 func init() { promptTimeout.Store(int64(callTimeout)) }
 
-// ErrQueueDelivered: Der Eintrag ist schon an pi übergeben und lässt sich nicht mehr entfernen.
+// ErrQueueDelivered: the entry has already been delivered to pi and can no longer be removed.
 var ErrQueueDelivered = store.ErrDelivered
 
-// SendResult ist die Antwort auf eine Nachricht.
+// SendResult is the response to a message.
 type SendResult struct {
-	Resumed bool   `json:"resumed"`            // in einer frischen Sandbox fortgesetzt
-	Queued  bool   `json:"queued,omitempty"`   // eingereiht statt sofort gesendet
-	QueueID string `json:"queue_id,omitempty"` // Kennung des Eintrags (bei queued)
+	Resumed bool   `json:"resumed"`            // resumed in a fresh sandbox
+	Queued  bool   `json:"queued,omitempty"`   // enqueued instead of sent right away
+	QueueID string `json:"queue_id,omitempty"` // ID of the entry (when queued)
 }
 
-// QueueEvent ist das SSE-Ereignis „queue“: der neue Stand der Warteschlange und was geschah.
+// QueueEvent is the SSE event "queue": the new state of the queue and what happened.
 type QueueEvent struct {
-	Entries []store.QueueEntry `json:"entries"` // offene Einträge in Reihenfolge
-	// Change: queued, removed, delivered (an pi übergeben), restored (Übergabe gescheitert oder
-	// Eingeschleustes nicht eingefügt, wieder offen).
+	Entries []store.QueueEntry `json:"entries"` // open entries in order
+	// Change: queued, removed, delivered (handed to pi), restored (delivery failed or steered entries
+	// not inserted, open again).
 	Change string   `json:"change"`
 	IDs    []string `json:"ids,omitempty"`
-	// Text: bei delivered der Auftrag, wie er an pi geht (Einträge zusammengefasst), mit Herkunft
-	// und Teilen (Review 3, H1).
+	// Text: for delivered, the message as it goes to pi (entries combined), with origin and parts
+	// (Review 3, H1).
 	Text    string         `json:"text,omitempty"`
 	Origin  string         `json:"origin,omitempty"`
 	Sources []store.Source `json:"sources,omitempty"`
 }
 
-// Gründe, aus denen eingereihte Einträge nicht von selbst übergeben werden (ChatView.HoldReason).
+// Reasons why queued entries are not delivered automatically (ChatView.HoldReason).
 const (
-	HoldAbort     = "abort"      // der Nutzer hat abgebrochen
-	HoldWakeLimit = "wake_limit" // Weckrufe je Stunde erschöpft (BgWakesPerHour)
-	HoldAutoTurns = "auto_turns" // zu viele Durchgänge ohne Nutzer in Folge (AutoTurnsMax)
+	HoldAbort     = "abort"      // the user aborted
+	HoldWakeLimit = "wake_limit" // wake-ups per hour used up (BgWakesPerHour)
+	HoldAutoTurns = "auto_turns" // too many turns in a row without the user (AutoTurnsMax)
 )
 
-// AutoHeldEvent ist das SSE-Ereignis „auto_held“: Meldungen bleiben eingereiht, weil eine Grenze
-// für Durchgänge ohne Nutzer erreicht ist; sie gehen mit der nächsten Nachricht oder „Jetzt senden“.
+// AutoHeldEvent is the SSE event "auto_held": notes stay queued because a limit for turns without
+// the user has been reached; they go with the next message or "Send now".
 type AutoHeldEvent struct {
 	Reason string `json:"reason"` // HoldWakeLimit, HoldAutoTurns
 	Limit  int    `json:"limit"`
@@ -86,7 +86,7 @@ func (m *Manager) publishQueue(ctx context.Context, chatID, change string, ids [
 func (m *Manager) publishQueueEv(ctx context.Context, chatID string, ev QueueEvent) {
 	list, err := m.st.ListQueue(context.WithoutCancel(ctx), chatID)
 	if err != nil {
-		slog.Warn("Warteschlange nicht lesbar", "chat", chatID, "fehler", err)
+		slog.Warn("queue not readable", "chat", chatID, "err", err)
 		return
 	}
 	ev.Entries = list
@@ -94,26 +94,26 @@ func (m *Manager) publishQueueEv(ctx context.Context, chatID string, ev QueueEve
 	m.publishChat(context.WithoutCancel(ctx), chatID)
 }
 
-// Queue liefert die offenen Einträge der Warteschlange.
+// Queue returns the open entries of the queue.
 func (m *Manager) Queue(ctx context.Context, chatID string) ([]store.QueueEntry, error) {
 	return m.st.ListQueue(ctx, chatID)
 }
 
-// checkAttachments prüft, dass jeder Anhang eine vom Nutzer hochgeladene Eingabe dieses Chats
-// ist (liegt dann in /workspace/inputs/); doppelte Namen entfallen.
+// checkAttachments checks that every attachment is an input of this chat uploaded by the user
+// (it then lives in /workspace/inputs/); duplicate names are dropped.
 func (m *Manager) checkAttachments(ctx context.Context, chatID string, names []string) ([]string, error) {
 	var clean []string
 	seen := map[string]bool{}
 	for _, n := range names {
 		sn := artifacts.SanitizeName(n)
 		if sn == "" || sn != n {
-			return nil, fmt.Errorf("%w: ungültiger Anhang %q", ErrInvalid, n)
+			return nil, fmt.Errorf("%w: invalid attachment %q", ErrInvalid, n)
 		}
 		if seen[sn] {
 			continue
 		}
 		if _, err := m.st.GetArtifact(ctx, chatID, store.KindInput, sn); err != nil {
-			return nil, fmt.Errorf("%w: Anhang %q ist keine hochgeladene Datei dieses Chats", ErrInvalid, sn)
+			return nil, fmt.Errorf("%w: attachment %q is not an uploaded file of this chat", ErrInvalid, sn)
 		}
 		seen[sn] = true
 		clean = append(clean, sn)
@@ -121,17 +121,17 @@ func (m *Manager) checkAttachments(ctx context.Context, chatID string, names []s
 	return clean, nil
 }
 
-// Send schickt eine Nachricht (siehe SendWithAttachments).
+// Send sends a message (see SendWithAttachments).
 func (m *Manager) Send(ctx context.Context, chatID, text string) (SendResult, error) {
 	return m.SendWithAttachments(ctx, chatID, text, nil)
 }
 
-// SendWithAttachments schickt eine Nachricht mit Anhängen oder reiht sie ein. Ein ruhender Chat
-// wird dabei fortgesetzt; zurückgehaltene Einträge der Warteschlange gehen mit.
+// SendWithAttachments sends a message with attachments or enqueues it. An idle chat is resumed on
+// the way; held entries of the queue go along.
 func (m *Manager) SendWithAttachments(ctx context.Context, chatID, text string, names []string) (SendResult, error) {
 	text = strings.TrimSpace(text)
 	if text == "" && len(names) == 0 {
-		return SendResult{}, errors.New("leere Nachricht")
+		return SendResult{}, errors.New("empty message")
 	}
 	clean, err := m.checkAttachments(ctx, chatID, names)
 	if err != nil {
@@ -144,13 +144,13 @@ func (m *Manager) SendWithAttachments(ctx context.Context, chatID, text string, 
 	return r, err
 }
 
-// FlushQueue übergibt die zurückgehaltenen Einträge jetzt (nach einem Abbruch oder bei ruhendem
-// Chat). Arbeitet pi, ErrRunning; ist nichts eingereiht, ErrInvalid.
+// FlushQueue delivers the held entries now (after an abort or when the chat is idle). If pi is
+// working, ErrRunning; if nothing is queued, ErrInvalid.
 func (m *Manager) FlushQueue(ctx context.Context, chatID string) (SendResult, error) {
 	return m.send(ctx, chatID, nil)
 }
 
-// Unqueue entfernt einen offenen Eintrag; ErrQueueDelivered, wenn er schon übergeben ist.
+// Unqueue removes an open entry; ErrQueueDelivered if it has already been delivered.
 func (m *Manager) Unqueue(ctx context.Context, chatID, id string) error {
 	m.userActive(chatID)
 	unlock := m.queueLock(chatID)
@@ -186,16 +186,16 @@ func (m *Manager) send(ctx context.Context, chatID string, msg *store.QueueEntry
 		if err != nil {
 			return SendResult{}, err
 		}
-		slog.Info("Nachricht eingereiht", "chat", chatID, "eintrag", e.ID)
+		slog.Info("message enqueued", "chat", chatID, "entry", e.ID)
 		m.publishQueue(ctx, chatID, "queued", []string{e.ID}, "")
 		if l != nil {
-			// Läuft gerade ein Werkzeug, gleich einschleusen; sonst beim nächsten Werkzeugstart
-			// oder am Ende des Durchgangs.
+			// If a tool is running, steer it in right away; otherwise at the next tool start or at
+			// the end of the turn.
 			go m.steerQueue(chatID, l)
 		}
 		return SendResult{Queued: true, QueueID: e.ID}, nil
 	}
-	// Nichts läuft: zurückgehaltene Einträge gehen zusammen mit dieser Nachricht.
+	// Nothing is running: held entries go together with this message.
 	held, err := m.st.ClaimQueue(ctx, chatID)
 	if err != nil {
 		unlock()
@@ -207,7 +207,7 @@ func (m *Manager) send(ctx context.Context, chatID string, msg *store.QueueEntry
 	}
 	if len(entries) == 0 {
 		unlock()
-		return SendResult{}, fmt.Errorf("%w: keine eingereihten Nachrichten", ErrInvalid)
+		return SendResult{}, fmt.Errorf("%w: no queued messages", ErrInvalid)
 	}
 	m.mu.Lock()
 	m.sending[chatID] = true
@@ -216,8 +216,8 @@ func (m *Manager) send(ctx context.Context, chatID string, msg *store.QueueEntry
 	return m.deliver(ctx, chatID, entries, ids(held), store.TriggerUser, gen)
 }
 
-// turnMeta begleitet einen Auftrag an pi, bis pi die Nutzernachricht dazu meldet (handle ordnet
-// sie zu und speichert sie mit Herkunft und Durchgang).
+// turnMeta accompanies a message to pi until pi reports the matching user message (handle assigns
+// it and stores it with origin and turn).
 type turnMeta struct {
 	id      int64
 	trigger string
@@ -226,13 +226,13 @@ type turnMeta struct {
 	text    string
 	at      time.Time
 
-	// steered: während eines Laufs eingeschleust (prompt mit streamingBehavior steer); claimed:
-	// die dabei übergebenen Einträge der Warteschlange.
+	// steered: steered in during a run (prompt with streamingBehavior steer); claimed: the queue
+	// entries delivered with it.
 	steered bool
 	claimed []string
 
 	mu       sync.Mutex
-	consumed bool // pi hat die Nutzernachricht gemeldet (der Auftrag ist angenommen)
+	consumed bool // pi has reported the user message (the message has been accepted)
 }
 
 func (t *turnMeta) markConsumed() {
@@ -247,25 +247,24 @@ func (t *turnMeta) isConsumed() bool {
 	return t.consumed
 }
 
-// errAbortedBeforePrompt: Der Nutzer hat abgebrochen, während der Auftrag unterwegs war (etwa beim
-// Fortsetzen); der Auftrag geht nicht an pi, sondern bleibt zurückgehalten eingereiht.
-var errAbortedBeforePrompt = errors.New("vor der Übergabe abgebrochen")
+// errAbortedBeforePrompt: the user aborted while the message was on its way (e.g. while resuming);
+// the message does not go to pi but stays queued and held.
+var errAbortedBeforePrompt = errors.New("aborted before delivery")
 
-// deliver schickt die Einträge als einen Auftrag an pi; claimed sind die Kennungen der dabei
-// übergebenen Einträge der Warteschlange (bei einem Fehler wieder offen). trigger: store.Trigger*;
-// gen: Stand der Abbrüche beim Entschluss zu senden. Der Aufrufer hat sending gesetzt; deliver nimmt
-// es zurück.
+// deliver sends the entries to pi as one message; claimed are the IDs of the queue entries
+// delivered with it (open again on an error). trigger: store.Trigger*; gen: abort counter at the
+// moment of deciding to send. The caller has set sending; deliver resets it.
 func (m *Manager) deliver(ctx context.Context, chatID string, entries []store.QueueEntry, claimed []string, trigger string, gen uint64) (SendResult, error) {
-	// Einmalige Hinweise: bevorzugte Sprache (nur beim ersten Durchgang des Chats; scheitert er, wird
-	// er zurückgenommen und der nächste Auftrag ist wieder der erste) und Hintergrundaufgaben, die mit
-	// einer früheren Sandbox endeten.
+	// One-off notices: preferred language (only on the chat's first turn; if it fails, it is rolled
+	// back and the next message is the first again) and background tasks that ended with an earlier
+	// sandbox.
 	lang := m.firstTurnLanguage(ctx, chatID)
 	notice, noticed := m.backgroundNotice(ctx, chatID)
 	c := composeMessage(entries, lang, notice)
 	tm := &turnMeta{trigger: trigger, origin: c.Origin, sources: c.Sources, text: c.Text, claimed: claimed}
 	var err error
 	if tm.id, err = m.st.CreateTurn(ctx, chatID, trigger, c.Origin, c.Sources, claimed); err != nil {
-		slog.Warn("Durchgang nicht angelegt", "chat", chatID, "fehler", err)
+		slog.Warn("turn not created", "chat", chatID, "err", err)
 	}
 	if len(claimed) > 0 {
 		m.publishQueueEv(ctx, chatID, QueueEvent{Change: "delivered", IDs: claimed, Text: c.Text, Origin: c.Origin, Sources: c.Sources})
@@ -274,7 +273,7 @@ func (m *Manager) deliver(ctx context.Context, chatID string, entries []store.Qu
 	if err == nil {
 		if len(noticed) > 0 {
 			if cerr := m.st.ClearBackgroundNotices(context.WithoutCancel(ctx), chatID, noticed); cerr != nil {
-				slog.Warn("Hinweis auf Hintergrundaufgaben nicht zurückgesetzt", "chat", chatID, "fehler", cerr)
+				slog.Warn("background task notice not reset", "chat", chatID, "err", cerr)
 			}
 		}
 		if trigger == store.TriggerWake {
@@ -291,23 +290,23 @@ func (m *Manager) deliver(ctx context.Context, chatID string, entries []store.Qu
 	}
 	if err != nil && len(claimed) > 0 {
 		if uerr := m.st.UnclaimQueue(context.WithoutCancel(ctx), claimed); uerr != nil {
-			slog.Error("Warteschlange nicht zurückgenommen", "chat", chatID, "fehler", uerr)
+			slog.Error("queue not restored", "chat", chatID, "err", uerr)
 		}
 		m.publishQueue(ctx, chatID, "restored", claimed, "")
 	}
 	if len(claimed) > 0 {
-		m.publishChat(context.WithoutCancel(ctx), chatID) // queue_held neu berechnen
+		m.publishChat(context.WithoutCancel(ctx), chatID) // recompute queue_held
 	}
 	return res, err
 }
 
-// holdAfterAbort: Der Auftrag ging wegen eines Abbruchs nicht an pi. Übergebene Einträge werden
-// wieder offen, eine neue Nachricht des Nutzers wird eingereiht; alles bleibt zurückgehalten.
+// holdAfterAbort: the message did not go to pi because of an abort. Delivered entries become open
+// again, a new message from the user is enqueued; everything stays held.
 func (m *Manager) holdAfterAbort(ctx context.Context, chatID string, entries []store.QueueEntry, claimed []string, res SendResult) (SendResult, error) {
 	ctx = context.WithoutCancel(ctx)
 	if len(claimed) > 0 {
 		if err := m.st.UnclaimQueue(ctx, claimed); err != nil {
-			slog.Error("Warteschlange nicht zurückgenommen", "chat", chatID, "fehler", err)
+			slog.Error("queue not restored", "chat", chatID, "err", err)
 		}
 	}
 	res.Queued = len(claimed) > 0
@@ -325,12 +324,12 @@ func (m *Manager) holdAfterAbort(ctx context.Context, chatID string, entries []s
 		}
 		res.Queued, res.QueueID = true, q.ID
 	}
-	slog.Info("Abbruch vor der Übergabe: Auftrag bleibt eingereiht", "chat", chatID)
+	slog.Info("abort before delivery: message stays queued", "chat", chatID)
 	m.publishQueue(ctx, chatID, "restored", claimed, "")
 	return res, nil
 }
 
-// markWoke hält an den Hintergrundaufgaben fest, dass ihre Meldung einen Weckruf ausgelöst hat.
+// markWoke records on the background tasks that their note triggered a wake-up.
 func (m *Manager) markWoke(ctx context.Context, chatID string, sources []store.Source) {
 	for _, s := range sources {
 		if s.Kind != store.QueueSystem || s.Type != store.NoteBackground {
@@ -352,14 +351,14 @@ func ids(es []store.QueueEntry) []string {
 	return out
 }
 
-// dispatch setzt den Chat bei Bedarf fort und schickt den Auftrag per prompt an pi.
+// dispatch resumes the chat if needed and sends the message to pi via prompt.
 func (m *Manager) dispatch(ctx context.Context, chatID string, tm *turnMeta, gen uint64) (SendResult, error) {
 	l, resumed, err := m.ensureLive(ctx, chatID)
 	if err != nil {
 		return SendResult{}, err
 	}
 	m.mu.Lock()
-	if m.live[chatID] != l { // zwischendurch ruhen gelassen (Leerlauf): erneut fortsetzen
+	if m.live[chatID] != l { // put to idle in the meantime (idle timer): resume again
 		m.mu.Unlock()
 		var again bool
 		if l, again, err = m.ensureLive(ctx, chatID); err != nil {
@@ -369,19 +368,19 @@ func (m *Manager) dispatch(ctx context.Context, chatID string, tm *turnMeta, gen
 		m.mu.Lock()
 	}
 	if m.aborts[chatID] != gen {
-		// Abgebrochen, während der Auftrag unterwegs war: nicht mehr an pi (Review 3, N5).
+		// Aborted while the message was on its way: no longer to pi (Review 3, N5).
 		l.holdQueue, l.holdReason = true, HoldAbort
 		m.mu.Unlock()
 		return SendResult{Resumed: resumed}, errAbortedBeforePrompt
 	}
 	running := l.running
 	if !running {
-		l.running = true // bis agent_start eintrifft, gilt der Chat als laufend
+		l.running = true // until agent_start arrives, the chat counts as running
 		l.runningSince = time.Now()
 	}
 	tm.steered = running
 	if tm.trigger != store.TriggerWake {
-		// Eine Nachricht des Nutzers hebt das Zurückhalten auf (das Zurückgehaltene geht mit).
+		// A message from the user lifts the hold (the held entries go along).
 		l.holdQueue, l.holdReason = false, ""
 	}
 	tm.at = time.Now()
@@ -392,17 +391,17 @@ func (m *Manager) dispatch(ctx context.Context, chatID string, tm *turnMeta, gen
 	m.mu.Unlock()
 	cmd := map[string]any{"type": "prompt", "message": tm.text}
 	if running {
-		// Einschleusen (steerQueue): pi fügt den Auftrag nach den laufenden Werkzeugen ein, vor
-		// dem nächsten Modellaufruf.
+		// Steering (steerQueue): pi inserts the message after the running tools, before the next
+		// model call.
 		cmd["streamingBehavior"] = "steer"
 	} else {
 		l.slot.SetActivity("thinking", "")
 	}
 	if _, err := callT(l.slot.Worker, cmd, time.Duration(promptTimeout.Load())); err != nil {
 		if m.acceptedAnyway(l, tm, running) {
-			// Zeitlimit, aber pi hat den Auftrag angenommen: nicht zurücknehmen, sonst ginge er
-			// ein zweites Mal an pi (Review 3, N5).
-			slog.Warn("prompt ohne Antwort, aber von pi angenommen", "chat", chatID, "fehler", err)
+			// Timeout, but pi has accepted the message: do not roll back, or it would go to pi a
+			// second time (Review 3, N5).
+			slog.Warn("prompt without response, but accepted by pi", "chat", chatID, "err", err)
 		} else {
 			m.mu.Lock()
 			l.running = running
@@ -421,8 +420,8 @@ func (m *Manager) dispatch(ctx context.Context, chatID string, tm *turnMeta, gen
 	return SendResult{Resumed: resumed}, nil
 }
 
-// acceptedAnyway: Hat pi einen Auftrag angenommen, obwohl prompt mit Fehler (etwa Zeitlimit)
-// zurückkam? Ja, wenn pi die Nutzernachricht schon gemeldet hat oder (ohne früheren Lauf) arbeitet.
+// acceptedAnyway: has pi accepted a message although prompt returned an error (e.g. timeout)? Yes,
+// if pi has already reported the user message or (without an earlier run) is working.
 func (m *Manager) acceptedAnyway(l *live, tm *turnMeta, wasRunning bool) bool {
 	if tm.isConsumed() {
 		return true
@@ -440,8 +439,8 @@ func (m *Manager) acceptedAnyway(l *live, tm *turnMeta, wasRunning bool) bool {
 	return json.Unmarshal(resp.Data, &st) == nil && st.IsStreaming || tm.isConsumed()
 }
 
-// takeTurn ordnet die von pi gemeldete Nutzernachricht ihrem Auftrag zu: bevorzugt der mit genau
-// diesem Text, sonst der älteste (pi kann den Text verändern, etwa bei Skills).
+// takeTurn assigns the user message reported by pi to its message: preferably the one with exactly
+// this text, otherwise the oldest (pi can change the text, e.g. with skills).
 func (m *Manager) takeTurn(l *live, text string) *turnMeta {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -462,10 +461,10 @@ func (m *Manager) takeTurn(l *live, text string) *turnMeta {
 	return tm
 }
 
-// deliverQueue übergibt nach einem Laufende (oder als Weckruf) alle offenen Einträge als nächsten
-// Auftrag, sofern der Nutzer nicht abgebrochen hat und nichts anderes unterwegs ist. Besteht die
-// Übergabe nur aus Meldungen des Orchestrators, ist sie ein Weckruf und unterliegt dessen Grenzen
-// (Review 3, H2): BgWakesPerHour je Stunde und AutoTurnsMax in Folge ohne Nutzer.
+// deliverQueue delivers all open entries as the next message after the end of a run (or as a
+// wake-up), provided the user has not aborted and nothing else is on its way. If the delivery
+// consists only of orchestrator notes, it is a wake-up and subject to its limits (Review 3, H2):
+// BgWakesPerHour per hour and AutoTurnsMax in a row without the user.
 func (m *Manager) deliverQueue(chatID string, l *live) {
 	ctx := context.Background()
 	unlock := m.queueLock(chatID)
@@ -481,7 +480,7 @@ func (m *Manager) deliverQueue(chatID string, l *live) {
 	if err != nil || len(open) == 0 {
 		unlock()
 		if err != nil {
-			slog.Warn("Warteschlange nicht lesbar", "chat", chatID, "fehler", err)
+			slog.Warn("queue not readable", "chat", chatID, "err", err)
 		}
 		return
 	}
@@ -498,7 +497,7 @@ func (m *Manager) deliverQueue(chatID string, l *live) {
 			l.holdQueue, l.holdReason = true, ev.Reason
 			m.mu.Unlock()
 			unlock()
-			slog.Warn("Grenze für Durchgänge ohne Nutzer erreicht, Meldungen bleiben eingereiht", "chat", chatID, "grund", ev.Reason, "grenze", ev.Limit)
+			slog.Warn("limit for turns without the user reached, notes stay queued", "chat", chatID, "reason", ev.Reason, "limit", ev.Limit)
 			m.publish(chatID, Event{Kind: "auto_held", Data: ev})
 			m.publishChat(ctx, chatID)
 			return
@@ -508,7 +507,7 @@ func (m *Manager) deliverQueue(chatID string, l *live) {
 	if err != nil || len(entries) == 0 {
 		unlock()
 		if err != nil {
-			slog.Warn("Warteschlange nicht lesbar", "chat", chatID, "fehler", err)
+			slog.Warn("queue not readable", "chat", chatID, "err", err)
 		}
 		return
 	}
@@ -516,16 +515,16 @@ func (m *Manager) deliverQueue(chatID string, l *live) {
 	m.sending[chatID] = true
 	m.mu.Unlock()
 	unlock()
-	slog.Info("Warteschlange übergeben", "chat", chatID, "einträge", len(entries), "auslöser", trigger)
+	slog.Info("queue delivered", "chat", chatID, "entries", len(entries), "trigger", trigger)
 	if _, err := m.deliver(ctx, chatID, entries, ids(entries), trigger, gen); err != nil {
-		m.publish(chatID, Event{Kind: "error", Data: map[string]string{"message": "Eingereihte Nachrichten nicht übergeben (" + err.Error() + "). Sie bleiben eingereiht."}})
+		m.publish(chatID, Event{Kind: "error", Data: map[string]string{"message": "Queued messages not delivered (" + err.Error() + "). They stay queued."}})
 	}
 }
 
-// steerQueue schleust offene Einträge in den laufenden Durchgang ein, während ein Werkzeug läuft:
-// pi fügt sie nach den laufenden Werkzeugen ein, vor dem nächsten Modellaufruf (wie Claude Code).
-// Solange das Modell nur schreibt, bleiben sie eingereiht (und entfernbar); endet der Durchgang
-// ohne weiteres Werkzeug, übergibt deliverQueue sie wie bisher.
+// steerQueue steers open entries into the running turn while a tool is running: pi inserts them
+// after the running tools, before the next model call (like Claude Code). As long as the model is
+// only writing, they stay queued (and removable); if the turn ends without another tool,
+// deliverQueue delivers them as before.
 func (m *Manager) steerQueue(chatID string, l *live) {
 	ctx := context.Background()
 	unlock := m.queueLock(chatID)
@@ -537,9 +536,9 @@ func (m *Manager) steerQueue(chatID string, l *live) {
 		unlock()
 		return
 	}
-	// Nur mit einer Nachricht des Nutzers: Reine Meldungen des Orchestrators (Ende einer
-	// Hintergrundaufgabe) gehen wie bisher über deliverQueue, das sie als Weckruf zählt und die
-	// Grenzen für Durchgänge ohne Nutzer anwendet (Review 3, H2).
+	// Only with a message from the user: pure orchestrator notes (end of a background task) go
+	// through deliverQueue as before, which counts them as a wake-up and applies the limits for
+	// turns without the user (Review 3, H2).
 	open, err := m.st.ListQueue(ctx, chatID)
 	user := false
 	for _, e := range open {
@@ -556,7 +555,7 @@ func (m *Manager) steerQueue(chatID string, l *live) {
 	if err != nil || len(entries) == 0 {
 		unlock()
 		if err != nil {
-			slog.Warn("Warteschlange nicht lesbar", "chat", chatID, "fehler", err)
+			slog.Warn("queue not readable", "chat", chatID, "err", err)
 		}
 		return
 	}
@@ -564,16 +563,16 @@ func (m *Manager) steerQueue(chatID string, l *live) {
 	m.sending[chatID] = true
 	m.mu.Unlock()
 	unlock()
-	slog.Info("Warteschlange eingeschleust", "chat", chatID, "einträge", len(entries))
+	slog.Info("queue steered in", "chat", chatID, "entries", len(entries))
 	if _, err := m.deliver(ctx, chatID, entries, ids(entries), store.TriggerQueue, gen); err != nil {
-		m.publish(chatID, Event{Kind: "error", Data: map[string]string{"message": "Eingereihte Nachrichten nicht eingeschleust (" + err.Error() + "). Sie bleiben eingereiht."}})
+		m.publish(chatID, Event{Kind: "error", Data: map[string]string{"message": "Queued messages not steered in (" + err.Error() + "). They stay queued."}})
 	}
 }
 
-// reclaimSteered holt eingeschleuste Aufträge, die pi noch nicht eingefügt hat, mit clear_queue aus
-// pi zurück und öffnet ihre Einträge wieder (vor einem Abbruch und nach dem Laufende). Hat pi nichts
-// mehr in der Warteschlange, aber einen neuen Lauf begonnen, war der Auftrag zu spät für den alten
-// Lauf und startet den neuen; dann bleibt er, wie er ist, sonst käme er doppelt an.
+// reclaimSteered takes steered messages that pi has not inserted yet back from pi with clear_queue
+// and reopens their entries (before an abort and after the end of a run). If pi has nothing left in
+// its queue but has started a new run, the message came too late for the old run and starts the new
+// one; then it stays as it is, otherwise it would arrive twice.
 func (m *Manager) reclaimSteered(ctx context.Context, chatID string, l *live) {
 	m.mu.Lock()
 	has := false
@@ -589,7 +588,7 @@ func (m *Manager) reclaimSteered(ctx context.Context, chatID string, l *live) {
 	}
 	resp, err := callT(l.slot.Worker, map[string]any{"type": "clear_queue"}, callTimeout)
 	if err != nil {
-		slog.Warn("Warteschlange von pi nicht geleert", "chat", chatID, "fehler", err)
+		slog.Warn("pi's queue not cleared", "chat", chatID, "err", err)
 		return
 	}
 	var d struct {
@@ -621,27 +620,27 @@ func (m *Manager) reclaimSteered(ctx context.Context, chatID string, l *live) {
 	m.restoreSteered(ctx, chatID, lost)
 }
 
-// restoreSteered öffnet die Einträge eingeschleuster Aufträge wieder, die pi nicht eingefügt hat,
-// und verwirft deren Durchgang.
+// restoreSteered reopens the entries of steered messages that pi did not insert and discards their
+// turn.
 func (m *Manager) restoreSteered(ctx context.Context, chatID string, lost []*turnMeta) {
 	for _, tm := range lost {
 		ctx := context.WithoutCancel(ctx)
 		if len(tm.claimed) > 0 {
 			if err := m.st.UnclaimQueue(ctx, tm.claimed); err != nil {
-				slog.Error("Eingeschleuste Einträge nicht zurückgenommen", "chat", chatID, "fehler", err)
+				slog.Error("steered entries not restored", "chat", chatID, "err", err)
 				continue
 			}
 		}
 		if tm.id > 0 {
 			_ = m.st.DeleteTurn(ctx, tm.id)
 		}
-		slog.Info("Eingeschleuster Auftrag nicht eingefügt, wieder eingereiht", "chat", chatID, "einträge", len(tm.claimed))
+		slog.Info("steered message not inserted, enqueued again", "chat", chatID, "entries", len(tm.claimed))
 		m.publishQueue(ctx, chatID, "restored", tm.claimed, "")
 	}
 }
 
-// autoLimitTurns prüft nur die Grenze für Durchgänge ohne Nutzer in Folge (AutoTurnsMax); für
-// Durchgänge, die pi selbst beginnt (die Weckrufe je Stunde zählen Hintergrundaufgaben).
+// autoLimitTurns checks only the limit for turns in a row without the user (AutoTurnsMax); for
+// turns that pi starts itself (the wake-ups per hour count background tasks).
 func (m *Manager) autoLimitTurns(ctx context.Context, chatID string) (AutoHeldEvent, bool) {
 	k, err := m.st.AutoTurnsInRow(ctx, chatID)
 	if err != nil || k >= m.opt.AutoTurnsMax {
@@ -650,8 +649,8 @@ func (m *Manager) autoLimitTurns(ctx context.Context, chatID string) (AutoHeldEv
 	return AutoHeldEvent{}, false
 }
 
-// autoLimit prüft die Grenzen für einen Durchgang ohne Nutzer. Fehler beim Zählen gelten als
-// erreichte Grenze (lieber anhalten als unbegrenzt weiterlaufen).
+// autoLimit checks the limits for a turn without the user. Errors while counting count as a
+// reached limit (better to stop than to run on without limit).
 func (m *Manager) autoLimit(ctx context.Context, chatID string) (AutoHeldEvent, bool) {
 	n, err := m.st.WakesSince(ctx, chatID, time.Now().Add(-time.Hour))
 	if err != nil || n >= m.opt.BgWakesPerHour {

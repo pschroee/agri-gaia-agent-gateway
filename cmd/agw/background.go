@@ -8,10 +8,10 @@ import (
 	"agw/internal/agwclient"
 )
 
-// cmdChatBg zeigt die Hintergrundaufgaben eines Chats mit den letzten Zeilen ihrer Ausgabe.
+// cmdChatBg shows a chat's background tasks with the last lines of their output.
 func (a *app) cmdChatBg(args []string) error {
 	fs := a.flags("chat bg")
-	tail := fs.Int("tail", 3, "so viele letzte Zeilen je Aufgabe (0: keine)")
+	tail := fs.Int("tail", 3, "this many last lines per task (0: none)")
 	pos, err := a.parse(fs, args, 1, 1, "agw chat bg <id> [--tail N] [--json]")
 	if err != nil {
 		return err
@@ -24,7 +24,7 @@ func (a *app) cmdChatBg(args []string) error {
 		return a.printJSON(list)
 	}
 	if len(list) == 0 {
-		fmt.Fprintln(a.stdout, "Keine Hintergrundaufgaben.")
+		fmt.Fprintln(a.stdout, "No background tasks.")
 		return nil
 	}
 	for _, t := range list {
@@ -41,7 +41,7 @@ func (a *app) cmdChatBg(args []string) error {
 	return nil
 }
 
-// cmdChatBgStop beendet eine laufende Hintergrundaufgabe.
+// cmdChatBgStop stops a running background task.
 func (a *app) cmdChatBgStop(args []string) error {
 	fs := a.flags("chat bg-stop")
 	pos, err := a.parse(fs, args, 2, 2, "agw chat bg-stop <id> <bg-id> [--json]")
@@ -62,33 +62,33 @@ func (a *app) cmdChatBgStop(args []string) error {
 func bgStateLabel(t agwclient.BackgroundTask) string {
 	switch t.State {
 	case "running":
-		return "läuft"
+		return "running"
 	case "exited":
 		if t.ExitCode != nil {
-			return fmt.Sprintf("beendet (Exit %d)", *t.ExitCode)
+			return fmt.Sprintf("exited (exit %d)", *t.ExitCode)
 		}
-		return "beendet"
+		return "exited"
 	case "timeout":
-		return "Zeitgrenze"
+		return "timeout"
 	case "stopped":
 		if t.StoppedBy == "user" {
-			return "vom Nutzer gestoppt"
+			return "stopped by the user"
 		}
-		return "vom Agenten gestoppt"
+		return "stopped by the agent"
 	case "suspended":
-		return "beim Ruhen beendet"
+		return "ended when going idle"
 	case "closed":
-		return "mit dem Chat beendet"
+		return "ended with the chat"
 	case "lost":
-		return "mit der Sandbox verloren"
+		return "lost with the sandbox"
 	}
 	if t.Error != "" {
-		return "fehlgeschlagen: " + truncateLine(t.Error, 60)
+		return "failed: " + truncateLine(t.Error, 60)
 	}
-	return "fehlgeschlagen"
+	return "failed"
 }
 
-// bgRuntime: Laufzeit als m:ss (bis jetzt, solange die Aufgabe läuft).
+// bgRuntime: runtime as m:ss (until now while the task is running).
 func bgRuntime(t agwclient.BackgroundTask, now time.Time) string {
 	start, err := time.Parse(time.RFC3339Nano, t.StartedAt)
 	if err != nil {

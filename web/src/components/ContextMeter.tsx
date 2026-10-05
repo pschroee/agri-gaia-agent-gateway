@@ -19,7 +19,7 @@ const textColor: Record<ContextLevel, string> = {
   danger: "text-red-700",
 }
 
-/** Kleiner Ring mit dem Anteil des genutzten Kontextfensters. */
+/** Small ring with the share of the context window used. */
 export function ContextRing({ ratio, level, className }: { ratio: number; level: ContextLevel; className?: string }) {
   const r = 7
   const c = 2 * Math.PI * r
@@ -41,14 +41,14 @@ export function ContextRing({ ratio, level, className }: { ratio: number; level:
   )
 }
 
-/** Kompakte Anzeige für Chatliste und Statusseite. */
+/** Compact display for the chat list and status page. */
 export function ContextBadge({ context, className }: { context?: ContextUsage; className?: string }) {
   if (!context) return null
   const d = describeContext(context)
   return (
     <span
       className={cn("inline-flex items-center gap-1 text-xs tabular-nums", textColor[d.level], className)}
-      title={`Kontext: ${d.measured ? `${d.used} (${d.percent})` : d.used}`}
+      title={`Context: ${d.measured ? `${d.used} (${d.percent})` : d.used}`}
     >
       <ContextRing ratio={d.ratio} level={d.level} className="size-3.5" />
       {d.percent}
@@ -65,7 +65,7 @@ type Props = {
   onCompact: () => void
 }
 
-/** Kontextanzeige im Chatkopf; die Einzelheiten öffnen sich erst beim Klicken. */
+/** Context display in the chat header; the details open only on click. */
 export function ContextIndicator({ chat, busy, onAutoCompact, onCompact }: Props) {
   const ctx = chat.context
   const d = ctx ? describeContext(ctx) : undefined
@@ -81,49 +81,49 @@ export function ContextIndicator({ chat, busy, onAutoCompact, onCompact }: Props
             "inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs tabular-nums hover:bg-muted",
             textColor[level],
           )}
-          aria-label="Kontextauslastung"
+          aria-label="Context usage"
         >
           <ContextRing ratio={d?.ratio ?? 0} level={level} />
           <span>{d ? d.percent : "–"}</span>
-          <span className="hidden text-muted-foreground sm:inline">Kontext</span>
+          <span className="hidden text-muted-foreground sm:inline">Context</span>
         </button>
       </PopoverTrigger>
       <PopoverContent align="end" collisionPadding={12} className="w-72 max-w-[calc(100vw-1.5rem)] text-xs">
         <div className="mb-2 flex items-center gap-2">
           <ContextRing ratio={d?.ratio ?? 0} level={level} className="size-6" />
           <div>
-            <div className="text-sm font-semibold">Kontext {d?.measured ? d.percent : ""}</div>
-            <div className="text-muted-foreground">{d ? d.used : "noch nicht gemessen"}</div>
+            <div className="text-sm font-semibold">Context {d?.measured ? d.percent : ""}</div>
+            <div className="text-muted-foreground">{d ? d.used : "not measured yet"}</div>
           </div>
         </div>
         <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1">
           {d?.measured && (
             <>
-              <dt className="text-muted-foreground">Verbleibend</dt>
+              <dt className="text-muted-foreground">Remaining</dt>
               <dd>{d.remaining}</dd>
             </>
           )}
-          <dt className="text-muted-foreground">Auto-Kompaktierung</dt>
-          <dd>{chat.auto_compact ? `an, ab ${d?.threshold ?? "?"}` : "aus"}</dd>
-          <dt className="text-muted-foreground">Kompaktierungen</dt>
+          <dt className="text-muted-foreground">Auto-compaction</dt>
+          <dd>{chat.auto_compact ? `on, from ${d?.threshold ?? "?"}` : "off"}</dd>
+          <dt className="text-muted-foreground">Compactions</dt>
           <dd>{chat.compactions ?? 0}</dd>
-          <dt className="text-muted-foreground">Cache-Treffer</dt>
+          <dt className="text-muted-foreground">Cache hits</dt>
           <dd>{pct(cache)}</dd>
           {ctx && (
             <>
-              <dt className="text-muted-foreground">Stand</dt>
+              <dt className="text-muted-foreground">Updated</dt>
               <dd>{formatTime(ctx.updated_at)}</dd>
             </>
           )}
         </dl>
         <div className="mt-3 flex items-center justify-between gap-2 border-t pt-2">
           <Label htmlFor={`autocompact-${chat.id}`} className="text-xs">
-            Auto-Kompaktierung
+            Auto-compaction
           </Label>
           <Switch
             id={`autocompact-${chat.id}`}
             checked={chat.auto_compact ?? false}
-            disabled={busy === "Auto-Kompaktierung"}
+            disabled={busy === "Auto-compaction"}
             onCheckedChange={onAutoCompact}
           />
         </div>
@@ -131,11 +131,11 @@ export function ContextIndicator({ chat, busy, onAutoCompact, onCompact }: Props
           size="sm"
           variant="outline"
           className="mt-2 w-full"
-          disabled={chat.running || busy === "Kompaktieren"}
-          title={chat.running ? "Erst möglich, wenn pi nicht arbeitet" : undefined}
+          disabled={chat.running || busy === "Compact"}
+          title={chat.running ? "Only possible when pi is not working" : undefined}
           onClick={onCompact}
         >
-          {busy === "Kompaktieren" ? <Loader2Icon className="animate-spin" /> : <ShrinkIcon />} Jetzt kompaktieren
+          {busy === "Compact" ? <Loader2Icon className="animate-spin" /> : <ShrinkIcon />} Compact now
         </Button>
       </PopoverContent>
     </Popover>

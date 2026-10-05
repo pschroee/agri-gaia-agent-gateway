@@ -14,36 +14,36 @@ import (
 	"agw/internal/agwclient"
 )
 
-// approvalMode legt fest, wie der Stream-Verarbeiter auf offene Bestätigungen reagiert.
+// approvalMode determines how the stream processor reacts to pending approvals.
 type approvalMode int
 
 const (
-	approvalShow   approvalMode = iota // nur anzeigen (watch)
-	approvalAsk                        // auf dem Terminal fragen
-	approvalAuto                       // automatisch bestätigen
-	approvalReject                     // automatisch ablehnen
+	approvalShow   approvalMode = iota // only show (watch)
+	approvalAsk                        // ask on the terminal
+	approvalAuto                       // approve automatically
+	approvalReject                     // reject automatically
 )
 
-// streamer setzt die SSE-Ereignisse eines Chats in Terminalausgabe um: Antworttext auf out,
-// alles andere (Werkzeuge, Thinking, Bestätigungen, Fehler) auf errw.
+// streamer turns a chat's SSE events into terminal output: reply text on out,
+// everything else (tools, thinking, approvals, errors) on errw.
 type streamer struct {
 	out, errw io.Writer
 	in        *bufio.Reader
 	color     bool
-	thinking  bool // Thinking-Deltas ausgeben
-	verbose   bool // auch Nutzernachrichten und Socket-Aufrufe (watch)
-	calls     bool // jeden Modellaufruf (llm_call) und Eingriffe der Subagenten-Grenze zeigen (--verbose)
+	thinking  bool // print thinking deltas
+	verbose   bool // also user messages and socket calls (watch)
+	calls     bool // show every model call (llm_call) and interventions of the subagent limit (--verbose)
 	mode      approvalMode
 	chatID    string
 	decide    func(ctx context.Context, id string, approve bool) (agwclient.Approval, error)
-	// untilCompaction: das Warten endet mit dem ersten compaction_end nach dem Senden
-	// (agw chat compact --wait); dessen Ergebnis geht dann auf out.
+	// untilCompaction: waiting ends with the first compaction_end after sending
+	// (agw chat compact --wait); its result then goes to out.
 	untilCompaction bool
 
-	sawStart bool // agent_start nach dem Senden gesehen
-	outMid   bool // stdout steht mitten in einer Zeile
-	errMid   bool // stderr steht mitten in einer Thinking-Zeile
-	streamed bool // aktuelle Antwort hatte Text-Deltas
+	sawStart bool // agent_start seen after sending
+	outMid   bool // stdout is in the middle of a line
+	errMid   bool // stderr is in the middle of a thinking line
+	streamed bool // current reply had text deltas
 	role     string
 	handled  map[string]bool
 	failed   bool
@@ -60,7 +60,7 @@ func (s *streamer) dim(t string) string {
 	return "\x1b[2m" + t + "\x1b[0m"
 }
 
-// breakLines schließt offene Zeilen, bevor eine Meldung auf stderr folgt.
+// breakLines closes open lines before a message on stderr follows.
 func (s *streamer) breakLines() {
 	if s.outMid {
 		io.WriteString(s.out, "\n")
@@ -93,13 +93,13 @@ type piEvent struct {
 	Type    string          `json:"type"`
 	Message *piMessage      `json:"message"`
 	Update  *assistantEvent `json:"assistantMessageEvent"`
-	// Werkzeugausführung
+	// tool execution
 	ToolCallID string          `json:"toolCallId"`
 	ToolName   string          `json:"toolName"`
 	Args       json.RawMessage `json:"args"`
 	Result     json.RawMessage `json:"result"`
 	IsError    bool            `json:"isError"`
-	// compaction_start/compaction_end (Ergebnis in Result)
+	// compaction_start/compaction_end (result in Result)
 	Reason  string `json:"reason"`
 	Aborted bool   `json:"aborted"`
 	// auto_retry_start
@@ -130,7 +130,7 @@ type contentBlock struct {
 	Arguments json.RawMessage `json:"arguments"`
 }
 
-// blocks liest Nachrichteninhalt, der eine Zeichenkette oder eine Blockliste sein kann.
+// blocks reads message content, which can be a string or a list of blocks.
 func blocks(raw json.RawMessage) []contentBlock {
 	var str string
 	if json.Unmarshal(raw, &str) == nil {
@@ -148,13 +148,13 @@ func textOf(raw json.RawMessage) string {
 		case "text":
 			sb.WriteString(b.Text)
 		case "image":
-			sb.WriteString("[Bild]")
+			sb.WriteString("[image]")
 		}
 	}
 	return sb.String()
 }
 
-// resultText: Ergebnis einer Werkzeugausführung ({content:[…]}, Blockliste oder Text).
+// resultText: result of a tool execution ({content:[…]}, block list or text).
 func resultText(raw json.RawMessage) string {
 	if len(raw) == 0 || string(raw) == "null" {
 		return ""
@@ -168,7 +168,7 @@ func resultText(raw json.RawMessage) string {
 	return textOf(raw)
 }
 
-// compactJSON gibt JSON einzeilig und gekürzt aus.
+// compactJSON prints JSON on one line, truncated.
 func compactJSON(raw json.RawMessage, max int) string {
 	if len(raw) == 0 || string(raw) == "null" {
 		return ""
@@ -196,7 +196,7 @@ const (
 func (s *streamer) toolResult(text string, isError bool) {
 	text = strings.TrimRight(text, "\n")
 	if isError {
-		s.note("  %s", s.dim("✗ Fehler"))
+		s.note("  %s", s.dim("✗ error"))
 	}
 	if text == "" {
 		return
@@ -210,13 +210,13 @@ func (s *streamer) toolResult(text string, isError bool) {
 		s.note("  %s", s.dim("│ "+truncate(l, resultLineMax)))
 	}
 	if n := len(lines) - len(shown); n > 0 {
-		s.note("  %s", s.dim(fmt.Sprintf("│ … (%d weitere Zeilen)", n)))
+		s.note("  %s", s.dim(fmt.Sprintf("│ … (%d more lines)", n)))
 	}
 }
 
-// handle verarbeitet ein Ereignis. afterSend sagt, ob es nach dem Senden der eigenen
-// Nachricht eintraf. done ist true beim ersten agent_settled nach einem agent_start, der
-// nach dem Senden kam.
+// handle processes an event. afterSend says whether it arrived after our own message
+// was sent. done is true at the first agent_settled after an agent_start that came
+// after sending.
 func (s *streamer) handle(ctx context.Context, ev agwclient.Event, afterSend bool) (done bool, err error) {
 	switch ev.Kind {
 	case "pi":
@@ -234,7 +234,7 @@ func (s *streamer) handle(ctx context.Context, ev agwclient.Event, afterSend boo
 	case "artifact":
 		var a agwclient.Artifact
 		if json.Unmarshal(ev.Data, &a) == nil {
-			s.note("%s", s.dim(fmt.Sprintf("Artefakt gespeichert: %s (%d Bytes, %s)", a.Name, a.Size, kindLabel(a.Kind))))
+			s.note("%s", s.dim(fmt.Sprintf("artifact saved: %s (%d bytes, %s)", a.Name, a.Size, kindLabel(a.Kind))))
 		}
 	case "error":
 		var e struct {
@@ -242,7 +242,7 @@ func (s *streamer) handle(ctx context.Context, ev agwclient.Event, afterSend boo
 		}
 		_ = json.Unmarshal(ev.Data, &e)
 		s.failed = true
-		s.note("Fehler: %s", e.Message)
+		s.note("error: %s", e.Message)
 		if s.untilCompaction && afterSend {
 			return true, nil
 		}
@@ -260,7 +260,7 @@ func (s *streamer) handle(ctx context.Context, ev agwclient.Event, afterSend boo
 			IDs    []string `json:"ids"`
 		}
 		if json.Unmarshal(ev.Data, &q) == nil && q.Change == "delivered" {
-			s.note("%s", s.dim(fmt.Sprintf("Eingereihte Nachrichten übergeben (%d).", len(q.IDs))))
+			s.note("%s", s.dim(fmt.Sprintf("queued messages handed over (%d).", len(q.IDs))))
 		}
 	case "socket_call":
 		var c agwclient.SocketCall
@@ -283,21 +283,21 @@ func (s *streamer) handle(ctx context.Context, ev agwclient.Event, afterSend boo
 	return false, nil
 }
 
-// socketCall: Eingriffe der Subagenten-Grenze melden zusätzlich ein error-Ereignis und stehen
-// deshalb nur mit --verbose (oder bei watch) hier; abgelehnte Rückfragen von Erweiterungen
-// erscheinen sonst nirgends und werden immer gezeigt.
+// socketCall: interventions of the subagent limit also report an error event and therefore
+// only appear here with --verbose (or with watch); rejected prompts from extensions
+// appear nowhere else and are always shown.
 func (s *streamer) socketCall(c agwclient.SocketCall) {
 	switch c.Op {
 	case "agent_limit":
 		if s.calls || s.verbose {
-			s.note("%s", s.dim(fmt.Sprintf("· Proxy hat einen Modellaufruf abgewiesen (%s)", c.Detail)))
+			s.note("%s", s.dim(fmt.Sprintf("· proxy refused a model call (%s)", c.Detail)))
 		}
 	case "subagent_limit":
 		if s.calls || s.verbose {
-			s.note("%s", s.dim(fmt.Sprintf("· Grenze für Subagenten überschritten (%s) – Durchgang %s", c.Detail, orDefault(c.Result, "abgebrochen"))))
+			s.note("%s", s.dim(fmt.Sprintf("· subagent limit exceeded (%s) – turn %s", c.Detail, orDefault(c.Result, "aborted"))))
 		}
 	case "extension_ui":
-		s.note("%s", s.dim(fmt.Sprintf("· Rückfrage einer Erweiterung %s (keine Eingabe möglich): %s", orDefault(c.Result, "abgelehnt"), truncate(c.Detail, 120))))
+		s.note("%s", s.dim(fmt.Sprintf("· prompt from an extension %s (no input possible): %s", orDefault(c.Result, "rejected"), truncate(c.Detail, 120))))
 	default:
 		if s.verbose {
 			s.note("%s", s.dim(fmt.Sprintf("· Socket %s %s %s → %s", c.Via, c.Op, truncate(c.Detail, 80), truncate(c.Result, 80))))
@@ -305,13 +305,13 @@ func (s *streamer) socketCall(c agwclient.SocketCall) {
 	}
 }
 
-// subagent gibt einen Eintrag aus einer Subagenten-Sitzung eingerückt aus.
+// subagent prints an entry from a subagent session, indented.
 func (s *streamer) subagent(e agwclient.SubagentEntry) {
 	prefix := "  ↳ " + orDefault(e.Agent, "Subagent") + ": "
 	p := e.Payload
 	switch e.Kind {
 	case "task":
-		s.note("%s", prefix+"Auftrag: "+truncate(oneLine(p.Text), 120))
+		s.note("%s", prefix+"task: "+truncate(oneLine(p.Text), 120))
 	case "tool_call":
 		line := "▶ " + p.Name
 		if a := compactJSON(json.RawMessage(p.Arguments), 200); a != "" {
@@ -372,9 +372,9 @@ func (s *streamer) handlePi(p piEvent, afterSend bool) bool {
 			switch p.Message.StopReason {
 			case "error":
 				s.failed = true
-				s.note("Fehler: %s", orDefault(p.Message.ErrorMessage, "Die Antwort brach mit einem Fehler ab."))
+				s.note("error: %s", orDefault(p.Message.ErrorMessage, "The reply broke off with an error."))
 			case "aborted":
-				s.note("Antwort abgebrochen.")
+				s.note("Reply aborted.")
 			}
 		case "user":
 			if s.verbose {
@@ -393,7 +393,7 @@ func (s *streamer) handlePi(p piEvent, afterSend bool) bool {
 	case "tool_execution_end":
 		s.toolResult(resultText(p.Result), p.IsError)
 	case "compaction_start":
-		msg := "Kontext wird zusammengefasst"
+		msg := "summarising the context"
 		if p.Reason != "" {
 			msg += " (" + compactionReason(p.Reason) + ")"
 		}
@@ -401,7 +401,7 @@ func (s *streamer) handlePi(p piEvent, afterSend bool) bool {
 	case "compaction_end":
 		return s.compactionEnd(p, afterSend)
 	case "auto_retry_start":
-		msg := "Erneuter Versuch"
+		msg := "retry"
 		if p.Attempt > 0 {
 			msg += fmt.Sprintf(" %d/%d", p.Attempt, p.MaxAttempts)
 		}
@@ -413,7 +413,7 @@ func (s *streamer) handlePi(p piEvent, afterSend bool) bool {
 	return false
 }
 
-// compactionResult: die für die Ausgabe nötigen Felder aus compaction_end.result.
+// compactionResult: the fields of compaction_end.result needed for the output.
 type compactionResult struct {
 	TokensBefore         int64 `json:"tokensBefore"`
 	EstimatedTokensAfter int64 `json:"estimatedTokensAfter"`
@@ -429,9 +429,9 @@ func (s *streamer) compactionEnd(p piEvent, afterSend bool) bool {
 		}
 	}
 	if p.Aborted || res == nil {
-		msg := "Kompaktierung abgebrochen"
+		msg := "compaction aborted"
 		if !p.Aborted {
-			msg = "Kompaktierung ohne Ergebnis"
+			msg = "compaction without a result"
 		}
 		if p.ErrorMessage != "" {
 			msg += ": " + p.ErrorMessage
@@ -466,7 +466,7 @@ func (s *streamer) handleApproval(ctx context.Context, a agwclient.Approval) err
 	if a.State != "pending" {
 		if !s.handled[a.ID+"/"+a.State] && !s.handled[a.ID] {
 			s.handled[a.ID+"/"+a.State] = true
-			s.note("Bestätigung %s (%s): %s", a.ID, a.Name, approvalState(a.State))
+			s.note("approval %s (%s): %s", a.ID, a.Name, approvalState(a.State))
 		}
 		return nil
 	}
@@ -475,17 +475,17 @@ func (s *streamer) handleApproval(ctx context.Context, a agwclient.Approval) err
 	}
 	s.handled[a.ID] = true
 	internet := a.Kind == "internet_access"
-	desc := fmt.Sprintf("Artefakt %s (%d Bytes)", a.Name, a.Size)
-	question := desc + " bestätigen? [j/n] "
+	desc := fmt.Sprintf("artifact %s (%d bytes)", a.Name, a.Size)
+	question := "Approve " + desc + "? [y/n] "
 	if internet {
-		desc = "Internetzugang"
-		question = "Internetzugang erlauben? [j/n] "
+		desc = "internet access"
+		question = "Allow internet access? [y/n] "
 	}
 	if a.Kind == "platform_write" {
-		desc = "Plattform-Aufruf " + a.Name
-		question = desc + " ausführen? [j/n] "
+		desc = "platform call " + a.Name
+		question = "Run " + desc + "? [y/n] "
 	}
-	request := "Agent bittet um Internetzugang: " + orDefault(a.Name, "(ohne Begründung)")
+	request := "agent requests internet access: " + orDefault(a.Name, "(no reason given)")
 	var approve bool
 	switch s.mode {
 	case approvalShow:
@@ -493,7 +493,7 @@ func (s *streamer) handleApproval(ctx context.Context, a agwclient.Approval) err
 		if internet {
 			what = request
 		}
-		s.note("Offene Bestätigung %s: %s über %s – agw approve %s | agw reject %s", a.ID, what, a.Via, a.ID, a.ID)
+		s.note("pending approval %s: %s via %s – agw approve %s | agw reject %s", a.ID, what, a.Via, a.ID, a.ID)
 		return nil
 	case approvalAuto:
 		approve = true
@@ -505,10 +505,10 @@ func (s *streamer) handleApproval(ctx context.Context, a agwclient.Approval) err
 	}
 	if s.mode == approvalAsk {
 		if a.Preview != "" && !internet {
-			s.note("%s", s.dim("Vorschau:"))
+			s.note("%s", s.dim("preview:"))
 			lines := strings.Split(strings.TrimRight(a.Preview, "\n"), "\n")
 			for i, l := range lines {
-				// Einen Plattform-Aufruf zeigt die Konsole ganz: bestätigt wird, was zu sehen ist (Review W1).
+				// The console shows a platform call in full: what is approved is what can be seen (Review W1).
 				if i == 10 && a.Kind != "platform_write" {
 					s.note("  %s", s.dim("…"))
 					break
@@ -523,25 +523,25 @@ func (s *streamer) handleApproval(ctx context.Context, a agwclient.Approval) err
 		var ok bool
 		approve, ok = s.ask(question)
 		if !ok {
-			s.note("Keine Eingabe – Bestätigung bleibt offen: agw approve %s | agw reject %s", a.ID, a.ID)
+			s.note("no input – approval stays pending: agw approve %s | agw reject %s", a.ID, a.ID)
 			return nil
 		}
 	}
 	if s.decide == nil {
-		return errors.New("keine Entscheidungsfunktion gesetzt")
+		return errors.New("no decision function set")
 	}
 	res, err := s.decide(ctx, a.ID, approve)
 	if err != nil {
 		s.failed = true
-		s.note("Fehler beim Entscheiden über %s: %v", a.ID, err)
+		s.note("error deciding on %s: %v", a.ID, err)
 		return nil
 	}
-	word := "abgelehnt"
+	word := "rejected"
 	if approve {
-		word = "bestätigt"
+		word = "approved"
 	}
 	if s.mode == approvalAuto || s.mode == approvalReject {
-		s.note("%s automatisch %s.", desc, word)
+		s.note("%s %s automatically.", desc, word)
 	} else {
 		s.note("%s %s.", desc, word)
 	}
@@ -551,7 +551,7 @@ func (s *streamer) handleApproval(ctx context.Context, a agwclient.Approval) err
 	return nil
 }
 
-// ask fragt auf stderr und liest die Antwort von in. ok ist false am Eingabeende.
+// ask asks on stderr and reads the answer from in. ok is false at the end of input.
 func (s *streamer) ask(prompt string) (approve, ok bool) {
 	if s.in == nil {
 		return false, false
@@ -562,16 +562,16 @@ func (s *streamer) ask(prompt string) (approve, ok bool) {
 		line, err := s.in.ReadString('\n')
 		ans := strings.ToLower(strings.TrimSpace(line))
 		switch ans {
-		case "j", "ja", "y", "yes":
+		case "y", "yes":
 			return true, true
-		case "n", "nein", "no":
+		case "n", "no":
 			return false, true
 		}
 		if err != nil {
 			io.WriteString(s.errw, "\n")
 			return false, false
 		}
-		io.WriteString(s.errw, "Bitte j oder n eingeben.\n")
+		io.WriteString(s.errw, "Please enter y or n.\n")
 	}
 }
 
@@ -580,8 +580,8 @@ type stamped struct {
 	after bool
 }
 
-// startReader liest den SSE-Strom nebenläufig. Jedes Ereignis wird beim Eintreffen mit dem
-// Stand von armed gestempelt (nil = immer nach dem Senden).
+// startReader reads the SSE stream concurrently. Each event is stamped on arrival with the
+// state of armed (nil = always after sending).
 func startReader(ctx context.Context, r io.Reader, armed *atomic.Bool) (<-chan stamped, <-chan error) {
 	ch := make(chan stamped, 1024)
 	errc := make(chan error, 1)
@@ -601,10 +601,10 @@ func startReader(ctx context.Context, r io.Reader, armed *atomic.Bool) (<-chan s
 	return ch, errc
 }
 
-var errStreamClosed = errors.New("Verbindung zum Orchestrator abgebrochen, bevor die Antwort fertig war")
+var errStreamClosed = errors.New("connection to the orchestrator broke off before the reply was complete")
 
-// consume verarbeitet Ereignisse, bis (bei untilSettled) die Antwort fertig ist, der Strom
-// endet oder ctx abgebrochen wird.
+// consume processes events until (with untilSettled) the reply is complete, the stream
+// ends or ctx is cancelled.
 func consume(ctx context.Context, ch <-chan stamped, errc <-chan error, s *streamer, untilSettled bool) error {
 	for {
 		select {
@@ -641,15 +641,15 @@ func follow(ctx context.Context, r io.Reader, s *streamer, armed *atomic.Bool, u
 	return consume(ctx, ch, errc, s, untilSettled)
 }
 
-// sendAndFollow abonniert den Ereignisstrom, sendet danach die Nachricht und gibt die Antwort
-// aus, bis sie fertig ist. So geht kein Ereignis zwischen Senden und Abonnieren verloren.
+// sendAndFollow subscribes to the event stream, then sends the message and prints the reply
+// until it is complete. That way no event is lost between sending and subscribing.
 func sendAndFollow(ctx context.Context, c *agwclient.Client, chatID, text string, s *streamer, checkRunning bool) (agwclient.SendResult, error) {
 	return actAndFollow(ctx, c, chatID, s, checkRunning, func(ctx context.Context) (agwclient.SendResult, error) {
 		return c.Send(ctx, chatID, text)
 	})
 }
 
-// actAndFollow ist sendAndFollow mit beliebiger Aktion (Nachricht oder Slash-Befehl).
+// actAndFollow is sendAndFollow with any action (message or slash command).
 func actAndFollow(ctx context.Context, c *agwclient.Client, chatID string, s *streamer, checkRunning bool, act func(context.Context) (agwclient.SendResult, error)) (agwclient.SendResult, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -661,8 +661,8 @@ func actAndFollow(ctx context.Context, c *agwclient.Client, chatID string, s *st
 	var armed atomic.Bool
 	ch, errc := startReader(ctx, body, &armed)
 	if checkRunning {
-		// Läuft pi schon, wird die Nachricht als steer eingereiht; ein neues agent_start kommt
-		// dann nicht, und das nächste agent_settled beendet das Warten.
+		// If pi is already running, the message is enqueued as steer; no new agent_start
+		// comes then, and the next agent_settled ends the waiting.
 		if det, err := c.Chat(ctx, chatID); err == nil && det.Chat.Running {
 			s.sawStart = true
 		}
@@ -673,15 +673,15 @@ func actAndFollow(ctx context.Context, c *agwclient.Client, chatID string, s *st
 		return res, err
 	}
 	if res.Queued {
-		// Die Nachricht geht mit dem Ende des laufenden Durchgangs; gewartet wird auf den
-		// Durchgang danach (dessen agent_start kommt nach der Übergabe).
+		// The message goes with the end of the running turn; we wait for the turn
+		// after that (its agent_start comes after the handover).
 		s.sawStart = false
-		s.note("%s", s.dim("Eingereiht; geht an den Agenten, sobald der laufende Durchgang endet."))
+		s.note("%s", s.dim("Queued; goes to the agent as soon as the running turn ends."))
 	}
 	return res, consume(ctx, ch, errc, s, true)
 }
 
-// resumeStep ist ein Schritt beim Fortsetzen eines ruhenden Chats (SSE „resume“, poc/API.md).
+// resumeStep is a step when resuming an idle chat (SSE "resume", API.md).
 type resumeStep struct {
 	Phase  string `json:"phase"`
 	Status string `json:"status"`
@@ -692,21 +692,21 @@ type resumeStep struct {
 }
 
 var resumePhaseLabel = map[string]string{
-	"acquire":   "Platz aus dem Pool",
-	"session":   "Sitzung eingespielt",
-	"settings":  "Einstellungen gesetzt",
-	"workspace": "Arbeitsbereich",
-	"inputs":    "Eingaben bereitgestellt",
+	"acquire":   "slot from the pool",
+	"session":   "session restored",
+	"settings":  "settings applied",
+	"workspace": "workspace",
+	"inputs":    "inputs provided",
 }
 
-// resumeLine beschreibt einen abgeschlossenen Schritt; laufende Schritte ergeben "".
+// resumeLine describes a completed step; running steps yield "".
 func resumeLine(r resumeStep) string {
-	secs := deNum(float64(r.Ms)/1000, 1, 1) + " s"
+	secs := fmtNum(float64(r.Ms)/1000, 1, 1) + " s"
 	switch {
 	case r.Phase == "ready":
-		return "Chat in einer frischen Sandbox fortgesetzt (" + secs + ")."
+		return "chat resumed in a fresh sandbox (" + secs + ")."
 	case r.Phase == "failed":
-		return "Fortsetzen gescheitert: " + r.Detail
+		return "resume failed: " + r.Detail
 	case r.Status == "running":
 		return ""
 	}
@@ -716,17 +716,17 @@ func resumeLine(r resumeStep) string {
 	}
 	var parts []string
 	if r.Size != nil && r.Files != nil && (r.Phase == "workspace" || r.Phase == "inputs") {
-		parts = append(parts, fmt.Sprintf("%s MB, %d Dateien", deNum(float64(*r.Size)/(1<<20), 1, 1), *r.Files))
+		parts = append(parts, fmt.Sprintf("%s MB, %d files", fmtNum(float64(*r.Size)/(1<<20), 1, 1), *r.Files))
 	}
 	if r.Detail != "" {
 		parts = append(parts, r.Detail)
 	}
-	line := "Fortsetzen: " + label
+	line := "resume: " + label
 	if len(parts) > 0 {
 		line += " (" + strings.Join(parts, "; ") + ")"
 	}
 	if r.Status == "warning" || r.Status == "error" {
-		line += " – Problem"
+		line += " – problem"
 	}
 	return line + " · " + secs
 }

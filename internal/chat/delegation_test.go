@@ -16,7 +16,7 @@ import (
 	"agw/internal/platform"
 )
 
-// fakePlatformRecorder hält jede Anfrage fest, die die Plattform erreicht.
+// fakePlatformRecorder records every request that reaches the platform.
 type fakePlatformRecorder struct {
 	mu  sync.Mutex
 	got []string
@@ -42,7 +42,7 @@ func withRecordingPlatform(t *testing.T, e *env) *fakePlatformRecorder {
 		switch {
 		case r.Method == "POST" && r.URL.Path == "/datasets":
 			w.WriteHeader(http.StatusCreated)
-			fmt.Fprint(w, `{"id":77,"name":"neu"}`)
+			fmt.Fprint(w, `{"id":77,"name":"new"}`)
 		case r.URL.Path == "/openapi.json":
 			fmt.Fprint(w, `{"paths":{"/datasets":{"get":{"summary":"Get Datasets"}}}}`)
 		case r.Method == "POST" && r.URL.Path == "/train/config":
@@ -61,8 +61,8 @@ func withRecordingPlatform(t *testing.T, e *env) *fakePlatformRecorder {
 	return f
 }
 
-// Gliederung 7.3.1: jeder verbotene Aufruf direkt an den Autorisierungsdienst, ohne Sprachmodell.
-// Soll: alle verbotenen abgewiesen, und keiner erreicht die Plattform; alle erlaubten gehen durch.
+// Outline 7.3.1: every forbidden call directly to the authorization service, without a language model.
+// Expected: all forbidden ones refused, and none reaches the platform; all allowed ones go through.
 func TestConformanceThroughManager(t *testing.T) {
 	e := setup(t)
 	f := withRecordingPlatform(t, e)
@@ -117,25 +117,25 @@ func TestConformanceThroughManager(t *testing.T) {
 		reached := len(f.reached()) > before
 		results[c.Name] = allowed
 		if allowed != c.Allowed {
-			t.Errorf("%s [%s]: erlaubt=%v, Soll %v", c.Name, c.Group, allowed, c.Allowed)
+			t.Errorf("%s [%s]: allowed=%v, want %v", c.Name, c.Group, allowed, c.Allowed)
 		}
 		if !c.Allowed && reached {
-			t.Errorf("%s: verbotener Aufruf hat die Plattform erreicht: %v", c.Name, f.reached()[before:])
+			t.Errorf("%s: forbidden call reached the platform: %v", c.Name, f.reached()[before:])
 		}
-		// Ausnahme: API-Beschreibung, eigene Pfade (/_agw) erreichen die Plattform nicht.
+		// Exception: API description, own paths (/_agw) do not reach the platform.
 		if c.Allowed && !reached && c.Tool != "rights" {
-			t.Errorf("%s: erlaubter Aufruf hat die Plattform nicht erreicht", c.Name)
+			t.Errorf("%s: allowed call did not reach the platform", c.Name)
 		}
 	}
 	report := delegation.Report(results, cases)
-	t.Logf("Konformitätsprüfung durch den Manager:\n%s", report)
+	t.Logf("conformance check through the manager:\n%s", report)
 	if p := os.Getenv("AGW_CONFORMANCE_REPORT"); p != "" {
 		_ = os.WriteFile(p, []byte(report), 0o644)
 	}
 }
 
-// Herkunftsregel Ende zu Ende: ein angelegter Datensatz ist „own", ein anderer nicht, und das gilt
-// auch nach Ruhen und Fortsetzen; die Aufgabe eines angelegten Trainings ebenso.
+// Provenance rule end to end: a created dataset is "own", another one is not, and that also holds
+// after idling and resuming; likewise the task of a created training.
 func TestDelegationProvenance(t *testing.T) {
 	e := setup(t)
 	f := withRecordingPlatform(t, e)
@@ -160,49 +160,49 @@ func TestDelegationProvenance(t *testing.T) {
 		return res
 	}
 	if r := call("PATCH", "/datasets/77", `{}`); r.Status != "denied" {
-		t.Fatalf("vor dem Anlegen fremd: %+v", r)
+		t.Fatalf("foreign before creating: %+v", r)
 	}
-	if r := call("POST", "/datasets", `{"name":"neu"}`); r.Status != "ok" {
-		t.Fatalf("anlegen: %+v", r)
+	if r := call("POST", "/datasets", `{"name":"new"}`); r.Status != "ok" {
+		t.Fatalf("create: %+v", r)
 	}
 	if r := call("PATCH", "/datasets/77", `{}`); r.Status != "ok" {
-		t.Fatalf("eigener Datensatz: %+v", r)
+		t.Fatalf("own dataset: %+v", r)
 	}
 	if r := call("PATCH", "/datasets/78", `{}`); r.Status != "denied" {
-		t.Fatalf("fremder Datensatz: %+v", r)
+		t.Fatalf("foreign dataset: %+v", r)
 	}
-	// Training nur auf einem Datensatz, den die Delegation lesen darf: hier dem eigenen (Review 5, W1).
+	// Training only on a dataset the delegation may read: here the own one (Review 5, W1).
 	if r := call("POST", "/train/config", `{"provider":"T","dataset_id":5}`); r.Status != "denied" {
-		t.Fatalf("Training auf fremdem Datensatz: %+v", r)
+		t.Fatalf("training on a foreign dataset: %+v", r)
 	}
 	if r := call("POST", "/train/config", `{"provider":"T","dataset_id":77}`); r.Status != "ok" {
-		t.Fatalf("Training anlegen: %+v", r)
+		t.Fatalf("create training: %+v", r)
 	}
 	if _, err := e.m.Suspend(ctx, c.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.m.Send(ctx, c.ID, "weiter"); err != nil { // Fortsetzen
+	if _, err := e.m.Send(ctx, c.ID, "continue"); err != nil { // resume
 		t.Fatal(err)
 	}
 	slot = e.m.live[c.ID].slot.ID
 	if r := call("GET", "/tasks/41", ""); r.Status != "ok" {
-		t.Fatalf("eigene Aufgabe nach Fortsetzen: %+v", r)
+		t.Fatalf("own task after resuming: %+v", r)
 	}
 	if r := call("PATCH", "/datasets/077", `{}`); r.Status != "ok" {
-		t.Fatalf("eigener Datensatz nach Fortsetzen (Kennung 077): %+v", r)
+		t.Fatalf("own dataset after resuming (ID 077): %+v", r)
 	}
 	rights := call("GET", platform.RightsPath, "")
 	if !strings.Contains(rights.Body, "dataset 77") || !strings.Contains(rights.Body, "task 41") {
-		t.Fatalf("Rechte ohne angelegte Objekte: %s", rights.Body)
+		t.Fatalf("rights without created objects: %s", rights.Body)
 	}
 	for _, g := range f.reached() {
 		if strings.Contains(g, "/datasets/78") {
-			t.Fatalf("fremder Datensatz erreichte die Plattform: %v", f.reached())
+			t.Fatalf("foreign dataset reached the platform: %v", f.reached())
 		}
 	}
 }
 
-// Stufe „keine Schutzmaßnahme": enforce false lässt durch, vermerkt den Übergriff aber.
+// Stage "no protection": enforce false lets it through but records the violation.
 func TestDelegationAuditOnly(t *testing.T) {
 	e := setup(t)
 	f := withRecordingPlatform(t, e)
@@ -213,9 +213,9 @@ func TestDelegationAuditOnly(t *testing.T) {
 	}
 	res, _ := e.m.PlatformCall(ctx, c.ID, e.m.live[c.ID].slot.ID, "api", platform.Request{Method: "DELETE", Path: "/models/3"})
 	if res.Status != "ok" || !strings.Contains(res.Violation, "delete model 3") || len(f.reached()) != 1 {
-		t.Fatalf("nur protokollieren: %+v %v", res, f.reached())
+		t.Fatalf("log only: %+v %v", res, f.reached())
 	}
 	if _, err := e.m.Create(ctx, NewChat{Delegation: json.RawMessage(`{"rules":[{"action":"fly","resource":"dataset"}]}`)}); err == nil {
-		t.Fatal("ungültige Delegation beim Anlegen erwartet abgewiesen")
+		t.Fatal("invalid delegation expected to be refused on creation")
 	}
 }

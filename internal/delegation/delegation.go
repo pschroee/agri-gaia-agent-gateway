@@ -1,7 +1,7 @@
-// Package delegation prüft Plattform-Aufrufe gegen die übertragenen Rechte eines Chats: welche
-// Aktionen auf welchen Objekten der Agent für diese Aufgabe ausführen darf. Alles andere ist ein
-// Übergriff. Jeder Aufruf wird allein aus Methode und normalisiertem Pfad eingeordnet, nie aus
-// Angaben des Agenten (docs/plan-delegation-rest-plattform.md, Schritt 1).
+// Package delegation checks platform calls against a chat's delegated rights: which actions on
+// which objects the agent may perform for this task. Everything else is a violation. Every call
+// is classified from its method and normalized path alone, never from what the agent claims
+// (docs/plan-delegation-rest-platform.md, Step 1: Delegation).
 package delegation
 
 import (
@@ -18,7 +18,7 @@ import (
 	"agw/internal/platform"
 )
 
-// Aktionen.
+// Actions.
 const (
 	Read   = "read"
 	Create = "create"
@@ -27,7 +27,7 @@ const (
 	Run    = "run"
 )
 
-// Ressourcen.
+// Resources.
 const (
 	Dataset        = "dataset"
 	Model          = "model"
@@ -36,14 +36,14 @@ const (
 	TrainTemplate  = "train_template"
 	EdgeDevice     = "edge_device"
 	ContainerImage = "container_image"
-	API            = "api"  // alle übrigen Pfade
-	Docs           = "docs" // Beschreibung der API, immer lesbar
+	API            = "api"  // all other paths
+	Docs           = "docs" // description of the API, always readable
 )
 
-// Besondere Kennungen in Regeln.
+// Special identifiers in rules.
 const (
-	All = "*"   // jedes Objekt
-	Own = "own" // in dieser Delegation entstanden (Herkunftsregel)
+	All = "*"   // any object
+	Own = "own" // created under this delegation (provenance rule)
 )
 
 var (
@@ -51,57 +51,57 @@ var (
 	resources = map[string]bool{Dataset: true, Model: true, Training: true, Task: true, TrainTemplate: true, EdgeDevice: true, ContainerImage: true, API: true}
 )
 
-// Rule erlaubt eine Aktion auf einer Ressource. Ohne IDs gilt sie nur für Aufrufe ohne Objekt
-// (Listen, Anlegen); IDs nennt Kennungen, "*" oder "own".
+// Rule allows an action on a resource. Without IDs it only applies to calls without an object
+// (lists, creating); IDs names identifiers, "*" or "own".
 type Rule struct {
 	Action   string   `json:"action"`
 	Resource string   `json:"resource"`
 	IDs      []string `json:"ids,omitempty"`
 }
 
-// Delegation sind die übertragenen Rechte eines Chats.
+// Delegation holds a chat's delegated rights.
 type Delegation struct {
 	Rules     []Rule     `json:"rules"`
 	ExpiresAt *time.Time `json:"expires_at,omitempty"`
-	// Enforce: true (Standard) weist Übergriffe ab; false protokolliert sie nur (Stufe „keine
-	// Schutzmaßnahme" des Versuchsplans: dieselbe Beobachtungsstelle, keine Grenze).
+	// Enforce: true (default) blocks violations; false only logs them (stage "no protection" of the
+	// experiment plan: the same observation point, no boundary).
 	Enforce *bool `json:"enforce,omitempty"`
-	// Confirm: "writes" (Standard) fragt bei schreibenden Aufrufen zusätzlich den Nutzer, "none" nicht.
+	// Confirm: "writes" (default) additionally asks the user for writing calls, "none" does not.
 	Confirm string `json:"confirm,omitempty"`
 }
 
-// Parse liest und prüft eine Delegation. Unbekannte Felder sind ein Fehler, damit ein Tippfehler
-// nicht still Rechte verschenkt oder entzieht.
+// Parse reads and validates a delegation. Unknown fields are an error, so that a typo does not
+// silently grant or withdraw rights.
 func Parse(raw []byte) (*Delegation, error) {
 	d := json.NewDecoder(strings.NewReader(string(raw)))
 	d.DisallowUnknownFields()
 	var del Delegation
 	if err := d.Decode(&del); err != nil {
-		return nil, fmt.Errorf("Delegation unlesbar: %w", err)
+		return nil, fmt.Errorf("delegation unreadable: %w", err)
 	}
 	if d.More() {
-		return nil, errors.New("Delegation: nach dem Objekt folgt weiterer Text")
+		return nil, errors.New("delegation: further text follows the object")
 	}
 	return &del, del.Validate()
 }
 
-// Validate prüft Aktionen, Ressourcen und Kennungen und bringt Kennungen in eine feste Form.
+// Validate checks actions, resources and identifiers and brings identifiers into a canonical form.
 func (d *Delegation) Validate() error {
 	for i := range d.Rules {
 		r := &d.Rules[i]
 		if !actions[r.Action] {
-			return fmt.Errorf("Regel %d: unbekannte Aktion %q (read, create, update, delete, run)", i+1, r.Action)
+			return fmt.Errorf("rule %d: unknown action %q (read, create, update, delete, run)", i+1, r.Action)
 		}
 		if !resources[r.Resource] {
-			return fmt.Errorf("Regel %d: unbekannte Ressource %q", i+1, r.Resource)
+			return fmt.Errorf("rule %d: unknown resource %q", i+1, r.Resource)
 		}
 		for j, id := range r.IDs {
 			id = strings.TrimSpace(id)
 			if id == "" {
-				return fmt.Errorf("Regel %d: leere Kennung", i+1)
+				return fmt.Errorf("rule %d: empty identifier", i+1)
 			}
 			if id == unknownID {
-				return fmt.Errorf("Regel %d: %q ist keine Kennung", i+1, id)
+				return fmt.Errorf("rule %d: %q is not an identifier", i+1, id)
 			}
 			if id != All && id != Own {
 				id = canonID(id)
@@ -112,42 +112,42 @@ func (d *Delegation) Validate() error {
 	switch d.Confirm {
 	case "", "writes", "none":
 	default:
-		return fmt.Errorf("confirm muss writes oder none sein, nicht %q", d.Confirm)
+		return fmt.Errorf("confirm must be writes or none, not %q", d.Confirm)
 	}
 	return nil
 }
 
-// Enforcing sagt, ob Übergriffe abgewiesen werden.
+// Enforcing reports whether violations are blocked.
 func (d *Delegation) Enforcing() bool { return d.Enforce == nil || *d.Enforce }
 
-// ConfirmWrites sagt, ob schreibende Aufrufe zusätzlich der Nutzer bestätigt.
+// ConfirmWrites reports whether the user additionally confirms writing calls.
 func (d *Delegation) ConfirmWrites() bool { return d.Confirm != "none" }
 
-// Summary beschreibt die Rechte für den Agenten und die Oberfläche.
+// Summary describes the rights for the agent and the UI.
 func (d *Delegation) Summary() string {
 	var b strings.Builder
-	mode := "Übergriffe werden abgewiesen"
+	mode := "violations are blocked"
 	if !d.Enforcing() {
-		mode = "Übergriffe werden nur protokolliert"
+		mode = "violations are only logged"
 	}
-	fmt.Fprintf(&b, "Übertragene Rechte (%s", mode)
+	fmt.Fprintf(&b, "Delegated rights (%s", mode)
 	if d.ExpiresAt != nil {
-		fmt.Fprintf(&b, ", gültig bis %s", d.ExpiresAt.Format(time.RFC3339))
+		fmt.Fprintf(&b, ", valid until %s", d.ExpiresAt.Format(time.RFC3339))
 	}
 	b.WriteString("):\n")
 	if len(d.Rules) == 0 {
-		b.WriteString("  keine; jeder Aufruf der Plattform ist ein Übergriff\n")
+		b.WriteString("  none; every platform call is a violation\n")
 	}
 	for _, r := range d.Rules {
-		ids := "ohne Objekt (Listen, Anlegen)"
+		ids := "without object (lists, creating)"
 		if len(r.IDs) > 0 {
 			names := make([]string, len(r.IDs))
 			for i, id := range r.IDs {
 				switch id {
 				case All:
-					names[i] = "alle"
+					names[i] = "all"
 				case Own:
-					names[i] = "in diesem Chat angelegte"
+					names[i] = "created in this chat"
 				default:
 					names[i] = id
 				}
@@ -159,9 +159,9 @@ func (d *Delegation) Summary() string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
-// Access ist die Einordnung eines Aufrufs. Manche Aufrufe berühren mehr als ein Objekt (Review 5,
-// K2 und W1): Also nennt die weiteren Zugriffe, die ebenfalls erlaubt sein müssen. Problem ist gesetzt,
-// wenn der Aufruf unabhängig von den Regeln abzuweisen ist (etwa ein Feld außerhalb der Positivliste).
+// Access is the classification of a call. Some calls touch more than one object (Review 5,
+// K2 and W1): Also names the further accesses that must be allowed as well. Problem is set
+// when the call has to be refused regardless of the rules (e.g. a field outside the allowlist).
 type Access struct {
 	Action   string   `json:"action"`
 	Resource string   `json:"resource"`
@@ -181,7 +181,7 @@ func (a Access) String() string {
 	return s
 }
 
-// unknownID steht für eine Kennung, die im Aufruf fehlt oder unlesbar ist; keine Regel nennt sie.
+// unknownID stands for an identifier that is missing from the call or unreadable; no rule names it.
 const unknownID = "?"
 
 type route struct {
@@ -189,7 +189,7 @@ type route struct {
 	re       *regexp.Regexp
 	action   string
 	resource string
-	idGroup  int // Gruppe mit der Kennung, 0: ohne Objekt
+	idGroup  int // group holding the identifier, 0: without object
 }
 
 func r(method, pattern, action, resource string, idGroup int) route {
@@ -198,8 +198,8 @@ func r(method, pattern, action, resource string, idGroup int) route {
 
 const seg = `([^/]+)`
 
-// routes ordnet die Pfade der Plattform ein, die festen vor denen mit Kennung (sonst wäre
-// /datasets/keyword ein Datensatz „keyword"). Was hier fehlt, ist api.
+// routes classifies the platform's paths, fixed ones before those with an identifier (otherwise
+// /datasets/keyword would be a dataset "keyword"). Whatever is missing here is api.
 var routes = []route{
 	r("GET", `/openapi\.json`, Read, Docs, 0),
 	r("GET", `/datasets`, Read, Dataset, 0),
@@ -209,7 +209,7 @@ var routes = []route{
 	r("POST", `/datasets`, Create, Dataset, 0),
 	r("POST", `/datasets/import`, Create, Dataset, 0),
 	r("GET", `/datasets/`+seg, Read, Dataset, 1),
-	// Schreibendes GET: holt die Annotation aus CVAT und schreibt sie nach MinIO (Review 5, W5).
+	// Writing GET: fetches the annotation from CVAT and writes it to MinIO (Review 5, W5).
 	r("GET", `/datasets/`+seg+`/download`, Update, Dataset, 1),
 	r("PATCH", `/datasets/`+seg, Update, Dataset, 1),
 	r("PATCH", `/datasets/`+seg+`/toggle-public`, Update, Dataset, 1),
@@ -230,13 +230,13 @@ var routes = []route{
 	r("GET", `/train/config/export`, Read, TrainTemplate, 0),
 	r("GET", `/train/config/`+seg+`/`+seg, Read, TrainTemplate, 0),
 	r("POST", `/train/config`, Create, Training, 0),
-	r("PUT", `/train/config`, Update, Training, 0), // Kennung steht im Körper (container_id)
+	r("PUT", `/train/config`, Update, Training, 0), // identifier is in the body (container_id)
 	r("GET", `/train/containers`, Read, Training, 0),
 	r("GET", `/train/containers/`+seg, Read, Training, 1),
 	r("GET", `/train/containers/`+seg+`/status`, Read, Training, 1),
 	r("GET", `/train/containers/`+seg+`/logs`, Read, Training, 1),
 	r("GET", `/train/containers/`+seg+`/config`, Read, Training, 1),
-	// Schreibendes GET: legt aus dem Container ein Modell an (Review K1 der Plattform-Anbindung).
+	// Writing GET: creates a model from the container (Review K1 of the platform binding).
 	r("GET", `/train/containers/`+seg+`/model`, Create, Model, 0),
 	r("POST", `/train/containers/`+seg+`/run`, Run, Training, 1),
 	r("POST", `/train/containers/`+seg+`/stop`, Run, Training, 1),
@@ -250,7 +250,7 @@ var routes = []route{
 
 	r("GET", `/edge-devices`, Read, EdgeDevice, 0),
 	r("POST", `/edge-devices`, Create, EdgeDevice, 0),
-	// Schreibendes GET: registriert ein noch nicht registriertes Gerät bei Portainer (Review 5, W5).
+	// Writing GET: registers a not yet registered device with Portainer (Review 5, W5).
 	r("GET", `/edge-devices/`+seg, Update, EdgeDevice, 1),
 	r("DELETE", `/edge-devices/`+seg, Delete, EdgeDevice, 1),
 	r("GET", `/edge-devices/`+seg+`/deployments`, Read, EdgeDevice, 1),
@@ -260,8 +260,8 @@ var routes = []route{
 	r("DELETE", `/container-images/([^/]+/[^/]+:[^/]+)`, Delete, ContainerImage, 1),
 }
 
-// Classify ordnet einen (normalisierten) Aufruf ein. Unbekannte Pfade sind api: GET read, sonst
-// update; erlaubt nur mit einer ausdrücklichen api-Regel.
+// Classify classifies a (normalized) call. Unknown paths are api: GET is read, anything else
+// update; allowed only with an explicit api rule.
 func Classify(req platform.Request) Access {
 	for _, rt := range routes {
 		if rt.method != req.Method {
@@ -277,13 +277,13 @@ func Classify(req platform.Request) Access {
 		}
 		switch {
 		case rt.method == http.MethodPut && rt.re.String() == "^/train/config$":
-			// Kennungen im Körper (Review 5, W1): Container und Datensatz.
+			// Identifiers in the body (Review 5, W1): container and dataset.
 			a.ID = bodyIDOr(req.Body, "container_id")
 			a.Also = append(a.Also, Access{Action: Read, Resource: Dataset, ID: bodyIDOr(req.Body, "dataset_id")})
 		case rt.method == http.MethodPost && rt.re.String() == "^/train/config$":
 			a.Also = append(a.Also, Access{Action: Read, Resource: Dataset, ID: bodyIDOr(req.Body, "dataset_id")})
 		case rt.re.String() == "^/train/containers/"+seg+"/model$":
-			// Das neue Modell enthält Datei und Protokoll des Containers (Review 5, K2).
+			// The new model contains the container's file and log (Review 5, K2).
 			a.Also = append(a.Also, Access{Action: Read, Resource: Training, ID: canonID(m[1])})
 		}
 		if p := checkFields(req); p != "" {
@@ -300,10 +300,10 @@ func Classify(req platform.Request) Access {
 	return Access{Action: Update, Resource: API, ID: req.Path}
 }
 
-// fieldRules: Positivlisten für schreibende Körper (Review 5, K1). PATCH /datasets/{id} setzt im
-// Backend jedes Feld per setattr, auch bucket_name (später ungeprüft in einem Shell-Befehl im
-// CVAT-Container) und metadata_uri (Löschen fremder Metadaten); der PATCH der Trainingscontainer
-// übernimmt container_id, image_id und owner. Wer hier ein Feld ergänzt, prüft es am Backend-Code.
+// fieldRules: allowlists for writing bodies (Review 5, K1). PATCH /datasets/{id} sets every field
+// in the backend via setattr, including bucket_name (later used unchecked in a shell command in the
+// CVAT container) and metadata_uri (deleting other users' metadata); the PATCH of training containers
+// takes over container_id, image_id and owner. Whoever adds a field here checks it against the backend code.
 var fieldRules = []struct {
 	method string
 	re     *regexp.Regexp
@@ -314,7 +314,7 @@ var fieldRules = []struct {
 	{http.MethodPatch, regexp.MustCompile(`^/train/containers/[^/]+/score$`), []string{"score"}},
 }
 
-// checkFields prüft die Felder eines JSON-Körpers gegen die Positivliste der Route.
+// checkFields checks the fields of a JSON body against the route's allowlist.
 func checkFields(req platform.Request) string {
 	for _, fr := range fieldRules {
 		if fr.method != req.Method || !fr.re.MatchString(req.Path) {
@@ -325,21 +325,21 @@ func checkFields(req platform.Request) string {
 		}
 		var m map[string]json.RawMessage
 		if json.Unmarshal(req.Body, &m) != nil {
-			return "Körper ist kein JSON-Objekt"
+			return "body is not a JSON object"
 		}
 		for k := range m {
 			if !contains(fr.fields, k) {
 				if len(fr.fields) == 0 {
-					return fmt.Sprintf("%s %s: kein Feld darf gesetzt werden (%q)", req.Method, fr.re.String(), k)
+					return fmt.Sprintf("%s %s: no field may be set (%q)", req.Method, fr.re.String(), k)
 				}
-				return fmt.Sprintf("Feld %q nicht erlaubt; erlaubt: %s", k, strings.Join(fr.fields, ", "))
+				return fmt.Sprintf("field %q not allowed; allowed: %s", k, strings.Join(fr.fields, ", "))
 			}
 		}
 	}
 	return ""
 }
 
-// bodyIDOr ist bodyID mit unknownID, wenn die Kennung fehlt (dann passt nur eine Regel mit "*").
+// bodyIDOr is bodyID with unknownID if the identifier is missing (then only a rule with "*" matches).
 func bodyIDOr(body []byte, key string) string {
 	if id := bodyID(body, key); id != "" {
 		return id
@@ -347,8 +347,8 @@ func bodyIDOr(body []byte, key string) string {
 	return unknownID
 }
 
-// canonID bringt eine Kennung in eine feste Form: Ganzzahlen ohne führende Nullen und Leerzeichen
-// (das Backend liest „01" als 1), alles andere unverändert.
+// canonID brings an identifier into a canonical form: integers without leading zeros and spaces
+// (the backend reads "01" as 1), everything else unchanged.
 func canonID(s string) string {
 	t := strings.TrimSpace(s)
 	if n, err := strconv.ParseInt(t, 10, 64); err == nil {
@@ -357,10 +357,10 @@ func canonID(s string) string {
 	return s
 }
 
-// bodyID liest eine Kennung aus dem JSON-Körper so, wie das Backend (Python json) sie liest: bei
-// doppelten Schlüsseln gilt der letzte; Go macht es beim Lesen in eine Map ebenso.
+// bodyID reads an identifier from the JSON body the way the backend (Python json) reads it: with
+// duplicate keys the last one wins; Go does the same when reading into a map.
 func bodyID(body []byte, key string) string {
-	// Zahlen exakt lesen (Review 5, W2): float64 machte aus 9007199254740993 die Kennung …992.
+	// Read numbers exactly (Review 5, W2): float64 turned 9007199254740993 into the identifier …992.
 	d := json.NewDecoder(strings.NewReader(string(body)))
 	d.UseNumber()
 	var m map[string]any
@@ -372,21 +372,21 @@ func bodyID(body []byte, key string) string {
 		if n, err := strconv.ParseInt(v.String(), 10, 64); err == nil {
 			return strconv.FormatInt(n, 10)
 		}
-		return "" // 7.0, 1e3 und Überlauf: keine Ganzzahl, keine Kennung
+		return "" // 7.0, 1e3 and overflow: not an integer, not an identifier
 	case string:
 		return canonID(v)
 	}
 	return ""
 }
 
-// Decision ist das Ergebnis einer Prüfung.
+// Decision is the result of a check.
 type Decision struct {
 	Allowed bool
 	Access  Access
-	Reason  string // bei Übergriffen: warum
+	Reason  string // for violations: why
 }
 
-// Check prüft einen Zugriff. own sagt, ob ein Objekt in dieser Delegation entstanden ist.
+// Check checks an access. own reports whether an object was created under this delegation.
 func (d *Delegation) Check(a Access, now time.Time, own func(resource, id string) bool) Decision {
 	dec := Decision{Access: a}
 	if a.Problem != "" {
@@ -398,12 +398,12 @@ func (d *Delegation) Check(a Access, now time.Time, own func(resource, id string
 		return dec
 	}
 	if d.ExpiresAt != nil && !now.Before(*d.ExpiresAt) {
-		dec.Reason = "Delegation abgelaufen seit " + d.ExpiresAt.Format(time.RFC3339)
+		dec.Reason = "delegation expired since " + d.ExpiresAt.Format(time.RFC3339)
 		return dec
 	}
 	for _, x := range a.Also {
 		if sub := d.checkOne(x, own); !sub {
-			dec.Reason = "nicht in den übertragenen Rechten: " + x.Action + " " + x.Resource + " " + x.ID + " (berührt von " + a.Action + " " + a.Resource + ")"
+			dec.Reason = "not in the delegated rights: " + x.Action + " " + x.Resource + " " + x.ID + " (touched by " + a.Action + " " + a.Resource + ")"
 			return dec
 		}
 	}
@@ -411,7 +411,7 @@ func (d *Delegation) Check(a Access, now time.Time, own func(resource, id string
 		dec.Allowed = true
 		return dec
 	}
-	dec.Reason = "nicht in den übertragenen Rechten: " + Access{Action: a.Action, Resource: a.Resource, ID: a.ID}.String()
+	dec.Reason = "not in the delegated rights: " + Access{Action: a.Action, Resource: a.Resource, ID: a.ID}.String()
 	return dec
 }
 
@@ -444,14 +444,14 @@ func contains(l []string, s string) bool {
 	return false
 }
 
-// Created ermittelt nach einem erfolgreichen Anlage-Aufruf das neue Objekt (Herkunftsregel): die
-// Kennung aus dem Körper bei Datensätzen und Modellen, die Aufgabe aus Location beim Training.
-// Trainingscontainer entstehen asynchron und lassen sich so nicht zuordnen (Grenze).
+// Created determines the new object after a successful create call (provenance rule): the
+// identifier from the body for datasets and models, the task from Location for training.
+// Training containers are created asynchronously and cannot be attributed this way (limitation).
 func Created(a Access, res platform.Result) (resource, id string, ok bool) {
 	if res.Status != "ok" || res.HTTPStatus < 200 || res.HTTPStatus >= 300 {
 		return "", "", false
 	}
-	if a.Action == Run && a.Resource == Training { // Start und Stopp melden ihre Aufgabe (Review 5, M1)
+	if a.Action == Run && a.Resource == Training { // start and stop report their task (Review 5, M1)
 		if m := taskLoc.FindStringSubmatch(res.Location); m != nil {
 			return Task, canonID(m[1]), true
 		}
@@ -475,7 +475,7 @@ func Created(a Access, res platform.Result) (resource, id string, ok bool) {
 
 var taskLoc = regexp.MustCompile(`^/tasks/([0-9]+)(?:$|\?)`)
 
-// Resources listet die bekannten Ressourcen (für Hilfetexte).
+// Resources lists the known resources (for help texts).
 func Resources() []string {
 	out := make([]string, 0, len(resources))
 	for k := range resources {

@@ -15,7 +15,7 @@ import (
 	"agw/internal/store"
 )
 
-// Anfragen aus den Sandbox-Netzen werden abgewiesen, alle anderen durchgelassen.
+// Requests from the sandbox networks are refused, all others let through.
 func TestGuardBlocksSandboxSubnets(t *testing.T) {
 	blocked, err := ParseSubnets("10.231.19.0/24, 10.231.20.0/24")
 	if err != nil {
@@ -31,11 +31,11 @@ func TestGuardBlocksSandboxSubnets(t *testing.T) {
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, r)
 		if w.Code != want {
-			t.Errorf("%s: %d, erwartet %d", addr, w.Code, want)
+			t.Errorf("%s: %d, expected %d", addr, w.Code, want)
 		}
 	}
-	if _, err := ParseSubnets("kein-netz"); err == nil {
-		t.Fatal("ungültige Angabe akzeptiert")
+	if _, err := ParseSubnets("not-a-network"); err == nil {
+		t.Fatal("invalid range accepted")
 	}
 }
 
@@ -46,8 +46,8 @@ func authServer() http.Handler {
 	return s.auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(204) }))
 }
 
-// K3: Die API ist ohne Anmeldung nicht nutzbar, auch nicht aus einem Netz,
-// das keine Quelladresse verrät (host.docker.internal).
+// K3: the API cannot be used without login, not even from a network
+// that does not reveal a source address (host.docker.internal).
 func TestAPIRequiresToken(t *testing.T) {
 	h := authServer()
 	cases := []struct {
@@ -55,12 +55,12 @@ func TestAPIRequiresToken(t *testing.T) {
 		mod    func(*http.Request)
 		expect int
 	}{
-		{"ohne", func(r *http.Request) {}, 401},
-		{"falsches Bearer", func(r *http.Request) { r.Header.Set("Authorization", "Bearer falsch") }, 401},
+		{"without", func(r *http.Request) {}, 401},
+		{"wrong bearer", func(r *http.Request) { r.Header.Set("Authorization", "Bearer wrong") }, 401},
 		{"Bearer", func(r *http.Request) { r.Header.Set("Authorization", "Bearer "+testToken) }, 204},
 		{"Cookie", func(r *http.Request) { r.AddCookie(&http.Cookie{Name: CookieName, Value: testToken}) }, 204},
-		{"fremder Host (DNS-Rebinding)", func(r *http.Request) {
-			r.Host = "angreifer.example:18480"
+		{"foreign host (DNS rebinding)", func(r *http.Request) {
+			r.Host = "attacker.example:18480"
 			r.Header.Set("Authorization", "Bearer "+testToken)
 		}, 403},
 	}
@@ -70,18 +70,18 @@ func TestAPIRequiresToken(t *testing.T) {
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, r)
 		if w.Code != c.expect {
-			t.Errorf("%s: %d, erwartet %d", c.name, w.Code, c.expect)
+			t.Errorf("%s: %d, expected %d", c.name, w.Code, c.expect)
 		}
 	}
 }
 
-// Statische UI-Dateien bleiben ohne Anmeldung erreichbar; sie enthalten nichts Geheimes.
+// Static UI files stay reachable without login; they contain nothing secret.
 func TestStaticWithoutToken(t *testing.T) {
 	r := httptest.NewRequest("GET", "http://127.0.0.1:18480/assets/x.js", nil)
 	w := httptest.NewRecorder()
 	authServer().ServeHTTP(w, r)
 	if w.Code != 204 {
-		t.Fatalf("statisch: %d", w.Code)
+		t.Fatalf("static: %d", w.Code)
 	}
 }
 
@@ -95,16 +95,16 @@ func TestLoginSetsStrictCookie(t *testing.T) {
 		c[0].Path != "/" || w.Header().Get("Location") != "/" {
 		t.Fatalf("Login: %d %+v %v", w.Code, c, w.Header())
 	}
-	r = httptest.NewRequest("GET", "http://127.0.0.1:18480/login?token=falsch", nil)
+	r = httptest.NewRequest("GET", "http://127.0.0.1:18480/login?token=wrong", nil)
 	w = httptest.NewRecorder()
 	s.login(w, r)
 	if w.Code != 401 || len(w.Result().Cookies()) != 0 {
-		t.Fatalf("falsches Token: %d", w.Code)
+		t.Fatalf("wrong token: %d", w.Code)
 	}
 }
 
-// Unter einem Pfadpräfix (AGW_PUBLIC_URL=https://app.<basis>/agent) führt /login?token= zur UI unter
-// /agent/, und das Cookie gilt nur dort.
+// Under a path prefix (AGW_PUBLIC_URL=https://app.<base>/agent), /login?token= leads to the UI under
+// /agent/, and the cookie only applies there.
 func TestLoginUnderBasePath(t *testing.T) {
 	s := &Server{Token: testToken, Env: config.Env{BasePath: "/agent"}}
 	r := httptest.NewRequest("GET", "http://app.example/login?token="+testToken, nil)
@@ -112,21 +112,21 @@ func TestLoginUnderBasePath(t *testing.T) {
 	s.Handler().ServeHTTP(w, r)
 	c := w.Result().Cookies()
 	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/agent/" || len(c) != 1 || c[0].Path != "/agent/" {
-		t.Fatalf("Login unter /agent: %d %v %+v", w.Code, w.Header(), c)
+		t.Fatalf("login under /agent: %d %v %+v", w.Code, w.Header(), c)
 	}
 }
 
-// M1: Cross-Origin-POSTs (CSRF) werden abgewiesen, auch mit gültigem Cookie.
+// M1: cross-origin POSTs (CSRF) are refused, even with a valid cookie.
 func TestCrossOriginPostRejected(t *testing.T) {
 	h := authServer()
 	r := httptest.NewRequest("POST", "http://127.0.0.1:18480/api/chats", strings.NewReader(`{}`))
 	r.AddCookie(&http.Cookie{Name: CookieName, Value: testToken})
-	r.Header.Set("Origin", "https://angreifer.example")
+	r.Header.Set("Origin", "https://attacker.example")
 	r.Header.Set("Sec-Fetch-Site", "cross-site")
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
 	if w.Code != 403 {
-		t.Fatalf("Cross-Origin-POST: %d", w.Code)
+		t.Fatalf("cross-origin POST: %d", w.Code)
 	}
 }
 
@@ -154,9 +154,9 @@ func (f *fakeImages) OpenImage(_ context.Context, chatID, msg, p string) (store.
 	return store.ChatImage{ContentType: "image/png", Size: int64(len(f.data)), Path: "/workspace/plot.png"}, io.NopCloser(bytes.NewReader(f.data)), nil
 }
 
-// Anzeige-Bilder: nur mit Anmeldung, Typ aus den Magic Bytes, nosniff, privat zwischengespeichert.
+// Display images: only with login, type from the magic bytes, nosniff, cached privately.
 func TestImageEndpoint(t *testing.T) {
-	png := []byte("\x89PNG\r\n\x1a\nDaten")
+	png := []byte("\x89PNG\r\n\x1a\ndata")
 	f := &fakeImages{data: png}
 	s := &Server{Token: testToken, Images: f}
 	h := s.Handler()
@@ -171,34 +171,34 @@ func TestImageEndpoint(t *testing.T) {
 	}
 	target := "/api/chats/c1/images?path=" + url.QueryEscape("/workspace/plot.png") + "&msg=resp-1"
 	if w := get(target, false); w.Code != 401 {
-		t.Fatalf("ohne Anmeldung: %d", w.Code)
+		t.Fatalf("without login: %d", w.Code)
 	}
 	w := get(target, true)
 	if w.Code != 200 || !bytes.Equal(w.Body.Bytes(), png) {
-		t.Fatalf("Abruf: %d %q", w.Code, w.Body.String())
+		t.Fatalf("fetch: %d %q", w.Code, w.Body.String())
 	}
 	hd := w.Header()
 	if hd.Get("Content-Type") != "image/png" || hd.Get("X-Content-Type-Options") != "nosniff" ||
 		!strings.HasPrefix(hd.Get("Cache-Control"), "private") || !strings.HasPrefix(hd.Get("Content-Disposition"), "inline") {
-		t.Fatalf("Kopfzeilen: %v", hd)
+		t.Fatalf("headers: %v", hd)
 	}
 	if f.chat != "c1" || f.msg != "resp-1" || f.path != "/workspace/plot.png" {
-		t.Fatalf("weitergereicht: %+v", f)
+		t.Fatalf("passed on: %+v", f)
 	}
 	if w := get("/api/chats/c1/images?msg=resp-1", true); w.Code != 400 {
-		t.Fatalf("ohne Pfad: %d", w.Code)
+		t.Fatalf("without path: %d", w.Code)
 	}
 	f.err = chat.ErrImageUnavailable
 	if w := get(target, true); w.Code != 404 || w.Header().Get("Cache-Control") != "no-store" {
-		t.Fatalf("nicht verfügbar: %d %q", w.Code, w.Header().Get("Cache-Control"))
+		t.Fatalf("not available: %d %q", w.Code, w.Header().Get("Cache-Control"))
 	}
 	f.err = chat.ErrInvalid
 	if w := get(target, true); w.Code != 400 {
-		t.Fatalf("ungültig: %d", w.Code)
+		t.Fatalf("invalid: %d", w.Code)
 	}
 }
 
-// Stopp einer Hintergrundaufgabe, die nicht (mehr) läuft: 409.
+// Stopping a background task that is not (or no longer) running: 409.
 func TestErrCodeBackground(t *testing.T) {
 	if errCode(chat.ErrNotRunning) != http.StatusConflict {
 		t.Fatal("ErrNotRunning")

@@ -20,10 +20,10 @@ import type {
 
 export class ApiError extends Error {
   readonly status: number
-  /** Maschinenlesbarer Grund, etwa „context_too_large“ beim Modellwechsel. */
+  /** Machine-readable reason, e.g. "context_too_large" when switching models. */
   readonly code?: string
   readonly details?: unknown
-  /** Bei 401 im oidc-Modus: Pfad der Anmeldung (/oidc/login, unter einem Präfix etwa /agent/oidc/login). */
+  /** On 401 in oidc mode: login path (/oidc/login, under a prefix e.g. /agent/oidc/login). */
   readonly login?: string
   constructor(status: number, message: string, code?: string, details?: unknown, login?: string) {
     super(message)
@@ -35,7 +35,7 @@ export class ApiError extends Error {
   }
 }
 
-/** Anmeldung über die Plattform: einmal still anmelden (prompt=none), danach „nicht angemeldet“ zeigen. */
+/** Login through the platform: log in silently once (prompt=none), afterwards show "not logged in". */
 function silentLogin(loginPath: string) {
   if (!isLoginPath(loginPath)) return
   let store: Storage | undefined
@@ -47,7 +47,7 @@ function silentLogin(loginPath: string) {
   if (claimSilentLogin(store, Date.now())) window.location.assign(silentLoginUrl(loginPath, window.location))
 }
 
-/** Details zu „context_too_large“: Der Kontext passt nicht in das gewünschte Modell. */
+/** Details of "context_too_large": the context does not fit into the requested model. */
 export type ContextTooLarge = { model: string; tokens: number; window: number; limit: number }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -71,7 +71,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       details = body?.details
       login = body?.login
     } catch {
-      // Antwort ohne JSON-Körper
+      // response without a JSON body
     }
     if (res.status === 401 && login) silentLogin(login)
     throw new ApiError(res.status, message, code, details, login)
@@ -86,7 +86,7 @@ const enc = encodeURIComponent
 
 export const api = {
   me: () => request<Me>("api/me"),
-  /** Sitzung am Orchestrator beenden (nur oidc-Modus). */
+  /** End the session at the orchestrator (oidc mode only). */
   logout: async () => {
     await fetch("oidc/logout", { method: "POST" })
   },
@@ -97,13 +97,13 @@ export const api = {
   chats: () => request<Chat[]>("api/chats"),
   chat: (id: string) => request<ChatDetail>(`api/chats/${enc(id)}`),
   createChat: (req: CreateChatRequest) => post<Chat>("api/chats", req),
-  /** Modell wechseln; 409 „context_too_large“, wenn der Kontext nicht passt (dann compactFirst). */
+  /** Switch the model; 409 "context_too_large" if the context does not fit (then compactFirst). */
   setModel: (id: string, model: string, compactFirst = false) =>
     post<Chat>(`api/chats/${enc(id)}/model`, { model, compact_first: compactFirst }),
   setEffort: (id: string, level: string) => post<Chat>(`api/chats/${enc(id)}/effort`, { level }),
-  /** Laufenden bash-Befehl stoppen; der Agent bekommt „Command stopped by the user“. */
+  /** Stop a running bash command; the agent gets "Command stopped by the user". */
   stopTool: (id: string, toolCallId: string) => post<{ ok: boolean }>(`api/chats/${enc(id)}/tools/${enc(toolCallId)}/stop`),
-  /** Laufenden bash-Befehl in eine Hintergrundaufgabe umwandeln; er läuft weiter. */
+  /** Turn a running bash command into a background task; it keeps running. */
   backgroundTool: (id: string, toolCallId: string) =>
     post<BackgroundTask>(`api/chats/${enc(id)}/tools/${enc(toolCallId)}/background`),
   sendMessage: (id: string, text: string, attachments?: string[]) =>
@@ -111,10 +111,10 @@ export const api = {
       `api/chats/${enc(id)}/messages`,
       attachments && attachments.length > 0 ? { text, attachments } : { text },
     ),
-  /** Eingereihte Nachricht entfernen; 409, wenn schon übergeben. */
+  /** Remove a queued message; 409 if already handed over. */
   unqueue: (id: string, entry: string) =>
     request<{ ok: boolean }>(`api/chats/${enc(id)}/queue/${enc(entry)}`, { method: "DELETE" }),
-  /** Zurückgehaltene Nachrichten jetzt übergeben; 409, wenn der Agent arbeitet. */
+  /** Hand over held-back messages now; 409 if the agent is working. */
   flushQueue: (id: string) => post<SendResult>(`api/chats/${enc(id)}/queue/send`),
   abort: (id: string) => post<Chat>(`api/chats/${enc(id)}/abort`),
   suspend: (id: string) => post<Chat>(`api/chats/${enc(id)}/suspend`),
@@ -123,7 +123,7 @@ export const api = {
   llmCalls: (id: string) => request<LLMCall[]>(`api/chats/${enc(id)}/llm_calls`),
   toolExecutions: (id: string) => request<ToolExecutionsResponse>(`api/chats/${enc(id)}/tool_executions`),
   background: (id: string) => request<BackgroundTask[]>(`api/chats/${enc(id)}/background`),
-  /** Laufende Hintergrundaufgabe beenden; 409, wenn sie nicht (mehr) läuft. */
+  /** End a running background task; 409 if it is not (or no longer) running. */
   stopBackground: (id: string, bg: string) => post<BackgroundTask>(`api/chats/${enc(id)}/background/${enc(bg)}/stop`),
   setAutoCompact: (id: string, enabled: boolean) => post<Chat>(`api/chats/${enc(id)}/autocompact`, { enabled }),
   commands: (id: string) => request<Command[]>(`api/chats/${enc(id)}/commands`),
@@ -143,6 +143,6 @@ export const urls = {
   events: (id: string) => `api/chats/${enc(id)}/events`,
   artifact: (id: string, name: string, kind: ArtifactKind) =>
     `api/chats/${enc(id)}/artifacts/${enc(name)}?kind=${kind}`,
-  /** Anzeige-Bild einer Antwort (Pfad in der Sandbox, Kennung der Antwort), siehe lib/images. */
+  /** Display image of a response (path in the sandbox, ID of the response), see lib/images. */
   image: (id: string, path: string, msg: string) => `api/chats/${enc(id)}/images?path=${enc(path)}&msg=${enc(msg)}`,
 }

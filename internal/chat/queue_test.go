@@ -16,21 +16,21 @@ func TestComposeMessage(t *testing.T) {
 		in   []store.QueueEntry
 		want string
 	}{
-		{[]store.QueueEntry{{Text: "eins"}}, "eins"},
-		{[]store.QueueEntry{{Text: "eins"}, {Text: " zwei "}}, "eins\n\nzwei"},
-		{[]store.QueueEntry{{Text: "a", Attachments: []string{"x.csv"}}}, "a\n\n[Anhänge unter /workspace/inputs/]\n- x.csv"},
-		{[]store.QueueEntry{{Attachments: []string{"x.csv"}}}, "Siehe Anhänge.\n\n[Anhänge unter /workspace/inputs/]\n- x.csv"},
+		{[]store.QueueEntry{{Text: "one"}}, "one"},
+		{[]store.QueueEntry{{Text: "one"}, {Text: " two "}}, "one\n\ntwo"},
+		{[]store.QueueEntry{{Text: "a", Attachments: []string{"x.csv"}}}, "a\n\n[Attachments in /workspace/inputs/]\n- x.csv"},
+		{[]store.QueueEntry{{Attachments: []string{"x.csv"}}}, "See attachments.\n\n[Attachments in /workspace/inputs/]\n- x.csv"},
 		{[]store.QueueEntry{{Text: "a", Attachments: []string{"x.csv"}}, {Text: "b", Attachments: []string{"y.png", "x.csv"}}},
-			"a\n\nb\n\n[Anhänge unter /workspace/inputs/]\n- x.csv\n- y.png"},
+			"a\n\nb\n\n[Attachments in /workspace/inputs/]\n- x.csv\n- y.png"},
 	}
 	for _, c := range cases {
 		if got := composeMessage(c.in, nil); got.Text != c.want || got.Origin != store.OriginUser {
-			t.Errorf("composeMessage(%+v) = %q, erwartet %q", c.in, got, c.want)
+			t.Errorf("composeMessage(%+v) = %q, want %q", c.in, got, c.want)
 		}
 	}
 }
 
-// prompts liefert die Aufträge, die an den Agenten gingen.
+// prompts returns the messages that went to the agent.
 func (a *fakeAgent) prompts() []string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -50,10 +50,10 @@ func waitUntil(t *testing.T, what string, cond func() bool) {
 			return
 		}
 	}
-	t.Fatalf("Zeitüberschreitung: %s", what)
+	t.Fatalf("timeout: %s", what)
 }
 
-// busyChat legt einen Chat an, dessen erster Lauf erst endet, wenn release aufgerufen wird.
+// busyChat creates a chat whose first run only ends when release is called.
 func busyChat(t *testing.T, e *env) (id string, a *fakeAgent, release func()) {
 	t.Helper()
 	ctx := context.Background()
@@ -66,9 +66,9 @@ func busyChat(t *testing.T, e *env) (id string, a *fakeAgent, release func()) {
 	a.mu.Lock()
 	a.hold = hold
 	a.mu.Unlock()
-	res, err := e.m.Send(ctx, c.ID, "eins")
+	res, err := e.m.Send(ctx, c.ID, "one")
 	if err != nil || res.Queued {
-		t.Fatalf("erste Nachricht: %+v %v", res, err)
+		t.Fatalf("first message: %+v %v", res, err)
 	}
 	return c.ID, a, func() { close(hold) }
 }
@@ -79,39 +79,39 @@ func TestQueueWhileRunningDeliveredTogether(t *testing.T) {
 	id, a, release := busyChat(t, e)
 	events, cancel := e.m.Subscribe(id)
 	defer cancel()
-	if _, err := e.m.AddInput(ctx, id, "daten.csv", []byte("x")); err != nil {
+	if _, err := e.m.AddInput(ctx, id, "data.csv", []byte("x")); err != nil {
 		t.Fatal(err)
 	}
-	r2, err := e.m.SendWithAttachments(ctx, id, "zwei", []string{"daten.csv"})
+	r2, err := e.m.SendWithAttachments(ctx, id, "two", []string{"data.csv"})
 	if err != nil || !r2.Queued || r2.QueueID == "" {
-		t.Fatalf("zweite: %+v %v", r2, err)
+		t.Fatalf("second: %+v %v", r2, err)
 	}
-	r3, _ := e.m.Send(ctx, id, "drei")
-	r4, _ := e.m.Send(ctx, id, "vier")
+	r3, _ := e.m.Send(ctx, id, "three")
+	r4, _ := e.m.Send(ctx, id, "four")
 	if !r3.Queued || !r4.Queued {
-		t.Fatalf("nicht eingereiht: %+v %+v", r3, r4)
+		t.Fatalf("not enqueued: %+v %+v", r3, r4)
 	}
 	ev := waitEvent(t, events, "queue", "")
 	if qe := ev.Data.(QueueEvent); qe.Change != "queued" || len(qe.Entries) != 1 {
-		t.Fatalf("Ereignis: %+v", qe)
+		t.Fatalf("event: %+v", qe)
 	}
 	if err := e.m.Unqueue(ctx, id, r3.QueueID); err != nil {
 		t.Fatal(err)
 	}
 	v, _ := e.m.View(ctx, id)
 	if v.Queued != 2 || v.QueueHeld {
-		t.Fatalf("während des Laufs: queued=%d held=%v", v.Queued, v.QueueHeld)
+		t.Fatalf("during the run: queued=%d held=%v", v.Queued, v.QueueHeld)
 	}
 	if got := a.prompts(); len(got) != 1 {
-		t.Fatalf("vor Laufende schon übergeben: %q", got)
+		t.Fatalf("delivered before the end of the run: %q", got)
 	}
 	release()
-	waitUntil(t, "Übergabe", func() bool { return len(a.prompts()) == 2 })
-	want := "zwei\n\nvier\n\n[Anhänge unter /workspace/inputs/]\n- daten.csv"
+	waitUntil(t, "delivery", func() bool { return len(a.prompts()) == 2 })
+	want := "two\n\nfour\n\n[Attachments in /workspace/inputs/]\n- data.csv"
 	if got := a.prompts()[1]; got != want {
-		t.Fatalf("Auftrag:\n%q\nerwartet\n%q", got, want)
+		t.Fatalf("message:\n%q\nwant\n%q", got, want)
 	}
-	// Das Ereignis „delivered“ nennt den Text, damit die UI die Blase ohne Lücke zeigen kann.
+	// The "delivered" event carries the text so that the UI can show the bubble without a gap.
 	for {
 		qe := waitEvent(t, events, "queue", "").Data.(QueueEvent)
 		if qe.Change == "delivered" {
@@ -122,11 +122,11 @@ func TestQueueWhileRunningDeliveredTogether(t *testing.T) {
 		}
 	}
 	if err := e.m.Unqueue(ctx, id, r2.QueueID); !errors.Is(err, ErrQueueDelivered) {
-		t.Fatalf("Entfernen nach Übergabe: %v", err)
+		t.Fatalf("removal after delivery: %v", err)
 	}
 	waitSettled(t, e, id)
 	if q, _ := e.m.Queue(ctx, id); len(q) != 0 {
-		t.Fatalf("Warteschlange nicht leer: %+v", q)
+		t.Fatalf("queue not empty: %+v", q)
 	}
 }
 
@@ -134,50 +134,50 @@ func TestQueueHeldAfterAbort(t *testing.T) {
 	e := setup(t)
 	ctx := context.Background()
 	id, a, release := busyChat(t, e)
-	if r, _ := e.m.Send(ctx, id, "zwei"); !r.Queued {
-		t.Fatal("nicht eingereiht")
+	if r, _ := e.m.Send(ctx, id, "two"); !r.Queued {
+		t.Fatal("not enqueued")
 	}
 	if _, err := e.m.Abort(ctx, id); err != nil {
 		t.Fatal(err)
 	}
 	release()
 	waitSettled(t, e, id)
-	time.Sleep(100 * time.Millisecond) // Hintergrundarbeit nach agent_settled
+	time.Sleep(100 * time.Millisecond) // background work after agent_settled
 	if got := a.prompts(); len(got) != 1 {
-		t.Fatalf("nach Abbruch übergeben: %q", got)
+		t.Fatalf("delivered after abort: %q", got)
 	}
 	v, _ := e.m.View(ctx, id)
 	if v.Queued != 1 || !v.QueueHeld {
-		t.Fatalf("nach Abbruch: queued=%d held=%v", v.Queued, v.QueueHeld)
+		t.Fatalf("after abort: queued=%d held=%v", v.Queued, v.QueueHeld)
 	}
-	// Die nächste Nachricht nimmt die zurückgehaltene mit.
-	res, err := e.m.Send(ctx, id, "drei")
+	// The next message takes the held one along.
+	res, err := e.m.Send(ctx, id, "three")
 	if err != nil || res.Queued {
-		t.Fatalf("drei: %+v %v", res, err)
+		t.Fatalf("three: %+v %v", res, err)
 	}
-	if got := a.prompts(); len(got) != 2 || got[1] != "zwei\n\ndrei" {
-		t.Fatalf("Aufträge: %q", got)
+	if got := a.prompts(); len(got) != 2 || got[1] != "two\n\nthree" {
+		t.Fatalf("messages: %q", got)
 	}
 	waitSettled(t, e, id)
 	if v, _ := e.m.View(ctx, id); v.Queued != 0 || v.QueueHeld {
-		t.Fatalf("danach: %+v", v)
+		t.Fatalf("afterwards: %+v", v)
 	}
-	// Ohne Eingereihtes gibt es nichts zu übergeben.
+	// Without queued entries there is nothing to deliver.
 	if _, err := e.m.FlushQueue(ctx, id); !errors.Is(err, ErrInvalid) {
-		t.Fatalf("leere Warteschlange: %v", err)
+		t.Fatalf("empty queue: %v", err)
 	}
 }
 
-// Die Warteschlange liegt in Postgres und übersteht einen Neustart des Orchestrators; danach
-// ruht der Chat, und „jetzt senden“ setzt ihn mit den eingereihten Nachrichten fort.
+// The queue lives in Postgres and survives a restart of the orchestrator; afterwards the chat is
+// idle, and "send now" resumes it with the queued messages.
 func TestQueueSurvivesRestart(t *testing.T) {
 	e := setup(t)
 	ctx := context.Background()
 	id, _, release := busyChat(t, e)
-	if r, _ := e.m.Send(ctx, id, "nach dem Neustart"); !r.Queued {
-		t.Fatal("nicht eingereiht")
+	if r, _ := e.m.Send(ctx, id, "after the restart"); !r.Queued {
+		t.Fatal("not enqueued")
 	}
-	// Neustart: neuer Manager auf derselben Datenbank; der alte Chat ruht.
+	// Restart: new manager on the same database; the old chat is idle.
 	e.m.Shutdown(ctx)
 	release()
 	m2 := NewManager(e.st, e.p, e.cat, e.blobs, artifacts.NewBroker(), e.opt)
@@ -186,27 +186,27 @@ func TestQueueSurvivesRestart(t *testing.T) {
 	}
 	v, _ := m2.View(ctx, id)
 	if v.State != store.StateDormant || v.Queued != 1 || !v.QueueHeld {
-		t.Fatalf("nach Neustart: state=%s queued=%d held=%v", v.State, v.Queued, v.QueueHeld)
+		t.Fatalf("after restart: state=%s queued=%d held=%v", v.State, v.Queued, v.QueueHeld)
 	}
 	res, err := m2.FlushQueue(ctx, id)
 	if err != nil || !res.Resumed {
-		t.Fatalf("jetzt senden: %+v %v", res, err)
+		t.Fatalf("send now: %+v %v", res, err)
 	}
 	fresh := resumedAgent(e)
 	if fresh == nil {
-		t.Fatal("keine frische Sandbox")
+		t.Fatal("no fresh sandbox")
 	}
-	waitUntil(t, "Auftrag", func() bool {
+	waitUntil(t, "message", func() bool {
 		p := fresh.prompts()
-		return len(p) == 1 && p[0] == "nach dem Neustart"
+		return len(p) == 1 && p[0] == "after the restart"
 	})
 	if q, _ := m2.Queue(ctx, id); len(q) != 0 {
-		t.Fatalf("nicht übergeben: %+v", q)
+		t.Fatalf("not delivered: %+v", q)
 	}
 }
 
-// Läuft ein Werkzeug, geht eine neue Nachricht gleich per steer an pi und wird nach dem Werkzeug im
-// selben Durchgang eingefügt (wie Claude Code), nicht erst nach dem Ende des Durchgangs.
+// While a tool is running, a new message goes to pi right away via steer and is inserted after the
+// tool in the same turn (like Claude Code), not only after the end of the turn.
 func TestQueueSteeredWhileToolRuns(t *testing.T) {
 	e := setup(t)
 	ctx := context.Background()
@@ -216,22 +216,22 @@ func TestQueueSteeredWhileToolRuns(t *testing.T) {
 	a.mu.Lock()
 	a.hold, a.withTool = hold, true
 	a.mu.Unlock()
-	if _, err := e.m.Send(ctx, c.ID, "eins"); err != nil {
+	if _, err := e.m.Send(ctx, c.ID, "one"); err != nil {
 		t.Fatal(err)
 	}
-	waitUntil(t, "Werkzeug läuft", func() bool {
+	waitUntil(t, "tool running", func() bool {
 		e.m.mu.Lock()
 		defer e.m.mu.Unlock()
 		l := e.m.live[c.ID]
 		return l != nil && l.toolsRunning == 1
 	})
-	r, err := e.m.Send(ctx, c.ID, "zwei")
+	r, err := e.m.Send(ctx, c.ID, "two")
 	if err != nil || !r.Queued {
-		t.Fatalf("zweite: %+v %v", r, err)
+		t.Fatalf("second: %+v %v", r, err)
 	}
-	waitUntil(t, "eingeschleust", func() bool { a.mu.Lock(); defer a.mu.Unlock(); return len(a.steered) == 1 && a.steered[0] == "zwei" })
+	waitUntil(t, "steered in", func() bool { a.mu.Lock(); defer a.mu.Unlock(); return len(a.steered) == 1 && a.steered[0] == "two" })
 	if q, _ := e.m.Queue(ctx, c.ID); len(q) != 0 {
-		t.Fatalf("noch eingereiht: %+v", q)
+		t.Fatalf("still queued: %+v", q)
 	}
 	close(hold)
 	waitSettled(t, e, c.ID)
@@ -240,17 +240,17 @@ func TestQueueSteeredWhileToolRuns(t *testing.T) {
 	for _, m := range msgs {
 		roles = append(roles, m.Role)
 	}
-	// ein Durchgang: eins, zwei (eingefügt nach dem Werkzeug), dann die Antwort
+	// one turn: one, two (inserted after the tool), then the answer
 	if strings.Join(roles, ",") != "user,user,assistant" {
-		t.Fatalf("Verlauf: %v", roles)
+		t.Fatalf("history: %v", roles)
 	}
 	if n := strings.Count(strings.Join(a.commands(), ","), "prompt"); n != 2 {
-		t.Fatalf("prompt-Aufrufe: %d (%v)", n, a.commands())
+		t.Fatalf("prompt calls: %d (%v)", n, a.commands())
 	}
 }
 
-// Bricht der Nutzer ab, bevor pi Eingeschleustes einfügt, wird es wieder eingereiht (zurückgehalten)
-// statt verloren zu gehen.
+// If the user aborts before pi inserts the steered message, it is enqueued again (held) instead of
+// getting lost.
 func TestSteeredRestoredAfterAbort(t *testing.T) {
 	e := setup(t)
 	ctx := context.Background()
@@ -260,32 +260,32 @@ func TestSteeredRestoredAfterAbort(t *testing.T) {
 	a.mu.Lock()
 	a.hold, a.withTool = hold, true
 	a.mu.Unlock()
-	if _, err := e.m.Send(ctx, c.ID, "eins"); err != nil {
+	if _, err := e.m.Send(ctx, c.ID, "one"); err != nil {
 		t.Fatal(err)
 	}
-	waitUntil(t, "Werkzeug läuft", func() bool {
+	waitUntil(t, "tool running", func() bool {
 		e.m.mu.Lock()
 		defer e.m.mu.Unlock()
 		l := e.m.live[c.ID]
 		return l != nil && l.toolsRunning == 1
 	})
-	if _, err := e.m.Send(ctx, c.ID, "zwei"); err != nil {
+	if _, err := e.m.Send(ctx, c.ID, "two"); err != nil {
 		t.Fatal(err)
 	}
-	waitUntil(t, "eingeschleust", func() bool { a.mu.Lock(); defer a.mu.Unlock(); return len(a.steered) == 1 })
+	waitUntil(t, "steered in", func() bool { a.mu.Lock(); defer a.mu.Unlock(); return len(a.steered) == 1 })
 	if _, err := e.m.Abort(ctx, c.ID); err != nil {
 		t.Fatal(err)
 	}
 	close(hold)
 	waitSettled(t, e, c.ID)
-	waitUntil(t, "wieder eingereiht", func() bool { q, _ := e.m.Queue(ctx, c.ID); return len(q) == 1 && q[0].Text == "zwei" })
+	waitUntil(t, "enqueued again", func() bool { q, _ := e.m.Queue(ctx, c.ID); return len(q) == 1 && q[0].Text == "two" })
 	if v, _ := e.m.View(ctx, c.ID); !v.QueueHeld {
-		t.Fatalf("nicht zurückgehalten: %+v", v)
+		t.Fatalf("not held: %+v", v)
 	}
 }
 
-// Reine Meldungen des Orchestrators werden nicht eingeschleust: Sie gehen am Laufende über
-// deliverQueue (Weckruf mit seinen Grenzen, Review 3, H2).
+// Pure orchestrator notes are not steered in: they go through deliverQueue at the end of the run
+// (wake-up with its limits, Review 3, H2).
 func TestSystemNoteNotSteered(t *testing.T) {
 	e := setup(t)
 	ctx := context.Background()
@@ -295,16 +295,16 @@ func TestSystemNoteNotSteered(t *testing.T) {
 	a.mu.Lock()
 	a.hold, a.withTool = hold, true
 	a.mu.Unlock()
-	if _, err := e.m.Send(ctx, c.ID, "eins"); err != nil {
+	if _, err := e.m.Send(ctx, c.ID, "one"); err != nil {
 		t.Fatal(err)
 	}
-	waitUntil(t, "Werkzeug läuft", func() bool {
+	waitUntil(t, "tool running", func() bool {
 		e.m.mu.Lock()
 		defer e.m.mu.Unlock()
 		l := e.m.live[c.ID]
 		return l != nil && l.toolsRunning == 1
 	})
-	if _, err := e.st.EnqueueKind(ctx, c.ID, store.QueueSystem, "bg-1 ist fertig", nil); err != nil {
+	if _, err := e.st.EnqueueKind(ctx, c.ID, store.QueueSystem, "bg-1 is done", nil); err != nil {
 		t.Fatal(err)
 	}
 	e.m.mu.Lock()
@@ -315,10 +315,10 @@ func TestSystemNoteNotSteered(t *testing.T) {
 	n := len(a.steered)
 	a.mu.Unlock()
 	if n != 0 {
-		t.Fatalf("Meldung eingeschleust: %d", n)
+		t.Fatalf("note steered in: %d", n)
 	}
 	if q, _ := e.m.Queue(ctx, c.ID); len(q) != 1 {
-		t.Fatalf("Warteschlange: %+v", q)
+		t.Fatalf("queue: %+v", q)
 	}
 	close(hold)
 	waitSettled(t, e, c.ID)

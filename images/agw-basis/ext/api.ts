@@ -1,25 +1,25 @@
-// pi-Extension der Variante "api" (Schritt 2, REST-Variante): ein einziges Werkzeug platform_http,
-// mit dem der Agent die REST-API der Agri-Gaia-Plattform direkt aufruft, so wie sie in deren
-// OpenAPI-Beschreibung steht. Er meldet sich nicht an; die Anfrage geht über den Unix-Socket des
-// Platzes an den REST-Endpunkt des Orchestrators (/platform-api/…), der sie gegen die übertragenen
-// Rechte prüft, schreibende Aufrufe vom Nutzer bestätigen lässt und das Token selbst einsetzt.
+// pi extension of the "api" variant (step 2, REST variant): a single tool platform_http with
+// which the agent calls the REST API of the Agri-Gaia platform directly, as described in its
+// OpenAPI description. It does not log in; the request goes through the slot's Unix socket to
+// the orchestrator's REST endpoint (/platform-api/…), which checks it against the delegated
+// rights, has the user approve writing calls and inserts the token itself.
 //
-// Die Extension ist kein Kontrollpunkt: Sie reicht Methode, Pfad, Abfrage und Körper weiter und
-// zeigt Status und Antwort. Geprüft wird allein im Orchestrator.
+// The extension is not a control point: it passes on method, path, query and body and shows
+// status and response. Checking happens only in the orchestrator.
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { request } from "node:http";
 
 const SOCKET = process.env.AGW_SOCKET || "/run/agw/agw.sock";
 const PREFIX = "/platform-api";
-// Was das Modell von einer Antwort sieht; der Orchestrator liefert bis 8 MiB.
+// What the model sees of a response; the orchestrator delivers up to 8 MiB.
 const MAX_SHOWN = 64 * 1024;
 
-const description = `Ruft die REST-API der Agri-Gaia-Plattform auf (Datensätze, Modelle, Training, Aufgaben, Edge-Geräte, Container-Abbilder). Du meldest dich nicht an; Anmeldung, Prüfung gegen deine übertragenen Rechte und die Bestätigung schreibender Aufrufe durch den Nutzer übernimmt der Orchestrator.
-- Pfade wie in der OpenAPI-Beschreibung der Plattform, etwa GET /datasets, GET /datasets/3, GET /train/providers, POST /train/config, GET /tasks/12.
-- Welche Pfade es gibt: GET /_agw/paths (eine Zeile je Operation, mit query prefix=/train eingrenzbar). Welche Rechte du hast: GET /_agw/rights.
-- Körper nur als JSON; Dateien lassen sich so nicht hochladen.
-- Antwort 403 mit „verweigert vom Autorisierungsdienst": außerhalb deiner Rechte, nicht auf anderem Weg versuchen. 403 mit „vom Nutzer abgelehnt": der Nutzer hat den schreibenden Aufruf abgelehnt.
-- Schreibende Aufrufe warten, bis der Nutzer entscheidet.`;
+const description = `Calls the REST API of the Agri-Gaia platform (datasets, models, training, tasks, edge devices, container images). You do not log in; the orchestrator takes care of login, checking against your delegated rights and the user's approval of writing calls.
+- Paths as in the platform's OpenAPI description, e.g. GET /datasets, GET /datasets/3, GET /train/providers, POST /train/config, GET /tasks/12.
+- Which paths exist: GET /_agw/paths (one line per operation, narrow down with query prefix=/train). Which rights you have: GET /_agw/rights.
+- Body only as JSON; files cannot be uploaded this way.
+- Response 403 with "denied by the authorization service": outside your rights, do not try another way. 403 with "rejected by the user": the user rejected the writing call.
+- Writing calls wait until the user decides.`;
 
 function call(method: string, path: string, query: Record<string, string> | undefined, body: unknown, signal?: AbortSignal): Promise<{ status: number; headers: any; text: string }> {
 	let full = PREFIX + (path.startsWith("/") ? path : "/" + path);
@@ -34,7 +34,7 @@ function call(method: string, path: string, query: Record<string, string> | unde
 				path: full,
 				method: method.toUpperCase(),
 				signal,
-				timeout: 0, // schreibende Aufrufe warten auf den Nutzer
+				timeout: 0, // writing calls wait for the user
 				headers: payload ? { "content-type": "application/json", "content-length": Buffer.byteLength(payload) } : {},
 			},
 			(res) => {
@@ -52,25 +52,25 @@ function call(method: string, path: string, query: Record<string, string> | unde
 export default function (pi: ExtensionAPI) {
 	pi.registerTool({
 		name: "platform_http",
-		label: "Plattform-API",
+		label: "Platform API",
 		description,
-		promptSnippet: "platform_http: REST-API der Agri-Gaia-Plattform aufrufen (ohne Anmeldung, geprüft vom Orchestrator)",
+		promptSnippet: "platform_http: call the REST API of the Agri-Gaia platform (no login, checked by the orchestrator)",
 		parameters: {
 			type: "object",
 			properties: {
-				method: { type: "string", description: "GET, POST, PUT, PATCH oder DELETE" },
-				path: { type: "string", description: "Pfad der Plattform-API, etwa /datasets/3 (ohne Abfrage)" },
-				query: { type: "object", additionalProperties: { type: "string" }, description: "Abfrageparameter, etwa {\"limit\":\"10\"}" },
-				body: { description: "JSON-Körper (nur bei POST, PUT, PATCH, DELETE)" },
+				method: { type: "string", description: "GET, POST, PUT, PATCH or DELETE" },
+				path: { type: "string", description: "Path of the platform API, e.g. /datasets/3 (without query)" },
+				query: { type: "object", additionalProperties: { type: "string" }, description: "Query parameters, e.g. {\"limit\":\"10\"}" },
+				body: { description: "JSON body (only for POST, PUT, PATCH, DELETE)" },
 			},
 			required: ["method", "path"],
 		},
 		async execute(_toolCallId: string, params: any, signal: AbortSignal) {
 			const p = params ?? {};
-			if (typeof p.method !== "string" || typeof p.path !== "string") throw new Error("method und path fehlen");
+			if (typeof p.method !== "string" || typeof p.path !== "string") throw new Error("method and path are missing");
 			const r = await call(p.method, p.path, p.query, p.body, signal);
 			let text = r.text;
-			if (text.length > MAX_SHOWN) text = text.slice(0, MAX_SHOWN) + "\n[… gekürzt; mit skip/limit oder einem engeren Aufruf nachfragen]";
+			if (text.length > MAX_SHOWN) text = text.slice(0, MAX_SHOWN) + "\n[… truncated; ask again with skip/limit or a narrower call]";
 			const loc = r.headers?.location ? ` · Location: ${r.headers.location}` : "";
 			return { content: [{ type: "text", text: `HTTP ${r.status}${loc}\n${text}` }], details: { status: r.status } };
 		},

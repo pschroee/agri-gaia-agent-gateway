@@ -1,11 +1,11 @@
-/** Spitzenzeiten eines Tarifs (UTC) in Ortszeit darstellen. */
+/** Show a tariff's peak hours (UTC) in local time. */
 
 import type { PeakWindow } from "@/api/types"
 
 const dayKeys = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
-const dayNames = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
+const dayNames = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
-/** Tagesangabe wie "mon-fri", "sat", "mon,wed" oder "daily" als Menge von Wochentagen (0 = Montag). */
+/** Day spec like "mon-fri", "sat", "mon,wed" or "daily" as a set of weekdays (0 = Monday). */
 function parseDays(days: string): number[] | undefined {
   const d = days.trim().toLowerCase()
   if (d === "daily" || d === "all" || d === "*" || d === "mon-sun") return [0, 1, 2, 3, 4, 5, 6]
@@ -23,9 +23,9 @@ function parseDays(days: string): number[] | undefined {
 }
 
 function formatDays(set: number[]): string {
-  if (set.length === 7) return "täglich"
+  if (set.length === 7) return "daily"
   if (set.length === 1) return dayNames[set[0]]
-  // zusammenhängender Bereich, auch über den Wochenwechsel (So–Do)
+  // contiguous range, also across the week boundary (Sun–Thu)
   const inSet = new Set(set)
   const start = set.find((d) => !inSet.has((d + 6) % 7))
   if (start !== undefined) {
@@ -36,7 +36,7 @@ function formatDays(set: number[]): string {
   return set.map((d) => dayNames[d]).join(", ")
 }
 
-/** Versatz der Zeitzone gegenüber UTC in Minuten zum Zeitpunkt `at`. */
+/** Offset of the time zone from UTC in minutes at time `at`. */
 function tzOffsetMinutes(timeZone: string, at: Date): number {
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone,
@@ -62,9 +62,9 @@ const fmtMin = (min: number) => {
 }
 
 /**
- * Spitzenzeiten in Ortszeit, z. B. „Mo–Fr 03:00–06:00 und 08:00–12:00“. Der Versatz der Zeitzone
- * gilt zum Zeitpunkt `at` (Sommer-/Winterzeit). Beginnt ein Fenster in Ortszeit an einem anderen
- * Tag, verschieben sich die Wochentage mit.
+ * Peak hours in local time, e.g. "Mon–Fri 03:00–06:00 and 08:00–12:00". The time zone offset
+ * applies at time `at` (summer/winter time). If a window starts on a different day in local
+ * time, the weekdays shift along.
  */
 export function formatPeakWindows(windows: PeakWindow[], timeZone = "Europe/Berlin", at: Date = new Date()): string {
   const offset = tzOffsetMinutes(timeZone, at)
@@ -78,5 +78,5 @@ export function formatPeakWindows(windows: PeakWindow[], timeZone = "Europe/Berl
     const range = `${fmtMin(from)}–${fmtMin(to)}`
     groups.set(label, [...(groups.get(label) ?? []), range])
   }
-  return [...groups].map(([days, ranges]) => `${days} ${ranges.join(" und ")}`).join("; ")
+  return [...groups].map(([days, ranges]) => `${days} ${ranges.join(" and ")}`).join("; ")
 }

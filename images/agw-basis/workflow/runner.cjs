@@ -1,11 +1,11 @@
-// Laufzeit für workflowScript (pi-subagents) in der Ausführungs-Sandbox. Gestartet von
-// agw-exec (Operation workflow) als Agent-Nutzer; ersetzt den Worker-Thread, in dem
-// pi-subagents das Skript sonst im pi-Prozess ausführt (P4b: Ausbruch aus node:vm).
+// Runtime for workflowScript (pi-subagents) in the execution sandbox. Started by
+// agw-exec (operation workflow) as the agent user; replaces the worker thread in which
+// pi-subagents otherwise runs the script in the pi process (P4b: escape from node:vm).
 //
-// stdin, je Zeile JSON: zuerst {"source": <Quelltext des Workers von pi-subagents>}, danach
-// {"m": <Nachricht des Hosts>}. stdout, je Zeile: {"m": <Nachricht des Workers>} oder
-// {"__agw": "error", "message": …}. Der Worker läuft hier in einem Worker-Thread wie bei
-// pi-subagents; ein Ausbruch aus dessen node:vm erreicht nur diesen Prozess.
+// stdin, one JSON per line: first {"source": <source code of the pi-subagents worker>}, then
+// {"m": <message from the host>}. stdout, per line: {"m": <message from the worker>} or
+// {"__agw": "error", "message": …}. The worker runs here in a worker thread as in
+// pi-subagents; an escape from its node:vm only reaches this process.
 "use strict";
 const { Worker } = require("node:worker_threads");
 const readline = require("node:readline");
@@ -14,8 +14,8 @@ const acornPath = require.resolve("acorn", { paths: [__dirname] });
 const out = (obj) => process.stdout.write(JSON.stringify(obj) + "\n");
 let worker;
 let exited = false;
-// Endet die Eingabe, beenden wir den Worker selbst (terminate). Node meldet das als exit mit
-// Code 1; das ist dann kein Fehler des Skripts.
+// When the input ends, we end the worker ourselves (terminate). Node reports that as exit with
+// code 1; that is then not an error of the script.
 let terminating = false;
 
 const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });

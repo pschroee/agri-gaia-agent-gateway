@@ -22,7 +22,7 @@ import (
 	"agw/internal/titler"
 )
 
-// fakeAgent spielt pi: prompt erzeugt eine Antwort samt agent_settled.
+// fakeAgent plays pi: prompt produces a response including agent_settled.
 type fakeAgent struct {
 	id       string
 	mu       sync.Mutex
@@ -31,33 +31,33 @@ type fakeAgent struct {
 	internet bool
 	closed   bool
 	events   chan rpc.Event
-	pollOut  string   // Antwort auf das Einlese-Skript der Subagenten
-	execs    []string // ausgeführte Kommandos
-	reply    string   // Text der Antwort (sonst „Antwort von …“)
+	pollOut  string   // response to the subagents' read script
+	execs    []string // executed commands
+	reply    string   // text of the response (otherwise "Answer from …")
 
-	wsOut        []byte // Ausgabe des Sicherungsskripts für /workspace (sonst „unverändert“)
-	wsSaves      int    // Aufrufe des Sicherungsskripts
-	wsRestored   []byte // tar-Strom, der zum Einspielen kam
-	wsLatePrompt bool   // beim Einspielen war schon ein prompt gekommen
+	wsOut        []byte // output of the backup script for /workspace (otherwise "unchanged")
+	wsSaves      int    // calls of the backup script
+	wsRestored   []byte // tar stream that arrived for restoring
+	wsLatePrompt bool   // a prompt had already arrived at restore time
 
-	execDone chan struct{} // Ausführungs-Sandbox beendet (H2)
+	execDone chan struct{} // execution sandbox ended (H2)
 
-	hold       chan struct{} // gesetzt: der Lauf endet erst, wenn der Kanal geschlossen ist
-	failSwitch bool          // switch_session meldet cancelled (Fortsetzen scheitert)
+	hold       chan struct{} // set: the run only ends once the channel is closed
+	failSwitch bool          // switch_session reports cancelled (resume fails)
 
-	// onPrompt läuft während des Durchgangs (nach agent_start und der Nutzernachricht, vor der
-	// Antwort); promptWait: So lange antwortet der Aufruf prompt nicht (Zeitlimit nach Annahme).
+	// onPrompt runs during the turn (after agent_start and the user message, before the
+	// response); promptWait: for this long the prompt call does not respond (timeout after acceptance).
 	onPrompt   func(msg string)
 	promptWait time.Duration
-	streaming  bool   // zwischen prompt und agent_settled (get_state: isStreaming)
-	onSwitch   func() // läuft beim Einspielen der Sitzung (Fortsetzen)
+	streaming  bool   // between prompt and agent_settled (get_state: isStreaming)
+	onSwitch   func() // runs when the session is restored (resume)
 
-	ctxTokens int64 // gemeldeter Kontext (0: 4200); compact setzt ihn auf 2000
+	ctxTokens int64 // reported context (0: 4200); compact sets it to 2000
 
-	withTool bool     // der Lauf ruft ein Werkzeug auf (tool_execution_start vor hold, _end danach)
-	steered  []string // eingeschleuste Aufträge (prompt mit streamingBehavior steer), noch nicht eingefügt
-	thinking string   // Denkstufe (get_state); set_thinking_level setzt sie
-	model    string   // zuletzt per set_model gesetzt
+	withTool bool     // the run calls a tool (tool_execution_start before hold, _end after)
+	steered  []string // steered requests (prompt with streamingBehavior steer), not inserted yet
+	thinking string   // thinking level (get_state); set_thinking_level sets it
+	model    string   // last set via set_model
 }
 
 func newFakeAgent(id string) *fakeAgent {
@@ -66,7 +66,7 @@ func newFakeAgent(id string) *fakeAgent {
 
 func (a *fakeAgent) ExecDone() <-chan struct{} { return a.execDone }
 
-// crashPi beendet pis Ereignisstrom, ohne dass der Platz abgebaut wird (Absturz von pi).
+// crashPi ends pi's event stream without the slot being torn down (pi crash).
 func (a *fakeAgent) crashPi() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -94,7 +94,7 @@ func (a *fakeAgent) Call(_ context.Context, cmd map[string]any) (rpc.Response, e
 	switch cmd["type"] {
 	case "get_state":
 		a.mu.Lock()
-		// pi hat die Sitzung geschrieben, sobald eine Antwort kam.
+		// pi has written the session as soon as a response came.
 		if _, ok := a.files["/agent/sessions/s.jsonl"]; !ok {
 			a.files["/agent/sessions/s.jsonl"] = []byte(`{"type":"session","agent":"` + a.id + `"}` + "\n")
 		}
@@ -124,7 +124,7 @@ func (a *fakeAgent) Call(_ context.Context, cmd map[string]any) (rpc.Response, e
 		}
 		return rpc.Response{Success: true, Data: json.RawMessage(fmt.Sprintf(`{"contextUsage":{"tokens":%d,"contextWindow":1000000,"percent":0.42}}`, tokens))}, nil
 	case "get_commands":
-		return rpc.Response{Success: true, Data: json.RawMessage(`{"commands":[{"name":"skill:artifacts","description":"Artefakte","source":"skill"}]}`)}, nil
+		return rpc.Response{Success: true, Data: json.RawMessage(`{"commands":[{"name":"skill:artifacts","description":"Artifacts","source":"skill"}]}`)}, nil
 	case "compact":
 		a.mu.Lock()
 		if a.ctxTokens != 0 {
@@ -133,9 +133,9 @@ func (a *fakeAgent) Call(_ context.Context, cmd map[string]any) (rpc.Response, e
 		a.mu.Unlock()
 		go func() {
 			a.emit(`{"type":"compaction_start","reason":"manual"}`)
-			a.emit(`{"type":"compaction_end","reason":"manual","result":{"summary":"Zusammenfassung","tokensBefore":9000,"estimatedTokensAfter":2000,"usage":{"input":9000,"output":300,"cacheRead":0,"totalTokens":9300,"cost":{"total":0.003}}},"aborted":false,"willRetry":false}`)
+			a.emit(`{"type":"compaction_end","reason":"manual","result":{"summary":"Summary","tokensBefore":9000,"estimatedTokensAfter":2000,"usage":{"input":9000,"output":300,"cacheRead":0,"totalTokens":9300,"cost":{"total":0.003}}},"aborted":false,"willRetry":false}`)
 		}()
-		return rpc.Response{Success: true, Data: json.RawMessage(`{"summary":"Zusammenfassung"}`)}, nil
+		return rpc.Response{Success: true, Data: json.RawMessage(`{"summary":"Summary"}`)}, nil
 	case "switch_session":
 		a.mu.Lock()
 		fail, hook := a.failSwitch, a.onSwitch
@@ -147,8 +147,8 @@ func (a *fakeAgent) Call(_ context.Context, cmd map[string]any) (rpc.Response, e
 			return rpc.Response{Success: true, Data: json.RawMessage(`{"cancelled":true}`)}, nil
 		}
 	case "clear_queue":
-		// wie pi: liefert und entfernt, was eingeschleust, aber noch nicht eingefügt ist (abort
-		// dagegen setzt Eingereihtes fort)
+		// like pi: returns and removes what was steered in but not inserted yet (abort, by
+		// contrast, continues with queued messages)
 		a.mu.Lock()
 		b, _ := json.Marshal(map[string]any{"steering": append([]string{}, a.steered...), "followUp": []string{}})
 		a.steered = nil
@@ -163,12 +163,12 @@ func (a *fakeAgent) Call(_ context.Context, cmd map[string]any) (rpc.Response, e
 			return rpc.Response{Success: true}, nil
 		}
 		hold := a.hold
-		answer := fmt.Sprintf(`{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"Antwort von %s"}],"usage":{"input":10,"output":5,"cacheRead":0,"totalTokens":15,"cost":{"total":0.001}}}}`, a.id)
+		answer := fmt.Sprintf(`{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"Answer from %s"}],"usage":{"input":10,"output":5,"cacheRead":0,"totalTokens":15,"cost":{"total":0.001}}}}`, a.id)
 		if a.reply != "" {
 			answer = fmt.Sprintf(`{"type":"message_end","message":{"role":"assistant","responseId":"resp-%s","content":[{"type":"text","text":%q}],"usage":{"input":10,"output":5,"cacheRead":0,"totalTokens":15,"cost":{"total":0.001}}}}`, a.id, a.reply)
 		}
 		onPrompt, wait := a.onPrompt, a.promptWait
-		a.promptWait = 0 // nur einmal
+		a.promptWait = 0 // only once
 		a.streaming = true
 		a.mu.Unlock()
 		go func() {
@@ -188,7 +188,7 @@ func (a *fakeAgent) Call(_ context.Context, cmd map[string]any) (rpc.Response, e
 			}
 			if tool {
 				a.emit(`{"type":"tool_execution_end","toolCallId":"t1","toolName":"bash"}`)
-				// wie pi: Eingeschleustes kommt nach den Werkzeugen, vor dem nächsten Modellaufruf
+				// like pi: steered messages come after the tools, before the next model call
 				a.mu.Lock()
 				steered := a.steered
 				a.steered = nil
@@ -217,7 +217,7 @@ func (a *fakeAgent) ContainerID() string      { return "c-" + a.id }
 func (a *fakeAgent) ContainerName() string    { return "agwpoc-" + a.id }
 func (a *fakeAgent) Image() string            { return "test" }
 
-// ExecPi spielt den Container von pi: nur agw-exec und cat, keine Shell.
+// ExecPi plays pi's container: only agw-exec and cat, no shell.
 func (a *fakeAgent) ExecPi(_ context.Context, cmd []string, stdin io.Reader) ([]byte, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -237,7 +237,7 @@ func (a *fakeAgent) ExecPi(_ context.Context, cmd []string, stdin io.Reader) ([]
 	case len(cmd) == 2 && cmd[0] == "agw-exec" && cmd[1] == "kill-node":
 		return []byte("0\n"), nil
 	}
-	return nil, errors.New("im Container von pi nicht ausführbar (keine Shell): " + strings.Join(cmd, " "))
+	return nil, errors.New("not executable in pi's container (no shell): " + strings.Join(cmd, " "))
 }
 
 func (a *fakeAgent) Exec(_ context.Context, cmd []string, stdin io.Reader) ([]byte, error) {
@@ -250,10 +250,10 @@ func (a *fakeAgent) Exec(_ context.Context, cmd []string, stdin io.Reader) ([]by
 		b, _ = io.ReadAll(stdin)
 	}
 	switch {
-	case strings.Contains(script, "realpath -e"): // Bild lesen: sh -c <skript> sh <pfad> <grenze>
+	case strings.Contains(script, "realpath -e"): // read image: sh -c <script> sh <path> <limit>
 		d, ok := a.files[cmd[4]]
 		if !ok {
-			return nil, errors.New("exec: Exit-Code 3")
+			return nil, errors.New("exec: exit code 3")
 		}
 		var n int
 		fmt.Sscan(cmd[5], &n)
@@ -274,7 +274,7 @@ func (a *fakeAgent) Exec(_ context.Context, cmd []string, stdin io.Reader) ([]by
 	case strings.Contains(script, "mkdir -p"):
 		a.files[cmd[len(cmd)-1]] = b
 	default:
-		return nil, errors.New("unbekanntes exec: " + script)
+		return nil, errors.New("unknown exec: " + script)
 	}
 	return nil, nil
 }
@@ -363,8 +363,8 @@ type env struct {
 	mu     sync.Mutex
 	agents []*fakeAgent
 
-	failSwitch bool   // neue Sandboxen lassen switch_session scheitern
-	onSwitch   func() // für neue Sandboxen: läuft beim Einspielen der Sitzung
+	failSwitch bool   // new sandboxes make switch_session fail
+	onSwitch   func() // for new sandboxes: runs when the session is restored
 }
 
 func (e *env) agent(i int) *fakeAgent {
@@ -377,7 +377,7 @@ func setup(t *testing.T) *env {
 	t.Helper()
 	url := os.Getenv("AGW_TEST_DATABASE_URL")
 	if url == "" {
-		t.Skip("AGW_TEST_DATABASE_URL nicht gesetzt")
+		t.Skip("AGW_TEST_DATABASE_URL not set")
 	}
 	ctx := context.Background()
 	st, err := store.OpenSchema(ctx, url, "chattest_"+strings.ReplaceAll(time.Now().Format("150405.000000"), ".", "_"))
@@ -403,10 +403,10 @@ func setup(t *testing.T) *env {
 		defer fa.mu.Unlock()
 		if !fa.closed {
 			fa.closed = true
-			close(fa.events) // wie ein abgebauter Container: pis Strom endet
+			close(fa.events) // like a torn-down container: pi's stream ends
 		}
 	}
-	p := pool.New[Agent](create, destroy, map[string]int{"cli": 1, "mcp": 0, "beide": 0})
+	p := pool.New[Agent](create, destroy, map[string]int{"cli": 1, "mcp": 0, "both": 0})
 	pctx, cancel := context.WithCancel(ctx)
 	p.Start(pctx)
 	t.Cleanup(func() { cancel(); p.Shutdown(context.Background()) })
@@ -435,7 +435,7 @@ func waitEvent(t *testing.T, ch <-chan Event, kind, piType string) Event {
 				return ev
 			}
 		case <-timeout:
-			t.Fatalf("Ereignis %s/%s kam nicht", kind, piType)
+			t.Fatalf("event %s/%s did not arrive", kind, piType)
 		}
 	}
 }
@@ -451,7 +451,7 @@ func waitSettled(t *testing.T, e *env, id string) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatal("Lauf wurde nicht fertig")
+	t.Fatal("run did not finish")
 }
 
 func TestCreateSendStoresMessagesAndSession(t *testing.T) {
@@ -463,11 +463,11 @@ func TestCreateSendStoresMessagesAndSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	if c.State != store.StateActive || c.SlotID == "" || c.Model != "deepseek/deepseek-flash" {
-		t.Fatalf("angelegt: %+v", c)
+		t.Fatalf("created: %+v", c)
 	}
 	events, cancel := e.m.Subscribe(c.ID)
 	defer cancel()
-	if _, err := e.m.Send(ctx, c.ID, "Hallo"); err != nil {
+	if _, err := e.m.Send(ctx, c.ID, "Hello"); err != nil {
 		t.Fatal(err)
 	}
 	waitEvent(t, events, "pi", "message_update")
@@ -476,21 +476,21 @@ func TestCreateSendStoresMessagesAndSession(t *testing.T) {
 
 	a := e.agent(0)
 	if !a.internet {
-		t.Fatal("Internet nicht gesetzt")
+		t.Fatal("internet not set")
 	}
 	cmds := strings.Join(a.commands(), ",")
 	if i, j := strings.Index(cmds, "set_model"), strings.Index(cmds, "prompt"); i != 0 || j < i {
-		t.Fatalf("Befehle: %s", cmds)
+		t.Fatalf("commands: %s", cmds)
 	}
 	msgs, _ := e.st.Messages(ctx, c.ID)
 	if len(msgs) != 2 || msgs[0].Role != "user" || msgs[1].Role != "assistant" {
-		t.Fatalf("Nachrichten: %+v", msgs)
+		t.Fatalf("messages: %+v", msgs)
 	}
 	v, _ := e.m.View(ctx, c.ID)
 	if v.Tokens.Total != 15 || v.Cost < 0.0009 {
-		t.Fatalf("Kosten/Tokens: %+v %v", v.Tokens, v.Cost)
+		t.Fatalf("cost/tokens: %+v %v", v.Tokens, v.Cost)
 	}
-	// Die Sitzung wird nach agent_settled im Hintergrund gesichert (Review H1).
+	// The session is saved in the background after agent_settled (Review H1).
 	var sess []byte
 	for deadline := time.Now().Add(3 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
 		if sess, _ = e.st.LoadSession(ctx, c.ID); strings.Contains(string(sess), `"agent":"a1"`) {
@@ -498,25 +498,25 @@ func TestCreateSendStoresMessagesAndSession(t *testing.T) {
 		}
 	}
 	if !strings.Contains(string(sess), `"agent":"a1"`) {
-		t.Fatalf("Sitzung nicht gesichert: %q", sess)
+		t.Fatalf("session not saved: %q", sess)
 	}
 }
 
 func TestSuspendAndResumeInFreshSandbox(t *testing.T) {
 	e := setup(t)
 	ctx := context.Background()
-	c, _ := e.m.Create(ctx, NewChat{Message: "Merke dir 42"})
+	c, _ := e.m.Create(ctx, NewChat{Message: "Remember 42"})
 	waitSettled(t, e, c.ID)
 	v, err := e.m.Suspend(ctx, c.ID)
 	if err != nil || v.State != store.StateDormant || v.SlotID != "" {
 		t.Fatalf("Suspend: %+v %v", v, err)
 	}
-	resumed, err := e.m.Send(ctx, c.ID, "Was war die Zahl?")
+	resumed, err := e.m.Send(ctx, c.ID, "What was the number?")
 	if err != nil || !resumed.Resumed {
-		t.Fatalf("Fortsetzen: %v %v", resumed, err)
+		t.Fatalf("resume: %v %v", resumed, err)
 	}
 	waitSettled(t, e, c.ID)
-	// Der neue Agent ist nicht der alte (Einmalvergabe) und hat die Sitzung bekommen.
+	// The new agent is not the old one (single use) and has received the session.
 	var fresh *fakeAgent
 	e.mu.Lock()
 	for _, a := range e.agents {
@@ -530,15 +530,15 @@ func TestSuspendAndResumeInFreshSandbox(t *testing.T) {
 	}
 	e.mu.Unlock()
 	if fresh == nil || fresh.id == "a1" {
-		t.Fatal("keine frische Sandbox mit switch_session")
+		t.Fatal("no fresh sandbox with switch_session")
 	}
 	p := "/agent/sessions/" + c.ID + ".jsonl"
 	if got := string(fresh.files[p]); !strings.Contains(got, `"agent":"a1"`) {
-		t.Fatalf("Sitzung nicht eingespielt: %q", got)
+		t.Fatalf("session not restored: %q", got)
 	}
 	msgs, _ := e.st.Messages(ctx, c.ID)
 	if len(msgs) != 4 {
-		t.Fatalf("Nachrichten nach Fortsetzen: %d", len(msgs))
+		t.Fatalf("messages after resume: %d", len(msgs))
 	}
 }
 
@@ -556,20 +556,20 @@ func TestUploadNeedsApproval(t *testing.T) {
 	}
 	done := make(chan result, 1)
 	go func() {
-		r, err := e.m.Upload(store.WithToolCall(ctx, "call_up"), c.ID, slot, "cli", "zahlen.csv", 4, "", strings.NewReader("1,2\n"))
+		r, err := e.m.Upload(store.WithToolCall(ctx, "call_up"), c.ID, slot, "cli", "numbers.csv", 4, "", strings.NewReader("1,2\n"))
 		done <- result{r.Status, err}
 	}()
 	ev := waitEvent(t, events, "approval", "")
 	ap := ev.Data.(store.Approval)
 	if ap.State != "pending" || ap.Preview != "1,2\n" {
-		t.Fatalf("Anfrage: %+v", ap)
+		t.Fatalf("request: %+v", ap)
 	}
 	info, _ := e.m.pool.Get(slot)
 	if info.Info().Activity.Kind != "waiting_approval" {
-		t.Fatalf("Tätigkeit: %+v", info.Info().Activity)
+		t.Fatalf("activity: %+v", info.Info().Activity)
 	}
 	if _, err := e.m.Suspend(ctx, c.ID); !errors.Is(err, ErrPendingApproval) {
-		t.Fatalf("Ruhen trotz offener Bestätigung: %v", err)
+		t.Fatalf("idle despite pending approval: %v", err)
 	}
 	if _, err := e.m.Decide(ctx, ap.ID, true); err != nil {
 		t.Fatal(err)
@@ -580,11 +580,11 @@ func TestUploadNeedsApproval(t *testing.T) {
 	}
 	arts, _ := e.st.ListArtifacts(ctx, c.ID)
 	if len(arts) != 1 || arts[0].Kind != "output" || arts[0].ToolCallID != "call_up" {
-		t.Fatalf("Artefakte: %+v", arts)
+		t.Fatalf("artifacts: %+v", arts)
 	}
 	for _, k := range e.blobs.keys() {
 		if strings.HasPrefix(k, "pending/") {
-			t.Fatalf("ausstehendes Objekt blieb liegen: %s", k)
+			t.Fatalf("pending object left behind: %s", k)
 		}
 	}
 }
@@ -606,10 +606,10 @@ func TestUploadRejected(t *testing.T) {
 		t.Fatal(err)
 	}
 	if s := <-done; s != "rejected" {
-		t.Fatalf("Ablehnung kommt nicht an: %s", s)
+		t.Fatalf("rejection does not arrive: %s", s)
 	}
 	if len(e.blobs.keys()) != 0 {
-		t.Fatalf("Objekte übrig: %v", e.blobs.keys())
+		t.Fatalf("objects left: %v", e.blobs.keys())
 	}
 }
 
@@ -619,12 +619,12 @@ func TestUploadTimeoutExpires(t *testing.T) {
 	ctx := context.Background()
 	c, _ := e.m.Create(ctx, NewChat{})
 	r, err := e.m.Upload(ctx, c.ID, e.m.live[c.ID].slot.ID, "cli", "a.txt", 1, "", strings.NewReader("a"))
-	if err != nil || r.Status != "rejected" || !strings.Contains(r.Message, "Wartezeit") {
-		t.Fatalf("Ablauf: %+v %v", r, err)
+	if err != nil || r.Status != "rejected" || !strings.Contains(r.Message, "waiting time") {
+		t.Fatalf("expiry: %+v %v", r, err)
 	}
 	aps, _ := e.st.ListApprovals(ctx, "", c.ID)
 	if len(aps) != 1 || aps[0].State != "expired" {
-		t.Fatalf("Zustand: %+v", aps)
+		t.Fatalf("state: %+v", aps)
 	}
 }
 
@@ -635,22 +635,22 @@ func TestInternetToggleAndInputs(t *testing.T) {
 	c, _ := e.m.Create(ctx, NewChat{Internet: &off})
 	a := e.agent(0)
 	if a.internet {
-		t.Fatal("Internet an, obwohl aus gewünscht")
+		t.Fatal("internet on although off was requested")
 	}
 	if _, err := e.m.SetInternet(ctx, c.ID, true); err != nil || !a.internet {
-		t.Fatalf("Umschalten: %v %v", err, a.internet)
+		t.Fatalf("toggle: %v %v", err, a.internet)
 	}
-	if _, err := e.m.AddInput(ctx, c.ID, "../daten.csv", []byte("x,y\n")); err != nil {
+	if _, err := e.m.AddInput(ctx, c.ID, "../data.csv", []byte("x,y\n")); err != nil {
 		t.Fatal(err)
 	}
-	if string(a.files["/workspace/inputs/daten.csv"]) != "x,y\n" {
-		t.Fatalf("Eingabe nicht gespiegelt: %v", a.files)
+	if string(a.files["/workspace/inputs/data.csv"]) != "x,y\n" {
+		t.Fatalf("input not mirrored: %v", a.files)
 	}
-	// Nach dem Fortsetzen liegt die Eingabe auch in der neuen Sandbox.
+	// After resuming, the input is also in the new sandbox.
 	if _, err := e.m.Suspend(ctx, c.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.m.Send(ctx, c.ID, "weiter"); err != nil {
+	if _, err := e.m.Send(ctx, c.ID, "continue"); err != nil {
 		t.Fatal(err)
 	}
 	waitSettled(t, e, c.ID)
@@ -663,18 +663,18 @@ func TestInternetToggleAndInputs(t *testing.T) {
 		}
 	}
 	e.mu.Unlock()
-	if string(fresh.files["/workspace/inputs/daten.csv"]) != "x,y\n" || !fresh.internet {
-		t.Fatalf("frische Sandbox: Dateien %v, Internet %v", fresh.files, fresh.internet)
+	if string(fresh.files["/workspace/inputs/data.csv"]) != "x,y\n" || !fresh.internet {
+		t.Fatalf("fresh sandbox: files %v, internet %v", fresh.files, fresh.internet)
 	}
 }
 
 func TestUnknownModelAndVariant(t *testing.T) {
 	e := setup(t)
 	if _, err := e.m.Create(context.Background(), NewChat{Model: "x/y"}); !errors.Is(err, ErrUnknownModel) {
-		t.Fatalf("Modell: %v", err)
+		t.Fatalf("model: %v", err)
 	}
 	if _, err := e.m.Create(context.Background(), NewChat{Variant: "shell"}); !errors.Is(err, ErrUnknownVariant) {
-		t.Fatalf("Variante: %v", err)
+		t.Fatalf("variant: %v", err)
 	}
 }
 
@@ -686,22 +686,22 @@ func TestBillUsesTariffAtResponseTime(t *testing.T) {
 		t.Fatal(err)
 	}
 	m := &Manager{cat: cat}
-	// Dienstag 07:00 UTC (Spitze) und 12:00 UTC (Nebenzeit), je 1 Mio. Ausgabe-Tokens.
+	// Tuesday 07:00 UTC (peak) and 12:00 UTC (off-peak), 1M output tokens each.
 	peakMsg := json.RawMessage(`{"role":"assistant","provider":"deepseek","model":"deepseek-flash","timestamp":1790665200000,"usage":{"output":1000000}}`)
 	offMsg := json.RawMessage(`{"role":"assistant","provider":"deepseek","model":"deepseek-flash","timestamp":1790683200000,"usage":{"output":1000000}}`)
 	b1, b2 := m.bill(context.Background(), "", peakMsg), m.bill(context.Background(), "", offMsg)
 	if b1 == nil || !b1.Peak || b1.Cost != 1.2 {
-		t.Fatalf("Spitze: %+v", b1)
+		t.Fatalf("peak: %+v", b1)
 	}
 	if b2 == nil || b2.Peak || b2.Cost != 0.6 {
-		t.Fatalf("Nebenzeit: %+v", b2)
+		t.Fatalf("off-peak: %+v", b2)
 	}
 }
 
 func TestContextAfterSettle(t *testing.T) {
 	e := setup(t)
 	ctx := context.Background()
-	c, _ := e.m.Create(ctx, NewChat{Message: "hallo"})
+	c, _ := e.m.Create(ctx, NewChat{Message: "hello"})
 	waitSettled(t, e, c.ID)
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
@@ -710,23 +710,23 @@ func TestContextAfterSettle(t *testing.T) {
 			var u ContextUsage
 			_ = json.Unmarshal(v.Context, &u)
 			if u.Tokens == nil || *u.Tokens != 4200 || u.Window != 1000000 || u.ThresholdTokens != int64(1000000-e.m.opt.CompactReserveTokens) {
-				t.Fatalf("Kontext: %+v", u)
+				t.Fatalf("context: %+v", u)
 			}
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatal("Kontext nicht gespeichert")
+	t.Fatal("context not saved")
 }
 
 func TestCompactCommandStoresCompaction(t *testing.T) {
 	e := setup(t)
 	ctx := context.Background()
-	c, _ := e.m.Create(ctx, NewChat{Message: "hallo"})
+	c, _ := e.m.Create(ctx, NewChat{Message: "hello"})
 	waitSettled(t, e, c.ID)
 	events, cancel := e.m.Subscribe(c.ID)
 	defer cancel()
-	if _, err := e.m.RunCommand(ctx, c.ID, "/compact Fokus auf Zahlen"); err != nil {
+	if _, err := e.m.RunCommand(ctx, c.ID, "/compact focus on numbers"); err != nil {
 		t.Fatal(err)
 	}
 	waitEvent(t, events, "pi", "compaction_end")
@@ -736,23 +736,23 @@ func TestCompactCommandStoresCompaction(t *testing.T) {
 		if v.Compactions == 1 {
 			msgs, _ := e.st.Messages(ctx, c.ID)
 			last := msgs[len(msgs)-1]
-			if last.Role != "compaction" || !strings.Contains(string(last.Message), "Zusammenfassung") {
-				t.Fatalf("Eintrag: %+v", last)
+			if last.Role != "compaction" || !strings.Contains(string(last.Message), "Summary") {
+				t.Fatalf("entry: %+v", last)
 			}
 			var found bool
 			for _, cmd := range e.agent(0).cmds {
-				if cmd["type"] == "compact" && cmd["customInstructions"] == compactLanguageHint+" Fokus auf Zahlen" {
+				if cmd["type"] == "compact" && cmd["customInstructions"] == compactLanguageHint+" focus on numbers" {
 					found = true
 				}
 			}
 			if !found {
-				t.Fatal("compact ohne Anweisungen gesendet")
+				t.Fatal("compact sent without instructions")
 			}
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatal("Kompaktierung nicht gespeichert")
+	t.Fatal("compaction not saved")
 }
 
 func TestAutoCompactToggleAndResume(t *testing.T) {
@@ -764,7 +764,7 @@ func TestAutoCompactToggleAndResume(t *testing.T) {
 	}
 	v, _ := e.m.View(ctx, c.ID)
 	if v.AutoCompact {
-		t.Fatal("Automatik noch an")
+		t.Fatal("automatic compaction still on")
 	}
 	sent := func(a *fakeAgent) (bool, bool) {
 		a.mu.Lock()
@@ -778,10 +778,10 @@ func TestAutoCompactToggleAndResume(t *testing.T) {
 		return seen, last
 	}
 	if seen, last := sent(e.agent(0)); !seen || last {
-		t.Fatalf("set_auto_compaction nicht aus: %v %v", seen, last)
+		t.Fatalf("set_auto_compaction not off: %v %v", seen, last)
 	}
 	_, _ = e.m.Suspend(ctx, c.ID)
-	_, _ = e.m.Send(ctx, c.ID, "weiter")
+	_, _ = e.m.Send(ctx, c.ID, "continue")
 	waitSettled(t, e, c.ID)
 	e.mu.Lock()
 	fresh := e.agents[len(e.agents)-1]
@@ -792,7 +792,7 @@ func TestAutoCompactToggleAndResume(t *testing.T) {
 	}
 	e.mu.Unlock()
 	if seen, last := sent(fresh); !seen || last {
-		t.Fatalf("frische Sandbox bekam die Einstellung nicht: %v %v", seen, last)
+		t.Fatalf("fresh sandbox did not get the setting: %v %v", seen, last)
 	}
 }
 
@@ -809,7 +809,7 @@ func TestCommandsListAndPassThrough(t *testing.T) {
 		names[cm.Name] = cm.Source
 	}
 	if names["compact"] != "builtin" || names["autocompact"] != "builtin" || names["skill:artifacts"] != "skill" {
-		t.Fatalf("Befehle: %v", names)
+		t.Fatalf("commands: %v", names)
 	}
 	if _, err := e.m.RunCommand(ctx, c.ID, "/skill:artifacts list"); err != nil {
 		t.Fatal(err)
@@ -817,13 +817,13 @@ func TestCommandsListAndPassThrough(t *testing.T) {
 	waitSettled(t, e, c.ID)
 	msgs, _ := e.st.Messages(ctx, c.ID)
 	if !strings.Contains(string(msgs[0].Message), "/skill:artifacts list") {
-		t.Fatalf("nicht als Prompt weitergereicht: %s", msgs[0].Message)
+		t.Fatalf("not passed on as a prompt: %s", msgs[0].Message)
 	}
-	// Nach dem Ruhen bleibt die Liste bekannt.
+	// After idling the list stays known.
 	_, _ = e.m.Suspend(ctx, c.ID)
 	cmds, _ = e.m.Commands(ctx, c.ID)
 	if len(cmds) < 3 {
-		t.Fatalf("Liste nach Ruhen: %+v", cmds)
+		t.Fatalf("list after idling: %+v", cmds)
 	}
 }
 
@@ -837,32 +837,32 @@ func TestInternetRequest(t *testing.T) {
 	defer cancel()
 	done := make(chan string, 1)
 	go func() {
-		r, _ := e.m.RequestInternet(ctx, c.ID, slot, "cli", "Ich muss eine Python-Bibliothek installieren.")
+		r, _ := e.m.RequestInternet(ctx, c.ID, slot, "cli", "I need to install a Python library.")
 		done <- r.Status
 	}()
 	ev := waitEvent(t, events, "approval", "")
 	ap := ev.Data.(store.Approval)
-	if ap.Kind != "internet_access" || !strings.Contains(ap.Name, "Bibliothek") {
-		t.Fatalf("Anfrage: %+v", ap)
+	if ap.Kind != "internet_access" || !strings.Contains(ap.Name, "library") {
+		t.Fatalf("request: %+v", ap)
 	}
 	if e.agent(0).internet {
-		t.Fatal("Internet vor der Entscheidung an")
+		t.Fatal("internet on before the decision")
 	}
 	if _, err := e.m.Decide(ctx, ap.ID, true); err != nil {
 		t.Fatal(err)
 	}
 	if s := <-done; s != "approved" {
-		t.Fatalf("Status: %s", s)
+		t.Fatalf("status: %s", s)
 	}
 	v, _ := e.m.View(ctx, c.ID)
 	if !e.agent(0).internet || !v.Internet {
-		t.Fatal("Internet nach Zustimmung nicht an")
+		t.Fatal("internet not on after approval")
 	}
-	// Schon an: sofort bestätigt, ohne neue Anfrage.
-	r, _ := e.m.RequestInternet(ctx, c.ID, slot, "cli", "nochmal")
+	// Already on: approved immediately, without a new request.
+	r, _ := e.m.RequestInternet(ctx, c.ID, slot, "cli", "again")
 	aps, _ := e.st.ListApprovals(ctx, "", c.ID)
 	if r.Status != "approved" || len(aps) != 1 {
-		t.Fatalf("zweite Anfrage: %+v, %d Bestätigungen", r, len(aps))
+		t.Fatalf("second request: %+v, %d approvals", r, len(aps))
 	}
 }
 
@@ -876,22 +876,22 @@ func TestInternetRequestRejected(t *testing.T) {
 	defer cancel()
 	done := make(chan string, 1)
 	go func() {
-		r, _ := e.m.RequestInternet(ctx, c.ID, slot, "mcp", "Abruf einer Webseite")
+		r, _ := e.m.RequestInternet(ctx, c.ID, slot, "mcp", "Fetching a web page")
 		done <- r.Status
 	}()
 	ap := waitEvent(t, events, "approval", "").Data.(store.Approval)
 	_, _ = e.m.Decide(ctx, ap.ID, false)
 	if s := <-done; s != "rejected" {
-		t.Fatalf("Status: %s", s)
+		t.Fatalf("status: %s", s)
 	}
 	if e.agent(0).internet {
-		t.Fatal("Internet trotz Ablehnung an")
+		t.Fatal("internet on despite rejection")
 	}
 }
 
-// Nach dem Ruhen endet pis Strom, weil der Container abgebaut wird.
-// Das darf nicht als Absturz der Sandbox gelten und detach nicht doppelt auslösen
-// (früher: "close of closed channel" und Absturz des Orchestrators).
+// After idling, pi's stream ends because the container is torn down.
+// That must not count as a sandbox crash and must not trigger detach twice
+// (previously: "close of closed channel" and a crash of the orchestrator).
 func TestDetachThenStreamEndDoesNotPanic(t *testing.T) {
 	e := setup(t)
 	ctx := context.Background()
@@ -908,13 +908,13 @@ func TestDetachThenStreamEndDoesNotPanic(t *testing.T) {
 	list, _ := e.m.List(ctx)
 	for _, c := range list {
 		if c.State == store.StateActive {
-			t.Fatalf("Chat nach dem Ruhen wieder aktiv: %+v", c)
+			t.Fatalf("chat active again after idling: %+v", c)
 		}
 	}
 }
 
-// M7: Entscheidet der Nutzer genau dann, wenn die Wartezeit abläuft, gilt die
-// Entscheidung aus der Datenbank.
+// M7: if the user decides exactly when the waiting time expires, the decision
+// from the database applies.
 func TestDecisionWinsOverExpiry(t *testing.T) {
 	e := setup(t)
 	ctx := context.Background()
@@ -924,23 +924,23 @@ func TestDecisionWinsOverExpiry(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got := e.m.settle(ctx, c.ID, ap.ID, false, artifacts.ErrTimeout); got != store.ApprovalApproved {
-		t.Fatalf("Zustand: %s", got)
+		t.Fatalf("state: %s", got)
 	}
 }
 
-// H3: Internet umschalten wartet, bis ein laufendes Fortsetzen fertig ist, und
-// wirkt dann auf die neue Sandbox.
+// H3: toggling internet waits until a running resume is finished, and
+// then takes effect on the new sandbox.
 func TestSetInternetDuringResume(t *testing.T) {
 	e := setup(t)
 	ctx := context.Background()
 	on := true
-	c, _ := e.m.Create(ctx, NewChat{Internet: &on, Message: "hallo"})
+	c, _ := e.m.Create(ctx, NewChat{Internet: &on, Message: "hello"})
 	waitSettled(t, e, c.ID)
 	if _, err := e.m.Suspend(ctx, c.ID); err != nil {
 		t.Fatal(err)
 	}
 	done := make(chan struct{})
-	go func() { _, _ = e.m.Send(ctx, c.ID, "weiter"); close(done) }()
+	go func() { _, _ = e.m.Send(ctx, c.ID, "continue"); close(done) }()
 	time.Sleep(5 * time.Millisecond)
 	if _, err := e.m.SetInternet(ctx, c.ID, false); err != nil {
 		t.Fatal(err)
@@ -959,7 +959,7 @@ func TestSetInternetDuringResume(t *testing.T) {
 	last.mu.Lock()
 	defer last.mu.Unlock()
 	if v.Internet || last.internet {
-		t.Fatalf("Internet: DB %v, Sandbox %v – beide müssen aus sein", v.Internet, last.internet)
+		t.Fatalf("internet: DB %v, sandbox %v – both must be off", v.Internet, last.internet)
 	}
 }
 
@@ -971,10 +971,10 @@ func TestAttributeAndRecord(t *testing.T) {
 	a := e.agent(0)
 	att := e.m.Attribute(a.IP())
 	if att.ChatID != c.ID || att.MaxConcurrent != 4 {
-		t.Fatalf("Zuordnung: %+v", att)
+		t.Fatalf("attribution: %+v", att)
 	}
 	if got := e.m.Attribute("10.9.9.9"); got.ChatID != "" {
-		t.Fatalf("fremde Adresse zugeordnet: %+v", got)
+		t.Fatalf("foreign address attributed: %+v", got)
 	}
 	events, cancel := e.m.Subscribe(c.ID)
 	defer cancel()
@@ -983,12 +983,12 @@ func TestAttributeAndRecord(t *testing.T) {
 	waitEvent(t, events, "llm_call", "")
 	v, _ := e.m.View(ctx, c.ID)
 	if v.LLMCalls != 1 || v.Cost != 0.002 || v.CostOther != 0.002 {
-		t.Fatalf("nach Aufruf: %+v", v.Chat)
+		t.Fatalf("after call: %+v", v.Chat)
 	}
-	// Nach dem Ruhen gehört die Adresse zu keinem Chat mehr.
+	// After idling the address belongs to no chat anymore.
 	_, _ = e.m.Suspend(ctx, c.ID)
 	if got := e.m.Attribute(a.IP()); got.ChatID != "" {
-		t.Fatalf("Adresse nach Ruhen noch zugeordnet: %+v", got)
+		t.Fatalf("address still attributed after idling: %+v", got)
 	}
 }
 
@@ -997,22 +997,22 @@ func TestMaxSubagentsBoundsAndConfig(t *testing.T) {
 	ctx := context.Background()
 	c, _ := e.m.Create(ctx, NewChat{})
 	if v, _ := e.m.View(ctx, c.ID); v.MaxSubagents != 2 {
-		t.Fatalf("Vorgabe: %d", v.MaxSubagents)
+		t.Fatalf("default: %d", v.MaxSubagents)
 	}
 	if _, err := e.m.SetMaxSubagents(ctx, c.ID, 6); !errors.Is(err, ErrInvalid) {
-		t.Fatalf("über der Obergrenze: %v", err)
+		t.Fatalf("above the upper bound: %v", err)
 	}
 	if _, err := e.m.SetMaxSubagents(ctx, c.ID, 1); err != nil {
 		t.Fatal(err)
 	}
 	if att := e.m.Attribute(e.agent(0).IP()); att.MaxConcurrent != 2 {
-		t.Fatalf("Grenze wirkt nicht sofort am Proxy: %+v", att)
+		t.Fatalf("limit does not take effect at the proxy immediately: %+v", att)
 	}
 	a := e.agent(0)
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if !strings.Contains(strings.Join(a.execs, "\n"), "extensions/subagent/config.json") {
-		t.Fatalf("pi-subagents-Konfiguration nicht geschrieben: %v", a.execs)
+		t.Fatalf("pi-subagents configuration not written: %v", a.execs)
 	}
 }
 
@@ -1031,7 +1031,7 @@ func pollJSON(runs ...string) string {
 		agents[r] = "scout"
 	}
 	b, _ := json.Marshal(map[string]any{"files": fs, "agents": agents,
-		"runs": map[string]any{runs[0]: map[string]any{"agent": "scout", "label": "suche", "state": "running"}}})
+		"runs": map[string]any{runs[0]: map[string]any{"agent": "scout", "label": "search", "state": "running"}}})
 	return string(b)
 }
 
@@ -1054,20 +1054,20 @@ func TestSubagentEntriesAndHardLimit(t *testing.T) {
 	a.mu.Unlock()
 	offsets := map[string]int64{}
 	e.m.pollSubagents(c.ID, l, offsets, map[string]runInfo{}, map[string]string{})
-	if r := waitEvent(t, events, "subagent_run", "").Data.(store.SubagentRun); r.RunID != run1 || r.Label != "suche" || r.State != "running" {
-		t.Fatalf("Lauf: %+v", r)
+	if r := waitEvent(t, events, "subagent_run", "").Data.(store.SubagentRun); r.RunID != run1 || r.Label != "search" || r.State != "running" {
+		t.Fatalf("run: %+v", r)
 	}
 	ev := waitEvent(t, events, "subagent", "")
 	if se := ev.Data.(store.SubagentEntry); se.RunID != run1 || se.Agent != "scout" {
-		t.Fatalf("Eintrag: %+v", se)
+		t.Fatalf("entry: %+v", se)
 	}
 	a.mu.Lock()
 	aborted := strings.Contains(fmt.Sprint(a.cmds), "abort")
 	a.mu.Unlock()
 	if aborted {
-		t.Fatal("innerhalb der Grenze abgebrochen")
+		t.Fatal("aborted within the limit")
 	}
-	// Zweiter Lauf überschreitet die Grenze von 1: Abbruch und Prozesse beenden.
+	// Second run exceeds the limit of 1: abort and kill the processes.
 	a.mu.Lock()
 	a.pollOut = pollJSON(run1, run2)
 	a.mu.Unlock()
@@ -1076,14 +1076,14 @@ func TestSubagentEntriesAndHardLimit(t *testing.T) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if !strings.Contains(fmt.Sprint(a.cmds), "abort") {
-		t.Fatal("kein Abbruch bei überschrittener Grenze")
+		t.Fatal("no abort when the limit was exceeded")
 	}
 	if !strings.Contains(strings.Join(a.execs, "\n"), "pi: agw-exec kill-node") {
-		t.Fatal("Subagenten-Prozesse nicht beendet")
+		t.Fatal("subagent processes not killed")
 	}
 	v, _ := e.m.View(ctx, c.ID)
 	if v.Subagents != 2 {
-		t.Fatalf("gezählte Läufe: %d", v.Subagents)
+		t.Fatalf("counted runs: %d", v.Subagents)
 	}
 }
 
@@ -1092,7 +1092,7 @@ func TestExtensionUIIsCancelled(t *testing.T) {
 	ctx := context.Background()
 	c, _ := e.m.Create(ctx, NewChat{})
 	a := e.agent(0)
-	a.emit(`{"type":"extension_ui_request","id":"ui-1","method":"confirm","title":"Mehr Subagenten erlauben?"}`)
+	a.emit(`{"type":"extension_ui_request","id":"ui-1","method":"confirm","title":"Allow more subagents?"}`)
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		a.mu.Lock()
@@ -1101,7 +1101,7 @@ func TestExtensionUIIsCancelled(t *testing.T) {
 				a.mu.Unlock()
 				calls, _ := e.m.SocketCalls(ctx, c.ID)
 				if len(calls) == 0 || calls[len(calls)-1].Op != "extension_ui" {
-					t.Fatalf("nicht protokolliert: %+v", calls)
+					t.Fatalf("not logged: %+v", calls)
 				}
 				return
 			}
@@ -1109,7 +1109,7 @@ func TestExtensionUIIsCancelled(t *testing.T) {
 		a.mu.Unlock()
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatal("Rückfrage nicht beantwortet")
+	t.Fatal("query not answered")
 }
 
 func TestActivityWhilePreparingToolCall(t *testing.T) {
@@ -1127,21 +1127,21 @@ func TestActivityWhilePreparingToolCall(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatal("Tätigkeit „bereitet write vor“ nicht gesetzt")
+	t.Fatal(`activity "preparing write" not set`)
 }
 
 func TestSendWithAttachments(t *testing.T) {
 	e := setup(t)
 	ctx := context.Background()
 	c, _ := e.m.Create(ctx, NewChat{})
-	if _, err := e.m.AddInput(ctx, c.ID, "daten.csv", []byte("a\n")); err != nil {
+	if _, err := e.m.AddInput(ctx, c.ID, "data.csv", []byte("a\n")); err != nil {
 		t.Fatal(err)
 	}
-	// Nicht vorhandener Anhang wird abgewiesen, ohne etwas zu senden.
-	if _, err := e.m.SendWithAttachments(ctx, c.ID, "Schau dir das an", []string{"gibtsnicht.csv"}); !errors.Is(err, ErrInvalid) {
-		t.Fatalf("unbekannter Anhang: %v", err)
+	// A missing attachment is refused without sending anything.
+	if _, err := e.m.SendWithAttachments(ctx, c.ID, "Have a look at this", []string{"doesnotexist.csv"}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("unknown attachment: %v", err)
 	}
-	if _, err := e.m.SendWithAttachments(ctx, c.ID, "Schau dir das an", []string{"daten.csv"}); err != nil {
+	if _, err := e.m.SendWithAttachments(ctx, c.ID, "Have a look at this", []string{"data.csv"}); err != nil {
 		t.Fatal(err)
 	}
 	waitSettled(t, e, c.ID)
@@ -1150,22 +1150,22 @@ func TestSendWithAttachments(t *testing.T) {
 		Content []struct{ Text string } `json:"content"`
 	}
 	_ = json.Unmarshal(msgs[0].Message, &u)
-	want := "Schau dir das an\n\n[Anhänge unter /workspace/inputs/]\n- daten.csv"
+	want := "Have a look at this\n\n[Attachments in /workspace/inputs/]\n- data.csv"
 	if u.Content[0].Text != want {
-		t.Fatalf("Text an pi:\n%q\nerwartet\n%q", u.Content[0].Text, want)
+		t.Fatalf("text to pi:\n%q\nexpected\n%q", u.Content[0].Text, want)
 	}
-	// Nur Anhänge ohne Text sind erlaubt.
-	if _, err := e.m.SendWithAttachments(ctx, c.ID, "  ", []string{"daten.csv"}); err != nil {
-		t.Fatalf("nur Anhänge: %v", err)
+	// Attachments only, without text, are allowed.
+	if _, err := e.m.SendWithAttachments(ctx, c.ID, "  ", []string{"data.csv"}); err != nil {
+		t.Fatalf("attachments only: %v", err)
 	}
 }
 
-// H1: Stirbt pi, lebt die Ausführungs-Sandbox noch; der Arbeitsbereich wird gesichert, bevor
-// der Platz abgebaut wird. Der Chat ruht.
+// H1: if pi dies, the execution sandbox is still alive; the workspace is saved before
+// the slot is torn down. The chat goes idle.
 func TestPiDiesWorkspaceStillSaved(t *testing.T) {
 	e := setup(t)
 	ctx := context.Background()
-	c, _ := e.m.Create(ctx, NewChat{Message: "Hallo"})
+	c, _ := e.m.Create(ctx, NewChat{Message: "Hello"})
 	waitSettled(t, e, c.ID)
 	a := e.agent(0)
 	waitFor(t, func() bool { a.mu.Lock(); defer a.mu.Unlock(); return a.wsSaves >= 1 })
@@ -1181,28 +1181,28 @@ func TestPiDiesWorkspaceStillSaved(t *testing.T) {
 	after := a.wsSaves
 	a.mu.Unlock()
 	if after != before+1 {
-		t.Fatalf("Arbeitsbereich nach dem Tod von pi nicht gesichert: %d → %d", before, after)
+		t.Fatalf("workspace not saved after pi died: %d → %d", before, after)
 	}
 }
 
-// H2: Stirbt die Ausführungs-Sandbox, behandelt der Manager das wie den Tod von pi: Fehler an
-// die UI, Chat ruht, Sitzung (pi lebt noch) wird gesichert.
+// H2: if the execution sandbox dies, the manager treats it like pi dying: error to
+// the UI, chat goes idle, session (pi is still alive) is saved.
 func TestExecSandboxDiesChatGoesDormant(t *testing.T) {
 	e := setup(t)
 	ctx := context.Background()
-	c, _ := e.m.Create(ctx, NewChat{Message: "Hallo"})
+	c, _ := e.m.Create(ctx, NewChat{Message: "Hello"})
 	waitSettled(t, e, c.ID)
 	a := e.agent(0)
 	ch, cancel := e.m.Subscribe(c.ID)
 	defer cancel()
 	close(a.execDone)
 	ev := waitEvent(t, ch, "error", "")
-	if !strings.Contains(fmt.Sprint(ev.Data), "Ausführungs-Sandbox") {
-		t.Fatalf("Meldung: %v", ev.Data)
+	if !strings.Contains(fmt.Sprint(ev.Data), "execution sandbox") {
+		t.Fatalf("message: %v", ev.Data)
 	}
 	waitFor(t, func() bool { v, _ := e.m.View(ctx, c.ID); return v.State == store.StateDormant && v.SlotID == "" })
 	if sess, _ := e.st.LoadSession(ctx, c.ID); !strings.Contains(string(sess), `"agent":"a1"`) {
-		t.Fatalf("Sitzung nicht gesichert: %q", sess)
+		t.Fatalf("session not saved: %q", sess)
 	}
 }
 
@@ -1213,10 +1213,10 @@ func waitFor(t *testing.T, cond func() bool) {
 			return
 		}
 	}
-	t.Fatal("Bedingung nicht erfüllt")
+	t.Fatal("condition not met")
 }
 
-// Ein Chat ohne Titel heißt nach der ersten Frage wie sie; /rename setzt den Titel fest.
+// A chat without a title is named after the first question; /rename fixes the title.
 func TestAutoTitleAndRename(t *testing.T) {
 	e := setup(t)
 	ctx := context.Background()
@@ -1224,49 +1224,49 @@ func TestAutoTitleAndRename(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(c.Title, "Neuer Chat ") {
-		t.Fatalf("Platzhalter: %q", c.Title)
+	if !strings.HasPrefix(c.Title, "New chat ") {
+		t.Fatalf("placeholder: %q", c.Title)
 	}
 	title := func() string {
 		c, _ := e.st.GetChat(ctx, c.ID)
 		return c.Title
 	}
-	if _, err := e.m.Send(ctx, c.ID, "  Wie  groß ist\nder Datensatz? "); err != nil {
+	if _, err := e.m.Send(ctx, c.ID, "  How  big is\nthe dataset? "); err != nil {
 		t.Fatal(err)
 	}
 	waitSettled(t, e, c.ID)
-	if got := title(); got != "Wie groß ist der Datensatz?" {
-		t.Fatalf("nach der ersten Frage: %q", got)
+	if got := title(); got != "How big is the dataset?" {
+		t.Fatalf("after the first question: %q", got)
 	}
-	if _, err := e.m.Send(ctx, c.ID, "Und die Klassen?"); err != nil {
+	if _, err := e.m.Send(ctx, c.ID, "And the classes?"); err != nil {
 		t.Fatal(err)
 	}
 	waitSettled(t, e, c.ID)
-	if got := title(); got != "Wie groß ist der Datensatz?" {
-		t.Fatalf("zweite Frage ändert den Titel: %q", got)
+	if got := title(); got != "How big is the dataset?" {
+		t.Fatalf("second question changes the title: %q", got)
 	}
 	if _, err := e.m.RunCommand(ctx, c.ID, "/rename"); !errors.Is(err, ErrInvalid) {
-		t.Fatalf("/rename ohne Namen: %v", err)
+		t.Fatalf("/rename without a name: %v", err)
 	}
-	if _, err := e.m.RunCommand(ctx, c.ID, "/rename  Schwanzbeißen: Klassen "); err != nil {
+	if _, err := e.m.RunCommand(ctx, c.ID, "/rename  Tail biting: classes "); err != nil {
 		t.Fatal(err)
 	}
-	if got := title(); got != "Schwanzbeißen: Klassen" {
-		t.Fatalf("nach /rename: %q", got)
+	if got := title(); got != "Tail biting: classes" {
+		t.Fatalf("after /rename: %q", got)
 	}
 	msgs, _ := e.st.Messages(ctx, c.ID)
 	if len(msgs) != 4 {
-		t.Fatalf("/rename erzeugt Nachrichten: %d", len(msgs))
+		t.Fatalf("/rename creates messages: %d", len(msgs))
 	}
 
-	// Vom Nutzer benannt: bleibt auch nach der ersten Frage.
-	d, _ := e.m.Create(ctx, NewChat{Title: "Eigener Name"})
-	if _, err := e.m.Send(ctx, d.ID, "Hallo"); err != nil {
+	// Named by the user: stays even after the first question.
+	d, _ := e.m.Create(ctx, NewChat{Title: "Own name"})
+	if _, err := e.m.Send(ctx, d.ID, "Hello"); err != nil {
 		t.Fatal(err)
 	}
 	waitSettled(t, e, d.ID)
-	if got, _ := e.st.GetChat(ctx, d.ID); got.Title != "Eigener Name" {
-		t.Fatalf("eigener Titel überschrieben: %q", got.Title)
+	if got, _ := e.st.GetChat(ctx, d.ID); got.Title != "Own name" {
+		t.Fatalf("own title overwritten: %q", got.Title)
 	}
 }
 
@@ -1283,31 +1283,31 @@ func (f *fakeTitler) Title(_ context.Context, model, text string) (titler.Result
 	if f.release != nil {
 		<-f.release
 	}
-	return titler.Result{Title: "Datensatz: Größe", Model: model, Status: 200, Usage: config.Usage{Input: 100, Output: 5}, Cost: 0.00002, Started: time.Now()}, nil
+	return titler.Result{Title: "Dataset: size", Model: model, Status: 200, Usage: config.Usage{Input: 100, Output: 5}, Cost: 0.00002, Started: time.Now()}, nil
 }
 
-// Der Modelltitel ersetzt die gekürzte erste Frage, einmal; sein Aufruf zählt nicht als llm_call.
-// Benennt der Nutzer vorher um, bleibt sein Name.
+// The model title replaces the shortened first question, once; its call does not count as llm_call.
+// If the user renames the chat before, their name stays.
 func TestModelTitle(t *testing.T) {
 	e := setup(t)
 	ctx := context.Background()
 	ft := &fakeTitler{}
 	e.m.opt.Titler = ft
 	c, _ := e.m.Create(ctx, NewChat{})
-	if _, err := e.m.Send(ctx, c.ID, "Wie groß ist der Datensatz?"); err != nil {
+	if _, err := e.m.Send(ctx, c.ID, "How big is the dataset?"); err != nil {
 		t.Fatal(err)
 	}
 	waitSettled(t, e, c.ID)
-	waitUntil(t, "Modelltitel", func() bool { got, _ := e.st.GetChat(ctx, c.ID); return got.Title == "Datensatz: Größe" })
-	if _, err := e.m.Send(ctx, c.ID, "Und die Klassen?"); err != nil {
+	waitUntil(t, "model title", func() bool { got, _ := e.st.GetChat(ctx, c.ID); return got.Title == "Dataset: size" })
+	if _, err := e.m.Send(ctx, c.ID, "And the classes?"); err != nil {
 		t.Fatal(err)
 	}
 	waitSettled(t, e, c.ID)
 	ft.mu.Lock()
 	calls := append([]string(nil), ft.calls...)
 	ft.mu.Unlock()
-	if len(calls) != 1 || calls[0] != "deepseek/deepseek-flash|Wie groß ist der Datensatz?" {
-		t.Fatalf("Aufrufe des Titelgebers: %v", calls)
+	if len(calls) != 1 || calls[0] != "deepseek/deepseek-flash|How big is the dataset?" {
+		t.Fatalf("calls of the titler: %v", calls)
 	}
 	aux, _ := e.st.AuxCalls(ctx, c.ID)
 	llm, _ := e.st.ListLLMCalls(ctx, c.ID)
@@ -1315,36 +1315,36 @@ func TestModelTitle(t *testing.T) {
 		t.Fatalf("aux_llm_calls %+v, llm_calls %d", aux, len(llm))
 	}
 
-	// Angelegt mit der ersten Frage: bekommt ebenfalls den Titel des Modells.
-	m, err := e.m.Create(ctx, NewChat{Message: "Wie viele Bilder hat er?"})
+	// Created with the first question: also gets the model's title.
+	m, err := e.m.Create(ctx, NewChat{Message: "How many images does it have?"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	waitSettled(t, e, m.ID)
-	waitUntil(t, "Modelltitel beim Anlegen mit Nachricht", func() bool { got, _ := e.st.GetChat(ctx, m.ID); return got.Title == "Datensatz: Größe" })
+	waitUntil(t, "model title when created with a message", func() bool { got, _ := e.st.GetChat(ctx, m.ID); return got.Title == "Dataset: size" })
 
-	// Umbenennen, während der Titelgeber noch arbeitet: Der Name des Nutzers gewinnt.
+	// Renaming while the titler is still working: the user's name wins.
 	ft2 := &fakeTitler{release: make(chan struct{})}
 	e.m.opt.Titler = ft2
 	d, _ := e.m.Create(ctx, NewChat{})
-	if _, err := e.m.Send(ctx, d.ID, "Erste Frage"); err != nil {
+	if _, err := e.m.Send(ctx, d.ID, "First question"); err != nil {
 		t.Fatal(err)
 	}
-	waitUntil(t, "Titelgeber gerufen", func() bool { ft2.mu.Lock(); defer ft2.mu.Unlock(); return len(ft2.calls) == 1 })
-	if _, err := e.m.Rename(ctx, d.ID, "Mein Name"); err != nil {
+	waitUntil(t, "titler called", func() bool { ft2.mu.Lock(); defer ft2.mu.Unlock(); return len(ft2.calls) == 1 })
+	if _, err := e.m.Rename(ctx, d.ID, "My name"); err != nil {
 		t.Fatal(err)
 	}
 	close(ft2.release)
-	waitUntil(t, "Aufruf erfasst", func() bool { a, _ := e.st.AuxCalls(ctx, d.ID); return len(a) == 1 })
-	if got, _ := e.st.GetChat(ctx, d.ID); got.Title != "Mein Name" {
-		t.Fatalf("Modelltitel überschreibt /rename: %q", got.Title)
+	waitUntil(t, "call recorded", func() bool { a, _ := e.st.AuxCalls(ctx, d.ID); return len(a) == 1 })
+	if got, _ := e.st.GetChat(ctx, d.ID); got.Title != "My name" {
+		t.Fatalf("model title overwrites /rename: %q", got.Title)
 	}
 	waitSettled(t, e, d.ID)
 }
 
-// /model wechselt das Modell in pi und in der Datenbank; /effort setzt die Denkstufe und lehnt
-// Stufen ab, die das Modell nicht kennt. Passt der Kontext nicht, ist der Wechsel gesperrt; mit
-// compactFirst wird erst kompaktiert und dann gewechselt.
+// /model switches the model in pi and in the database; /effort sets the thinking level and refuses
+// levels the model does not know. If the context does not fit, the switch is blocked; with
+// compactFirst it compacts first and then switches.
 func TestModelAndEffort(t *testing.T) {
 	e := setup(t)
 	ctx := context.Background()
@@ -1354,16 +1354,16 @@ func TestModelAndEffort(t *testing.T) {
 	}
 	a := e.agent(0)
 	if v, _ := e.m.View(ctx, c.ID); v.ThinkingLevel != "high" || strings.Join(v.ThinkingLevels, ",") != "off,low,high,max" {
-		t.Fatalf("nach dem Anlegen: %q %v", v.ThinkingLevel, v.ThinkingLevels)
+		t.Fatalf("after creating: %q %v", v.ThinkingLevel, v.ThinkingLevels)
 	}
 	if _, err := e.m.RunCommand(ctx, c.ID, "/effort medium"); !errors.Is(err, ErrInvalid) {
-		t.Fatalf("Stufe, die das Modell nicht kennt: %v", err)
+		t.Fatalf("level the model does not know: %v", err)
 	}
 	if _, err := e.m.RunCommand(ctx, c.ID, "/effort LOW"); err != nil {
 		t.Fatal(err)
 	}
 	if v, _ := e.m.View(ctx, c.ID); v.ThinkingLevel != "low" || a.thinking != "low" {
-		t.Fatalf("nach /effort: %q, pi %q", v.ThinkingLevel, a.thinking)
+		t.Fatalf("after /effort: %q, pi %q", v.ThinkingLevel, a.thinking)
 	}
 	cmds, _ := e.m.Commands(ctx, c.ID)
 	var effort, model Command
@@ -1375,36 +1375,36 @@ func TestModelAndEffort(t *testing.T) {
 			model = x
 		}
 	}
-	if len(effort.Options) != 4 || !effort.Options[1].Current || effort.Options[1].Label != "niedrig" {
-		t.Fatalf("Vorschläge /effort: %+v", effort.Options)
+	if len(effort.Options) != 4 || !effort.Options[1].Current || effort.Options[1].Label != "low" {
+		t.Fatalf("suggestions /effort: %+v", effort.Options)
 	}
 	if len(model.Options) != 2 || !model.Options[0].Current || model.Options[1].Value != "deepseek/klein" {
-		t.Fatalf("Vorschläge /model: %+v", model.Options)
+		t.Fatalf("suggestions /model: %+v", model.Options)
 	}
-	if _, err := e.m.RunCommand(ctx, c.ID, "/model gibt/esnicht"); !errors.Is(err, ErrUnknownModel) {
-		t.Fatalf("unbekanntes Modell: %v", err)
+	if _, err := e.m.RunCommand(ctx, c.ID, "/model does/notexist"); !errors.Is(err, ErrUnknownModel) {
+		t.Fatalf("unknown model: %v", err)
 	}
 
-	// Kontext 4200 passt in 8000: Wechsel sofort, die Denkstufe wird erneut gesetzt.
+	// Context 4200 fits into 8000: switch immediately, the thinking level is set again.
 	if _, err := e.m.RunCommand(ctx, c.ID, "/model deepseek/klein"); err != nil {
 		t.Fatal(err)
 	}
 	if v, _ := e.m.View(ctx, c.ID); v.Model != "deepseek/klein" || a.model != "deepseek/klein" || v.ThinkingLevel != "low" {
-		t.Fatalf("nach /model: %q, pi %q, Stufe %q", v.Model, a.model, v.ThinkingLevel)
+		t.Fatalf("after /model: %q, pi %q, level %q", v.Model, a.model, v.ThinkingLevel)
 	}
 
-	// Zurück zum großen, Kontext wachsen lassen, dann ist das kleine gesperrt.
+	// Back to the large one, let the context grow, then the small one is blocked.
 	if _, err := e.m.SetModel(ctx, c.ID, "deepseek/deepseek-flash", false); err != nil {
 		t.Fatal(err)
 	}
 	a.mu.Lock()
 	a.ctxTokens = 9000
 	a.mu.Unlock()
-	if _, err := e.m.Send(ctx, c.ID, "viel Text"); err != nil {
+	if _, err := e.m.Send(ctx, c.ID, "lots of text"); err != nil {
 		t.Fatal(err)
 	}
 	waitSettled(t, e, c.ID)
-	waitUntil(t, "Kontext gemessen", func() bool {
+	waitUntil(t, "context measured", func() bool {
 		v, _ := e.m.View(ctx, c.ID)
 		var u ContextUsage
 		return json.Unmarshal(v.Context, &u) == nil && u.Tokens != nil && *u.Tokens == 9000
@@ -1412,12 +1412,12 @@ func TestModelAndEffort(t *testing.T) {
 	_, err = e.m.SetModel(ctx, c.ID, "deepseek/klein", false)
 	var tooLarge *ContextTooLargeError
 	if !errors.As(err, &tooLarge) || tooLarge.Tokens != 9000 || tooLarge.Window != 8000 {
-		t.Fatalf("zu voller Kontext: %v", err)
+		t.Fatalf("context too full: %v", err)
 	}
 	if v, _ := e.m.SetModel(ctx, c.ID, "deepseek/klein", true); v.PendingModel != "deepseek/klein" {
-		t.Fatalf("vorgemerkt: %+v", v.PendingModel)
+		t.Fatalf("scheduled: %+v", v.PendingModel)
 	}
-	waitUntil(t, "nach der Kompaktierung gewechselt", func() bool {
+	waitUntil(t, "switched after the compaction", func() bool {
 		v, _ := e.m.View(ctx, c.ID)
 		return v.Model == "deepseek/klein" && v.PendingModel == ""
 	})
@@ -1426,71 +1426,71 @@ func TestModelAndEffort(t *testing.T) {
 	}
 }
 
-// piRun spielt einen Durchgang, den pi selbst beginnt (pi-subagents meldet einen fertigen Subagenten).
+// piRun plays a turn that pi starts itself (pi-subagents reports a finished subagent).
 func (a *fakeAgent) piRun(note string) {
 	a.emit(`{"type":"agent_start"}`)
 	a.emit(fmt.Sprintf(`{"type":"message_end","message":{"role":"custom","customType":"subagent-notify","display":true,"content":%q}}`, note))
-	a.emit(`{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"Ergebnis übernommen"}],"usage":{"input":10,"output":5,"cacheRead":0,"totalTokens":15,"cost":{"total":0.001}}}}`)
+	a.emit(`{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"Result taken over"}],"usage":{"input":10,"output":5,"cacheRead":0,"totalTokens":15,"cost":{"total":0.001}}}}`)
 	a.emit(`{"type":"agent_settled"}`)
 }
 
-// Beginnt pi einen Durchgang selbst, zählt er als Weckruf ohne Nutzer: eigene Zeile in chat_turns,
-// die Meldung steht mit Herkunft system im Verlauf, und die Antwort gehört zu diesem Durchgang, nicht
-// zum vorigen Auftrag des Nutzers.
+// If pi starts a turn itself, it counts as a wake-up without the user: its own row in chat_turns,
+// the note appears in the history with origin system, and the response belongs to this turn, not
+// to the user's previous request.
 func TestPiInitiatedTurn(t *testing.T) {
 	e := setup(t)
 	ctx := context.Background()
 	c, _ := e.m.Create(ctx, NewChat{Title: "p"})
-	if _, err := e.m.Send(ctx, c.ID, "starte Subagenten im Hintergrund"); err != nil {
+	if _, err := e.m.Send(ctx, c.ID, "start subagents in the background"); err != nil {
 		t.Fatal(err)
 	}
 	waitSettled(t, e, c.ID)
-	e.agent(0).piRun("Subagent fertig: Bericht liegt vor")
-	waitUntil(t, "Durchgang von pi gespeichert", func() bool { m, _ := e.st.Messages(ctx, c.ID); return len(m) == 4 })
+	e.agent(0).piRun("Subagent finished: report is ready")
+	waitUntil(t, "turn from pi saved", func() bool { m, _ := e.st.Messages(ctx, c.ID); return len(m) == 4 })
 	waitSettled(t, e, c.ID)
 	msgs, _ := e.st.Messages(ctx, c.ID)
 	user, custom, answer := msgs[0], msgs[2], msgs[3]
 	if custom.Role != "custom" || custom.Origin != store.OriginSystem || custom.Trigger != store.TriggerWake || custom.TurnID == nil {
-		t.Fatalf("Meldung: %+v", custom)
+		t.Fatalf("note: %+v", custom)
 	}
 	if answer.TurnID == nil || user.TurnID == nil || *answer.TurnID != *custom.TurnID || *answer.TurnID == *user.TurnID || answer.Trigger != store.TriggerWake {
-		t.Fatalf("Zuordnung der Antwort: Nutzer %v, Meldung %v, Antwort %v (%s)", user.TurnID, custom.TurnID, answer.TurnID, answer.Trigger)
+		t.Fatalf("attribution of the response: user %v, note %v, response %v (%s)", user.TurnID, custom.TurnID, answer.TurnID, answer.Trigger)
 	}
 }
 
-// Auch Durchgänge von pi unterliegen der Grenze für Durchgänge ohne Nutzer: darüber bricht der
-// Orchestrator ab.
+// Turns from pi are also subject to the limit for turns without the user: above it the
+// orchestrator aborts.
 func TestPiInitiatedTurnLimited(t *testing.T) {
 	e := setup(t)
 	e.m.opt.AutoTurnsMax = 1
 	ctx := context.Background()
 	c, _ := e.m.Create(ctx, NewChat{Title: "p"})
-	if _, err := e.m.Send(ctx, c.ID, "los"); err != nil {
+	if _, err := e.m.Send(ctx, c.ID, "go"); err != nil {
 		t.Fatal(err)
 	}
 	waitSettled(t, e, c.ID)
 	a := e.agent(0)
-	a.piRun("erste Meldung")
+	a.piRun("first note")
 	waitSettled(t, e, c.ID)
 	if strings.Count(strings.Join(a.commands(), ","), "abort") != 0 {
-		t.Fatal("erster Durchgang ohne Nutzer abgebrochen")
+		t.Fatal("first turn without the user aborted")
 	}
-	a.piRun("zweite Meldung")
-	waitUntil(t, "abgebrochen", func() bool { return strings.Count(strings.Join(a.commands(), ","), "abort") == 1 })
+	a.piRun("second note")
+	waitUntil(t, "aborted", func() bool { return strings.Count(strings.Join(a.commands(), ","), "abort") == 1 })
 	if v, _ := e.m.View(ctx, c.ID); v.HoldReason != "" && v.HoldReason != HoldAutoTurns {
-		t.Fatalf("Zurückhalten: %q", v.HoldReason)
+		t.Fatalf("hold back: %q", v.HoldReason)
 	}
 }
 
-// Ohne Statusdatei nennt die Kind-Sitzung ihren Agenten in session_info („<agent>: <Auftrag>“).
+// Without a status file the child session names its agent in session_info ("<agent>: <task>").
 func TestParseChildSessionAgentFromSessionInfo(t *testing.T) {
-	data := `{"type":"session_info","id":"i1","name":"researcher: KONTEXT: Wir …"}` + "\n" +
-		`{"type":"message","id":"u1","message":{"role":"user","content":[{"type":"text","text":"Auftrag"}]}}` + "\n"
+	data := `{"type":"session_info","id":"i1","name":"researcher: CONTEXT: We …"}` + "\n" +
+		`{"type":"message","id":"u1","message":{"role":"user","content":[{"type":"text","text":"Task"}]}}` + "\n"
 	es := parseChildSession("c", "r", "", data)
 	if len(es) != 1 || es[0].Agent != "researcher" {
-		t.Fatalf("Einträge: %+v", es)
+		t.Fatalf("entries: %+v", es)
 	}
 	if es := parseChildSession("c", "r", "scout", data); es[0].Agent != "scout" {
-		t.Fatalf("bekannter Agent überschrieben: %+v", es)
+		t.Fatalf("known agent overwritten: %+v", es)
 	}
 }

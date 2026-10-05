@@ -1,13 +1,13 @@
-// Package fakellm ist ein geskriptetes, OpenAI-kompatibles Modell für
-// Integrationstests (E9). Es antwortet im SSE-Format von chat/completions.
+// Package fakellm is a scripted, OpenAI-compatible model for
+// integration tests (E9). It answers in the SSE format of chat/completions.
 //
-// Skript: Die erste Nutzernachricht, die Zeilen der Form "CALL <werkzeug> <json>"
-// enthält, legt die Werkzeugaufrufe fest. Die n-te Antwort des Modells nach
-// dieser Nachricht ruft den n-ten auf; danach antwortet es mit "fertig". So
-// steuert ein Test auch Subagenten: Deren Auftrag enthält eigene CALL-Zeilen.
+// Script: the first user message containing lines of the form "CALL <tool> <json>"
+// determines the tool calls. The model's n-th response after
+// this message calls the n-th one; after that it answers with "done". This way
+// a test also controls subagents: their task contains its own CALL lines.
 //
-// Platzhalter in den Argumenten: {{fullOutputPath}} wird durch den letzten Pfad der Form
-// „Full output: /tmp/pi-bash-….log“ aus den bisherigen Werkzeugergebnissen ersetzt (H1).
+// Placeholders in the arguments: {{fullOutputPath}} is replaced by the last path of the form
+// "Full output: /tmp/pi-bash-….log" from the tool results so far (H1).
 package fakellm
 
 import (
@@ -22,17 +22,17 @@ import (
 
 var fullOutputRe = regexp.MustCompile(`Full output: (/tmp/pi-bash-[0-9a-f]+\.log)`)
 
-// Weitere Platzhalter: {{replyTo}} ist die Kennung der letzten Anfrage eines Subagenten
-// (contact_supervisor, „replyTo: "…"“), {{runId}} die Kennung des letzten Laufs im Hintergrund
-// („Async: <agent> [<id>]“).
+// Further placeholders: {{replyTo}} is the ID of a subagent's last request
+// (contact_supervisor, `replyTo: "…"`), {{runId}} the ID of the last background run
+// ("Async: <agent> [<id>]").
 var (
 	replyToRe = regexp.MustCompile(`replyTo: "([0-9a-f-]{8,})"`)
 	runIDRe   = regexp.MustCompile(`Async: [a-z-]+ \[([0-9a-f-]{8,})\]`)
-	// {{peer}}: anderer Subagent in der Liste von intercom („(subagent-worker-1a2b3c4d)“).
+	// {{peer}}: another subagent in intercom's list ("(subagent-worker-1a2b3c4d)").
 	peerRe = regexp.MustCompile(`\((subagent-[a-z]+-[0-9a-f]{6,})\)`)
 )
 
-// Issued ist ein vom Modell angeforderter Werkzeugaufruf.
+// Issued is a tool call requested by the model.
 type Issued struct {
 	ID   string
 	Tool string
@@ -43,10 +43,10 @@ type Server struct {
 	n      atomic.Int64
 	mu     sync.Mutex
 	issued []Issued
-	seen   []string // Texte aller Nachrichten, die das Modell zu sehen bekam
+	seen   []string // texts of all messages the model got to see
 }
 
-// Seen liefert die Texte aller Nachrichten der bisherigen Anfragen (Haupt- und Kind-Sitzungen).
+// Seen returns the texts of all messages of the requests so far (main and child sessions).
 func (s *Server) Seen() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -78,7 +78,7 @@ func text(c json.RawMessage) string {
 
 type call struct{ tool, args string }
 
-// Script liefert die CALL-Zeilen eines Textes.
+// script returns the CALL lines of a text.
 func script(t string) []call {
 	var cs []call
 	for _, line := range strings.Split(t, "\n") {
@@ -155,7 +155,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			c.args = strings.ReplaceAll(c.args, "{{fullOutputPath}}", last)
 		}
-		// Platzhalter in einem Auftrag an einen Subagenten (Feld task) ersetzt erst der Subagent selbst.
+		// Placeholders in a task for a subagent (field task) are replaced only by the subagent itself.
 		nested := strings.Contains(c.args, `"task"`)
 		for ph, re := range map[string]*regexp.Regexp{"{{replyTo}}": replyToRe, "{{runId}}": runIDRe} {
 			if nested {
@@ -173,7 +173,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			c.args = strings.ReplaceAll(c.args, ph, last)
 		}
 		if !nested && strings.Contains(c.args, "{{peer}}") {
-			// Name eines anderen Subagenten aus der letzten Liste von intercom (nicht die eigene Sitzung).
+			// Name of another subagent from intercom's last list (not the own session).
 			last := ""
 			for _, m := range req.Messages {
 				for _, line := range strings.Split(text(m.Content), "\n") {
@@ -192,7 +192,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			"function": map[string]any{"name": c.tool, "arguments": c.args}}}}, nil))
 		send(chunk(map[string]any{}, "tool_calls"))
 	} else {
-		send(chunk(map[string]any{"role": "assistant", "content": "fertig"}, nil))
+		send(chunk(map[string]any{"role": "assistant", "content": "done"}, nil))
 		send(chunk(map[string]any{}, "stop"))
 	}
 	fmt.Fprint(w, "data: [DONE]\n\n")

@@ -1,10 +1,10 @@
 package worker
 
-// Integrationstest eines ganzen Platzes (E9) mit geskriptetem Modell: echter Container von pi
-// ohne Shell, echte Ausführungs-Sandbox, echte Extension exec-bridge.ts, echte Sockets. Das Modell
-// ist internal/fakellm; es läuft in diesem Testprozess, der sich als „orchestrator“ an das
-// Platz-Netz hängt. Unix-Sockets gehen auf dem Mac nur innerhalb der Docker-VM, deshalb läuft
-// der Test in einem Go-Container (./dev.sh test, Schalter AGW_E9_IN_DOCKER=1).
+// Integration test of a whole slot (E9) with a scripted model: real pi container
+// without a shell, real execution sandbox, real extension exec-bridge.ts, real sockets. The model
+// is internal/fakellm; it runs in this test process, which attaches itself to the slot network
+// as "orchestrator". On the Mac, Unix sockets only work inside the Docker VM, so the test
+// runs in a Go container (./dev.sh test, switch AGW_E9_IN_DOCKER=1).
 
 import (
 	"context"
@@ -30,7 +30,7 @@ type e9Backend struct {
 	mu   sync.Mutex
 	recs []store.ToolExecution
 	logs []string
-	plat []string // Aufrufe der Plattform-Anbindung (agw-platform im Abbild)
+	plat []string // calls of the platform binding (agw-platform in the image)
 }
 
 func (b *e9Backend) PlatformCall(_ context.Context, chat, slot, via string, req platform.Request) (platform.Result, error) {
@@ -67,51 +67,51 @@ func (b *e9Backend) executions() []store.ToolExecution {
 	return append([]store.ToolExecution(nil), b.recs...)
 }
 
-// Hauptagent: alle vier Datei- und Shellwerkzeuge, dann Subagenten im Vorder- und im Hintergrund
-// und drei Aufrufe, die der Wächter sperren muss.
-const e9Script = `Prüfe die Ausführungs-Sandbox.
-CALL bash {"command":"echo main-$(id -u); ls /agent 2>&1; tr '\\0' ' ' < /proc/1/cmdline; echo; test -e /agent/config/settings.json && echo SETTINGS-DA || echo SETTINGS-FEHLT"}
-CALL write {"path":"/workspace/e9.txt","content":"hallo e9\n"}
-CALL edit {"path":"/workspace/e9.txt","edits":[{"oldText":"hallo","newText":"moin"}]}
+// Main agent: all four file and shell tools, then subagents in the foreground and in the background
+// and three calls the guard has to block.
+const e9Script = `Check the execution sandbox.
+CALL bash {"command":"echo main-$(id -u); ls /agent 2>&1; tr '\\0' ' ' < /proc/1/cmdline; echo; test -e /agent/config/settings.json && echo SETTINGS-PRESENT || echo SETTINGS-MISSING"}
+CALL write {"path":"/workspace/e9.txt","content":"hello e9\n"}
+CALL edit {"path":"/workspace/e9.txt","edits":[{"oldText":"hello","newText":"howdy"}]}
 CALL read {"path":"/workspace/e9.txt"}
-CALL bash {"command":"agw-platform dataset 7; echo plattform-rc=$?"}
+CALL bash {"command":"agw-platform dataset 7; echo platform-rc=$?"}
 CALL bash {"command":"seq 1 20000"}
 CALL read {"path":"{{fullOutputPath}}","offset":19999}
-CALL bash {"command":"yes | head -c 300000000; echo ENDE"}
+CALL bash {"command":"yes | head -c 300000000; echo END"}
 CALL read {"path":"{{fullOutputPath}}","offset":1000,"limit":2}
-CALL subagent {"agent":"worker","async":false,"task":"K1\nCALL bash {\"command\":\"echo kind-$(id -u) > /workspace/kind.txt; ls /agent 2>&1\"}\nCALL grep {\"pattern\":\"moin\",\"path\":\"/workspace\"}\nCALL find {\"pattern\":\"*.txt\",\"path\":\"/workspace\"}\nCALL ls {\"path\":\"/workspace\"}"}
-CALL subagent {"action":"create","config":{"name":"boese","description":"x","systemPrompt":"x","extensions":"","subagentOnlyExtensions":""}}
+CALL subagent {"agent":"worker","async":false,"task":"K1\nCALL bash {\"command\":\"echo child-$(id -u) > /workspace/child.txt; ls /agent 2>&1\"}\nCALL grep {\"pattern\":\"howdy\",\"path\":\"/workspace\"}\nCALL find {\"pattern\":\"*.txt\",\"path\":\"/workspace\"}\nCALL ls {\"path\":\"/workspace\"}"}
+CALL subagent {"action":"create","config":{"name":"evil","description":"x","systemPrompt":"x","extensions":"","subagentOnlyExtensions":""}}
 CALL subagent {"agent":"claude-code","task":"x"}
-CALL subagent {"agent":"scout","task":"K2\nCALL bash {\"command\":\"echo hintergrund-$(id -u)\"}"}`
+CALL subagent {"agent":"scout","task":"K2\nCALL bash {\"command\":\"echo background-$(id -u)\"}"}`
 
-// Workflows (Entscheidung des Verfassers: workflowScript zurück, Skript in der
-// Ausführungs-Sandbox). Die Skripte stehen hier als Go-Strings, damit JSON das Maskieren übernimmt.
+// Workflows (decision of the author: workflowScript back, script in the
+// execution sandbox). The scripts are Go strings here so that JSON takes care of the escaping.
 const (
-	// P4b: Ausbruch aus node:vm. Vorher Code des Agenten als PID 1 im Container von pi, jetzt
-	// höchstens in der Ausführungs-Sandbox.
+	// P4b: escape from node:vm. Before: agent code as PID 1 in the pi container, now
+	// at most in the execution sandbox.
 	wfEscape = `const p = emit.constructor('return process')();
 const fs = p.getBuiltinModule('fs');
-let wrote = 'nein';
-try { fs.writeFileSync('/agent/config/settings.json', '{}'); wrote = 'ja'; } catch (e) { wrote = e.code; }
+let wrote = 'no';
+try { fs.writeFileSync('/agent/config/settings.json', '{}'); wrote = 'yes'; } catch (e) { wrote = e.code; }
 return { uid: p.getuid(), agent: fs.existsSync('/agent'), workspace: fs.existsSync('/workspace/e9.txt'), pid1: fs.readFileSync('/proc/1/cmdline', 'utf8').split('\0').join(' '), wrote };`
-	// Drei parallele Läufe; jeder ruft bash (belegt in tool_executions).
+	// Three parallel runs; each calls bash (recorded in tool_executions).
 	wfParallel = `const r = await runs.all([
   { key: 'w1', agent: 'worker', task: 'WF1\nCALL bash {"command":"echo wf-1; sleep 2"}' },
   { key: 'w2', agent: 'worker', task: 'WF2\nCALL bash {"command":"echo wf-2; sleep 2"}' },
   { key: 'w3', agent: 'scout', task: 'WF3\nCALL bash {"command":"echo wf-3; sleep 2"}' },
 ]);
 return r.map((x) => x.ok);`
-	// Kette: der zweite Lauf erst nach dem ersten.
-	wfChain = `const a = await runs.run('k1', { agent: 'worker', task: 'KE1\nCALL bash {"command":"echo kette-1 > /workspace/kette.txt"}' });
-const b = await runs.run('k2', { agent: 'worker', task: 'KE2\nCALL bash {"command":"cat /workspace/kette.txt; echo kette-2"}' });
+	// Chain: the second run only after the first.
+	wfChain = `const a = await runs.run('k1', { agent: 'worker', task: 'KE1\nCALL bash {"command":"echo chain-1 > /workspace/chain.txt"}' });
+const b = await runs.run('k2', { agent: 'worker', task: 'KE2\nCALL bash {"command":"cat /workspace/chain.txt; echo chain-2"}' });
 return [a.ok, b.ok];`
-	// Gesperrt: ein Lauf mit cwd, ein Agent mit fremder Laufzeit, runs.host und eine gefälschte
-	// Anfrage über stdout des Runners (sie kommt beim Host an, der Wächter weist sie ab).
+	// Blocked: a run with cwd, an agent with a foreign runtime, runs.host and a forged
+	// request via the runner's stdout (it reaches the host, the guard rejects it).
 	wfBlocked = `const out = [];
-try { await runs.run('b1', { agent: 'worker', task: 'B1\nCALL bash {"command":"echo gesperrt-cwd"}', cwd: '/agent' }); out.push('cwd lief'); } catch (e) { out.push('cwd: ' + e.message); }
-try { await runs.run('b2', { agent: 'claude-code', task: 'x' }); out.push('claude-code lief'); } catch (e) { out.push('claude-code: ' + e.message); }
+try { await runs.run('b1', { agent: 'worker', task: 'B1\nCALL bash {"command":"echo blocked-cwd"}', cwd: '/agent' }); out.push('cwd WENT-THROUGH'); } catch (e) { out.push('cwd: ' + e.message); }
+try { await runs.run('b2', { agent: 'claude-code', task: 'x' }); out.push('claude-code WENT-THROUGH'); } catch (e) { out.push('claude-code: ' + e.message); }
 const p = emit.constructor('return process')();
-p.stdout.write(JSON.stringify({ m: { type: 'call', callId: 4242, method: 'run', args: { key: 'f1', params: { agent: 'worker', task: 'F1\nCALL bash {"command":"echo gefaelscht"}', cwd: '/agent' } } } }) + '\n');
+p.stdout.write(JSON.stringify({ m: { type: 'call', callId: 4242, method: 'run', args: { key: 'f1', params: { agent: 'worker', task: 'F1\nCALL bash {"command":"echo forged"}', cwd: '/agent' } } } }) + '\n');
 const t0 = Date.now(); while (Date.now() - t0 < 500) {}
 return out;`
 )
@@ -123,7 +123,7 @@ func callLine(tool string, args any) string {
 
 func TestSlotE9WithScriptedModel(t *testing.T) {
 	if os.Getenv("AGW_E9_IN_DOCKER") != "1" {
-		t.Skip("läuft nur im Go-Container mit Docker-Socket (./dev.sh test)")
+		t.Skip("runs only in the Go container with the Docker socket (./dev.sh test)")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
@@ -203,7 +203,7 @@ func TestSlotE9WithScriptedModel(t *testing.T) {
 		callLine("subagent", map[string]any{"workflowScript": wfBlocked, "async": false}),
 		callLine("subagent", map[string]any{"workflowScriptPath": "/agent/x.js", "async": false}),
 		callLine("subagent", map[string]any{"agent": "reviewer", "async": false, "task": "R1\nCALL watchdog_diff {}"}),
-		// zwei einzelne Subagenten im Hintergrund: laufen sie gleichzeitig?
+		// two single subagents in the background: do they run at the same time?
 		callLine("subagent", map[string]any{"agent": "scout", "async": true, "task": "AS1\nCALL bash {\"command\":\"echo async-1; sleep 3\"}"}),
 		callLine("subagent", map[string]any{"agent": "scout", "async": true, "task": "AS2\nCALL bash {\"command\":\"echo async-2; sleep 3\"}"}),
 	}, "\n")
@@ -213,31 +213,31 @@ func TestSlotE9WithScriptedModel(t *testing.T) {
 	select {
 	case <-settled:
 	case <-ctx.Done():
-		t.Fatal("Lauf wird nicht fertig")
+		t.Fatal("run does not finish")
 	}
-	// Der Hintergrund-Subagent (scout) meldet sich über seinen Runner-Prozess.
+	// The background subagent (scout) reports via its runner process.
 	byTool := func() map[string]fakellm.Issued {
 		m := map[string]fakellm.Issued{}
 		for _, is := range fake.Issued() {
 			key := is.Tool
-			if strings.Contains(is.Args, "hintergrund") {
-				key = "bash-hintergrund"
+			if strings.Contains(is.Args, "background") {
+				key = "bash-background"
 			} else if strings.Contains(is.Args, "seq 1 20000") {
-				key = "bash-lang"
+				key = "bash-long"
 			} else if strings.Contains(is.Args, "head -c 300000000") {
-				key = "bash-riesig"
+				key = "bash-huge"
 			} else if strings.Contains(is.Args, `"offset":19999`) {
-				key = "read-lang"
+				key = "read-long"
 			} else if strings.Contains(is.Args, `"offset":1000`) {
-				key = "read-riesig"
-			} else if strings.Contains(is.Args, "plattform-rc") {
-				key = "bash-plattform"
-			} else if strings.Contains(is.Args, "kind-") {
-				key = "bash-kind"
+				key = "read-huge"
+			} else if strings.Contains(is.Args, "platform-rc") {
+				key = "bash-platform"
+			} else if strings.Contains(is.Args, "child-") {
+				key = "bash-child"
 			} else if is.Tool == "subagent" {
 				key = "subagent:" + is.Args
 			}
-			for _, k := range []string{"wf-1", "wf-2", "wf-3", "kette-1", "kette-2", "async-1", "async-2", "gesperrt-cwd", "gefaelscht", "watchdog_diff"} {
+			for _, k := range []string{"wf-1", "wf-2", "wf-3", "chain-1", "chain-2", "async-1", "async-2", "blocked-cwd", "forged", "watchdog_diff"} {
 				if strings.Contains(is.Args, k) || (k == "watchdog_diff" && is.Tool == k) {
 					key = "k:" + k
 				}
@@ -264,7 +264,7 @@ func TestSlotE9WithScriptedModel(t *testing.T) {
 	for time.Now().Before(deadline) {
 		m := byTool()
 		ready := true
-		for _, k := range []string{"bash-hintergrund", "k:async-1", "k:async-2"} {
+		for _, k := range []string{"bash-background", "k:async-1", "k:async-2"} {
 			if is, ok := m[k]; !ok || execFor(b.executions(), is.ID) == nil {
 				ready = false
 			}
@@ -277,85 +277,85 @@ func TestSlotE9WithScriptedModel(t *testing.T) {
 	issued := byTool()
 	execs := b.executions()
 
-	// P6: Jede Ausführung trägt eine vom Modell angeforderte ID, und jeder angeforderte Aufruf
-	// eines umgeleiteten Werkzeugs ist ausgeführt (Haupt- und Subagent).
+	// P6: every execution carries an ID requested by the model, and every requested call
+	// of a redirected tool was executed (main agent and subagent).
 	ids := map[string]bool{}
 	for _, is := range fake.Issued() {
 		ids[is.ID] = true
 	}
 	for _, e := range execs {
 		if !ids[e.ToolCallID] {
-			t.Errorf("Ausführung ohne Anforderung: %+v", e)
+			t.Errorf("execution without a request: %+v", e)
 		}
 	}
-	for _, key := range []string{"bash", "write", "edit", "read", "bash-kind", "grep", "find", "ls", "bash-hintergrund"} {
+	for _, key := range []string{"bash", "write", "edit", "read", "bash-child", "grep", "find", "ls", "bash-background"} {
 		is, ok := issued[key]
 		if !ok {
-			t.Errorf("Modell hat %s nie angefordert (Skript nicht abgearbeitet?)", key)
+			t.Errorf("model never requested %s (script not worked through?)", key)
 			continue
 		}
 		e := execFor(execs, is.ID)
 		if e == nil {
-			t.Errorf("%s (%s) nicht ausgeführt", key, is.ID)
+			t.Errorf("%s (%s) not executed", key, is.ID)
 			continue
 		}
 		wantMain := key == "bash" || key == "write" || key == "edit" || key == "read"
 		if (e.Session == "main") != wantMain {
-			t.Errorf("%s: Sitzung %q", key, e.Session)
+			t.Errorf("%s: session %q", key, e.Session)
 		}
 	}
-	// P8: bash läuft nicht im Container von pi.
+	// P8: bash does not run in the pi container.
 	if e := execFor(execs, issued["bash"].ID); e != nil {
-		for _, want := range []string{"main-10001", "No such file or directory", "agw-exec idle", "SETTINGS-FEHLT"} {
+		for _, want := range []string{"main-10001", "No such file or directory", "agw-exec idle", "SETTINGS-MISSING"} {
 			if !strings.Contains(e.OutputExcerpt, want) {
-				t.Errorf("Ausgabe von bash ohne %q: %q", want, e.OutputExcerpt)
+				t.Errorf("bash output without %q: %q", want, e.OutputExcerpt)
 			}
 		}
 	}
-	// Plattform-Anbindung: agw-platform liegt im Abbild und geht über den Socket der Ausführungs-Sandbox.
-	if e := execFor(execs, issued["bash-plattform"].ID); e == nil || !strings.Contains(e.OutputExcerpt, `HTTP 200`) || !strings.Contains(e.OutputExcerpt, "plattform-rc=0") {
+	// Platform binding: agw-platform is in the image and goes through the socket of the execution sandbox.
+	if e := execFor(execs, issued["bash-platform"].ID); e == nil || !strings.Contains(e.OutputExcerpt, `HTTP 200`) || !strings.Contains(e.OutputExcerpt, "platform-rc=0") {
 		t.Errorf("agw-platform: %+v", e)
 	}
 	b.mu.Lock()
 	if strings.Join(b.plat, ";") != "cli GET /datasets/7" {
-		t.Errorf("Plattform-Aufrufe: %v", b.plat)
+		t.Errorf("platform calls: %v", b.plat)
 	}
 	b.mu.Unlock()
 	if e := execFor(execs, issued["edit"].ID); e == nil || strings.Join(opsFor(execs, issued["edit"].ID), ",") != "access,read,write" {
-		t.Errorf("edit: Operationen %v", opsFor(execs, issued["edit"].ID))
+		t.Errorf("edit: operations %v", opsFor(execs, issued["edit"].ID))
 	}
-	if e := execFor(execs, issued["read"].ID); e == nil || e.OutputExcerpt != "moin e9\n" {
-		t.Errorf("read nach edit: %+v", e)
+	if e := execFor(execs, issued["read"].ID); e == nil || e.OutputExcerpt != "howdy e9\n" {
+		t.Errorf("read after edit: %+v", e)
 	}
-	// H1: Lange Ausgaben landen als Datei in der Ausführungs-Sandbox; pi überlebt auch 300 MB
-	// Ausgabe (vorher tmpfs voll im Container von pi, unbehandelter Fehler, PID 1 tot), und ein
-	// read auf den genannten Pfad liefert die Datei.
+	// H1: long output ends up as a file in the execution sandbox; pi survives even 300 MB of
+	// output (before: tmpfs full in the pi container, unhandled error, PID 1 dead), and a
+	// read on the named path returns the file.
 	endOf := func(key string) end {
 		mu.Lock()
 		defer mu.Unlock()
 		return ends[issued[key].ID]
 	}
-	if r := endOf("bash-lang"); !strings.Contains(r.text, "Full output: /tmp/pi-bash-") || !strings.Contains(r.text, "20000") {
-		t.Errorf("lange Ausgabe: %s", tail(r.text, 300))
+	if r := endOf("bash-long"); !strings.Contains(r.text, "Full output: /tmp/pi-bash-") || !strings.Contains(r.text, "20000") {
+		t.Errorf("long output: %s", tail(r.text, 300))
 	}
-	if r := endOf("read-lang"); r.isError || !strings.Contains(r.text, `19999\n20000`) {
-		t.Errorf("read auf die ganze Ausgabe: %+v", r)
+	if r := endOf("read-long"); r.isError || !strings.Contains(r.text, `19999\n20000`) {
+		t.Errorf("read on the full output: %+v", r)
 	}
-	if r := endOf("bash-riesig"); !strings.Contains(r.text, "ENDE") || !strings.Contains(r.text, "Full output: /tmp/pi-bash-") {
-		t.Errorf("sehr große Ausgabe: %s", tail(r.text, 300))
+	if r := endOf("bash-huge"); !strings.Contains(r.text, "END") || !strings.Contains(r.text, "Full output: /tmp/pi-bash-") {
+		t.Errorf("very large output: %s", tail(r.text, 300))
 	}
-	if r := endOf("read-riesig"); r.isError || !strings.Contains(r.text, `y\ny`) || !strings.Contains(r.text, "more lines in file") {
-		t.Errorf("read auf 256 MiB: %+v", r)
+	if r := endOf("read-huge"); r.isError || !strings.Contains(r.text, `y\ny`) || !strings.Contains(r.text, "more lines in file") {
+		t.Errorf("read on 256 MiB: %+v", r)
 	}
 	if out, _ := w.ExecPi(ctx, []string{"ls", "-a", "/tmp"}, nil); strings.Contains(string(out), "pi-bash") {
-		t.Errorf("Datei im Container von pi: %s", out)
+		t.Errorf("file in the pi container: %s", out)
 	}
 	if out, err := w.Exec(ctx, []string{"sh", "-c", "for f in /tmp/pi-bash-*.log; do stat -c %s $f; done; tail -c 80 $(ls -S /tmp/pi-bash-*.log | head -1)"}, nil); err != nil ||
 		!strings.Contains(string(out), "output truncated after 256 MiB") {
-		t.Errorf("Dateien der ganzen Ausgabe: %q %v", out, err)
+		t.Errorf("files of the full output: %q %v", out, err)
 	}
 
-	// Der Wächter sperrt Code und Agentendefinitionen im Container von pi (P4, P4b).
+	// The guard blocks code and agent definitions in the pi container (P4, P4b).
 	blocked := 0
 	for key, is := range issued {
 		if !strings.HasPrefix(key, "subagent:") {
@@ -366,37 +366,37 @@ func TestSlotE9WithScriptedModel(t *testing.T) {
 		mu.Unlock()
 		if strings.Contains(is.Args, "workflowScriptPath") || strings.Contains(is.Args, `"create"`) || (strings.Contains(is.Args, "claude-code") && !strings.Contains(is.Args, "workflowScript")) {
 			if !r.isError || !strings.Contains(r.text, "Blocked") {
-				t.Errorf("nicht gesperrt: %s → %+v", is.Args, r)
+				t.Errorf("not blocked: %s → %+v", is.Args, r)
 			}
 			blocked++
 		}
 	}
-	if blocked != 2 { // create und claude-code; workflowScriptPath prüft wf:path
-		t.Errorf("%d gesperrte Aufrufe statt 2", blocked)
+	if blocked != 2 { // create and claude-code; wf:path checks workflowScriptPath
+		t.Errorf("%d blocked calls instead of 2", blocked)
 	}
-	// Workflows: Das Skript läuft in der Ausführungs-Sandbox, nicht im pi-Prozess (P4b).
+	// Workflows: the script runs in the execution sandbox, not in the pi process (P4b).
 	res := func(key string) end {
 		mu.Lock()
 		defer mu.Unlock()
 		return ends[issued[key].ID]
 	}
 	if r := res("wf:escape"); r.isError || !regexp.MustCompile(`agent\W+false`).MatchString(r.text) || !regexp.MustCompile(`workspace\W+true`).MatchString(r.text) {
-		t.Errorf("Ausbruch aus dem Workflow: %s", tail(r.text, 600))
+		t.Errorf("escape from the workflow: %s", tail(r.text, 600))
 	}
 	for _, want := range []string{"agw-exec idle", "10001", "ENOENT"} {
 		if r := res("wf:escape"); !strings.Contains(r.text, want) {
-			t.Errorf("Ausbruch aus dem Workflow ohne %q: %s", want, tail(r.text, 600))
+			t.Errorf("escape from the workflow without %q: %s", want, tail(r.text, 600))
 		}
 	}
 	if e := execFor(execs, issued["wf:escape"].ID); e == nil || e.Tool != "subagent" || e.Op != "workflow" || !strings.Contains(string(e.Args), "getBuiltinModule") {
-		t.Errorf("Workflow nicht protokolliert: %+v", e)
+		t.Errorf("workflow not logged: %+v", e)
 	}
-	// Drei parallele Läufe: jeder bash-Aufruf belegt, in eigenen Sitzungen, zeitlich überlappend.
+	// Three parallel runs: every bash call recorded, in separate sessions, overlapping in time.
 	var par []*store.ToolExecution
 	for _, k := range []string{"k:wf-1", "k:wf-2", "k:wf-3"} {
 		e := execFor(execs, issued[k].ID)
 		if e == nil || e.Session == "main" {
-			t.Errorf("paralleler Lauf %s: %+v", k, e)
+			t.Errorf("parallel run %s: %+v", k, e)
 			continue
 		}
 		par = append(par, e)
@@ -411,70 +411,70 @@ func TestSlotE9WithScriptedModel(t *testing.T) {
 				earliestEnd = end
 			}
 		}
-		t.Logf("workflowScript runs.all: Beginn der drei bash-Aufrufe innerhalb von %v, Überlappung %v", latestStart.Sub(par[0].StartedAt), earliestEnd.Sub(latestStart))
+		t.Logf("workflowScript runs.all: the three bash calls started within %v, overlap %v", latestStart.Sub(par[0].StartedAt), earliestEnd.Sub(latestStart))
 		if !latestStart.Before(earliestEnd) {
-			t.Errorf("Läufe von runs.all nicht gleichzeitig")
+			t.Errorf("runs of runs.all not concurrent")
 		}
 		if par[0].Session == par[1].Session || par[1].Session == par[2].Session {
-			t.Errorf("parallele Läufe in derselben Sitzung: %s %s %s", par[0].Session, par[1].Session, par[2].Session)
+			t.Errorf("parallel runs in the same session: %s %s %s", par[0].Session, par[1].Session, par[2].Session)
 		}
 	}
 	if r := res("wf:parallel"); r.isError || strings.Count(r.text, "true") < 3 {
 		t.Errorf("runs.all: %s", tail(r.text, 400))
 	}
-	// Kette: der zweite Lauf sieht, was der erste geschrieben hat.
-	if e := execFor(execs, issued["k:kette-2"].ID); e == nil || !strings.Contains(e.OutputExcerpt, "kette-1\nkette-2") {
-		t.Errorf("Kette: %+v", e)
+	// Chain: the second run sees what the first one wrote.
+	if e := execFor(execs, issued["k:chain-2"].ID); e == nil || !strings.Contains(e.OutputExcerpt, "chain-1\nchain-2") {
+		t.Errorf("chain: %+v", e)
 	}
-	// Gesperrt: cwd, fremder Agent, gefälschte Anfrage über stdout des Runners.
-	if r := res("wf:blocked"); !strings.Contains(r.text, "parameter cwd is blocked") || !strings.Contains(r.text, "claude-code") || strings.Contains(r.text, "lief") {
-		t.Errorf("Sperren im Workflow: %s", tail(r.text, 600))
+	// Blocked: cwd, foreign agent, forged request via the runner's stdout.
+	if r := res("wf:blocked"); !strings.Contains(r.text, "parameter cwd is blocked") || !strings.Contains(r.text, "claude-code") || strings.Contains(r.text, "WENT-THROUGH") {
+		t.Errorf("blocks in the workflow: %s", tail(r.text, 600))
 	}
-	for _, k := range []string{"k:gesperrt-cwd", "k:gefaelscht"} {
+	for _, k := range []string{"k:blocked-cwd", "k:forged"} {
 		if is, ok := issued[k]; ok {
-			t.Errorf("gesperrter Lauf hat das Modell erreicht: %s %s", k, is.Args)
+			t.Errorf("blocked run reached the model: %s %s", k, is.Args)
 		}
 	}
 	if r := res("wf:path"); !r.isError || !strings.Contains(r.text, "workflowScriptPath is blocked") {
 		t.Errorf("workflowScriptPath: %+v", r)
 	}
-	// N2: watchdog_diff (git im Container von pi) ist gesperrt; das Ergebnis steht in der
-	// Sitzung des Subagenten.
+	// N2: watchdog_diff (git in the pi container) is blocked; the result is in the
+	// subagent's session.
 	if is, ok := issued["k:watchdog_diff"]; !ok {
-		t.Error("watchdog_diff nie angefordert")
+		t.Error("watchdog_diff never requested")
 	} else if out, err := w.ExecPi(ctx, []string{"agw-exec", "poll-subagents"}, strings.NewReader(`{"offsets":{}}`)); err != nil ||
 		!strings.Contains(string(out), is.ID) || !strings.Contains(string(out), "watchdog_diff is blocked") {
-		t.Errorf("watchdog_diff nicht gesperrt: %v %s", err, tail(string(out), 400))
+		t.Errorf("watchdog_diff not blocked: %v %s", err, tail(string(out), 400))
 	}
-	// Zwei einzelne Subagenten im Hintergrund laufen gleichzeitig (Frage des Verfassers).
+	// Two single subagents in the background run at the same time (question of the author).
 	a1, a2 := execFor(execs, issued["k:async-1"].ID), execFor(execs, issued["k:async-2"].ID)
 	if a1 == nil || a2 == nil {
-		t.Errorf("Hintergrund-Subagenten: %+v %+v", a1, a2)
+		t.Errorf("background subagents: %+v %+v", a1, a2)
 	} else {
 		first, second := a1, a2
 		if second.StartedAt.Before(first.StartedAt) {
 			first, second = second, first
 		}
 		overlap := first.StartedAt.Add(time.Duration(first.DurationMs) * time.Millisecond).Sub(second.StartedAt)
-		t.Logf("zwei Subagenten async: Abstand der Starts %v, Überlappung %v", second.StartedAt.Sub(first.StartedAt), overlap)
+		t.Logf("two subagents async: gap between starts %v, overlap %v", second.StartedAt.Sub(first.StartedAt), overlap)
 		if overlap <= 0 {
-			t.Errorf("Hintergrund-Subagenten laufen nacheinander")
+			t.Errorf("background subagents run one after another")
 		}
 	}
 
-	// Nichts davon hat den Container von pi verändert.
+	// None of this changed the pi container.
 	if out, err := w.ExecPi(ctx, []string{"cat", "/agent/config/settings.json"}, nil); err != nil || !strings.Contains(string(out), "exec-bridge.ts") {
-		t.Errorf("settings.json verändert: %q %v", out, err)
+		t.Errorf("settings.json changed: %q %v", out, err)
 	}
 	if out, _ := w.ExecPi(ctx, []string{"ls", "/agent/config"}, nil); strings.Contains(string(out), "agents") {
-		if out2, _ := w.ExecPi(ctx, []string{"ls", "/agent/config/agents"}, nil); strings.Contains(string(out2), "boese") {
-			t.Errorf("eigener Agent angelegt: %s", out2)
+		if out2, _ := w.ExecPi(ctx, []string{"ls", "/agent/config/agents"}, nil); strings.Contains(string(out2), "evil") {
+			t.Errorf("own agent created: %s", out2)
 		}
 	}
-	if out, _ := w.Exec(ctx, []string{"cat", "/workspace/kind.txt"}, nil); strings.TrimSpace(string(out)) != "kind-10001" {
-		t.Errorf("Subagent schrieb nicht in die Ausführungs-Sandbox: %q", out)
+	if out, _ := w.Exec(ctx, []string{"cat", "/workspace/child.txt"}, nil); strings.TrimSpace(string(out)) != "child-10001" {
+		t.Errorf("subagent did not write into the execution sandbox: %q", out)
 	}
-	t.Logf("%d Anforderungen, %d Ausführungen", len(fake.Issued()), len(execs))
+	t.Logf("%d requests, %d executions", len(fake.Issued()), len(execs))
 }
 
 func execFor(execs []store.ToolExecution, id string) *store.ToolExecution {

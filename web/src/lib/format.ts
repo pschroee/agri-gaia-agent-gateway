@@ -4,21 +4,21 @@ export function formatActivity(a: Activity | undefined): string {
   if (!a) return "–"
   switch (a.kind) {
     case "thinking":
-      return "Denkt"
+      return "Thinking"
     case "writing":
-      return "Schreibt"
+      return "Writing"
     case "tool":
-      return a.tool ? `Führt ${a.tool} aus` : "Führt ein Werkzeug aus"
+      return a.tool ? `Running ${a.tool}` : "Running a tool"
     case "preparing":
-      return a.tool ? `Bereitet ${a.tool} vor` : "Bereitet einen Werkzeugaufruf vor"
+      return a.tool ? `Preparing ${a.tool}` : "Preparing a tool call"
     case "compacting":
-      return "Fasst den Kontext zusammen"
+      return "Summarizing the context"
     case "waiting_approval":
-      return "Wartet auf Bestätigung"
+      return "Waiting for approval"
     case "starting":
-      return "Startet"
+      return "Starting"
     case "idle":
-      return "Wartet"
+      return "Waiting"
     default:
       return a.kind
   }
@@ -36,17 +36,17 @@ export function formatDuration(since: string | undefined, now: number = Date.now
   return `${hours} h ${mins % 60} min`
 }
 
-const usdFmt = new Intl.NumberFormat("de-DE", { minimumFractionDigits: 4, maximumFractionDigits: 4 })
-const intFmt = new Intl.NumberFormat("de-DE", { maximumFractionDigits: 0 })
-const oneDecimal = new Intl.NumberFormat("de-DE", { minimumFractionDigits: 1, maximumFractionDigits: 1 })
-const priceFmt = new Intl.NumberFormat("de-DE", { minimumFractionDigits: 2, maximumFractionDigits: 4 })
+const usdFmt = new Intl.NumberFormat("en-US", { minimumFractionDigits: 4, maximumFractionDigits: 4 })
+const intFmt = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 })
+const oneDecimal = new Intl.NumberFormat("en-US", { minimumFractionDigits: 1, maximumFractionDigits: 1 })
+const priceFmt = new Intl.NumberFormat("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 4 })
 
 export function formatUsd(v: number | undefined | null): string {
   if (v === undefined || v === null || Number.isNaN(v)) return "–"
   return `$${usdFmt.format(v)}`
 }
 
-/** Preis je 1 Mio. Tokens. */
+/** Price per 1M tokens. */
 export function formatPrice(v: number | undefined): string {
   if (v === undefined || Number.isNaN(v)) return "–"
   return `$${priceFmt.format(v)}`
@@ -76,24 +76,24 @@ export function formatTime(iso: string | undefined): string {
   if (!iso) return "–"
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return "–"
-  return d.toLocaleString("de-DE", { dateStyle: "short", timeStyle: "medium" })
+  return d.toLocaleString("en-US", { dateStyle: "short", timeStyle: "medium", hourCycle: "h23" })
 }
 
 /**
- * Tokens und Kosten einer Assistenten-Nachricht. `cost` ist der Wert des Orchestrators nach Tarif
- * und hat Vorrang; `usage.cost.total` (pis Einheitspreis) dient nur als Rückfall. Mit
- * `provisional` (Antwort live, Tarifwert steht noch aus) wird der Rückfall als vorläufig markiert.
+ * Tokens and cost of an assistant message. `cost` is the orchestrator's value by tariff
+ * and takes precedence; `usage.cost.total` (pi's flat price) only serves as a fallback. With
+ * `provisional` (response live, tariff value still pending) the fallback is marked as provisional.
  */
 export function formatUsage(u: Usage | undefined, cost?: number, opts?: { provisional?: boolean }): string {
   if (!u) return cost !== undefined ? formatUsd(cost) : ""
-  const parts = [`${formatTokens(u.input)} ein`, `${formatTokens(u.output)} aus`]
-  if (u.cacheRead) parts.push(`${formatTokens(u.cacheRead)} Cache`)
+  const parts = [`${formatTokens(u.input)} in`, `${formatTokens(u.output)} out`]
+  if (u.cacheRead) parts.push(`${formatTokens(u.cacheRead)} cache`)
   if (cost !== undefined) parts.push(formatUsd(cost))
-  else if (u.cost?.total) parts.push(opts?.provisional ? `≈ ${formatUsd(u.cost.total)} (vorläufig)` : formatUsd(u.cost.total))
+  else if (u.cost?.total) parts.push(opts?.provisional ? `≈ ${formatUsd(u.cost.total)} (provisional)` : formatUsd(u.cost.total))
   return parts.join(" · ")
 }
 
-/** Dauer in Millisekunden: unter 1 s in ms, unter 1 min mit einer Nachkommastelle. */
+/** Duration in milliseconds: below 1 s in ms, below 1 min with one decimal place. */
 export function formatMs(ms: number | undefined | null): string {
   if (ms === undefined || ms === null || Number.isNaN(ms)) return "–"
   if (ms < 1000) return `${Math.round(ms)} ms`
@@ -102,42 +102,42 @@ export function formatMs(ms: number | undefined | null): string {
   return `${Math.floor(secs / 60)} min ${secs % 60} s`
 }
 
-/** Kalenderdatum als TT.MM.JJJJ; nimmt das Datum so, wie es im ISO-Text steht (keine Zeitzonenverschiebung). */
+/** Calendar date as YYYY-MM-DD; takes the date as it stands in the ISO text (no time zone shift). */
 export function formatDate(iso: string | undefined): string {
   const m = iso ? /^(\d{4})-(\d{2})-(\d{2})/.exec(iso) : null
-  return m ? `${m[3]}.${m[2]}.${m[1]}` : "–"
+  return m ? `${m[1]}-${m[2]}-${m[3]}` : "–"
 }
 
 const socketResults: Record<string, string> = {
-  approved: "bestätigt",
-  rejected: "abgelehnt",
-  expired: "abgelaufen",
+  approved: "approved",
+  rejected: "rejected",
+  expired: "expired",
 }
 
-/** Übersetzt das Feld `result` eines Socket-Aufrufs; unbekannte Werte bleiben unverändert. */
+/** Translates the `result` field of a socket call; unknown values stay unchanged. */
 export function socketResultLabel(result: string): string {
   return socketResults[result.trim().toLowerCase()] ?? result
 }
 
 const socketOps: Record<string, string> = {
   upload: "Upload",
-  list: "Liste",
-  get: "Abruf",
+  list: "List",
+  get: "Fetch",
   ping: "Ping",
-  agent_limit: "Grenze gleichzeitiger Agenten",
-  subagent_limit: "Subagenten-Grenze überschritten – abgebrochen",
-  extension_ui: "Rückfrage einer Extension abgelehnt",
+  agent_limit: "Limit of concurrent agents",
+  subagent_limit: "Subagent limit exceeded – aborted",
+  extension_ui: "Extension prompt declined",
 }
 
-/** Lesbarer Name der Socket-Operation; unbekannte Werte bleiben unverändert. */
+/** Readable name of the socket operation; unknown values stay unchanged. */
 export function socketOpLabel(op: string): string {
   return socketOps[op.trim().toLowerCase()] ?? op
 }
 
 /**
- * Link und Stand der Preisquelle. `source` ist laut API.md nur die URL, `retrieved` ein ISO-Datum;
- * die ältere Form „<URL>, Abruf TT.MM.JJJJ“ in `source` wird ebenfalls verstanden.
- * Nur http(s)-Adressen werden als Link übernommen.
+ * Link and date of the price source. According to API.md `source` is just the URL, `retrieved` an ISO date;
+ * the older German form "<URL>, Abruf DD.MM.YYYY" in `source` is understood as well.
+ * Only http(s) addresses are taken over as a link.
  */
 export function pricingSource(p: Pick<Pricing, "source" | "retrieved"> | undefined): {
   href?: string
@@ -151,13 +151,13 @@ export function pricingSource(p: Pick<Pricing, "source" | "retrieved"> | undefin
     const d = formatDate(p.retrieved)
     if (d !== "–") out.retrieved = d
   } else if (p.source) {
-    const m = /Abruf\s+(\d{2}\.\d{2}\.\d{4})/.exec(p.source)
-    if (m) out.retrieved = m[1]
+    const m = /Abruf\s+(\d{2})\.(\d{2})\.(\d{4})/.exec(p.source)
+    if (m) out.retrieved = `${m[3]}-${m[2]}-${m[1]}`
   }
   return out
 }
 
-/** Quelle der Preise eines Modells: die der Preise, sonst die des Tarifs. */
+/** Price source of a model: that of the prices, otherwise that of the tariff. */
 export function modelPriceSource(m: Pick<Model, "pricing" | "tariff">): { href?: string; retrieved?: string } {
   const p = pricingSource(m.pricing)
   if (p.href) return p
@@ -166,17 +166,17 @@ export function modelPriceSource(m: Pick<Model, "pricing" | "tariff">): { href?:
   return {}
 }
 
-/** Linktext „Quelle · Stand TT.MM.JJJJ“ (Teile entfallen, wenn sie fehlen). */
+/** Link text "Source · as of YYYY-MM-DD" (parts are left out when missing). */
 export function sourceLabel(src: { href?: string; retrieved?: string }): string {
-  return [src.href ? "Quelle" : "", src.retrieved ? `Stand ${src.retrieved}` : ""].filter(Boolean).join(" · ")
+  return [src.href ? "Source" : "", src.retrieved ? `as of ${src.retrieved}` : ""].filter(Boolean).join(" · ")
 }
 
-/** Ob ein Thinking-Block sichtbaren Text hat (Leerraum und unsichtbare Zeichen zählen nicht). */
+/** Whether a thinking block has visible text (whitespace and invisible characters do not count). */
 export function hasThinkingText(text: unknown): boolean {
   return typeof text === "string" && text.replace(/[\s\u200b-\u200d\u2060\ufeff]/g, "") !== ""
 }
 
-/** Hat der Nutzer die Antwort abgebrochen? pi meldet das teils als Fehler („This operation was aborted“). */
+/** Did the user abort the response? pi sometimes reports this as an error ("This operation was aborted"). */
 export function isUserAbort(m: { stopReason?: string; errorMessage?: string }): boolean {
   if (m.stopReason === "aborted") return true
   return m.stopReason === "error" && /\b(operation|request) was aborted\b/i.test(m.errorMessage ?? "")

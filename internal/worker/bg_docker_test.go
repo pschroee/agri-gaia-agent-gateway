@@ -1,8 +1,8 @@
 package worker
 
-// Platztest der Hintergrundaufgaben mit geskriptetem Modell (Muster TestSlotE9WithScriptedModel):
-// echter Container von pi, echte Ausführungs-Sandbox, echte exec-bridge.ts. Das Backend spielt den
-// Manager (bgtask.Notifier) und hält Start und Ende fest. Läuft im Go-Container (./dev.sh test).
+// Slot test of the background tasks with a scripted model (pattern TestSlotE9WithScriptedModel):
+// real pi container, real execution sandbox, real exec-bridge.ts. The backend plays the
+// manager (bgtask.Notifier) and records start and end. Runs in the Go container (./dev.sh test).
 
 import (
 	"context"
@@ -23,9 +23,9 @@ import (
 	"agw/internal/store"
 )
 
-// Das geskriptete Modell lauscht einmal je Testprozess auf :18481; jeder Platztest setzt sein
-// eigenes Skript-Modell ein (zwei ListenAndServe auf demselben Port ließen das zweite still
-// scheitern, und der zweite Test spräche mit dem Modell des ersten).
+// The scripted model listens once per test process on :18481; every slot test installs its
+// own scripted model (two ListenAndServe on the same port would make the second fail silently,
+// and the second test would talk to the model of the first).
 var (
 	llmOnce sync.Once
 	llmCur  atomic.Pointer[fakellm.Server]
@@ -42,7 +42,7 @@ func useFakeLLM() *fakellm.Server {
 	return f
 }
 
-// bgBackend: e9Backend plus Notifier der Hintergrundaufgaben.
+// bgBackend: e9Backend plus the notifier of the background tasks.
 type bgBackend struct {
 	e9Backend
 	bmu     sync.Mutex
@@ -78,7 +78,7 @@ func (b *bgBackend) endedTask(id string) (store.BackgroundTask, bool) {
 
 func TestSlotBackgroundWithScriptedModel(t *testing.T) {
 	if os.Getenv("AGW_E9_IN_DOCKER") != "1" {
-		t.Skip("läuft nur im Go-Container mit Docker-Socket (./dev.sh test)")
+		t.Skip("runs only in the Go container with the Docker socket (./dev.sh test)")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
@@ -150,8 +150,8 @@ func TestSlotBackgroundWithScriptedModel(t *testing.T) {
 		}
 	}()
 	script := strings.Join([]string{
-		"Hintergrundaufgaben prüfen.",
-		callLine("bash", map[string]any{"command": "sleep 2; echo fertig-bg", "run_in_background": true}),
+		"Check background tasks.",
+		callLine("bash", map[string]any{"command": "sleep 2; echo done-bg", "run_in_background": true}),
 		callLine("bg_output", map[string]any{"id": "bg-1"}),
 		callLine("bash", map[string]any{"command": "sleep 300 & sleep 301", "run_in_background": true}),
 		callLine("bg_stop", map[string]any{"id": "bg-2"}),
@@ -159,7 +159,7 @@ func TestSlotBackgroundWithScriptedModel(t *testing.T) {
 		callLine("bash", map[string]any{"command": "echo x", "run_in_background": true, "timeout": -1}),
 		callLine("subagent", map[string]any{"agent": "worker", "async": false,
 			"task": "S1\n" + callLine("bash", map[string]any{"command": "sleep 1; echo sub-bg", "run_in_background": true}) + "\n" + callLine("bg_output", map[string]any{"id": "bg-3"})}),
-		callLine("bash", map[string]any{"command": "sleep 3; pgrep -f 'sleep 30[01]' || echo keine; cat /tmp/agw-bg/bg-1.log"}),
+		callLine("bash", map[string]any{"command": "sleep 3; pgrep -f 'sleep 30[01]' || echo none; cat /tmp/agw-bg/bg-1.log"}),
 	}, "\n")
 	if _, err := w.Call(ctx, map[string]any{"type": "prompt", "message": script}); err != nil {
 		t.Fatal(err)
@@ -167,7 +167,7 @@ func TestSlotBackgroundWithScriptedModel(t *testing.T) {
 	select {
 	case <-settled:
 	case <-ctx.Done():
-		t.Fatal("Lauf wird nicht fertig")
+		t.Fatal("run does not finish")
 	}
 	for deadline := time.Now().Add(20 * time.Second); time.Now().Before(deadline); time.Sleep(200 * time.Millisecond) {
 		if _, ok := b.endedTask("bg-3"); ok {
@@ -181,7 +181,7 @@ func TestSlotBackgroundWithScriptedModel(t *testing.T) {
 				return is
 			}
 		}
-		t.Fatalf("nicht angefordert: %s %s", tool, contains)
+		t.Fatalf("not requested: %s %s", tool, contains)
 		return fakellm.Issued{}
 	}
 	result := func(is fakellm.Issued) end {
@@ -189,48 +189,48 @@ func TestSlotBackgroundWithScriptedModel(t *testing.T) {
 		defer mu.Unlock()
 		return ends[is.ID]
 	}
-	// Start kehrt sofort zurück und nennt Kennung, Datei und die Werkzeuge.
-	start1 := find("bash", "fertig-bg")
+	// Start returns immediately and names the ID, the file and the tools.
+	start1 := find("bash", "done-bg")
 	if r := result(start1); r.isError || !strings.Contains(r.text, "Background task bg-1 started") || !strings.Contains(r.text, "/tmp/agw-bg/bg-1.log") || !strings.Contains(r.text, "do not poll") {
 		t.Errorf("Start: %+v", r)
 	}
 	if r := result(find("bg_output", `"bg-1"`)); r.isError || !strings.Contains(r.text, "bg-1 is running") {
-		t.Errorf("bg_output während des Laufs: %+v", r)
+		t.Errorf("bg_output while running: %+v", r)
 	}
 	if r := result(find("bg_stop", `"bg-2"`)); r.isError || !strings.Contains(r.text, "bg-2 was stopped") {
 		t.Errorf("bg_stop: %+v", r)
 	}
 	if r := result(find("bg_output", `"bg-9"`)); !r.isError || !strings.Contains(r.text, "unknown background task") {
-		t.Errorf("unbekannte Aufgabe: %+v", r)
+		t.Errorf("unknown task: %+v", r)
 	}
 	if r := result(find("bash", `"timeout":-1`)); !r.isError || !strings.Contains(r.text, "Invalid timeout") {
-		t.Errorf("ungültige Zeitgrenze: %+v", r)
+		t.Errorf("invalid timeout: %+v", r)
 	}
-	// Subagent: run_in_background und bg_output (über agentOverrides) gehen auch dort. Seine
-	// Werkzeugergebnisse stehen nicht im RPC-Strom der Hauptsitzung; belegt über das Protokoll.
+	// Subagent: run_in_background and bg_output (via agentOverrides) work there too. Its
+	// tool results are not in the RPC stream of the main session; proven via the log.
 	execs0 := b.executions()
 	if e := execFor(execs0, find("bash", "sub-bg").ID); e == nil || e.Op != "bg_start" || !strings.Contains(e.OutputExcerpt, `"id":"bg-3"`) {
-		t.Errorf("Start im Subagenten: %+v", e)
+		t.Errorf("start in the subagent: %+v", e)
 	}
 	if e := execFor(execs0, find("bg_output", `"bg-3"`).ID); e == nil || e.Op != "bg_output" || e.Error != "" {
-		t.Errorf("bg_output im Subagenten (Werkzeug nicht aktiv?): %+v", e)
+		t.Errorf("bg_output in the subagent (tool not active?): %+v", e)
 	}
-	// Nach dem Stopp ist die ganze Gruppe weg; die Ausgabedatei von bg-1 liegt in der Sandbox.
-	if r := result(find("bash", "pgrep")); !strings.Contains(r.text, "keine") || !strings.Contains(r.text, "fertig-bg") {
-		t.Errorf("nach dem Stopp: %+v", r)
+	// After the stop the whole group is gone; the output file of bg-1 is in the sandbox.
+	if r := result(find("bash", "pgrep")); !strings.Contains(r.text, "none") || !strings.Contains(r.text, "done-bg") {
+		t.Errorf("after the stop: %+v", r)
 	}
-	// Ende: bg-1 mit Exit 0 und Ausgabe, bg-2 vom Agenten gestoppt, bg-3 aus dem Subagenten.
-	if e, ok := b.endedTask("bg-1"); !ok || e.State != store.BgExited || *e.ExitCode != 0 || e.Tail != "fertig-bg\n" || e.OutputSHA256 == "" || !b.notify["bg-1"] {
-		t.Errorf("Ende bg-1: %+v", e)
+	// End: bg-1 with exit 0 and output, bg-2 stopped by the agent, bg-3 from the subagent.
+	if e, ok := b.endedTask("bg-1"); !ok || e.State != store.BgExited || *e.ExitCode != 0 || e.Tail != "done-bg\n" || e.OutputSHA256 == "" || !b.notify["bg-1"] {
+		t.Errorf("end bg-1: %+v", e)
 	}
 	if e, ok := b.endedTask("bg-2"); !ok || e.State != store.BgStopped || e.StoppedBy != "agent" {
-		t.Errorf("Ende bg-2: %+v", e)
+		t.Errorf("end bg-2: %+v", e)
 	}
 	e3, ok := b.endedTask("bg-3")
 	if !ok || e3.State != store.BgExited || e3.Session == "main" || !strings.Contains(e3.Tail, "sub-bg") {
-		t.Errorf("Ende bg-3: %+v", e3)
+		t.Errorf("end bg-3: %+v", e3)
 	}
-	// Protokoll: Start, Abruf und Stopp belegt, mit Werkzeug und Operation.
+	// Log: start, retrieval and stop recorded, with tool and operation.
 	execs := b.executions()
 	for _, c := range []struct {
 		is       fakellm.Issued
@@ -241,11 +241,11 @@ func TestSlotBackgroundWithScriptedModel(t *testing.T) {
 	} {
 		e := execFor(execs, c.is.ID)
 		if e == nil || e.Tool != c.tool || e.Op != c.op {
-			t.Errorf("Protokoll für %s: %+v", c.is.Args, e)
+			t.Errorf("log for %s: %+v", c.is.Args, e)
 		}
 	}
 	if e := execFor(execs, find("bash", "sub-bg").ID); e != nil && e.Session == "main" {
-		t.Errorf("Start im Subagenten unter main protokolliert")
+		t.Errorf("start in the subagent logged under main")
 	}
-	t.Logf("%d Aufgaben angelegt, %d beendet, %d Ausführungen protokolliert", len(b.created), len(b.ended), len(execs))
+	t.Logf("%d tasks created, %d ended, %d executions logged", len(b.created), len(b.ended), len(execs))
 }

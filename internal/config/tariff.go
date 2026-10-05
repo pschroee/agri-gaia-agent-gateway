@@ -6,28 +6,28 @@ import (
 	"time"
 )
 
-// Tariff beschreibt zeitabhängige Preise eines Anbieters. Die Preise im
-// Katalog bzw. in pis Register gelten als Spitzentarif; außerhalb der
-// Spitzenzeiten wird mit OffPeakFactor multipliziert.
+// Tariff describes a provider's time-dependent prices. The prices in the
+// catalog or in pi's registry count as the peak tariff; outside peak hours
+// they are multiplied by OffPeakFactor.
 //
-// Feiertage des Anbieters (bei DeepSeek chinesische Feiertage, an denen der
-// Nebentarif gilt) sind nicht bekannt und werden als Spitzenzeit gerechnet;
-// die Kosten sind damit eine obere Schranke.
+// The provider's holidays (for DeepSeek, Chinese holidays on which the
+// off-peak tariff applies) are not known and are billed as peak time;
+// the costs are therefore an upper bound.
 type Tariff struct {
 	PeakWindowsUTC []Window `json:"peak_windows_utc"`
 	OffPeakFactor  float64  `json:"offpeak_factor"`
 	Note           string   `json:"note,omitempty"`
-	Source         string   `json:"source,omitempty"`    // URL der Preisseite des Anbieters
-	Retrieved      string   `json:"retrieved,omitempty"` // Abrufdatum (ISO)
+	Source         string   `json:"source,omitempty"`    // URL of the provider's pricing page
+	Retrieved      string   `json:"retrieved,omitempty"` // retrieval date (ISO)
 }
 
 type Window struct {
 	Days string `json:"days"` // "mon-fri", "sat,sun", "all"
-	From string `json:"from"` // "HH:MM", einschließlich
-	To   string `json:"to"`   // "HH:MM", ausschließlich
+	From string `json:"from"` // "HH:MM", inclusive
+	To   string `json:"to"`   // "HH:MM", exclusive
 }
 
-// Usage sind die Tokens einer Antwort, wie pi sie meldet.
+// Usage holds the tokens of a response as pi reports them.
 type Usage struct {
 	Input      int64 `json:"input"`
 	Output     int64 `json:"output"`
@@ -50,7 +50,7 @@ func parseDays(s string) (map[time.Weekday]bool, error) {
 		a, b, isRange := strings.Cut(strings.TrimSpace(part), "-")
 		da, ok1 := dayNames[a]
 		if !ok1 {
-			return nil, fmt.Errorf("unbekannter Tag %q", a)
+			return nil, fmt.Errorf("unknown day %q", a)
 		}
 		if !isRange {
 			out[da] = true
@@ -58,7 +58,7 @@ func parseDays(s string) (map[time.Weekday]bool, error) {
 		}
 		db, ok2 := dayNames[b]
 		if !ok2 {
-			return nil, fmt.Errorf("unbekannter Tag %q", b)
+			return nil, fmt.Errorf("unknown day %q", b)
 		}
 		for d := da; ; d = (d + 1) % 7 {
 			out[d] = true
@@ -73,14 +73,14 @@ func parseDays(s string) (map[time.Weekday]bool, error) {
 func parseClock(s string) (int, error) {
 	t, err := time.Parse("15:04", s)
 	if err != nil {
-		return 0, fmt.Errorf("Uhrzeit %q: erwartet HH:MM", s)
+		return 0, fmt.Errorf("time %q: expected HH:MM", s)
 	}
 	return t.Hour()*60 + t.Minute(), nil
 }
 
 func (t *Tariff) validate() error {
 	if t.OffPeakFactor < 0 {
-		return fmt.Errorf("offpeak_factor negativ")
+		return fmt.Errorf("offpeak_factor is negative")
 	}
 	for _, w := range t.PeakWindowsUTC {
 		if _, err := parseDays(w.Days); err != nil {
@@ -95,13 +95,13 @@ func (t *Tariff) validate() error {
 			return err
 		}
 		if from >= to {
-			return fmt.Errorf("Zeitfenster %s–%s: Beginn muss vor dem Ende liegen (über Mitternacht in zwei Fenster teilen)", w.From, w.To)
+			return fmt.Errorf("time window %s–%s: start must be before the end (split windows across midnight into two)", w.From, w.To)
 		}
 	}
 	return nil
 }
 
-// IsPeak prüft, ob der Zeitpunkt in eine Spitzenzeit fällt.
+// IsPeak reports whether the given time falls into a peak window.
 func (t *Tariff) IsPeak(at time.Time) bool {
 	at = at.UTC()
 	min := at.Hour()*60 + at.Minute()
@@ -116,8 +116,8 @@ func (t *Tariff) IsPeak(at time.Time) bool {
 	return false
 }
 
-// Cost berechnet die Kosten einer Antwort in USD zum Zeitpunkt at.
-// peak meldet, ob der Spitzentarif galt (ohne Tarif: immer Einheitspreis, peak=false).
+// Cost computes the cost of a response in USD at time at.
+// peak reports whether the peak tariff applied (without a tariff: always a flat price, peak=false).
 func (c *Catalog) Cost(modelID string, u Usage, at time.Time) (cost float64, peak bool, ok bool) {
 	prov, _, found := c.Lookup(modelID)
 	if !found {

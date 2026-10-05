@@ -1,8 +1,8 @@
-// Bilder in Antworten des Agenten (siehe „Anzeige-Bilder“ in docs/entwurf.md). Fremde Adressen lädt die UI
-// nie: Über die Bildadresse könnten Daten aus der Sandbox zu einem fremden Server gelangen, ohne dass der
-// Nutzer Internet bestätigt hat (Markdown-Image-Exfiltration, Review K1). Lokale Pfade aus der Sandbox holt
-// der Orchestrator selbst, prüft sie und liefert sie aus; data:-Bilder bleiben im Browser.
-// Die Regeln entsprechen internal/chat/images.go (NormalizeImagePath, MessageImageKey).
+// Images in the agent's responses (see "Display images in the chat" in docs/design.md). The UI never loads
+// foreign addresses: through the image address, data from the sandbox could reach a foreign server without the
+// user having approved internet access (Markdown image exfiltration, Review K1). Local paths from the sandbox are
+// fetched by the orchestrator itself, which checks and serves them; data: images stay in the browser.
+// The rules match internal/chat/images.go (NormalizeImagePath, MessageImageKey).
 import { urls } from "@/api/client"
 
 const ROOTS = ["/workspace", "/tmp", "/home/agent"]
@@ -19,7 +19,7 @@ function decode(s: string): string {
   }
 }
 
-/** Bereinigt einen absoluten POSIX-Pfad (`.`, `..`, doppelte `/`). */
+/** Cleans an absolute POSIX path (`.`, `..`, double `/`). */
 function cleanPath(p: string): string {
   const out: string[] = []
   for (const part of p.split("/")) {
@@ -31,8 +31,8 @@ function cleanPath(p: string): string {
 }
 
 /**
- * Lokaler Bildpfad in der Sandbox, absolut und bereinigt; relative Pfade gelten ab /workspace.
- * `undefined` für fremde Adressen (Schema, `//…`) und Orte außerhalb von /workspace, /tmp, /home/agent.
+ * Local image path in the sandbox, absolute and cleaned; relative paths start at /workspace.
+ * `undefined` for foreign addresses (scheme, `//…`) and locations outside /workspace, /tmp, /home/agent.
  */
 export function sandboxImagePath(src: string): string | undefined {
   let p = decode(src.trim())
@@ -40,7 +40,7 @@ export function sandboxImagePath(src: string): string | undefined {
     p = p.slice("file://".length)
     if (!p.startsWith("/")) return undefined
   }
-  // Steuerzeichen gezielt abweisen
+  // reject control characters on purpose
   // oxlint-disable-next-line no-control-regex
   if (!p || p.length > 1024 || p.startsWith("//") || SCHEME.test(p) || /[\u0000-\u001f\u007f]/.test(p)) return undefined
   if (!p.startsWith("/")) p = "/workspace/" + p
@@ -49,13 +49,13 @@ export function sandboxImagePath(src: string): string | undefined {
 }
 
 export type ImageSource =
-  /** Aus der Sandbox, über den Orchestrator. */
+  /** From the sandbox, via the orchestrator. */
   | { kind: "sandbox"; url: string; path: string }
-  /** Eingebettet (data:), nur Rasterformate. */
+  /** Embedded (data:), raster formats only. */
   | { kind: "data"; url: string }
-  /** Lokaler Pfad, aber die Antwort ist noch nicht fertig (keine Kennung). */
+  /** Local path, but the response is not finished yet (no ID). */
   | { kind: "pending"; path: string }
-  /** Wird nicht geladen. */
+  /** Not loaded. */
   | { kind: "blocked"; src: string }
 
 export function imageSource(src: string | undefined, ctx?: { chatId?: string; msgId?: string }): ImageSource {
@@ -67,7 +67,7 @@ export function imageSource(src: string | undefined, ctx?: { chatId?: string; ms
   return { kind: "sandbox", path, url: urls.image(ctx.chatId, path, ctx.msgId) }
 }
 
-/** Kennung einer Antwort für ihre Bilder: responseId, sonst ts-<timestamp> (wie der Orchestrator). */
+/** ID of a response for its images: responseId, otherwise ts-<timestamp> (like the orchestrator). */
 export function messageImageKey(m: { responseId?: unknown; timestamp?: unknown }): string | undefined {
   if (typeof m.responseId === "string" && MSG_ID.test(m.responseId)) return m.responseId
   if (typeof m.timestamp === "number" && Number.isFinite(m.timestamp) && m.timestamp > 0) return `ts-${m.timestamp}`

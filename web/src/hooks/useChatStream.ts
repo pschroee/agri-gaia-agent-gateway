@@ -43,17 +43,17 @@ export type ChatStreamState = {
   approvals: Approval[]
   socketCalls: SocketCall[]
   subagentEntries: SubagentEntry[]
-  /** Name und Zustand je Lauf laut pi-subagents. */
+  /** Name and state per run according to pi-subagents. */
   subagentRuns: SubagentRunMeta[]
   llmCalls: LLMCall[]
-  /** Vom Orchestrator ausgeführte Werkzeugoperationen (E9). */
+  /** Tool operations executed by the orchestrator (E9). */
   toolExecs: ToolExecutionRecord[]
   commands: Command[]
-  /** Eingereihte Nachrichten laut Server (Warteschlange). */
+  /** Queued messages according to the server (queue). */
   queue: QueueEntry[]
-  /** Eingereiht, Antwort des Servers steht noch aus. */
+  /** Queued, the server's response is still pending. */
   localQueue: LocalQueued[]
-  /** Hintergrundaufgaben (bash mit run_in_background). */
+  /** Background tasks (bash with run_in_background). */
   background: BackgroundTask[]
   loadError?: string
   connected: boolean
@@ -78,9 +78,9 @@ const initial = (): ChatStreamState => ({
 const artifactKey = (a: Artifact) => `${a.kind}/${a.name}`
 
 /**
- * Lädt einen Chat und hält ihn über SSE aktuell. Nach einem Verbindungsabbruch wird neu verbunden
- * und der Chat danach einmal vollständig neu geladen. Beim Wechsel des Chats die aufrufende
- * Komponente per `key` neu anlegen.
+ * Loads a chat and keeps it up to date via SSE. After a connection loss it reconnects
+ * and then reloads the chat completely once. When switching chats, recreate the calling
+ * component via `key`.
  */
 export function useChatStream(chatId: string) {
   const [state, setState] = useState<ChatStreamState>(initial)
@@ -95,7 +95,7 @@ export function useChatStream(chatId: string) {
         artifacts: d.artifacts ?? [],
         approvals: d.approvals ?? [],
         socketCalls: d.socket_calls ?? [],
-        // Live eingetroffene Einträge behalten, falls die Antwort sie noch nicht kennt; der Server gewinnt
+        // keep entries that arrived live in case the response does not know them yet; the server wins
         subagentEntries: mergeSubagentEntries(s.subagentEntries, d.subagent_entries ?? []),
         subagentRuns: (d.subagent_runs ?? []).reduce((acc, r) => upsert(acc, r, (x) => x.run_id), s.subagentRuns),
         queue: d.queue ?? [],
@@ -112,14 +112,14 @@ export function useChatStream(chatId: string) {
         llmCalls: (Array.isArray(calls) ? calls : []).reduce((acc, c) => upsert(acc, c, (x) => x.id), s.llmCalls),
       }))
     } catch {
-      // Modellaufrufe sind eine Zusatzansicht; ohne sie bleibt der Reiter leer
+      // model calls are an additional view; without them the tab stays empty
     }
     try {
       const r = await api.toolExecutions(chatId)
       const list = Array.isArray(r?.executions) ? r.executions : []
       setState((s) => ({ ...s, toolExecs: list.reduce((acc, e) => upsert(acc, e, (x) => x.id), s.toolExecs) }))
     } catch {
-      // ohne Protokoll fehlen nur die Belege
+      // without the log only the evidence is missing
     }
   }, [chatId])
 
@@ -128,7 +128,7 @@ export function useChatStream(chatId: string) {
       const commands = await api.commands(chatId)
       setState((s) => ({ ...s, commands: Array.isArray(commands) ? commands : [] }))
     } catch {
-      // Befehlsliste ist optional; ohne sie gibt es nur kein Popover
+      // the command list is optional; without it there is just no popover
     }
   }, [chatId])
 
@@ -139,7 +139,7 @@ export function useChatStream(chatId: string) {
     let reconnecting = false
     let attempt = 0
 
-    // setState geschieht erst nach dem Abruf, nicht synchron im Effekt
+    // setState happens only after the fetch, not synchronously in the effect
     // oxlint-disable-next-line react/set-state-in-effect
     void load()
     void loadCommands()
@@ -160,11 +160,11 @@ export function useChatStream(chatId: string) {
         if (!ev) return
         switch (ev.kind) {
           case "pi": {
-            // Empfangszeit außerhalb des Updaters, damit ein doppelter Aufruf (StrictMode) dieselbe Zeit sieht
+            // receipt time outside the updater, so that a double call (StrictMode) sees the same time
             const received = Date.now()
             setState((s) => ({ ...s, transcript: applyPiEvent(s.transcript, ev.data, received) }))
-            // Danach einmal neu laden: Kosten und Tarif je Antwort (cost/peak) und gespeicherte
-            // Kompaktierungen gibt es nur in der Historie, nicht in den Live-Ereignissen.
+            // Reload once afterwards: cost and tariff per response (cost/peak) and stored
+            // compactions exist only in the history, not in the live events.
             if (ev.data.type === "agent_settled" || ev.data.type === "compaction_end") {
               void load()
               if (ev.data.type === "agent_settled") void loadCommands()
@@ -216,7 +216,7 @@ export function useChatStream(chatId: string) {
                 q.change === "delivered" && q.text
                   ? applyQueueDelivered(s.transcript, `queue-${q.ids?.[0] ?? Date.now()}`, q.text, q)
                   : q.change === "restored" && q.ids?.length
-                    ? // eingeschleust, aber von pi nicht eingefügt (Abbruch): steht wieder in der Warteschlange
+                    ? // injected, but not inserted by pi (abort): back in the queue
                       dropPending(s.transcript, `queue-${q.ids[0]}`)
                     : s.transcript,
             }))
@@ -225,19 +225,20 @@ export function useChatStream(chatId: string) {
           case "error": {
             const message = ev.data?.message
             if (limitErrorKind(message)) {
-              // Der Hinweis steht im Verlauf (aus dem Protokolleintrag agent_limit/subagent_limit);
-              // neu laden, falls das Ereignis socket_call verpasst wurde.
+              // The notice is in the history (from the log entry agent_limit/subagent_limit);
+              // reload in case the socket_call event was missed.
               toast.warning(message)
               void load()
             } else if (isCompactionError(message)) {
-              // Der Hinweis steht als Trennlinie im Verlauf; der Toast macht nur darauf aufmerksam.
+              // The notice is a divider in the history; the toast only draws attention to it.
               setState((s) => ({ ...s, transcript: applyCompactionError(s.transcript, message!) }))
               toast.warning(compactionNotice(message))
-            } else if (message?.startsWith("Arbeitsbereich nicht gesichert")) {
-              // Über der Größengrenze: Hinweis, kein Fehler; der Stand steht im Seitenreiter.
+            } else if (message?.startsWith("Workspace not saved")) {
+              // Above the size limit: a notice, not an error; the state is shown in the side tab
+              // (internal/chat/workspace.go).
               toast.warning(message)
             } else {
-              toast.error(message ?? "Unbekannter Fehler")
+              toast.error(message ?? "Unknown error")
             }
             break
           }
@@ -249,7 +250,7 @@ export function useChatStream(chatId: string) {
         reconnecting = true
         setState((s) => ({ ...s, connected: false }))
         if (stopped) return
-        // Gibt es den Chat nicht mehr (etwa nach ./dev.sh reset), nicht endlos neu verbinden.
+        // If the chat no longer exists (e.g. after ./dev.sh reset), do not reconnect endlessly.
         api.chat(chatId).then(
           () => {
             if (!stopped) retry = setTimeout(connect, reconnectDelay(attempt++))
@@ -257,7 +258,7 @@ export function useChatStream(chatId: string) {
           (e: unknown) => {
             if (e instanceof ApiError && e.status === 404) {
               stopped = true
-              setState((s) => ({ ...s, chat: undefined, loadError: "Diesen Chat gibt es nicht mehr." }))
+              setState((s) => ({ ...s, chat: undefined, loadError: "This chat no longer exists." }))
               return
             }
             if (!stopped) retry = setTimeout(connect, reconnectDelay(attempt++))
@@ -285,7 +286,7 @@ export function useChatStream(chatId: string) {
     [],
   )
 
-  // Gesendete Nachrichten und Warteschlange (optimistische Anzeige, siehe lib/stream, lib/queue)
+  // Sent messages and queue (optimistic display, see lib/stream, lib/queue)
   const outbox = useMemo(
     () => ({
       addPending: (key: string, text: string) =>

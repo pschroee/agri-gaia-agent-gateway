@@ -14,109 +14,109 @@ import (
 	"time"
 )
 
-// bigText erzeugt einen Text von rund n Zeilen, den das Modell nicht
-// zusammenfassen kann, ohne ihn zu lesen (je Zeile eine eigene Messung).
+// bigText creates a text of about n lines that the model cannot
+// summarise without reading it (one separate measurement per line).
 func bigText(seed, n int) string {
 	var b strings.Builder
 	x := seed*7919 + 17
 	for i := 0; i < n; i++ {
 		x = (x*1103515245 + 12345) % 2147483648
-		fmt.Fprintf(&b, "Messung %04d: Stall %c, Temperatur %d,%d Grad, Feuchte %d %%, Kennung %08x\n", i, 'A'+rune(x%6), 15+x%12, x%10, 40+x%50, x)
+		fmt.Fprintf(&b, "Measurement %04d: barn %c, temperature %d.%d degrees, humidity %d %%, ID %08x\n", i, 'A'+rune(x%6), 15+x%12, x%10, 40+x%50, x)
 	}
 	return b.String()
 }
 
-// Die Tests laufen nacheinander (kein t.Parallel), weil sie sich den Pool teilen.
+// The tests run one after another (no t.Parallel) because they share the pool.
 
 func TestSandboxHardening(t *testing.T) {
 	requireE2E(t)
 	id := newChat(t, "cli", false)
 	c, pc := containerOf(t, id), piContainerOf(t, id)
-	// Ausführungs-Sandbox (E9): kein Schlüssel, keine Konfiguration von pi, kein Weg zu API oder Proxy.
+	// Execution sandbox (E9): no key, no pi configuration, no route to the API or proxy.
 	out, _ := dockerExec(t, c, "sh", "-c", "env; ls /agent 2>&1")
 	if strings.Contains(out, "sk-") {
-		t.Fatal("API-Schlüssel in der Ausführungs-Sandbox")
+		t.Fatal("API key in the execution sandbox")
 	}
-	mustContain(t, out, "No such file", "kein /agent in der Ausführungs-Sandbox")
-	out, _ = dockerExec(t, c, "sh", "-c", "curl -s -m 5 http://orchestrator:18480/api/chats || echo API-UNERREICHBAR; curl -s -m 5 http://orchestrator:18481/ || echo PROXY-UNERREICHBAR")
-	mustContain(t, out, "API-UNERREICHBAR", "API aus der Ausführungs-Sandbox")
-	mustContain(t, out, "PROXY-UNERREICHBAR", "Proxy aus der Ausführungs-Sandbox")
-	out, _ = dockerExec(t, c, "sh", "-c", "curl -s -m 5 -o /dev/null -w '%{http_code}' https://example.com || echo KEIN_NETZ")
-	mustContain(t, out, "KEIN_NETZ", "Internet ohne Freigabe")
+	mustContain(t, out, "No such file", "no /agent in the execution sandbox")
+	out, _ = dockerExec(t, c, "sh", "-c", "curl -s -m 5 http://orchestrator:18480/api/chats || echo API-UNREACHABLE; curl -s -m 5 http://orchestrator:18481/ || echo PROXY-UNREACHABLE")
+	mustContain(t, out, "API-UNREACHABLE", "API from the execution sandbox")
+	mustContain(t, out, "PROXY-UNREACHABLE", "proxy from the execution sandbox")
+	out, _ = dockerExec(t, c, "sh", "-c", "curl -s -m 5 -o /dev/null -w '%{http_code}' https://example.com || echo NO_NET")
+	mustContain(t, out, "NO_NET", "internet without approval")
 	out, _ = dockerExec(t, c, "sh", "-c", "touch /usr/x 2>&1; id -u")
-	mustContain(t, out, "Read-only", "Wurzel schreibgeschützt")
-	mustContain(t, out, "10001", "unprivilegierter Nutzer")
-	// Container von pi: ohne Shell, ohne Schlüssel; die API bleibt gesperrt, der Proxy prüft das Modell.
+	mustContain(t, out, "Read-only", "root file system read-only")
+	mustContain(t, out, "10001", "unprivileged user")
+	// pi's container: no shell, no key; the API stays blocked, the proxy checks the model.
 	if _, err := dockerExec(t, pc, "sh", "-c", "true"); err == nil {
-		t.Fatal("Shell im Container von pi")
+		t.Fatal("shell in pi's container")
 	}
 	out, _ = dockerExec(t, pc, "cat", "/agent/config/models.json", "/proc/1/environ")
 	if strings.Contains(out, "sk-") {
-		t.Fatal("API-Schlüssel im Container von pi")
+		t.Fatal("API key in pi's container")
 	}
-	mustContain(t, nodeFetch(t, pc, "GET", "http://orchestrator:18480/api/chats", ""), "kein Zugriff aus dem Sandbox-Netz", "API aus dem Container von pi")
-	mustContain(t, nodeFetch(t, pc, "POST", "http://orchestrator:18481/llm/deepseek/chat/completions", `{"model":"fremd"}`), "nicht freigegeben", "Modell-Positivliste")
-	mustContain(t, nodeFetch(t, pc, "GET", "https://example.com", ""), "FEHLER", "Internet im Container von pi")
+	mustContain(t, nodeFetch(t, pc, "GET", "http://orchestrator:18480/api/chats", ""), "no access from the sandbox network", "API from pi's container")
+	mustContain(t, nodeFetch(t, pc, "POST", "http://orchestrator:18481/llm/deepseek/chat/completions", `{"model":"foreign"}`), "not allowed", "model allowlist")
+	mustContain(t, nodeFetch(t, pc, "GET", "https://example.com", ""), "ERROR", "internet in pi's container")
 }
 
-// Angriffswege aus dem Code-Review (K2, K3, H5): mit eingeschaltetem Internet.
+// Attack paths from the code review (K2, K3, H5): with internet switched on.
 func TestSandboxEscapesBlocked(t *testing.T) {
 	requireE2E(t)
 	a := newChat(t, "cli", true)
 	b := newChat(t, "cli", true)
 	ca, cb := containerOf(t, a), containerOf(t, b)
-	// K3: Nutzer-API über den Host ohne Token
+	// K3: user API via the host without a token
 	out, _ := dockerExec(t, ca, "sh", "-c", "curl -s -m 5 http://host.docker.internal:18480/api/approvals?state=pending; echo; curl -s -m 5 -o /dev/null -w '%{http_code}' -X POST http://host.docker.internal:18480/api/approvals/x -d '{\"approve\":true}'")
-	mustContain(t, out, "unbekannter Host", "API über host.docker.internal (Host-Prüfung)")
-	// Mit gefälschter Host-Kopfzeile greift die Anmeldung.
+	mustContain(t, out, "unknown host", "API via host.docker.internal (host check)")
+	// With a forged Host header the login check applies.
 	out2, _ := dockerExec(t, ca, "sh", "-c", "curl -s -m 5 -H 'Host: 127.0.0.1:18480' http://host.docker.internal:18480/api/approvals?state=pending")
-	mustContain(t, out2, "nicht angemeldet", "API ohne Token (Anmeldung)")
+	mustContain(t, out2, "not logged in", "API without a token (login)")
 	if strings.Contains(out, "200") || strings.Contains(out, "204") {
-		t.Fatalf("API ohne Token erreichbar: %s", out)
+		t.Fatalf("API reachable without a token: %s", out)
 	}
-	// K2: Doppelschlüssel am Proxy. Seit E9 erreicht nur der Container von pi den Proxy.
+	// K2: duplicate keys at the proxy. Since E9 only pi's container reaches the proxy.
 	pa, pb := piContainerOf(t, a), piContainerOf(t, b)
-	mustContain(t, nodeFetch(t, pa, "POST", "http://orchestrator:18481/llm/deepseek/chat/completions", `{"model":"deepseek-reasoner","Model":"deepseek-flash","messages":[]}`), "mehrdeutig", "Proxy-Doppelschlüssel")
-	mustContain(t, nodeFetch(t, pa, "POST", "http://orchestrator:18481/llm/deepseek/files", `{"model":"deepseek-flash"}`), "Pfad nicht freigegeben", "Proxy-Pfad")
-	// H5: Sandbox B erreicht einen Dienst in Sandbox A nicht, weder über das
-	// Platz-Netz noch über das Egress-Netz.
+	mustContain(t, nodeFetch(t, pa, "POST", "http://orchestrator:18481/llm/deepseek/chat/completions", `{"model":"deepseek-reasoner","Model":"deepseek-flash","messages":[]}`), "ambiguous", "proxy duplicate keys")
+	mustContain(t, nodeFetch(t, pa, "POST", "http://orchestrator:18481/llm/deepseek/files", `{"model":"deepseek-flash"}`), "path not allowed", "proxy path")
+	// H5: sandbox B does not reach a service in sandbox A, neither via the
+	// slot network nor via the egress network.
 	_, _ = dockerExec(t, ca, "sh", "-c", "cd /tmp && nohup python3 -m http.server 8765 >/dev/null 2>&1 &")
 	time.Sleep(time.Second)
 	local, _ := dockerExec(t, ca, "sh", "-c", "curl -s -m 3 -o /dev/null -w '%{http_code}' http://127.0.0.1:8765/")
-	mustContain(t, local, "200", "Dienst in Sandbox A läuft")
+	mustContain(t, local, "200", "service in sandbox A running")
 	ipsOut, _ := exec.Command("docker", "inspect", "-f", "{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}", ca).CombinedOutput()
 	for _, ip := range strings.Fields(string(ipsOut)) {
-		out, _ = dockerExec(t, cb, "sh", "-c", "curl -s -m 3 -o /dev/null -w '%{http_code}' http://"+ip+":8765/ || echo GESPERRT")
-		if !strings.Contains(out, "GESPERRT") && !strings.HasPrefix(strings.TrimSpace(out), "000") {
-			t.Fatalf("Sandbox B erreicht Sandbox A über %s: %s", ip, out)
+		out, _ = dockerExec(t, cb, "sh", "-c", "curl -s -m 3 -o /dev/null -w '%{http_code}' http://"+ip+":8765/ || echo BLOCKED")
+		if !strings.Contains(out, "BLOCKED") && !strings.HasPrefix(strings.TrimSpace(out), "000") {
+			t.Fatalf("sandbox B reaches sandbox A via %s: %s", ip, out)
 		}
 	}
-	out, _ = dockerExec(t, cb, "sh", "-c", "curl -s -m 3 -o /dev/null -w '%{http_code}' http://"+ca+":8765/ || echo GESPERRT")
-	if !strings.Contains(out, "GESPERRT") && !strings.HasPrefix(strings.TrimSpace(out), "000") {
-		t.Fatalf("Sandbox B erreicht Sandbox A über den Namen: %s", out)
+	out, _ = dockerExec(t, cb, "sh", "-c", "curl -s -m 3 -o /dev/null -w '%{http_code}' http://"+ca+":8765/ || echo BLOCKED")
+	if !strings.Contains(out, "BLOCKED") && !strings.HasPrefix(strings.TrimSpace(out), "000") {
+		t.Fatalf("sandbox B reaches sandbox A via the name: %s", out)
 	}
-	// Der Weg zum Modell besteht weiter, aber nur für pi.
-	mustContain(t, nodeFetch(t, pb, "POST", "http://orchestrator:18481/llm/deepseek/chat/completions", `{"model":"fremd"}`), "403", "Proxy aus dem Container von pi B erreichbar")
+	// The route to the model still exists, but only for pi.
+	mustContain(t, nodeFetch(t, pb, "POST", "http://orchestrator:18481/llm/deepseek/chat/completions", `{"model":"foreign"}`), "403", "proxy reachable from pi B's container")
 }
 
 func TestRunWithToolsCostAndContext(t *testing.T) {
 	requireE2E(t)
 	id := newChat(t, "cli", false)
 	s := subscribe(t, id)
-	ask(t, s, id, "Schreibe mit Python eine Datei quadrate.txt mit den Quadraten von 1 bis 5, eine Zahl je Zeile, führe es aus und zeige den Inhalt mit cat.", nil)
+	ask(t, s, id, "Use Python to write a file squares.txt with the squares of 1 to 5, one number per line, run it and show the content with cat.", nil)
 	calls := strings.Join(toolCalls(t, id), "\n")
-	mustContain(t, calls, "bash", "Werkzeugaufruf bash")
-	mustContain(t, lastAssistantText(t, id), "25", "Ergebnis")
+	mustContain(t, calls, "bash", "tool call bash")
+	mustContain(t, lastAssistantText(t, id), "25", "result")
 	if s.count(func(ev map[string]any) bool {
 		d, _ := ev["data"].(map[string]any)
 		e, _ := d["assistantMessageEvent"].(map[string]any)
 		return piType(ev) == "message_update" && e["type"] == "text_delta"
 	}) < 2 {
-		t.Fatal("kein Streaming (weniger als zwei Text-Deltas)")
+		t.Fatal("no streaming (fewer than two text deltas)")
 	}
 	f := getChat(t, id)
 	if f.Chat.Cost <= 0 || f.Chat.Tokens.Total <= 0 {
-		t.Fatalf("Kosten/Tokens: %v %+v", f.Chat.Cost, f.Chat.Tokens)
+		t.Fatalf("cost/tokens: %v %+v", f.Chat.Cost, f.Chat.Tokens)
 	}
 	billed := 0
 	for _, m := range f.Messages {
@@ -125,7 +125,7 @@ func TestRunWithToolsCostAndContext(t *testing.T) {
 		}
 	}
 	if billed == 0 {
-		t.Fatal("keine Antwort nach Tarif abgerechnet")
+		t.Fatal("no reply billed by tariff")
 	}
 	var cu struct {
 		Tokens          *int64 `json:"tokens"`
@@ -138,7 +138,7 @@ func TestRunWithToolsCostAndContext(t *testing.T) {
 		time.Sleep(300 * time.Millisecond)
 	}
 	if cu.Window < 100000 || cu.ThresholdTokens <= 0 {
-		t.Fatalf("Kontext: %+v", cu)
+		t.Fatalf("context: %+v", cu)
 	}
 }
 
@@ -147,17 +147,17 @@ func TestInternetRequestedByAgent(t *testing.T) {
 	id := newChat(t, "cli", false)
 	s := subscribe(t, id)
 	var asked []approval
-	ask(t, s, id, "Rufe mit curl https://example.com ab und nenne den Inhalt des <title>-Elements. Du hast anfangs kein Internet; erbitte es mit agw-internet und einer Begründung.", func(a approval) bool {
+	ask(t, s, id, "Fetch https://example.com with curl and give the content of the <title> element. You have no internet at first; request it with agw-internet and a reason.", func(a approval) bool {
 		asked = append(asked, a)
 		return true
 	})
 	if len(asked) == 0 || asked[0].Kind != "internet_access" || asked[0].Name == "" {
-		t.Fatalf("keine Internet-Anfrage mit Begründung: %+v", asked)
+		t.Fatalf("no internet request with a reason: %+v", asked)
 	}
 	if !getChat(t, id).Chat.Internet {
-		t.Fatal("Internet nach Zustimmung nicht an")
+		t.Fatal("internet not on after approval")
 	}
-	mustContain(t, lastAssistantText(t, id), "Example Domain", "Titel der Seite")
+	mustContain(t, lastAssistantText(t, id), "Example Domain", "title of the page")
 }
 
 func TestInternetRequestRejected(t *testing.T) {
@@ -165,15 +165,15 @@ func TestInternetRequestRejected(t *testing.T) {
 	id := newChat(t, "mcp", false)
 	s := subscribe(t, id)
 	var asked []approval
-	ask(t, s, id, "Ich brauche den Titel von https://example.com. Du hast kein Internet; erbitte es mit dem Werkzeug mcp_request_internet. Wenn es abgelehnt wird, sage das und höre auf.", func(a approval) bool {
+	ask(t, s, id, "I need the title of https://example.com. You have no internet; request it with the tool mcp_request_internet. If it is rejected, say so and stop.", func(a approval) bool {
 		asked = append(asked, a)
 		return false
 	})
 	if len(asked) == 0 || asked[0].Kind != "internet_access" || asked[0].Via != "mcp" {
-		t.Fatalf("keine MCP-Anfrage: %+v", asked)
+		t.Fatalf("no MCP request: %+v", asked)
 	}
 	if getChat(t, id).Chat.Internet {
-		t.Fatal("Internet trotz Ablehnung an")
+		t.Fatal("internet on despite rejection")
 	}
 }
 
@@ -181,22 +181,22 @@ func TestArtifactRejectThenApprove(t *testing.T) {
 	requireE2E(t)
 	id := newChat(t, "cli", false)
 	s := subscribe(t, id)
-	ask(t, s, id, "Erzeuge eine Datei hallo.txt mit dem Inhalt 'Hallo Welt' und lade sie mit agw-artifact als Artefakt hoch.", func(approval) bool { return false })
+	ask(t, s, id, "Create a file hello.txt with the content 'Hello world' and upload it with agw-artifact as an artifact.", func(approval) bool { return false })
 	f := getChat(t, id)
 	if len(f.Artifacts) != 0 {
-		t.Fatalf("Artefakt trotz Ablehnung: %+v", f.Artifacts)
+		t.Fatalf("artifact despite rejection: %+v", f.Artifacts)
 	}
-	ask(t, s, id, "Bitte lade hallo.txt noch einmal hoch, diesmal bestätige ich.", func(approval) bool { return true })
+	ask(t, s, id, "Please upload hello.txt once more, this time I will approve.", func(approval) bool { return true })
 	f = getChat(t, id)
 	var states []string
 	for _, a := range f.Approvals {
 		states = append(states, a.State)
 	}
-	if len(f.Artifacts) != 1 || f.Artifacts[0].Name != "hallo.txt" || f.Artifacts[0].Via != "cli" {
-		t.Fatalf("Artefakt: %+v (Bestätigungen %v)", f.Artifacts, states)
+	if len(f.Artifacts) != 1 || f.Artifacts[0].Name != "hello.txt" || f.Artifacts[0].Via != "cli" {
+		t.Fatalf("artifact: %+v (approvals %v)", f.Artifacts, states)
 	}
 	if !strings.Contains(strings.Join(states, ","), "rejected") || !strings.Contains(strings.Join(states, ","), "approved") {
-		t.Fatalf("Bestätigungen: %v", states)
+		t.Fatalf("approvals: %v", states)
 	}
 }
 
@@ -204,70 +204,70 @@ func TestMCPVariant(t *testing.T) {
 	requireE2E(t)
 	id := newChat(t, "mcp", false)
 	s := subscribe(t, id)
-	ask(t, s, id, "Rufe das Werkzeug mcp_ping auf, lege dann mit write die Datei notiz.txt mit dem Inhalt 'MCP' an und lade sie mit mcp_upload_artifact hoch.", func(approval) bool { return true })
+	ask(t, s, id, "Call the tool mcp_ping, then create the file note.txt with the content 'MCP' using write and upload it with mcp_upload_artifact.", func(approval) bool { return true })
 	calls := strings.Join(toolCalls(t, id), "\n")
 	mustContain(t, calls, "mcp_ping", "ping")
 	mustContain(t, calls, "mcp_upload_artifact", "Upload")
 	if strings.Contains(calls, "bash ") {
-		t.Fatal("bash in der MCP-Variante aufgerufen")
+		t.Fatal("bash called in the MCP variant")
 	}
 	f := getChat(t, id)
 	var ops []string
 	for _, c := range f.SocketCalls {
 		ops = append(ops, c.Via+":"+c.Op+":"+c.Result)
 	}
-	mustContain(t, strings.Join(ops, " "), "mcp:ping:ok", "Socket-Protokoll")
-	mustContain(t, strings.Join(ops, " "), "mcp:upload:approved", "Socket-Protokoll")
+	mustContain(t, strings.Join(ops, " "), "mcp:ping:ok", "socket log")
+	mustContain(t, strings.Join(ops, " "), "mcp:upload:approved", "socket log")
 }
 
 func TestUserInputAndResume(t *testing.T) {
 	requireE2E(t)
 	id := newChat(t, "cli", false)
 	s := subscribe(t, id)
-	uploadFile(t, id, "werte.csv", "a,b\n1,2\n3,4\n5,6\n")
-	ask(t, s, id, "Lies /workspace/inputs/werte.csv und nenne die Summe der Spalte b. Merke dir außerdem das Codewort Kiefer-42.", nil)
-	mustContain(t, lastAssistantText(t, id), "12", "Summe aus der Eingabe")
+	uploadFile(t, id, "values.csv", "a,b\n1,2\n3,4\n5,6\n")
+	ask(t, s, id, "Read /workspace/inputs/values.csv and give the sum of column b. Also remember the code word Kiefer-42.", nil)
+	mustContain(t, lastAssistantText(t, id), "12", "sum from the input")
 	old := getChat(t, id).Chat.SlotID
 	if code := call(t, "POST", "/api/chats/"+id+"/suspend", nil, nil); code != 200 {
-		t.Fatalf("Ruhen: %d", code)
+		t.Fatalf("idle: %d", code)
 	}
 	if st := getChat(t, id).Chat; st.State != "dormant" || st.SlotID != "" {
-		t.Fatalf("nach Ruhen: %+v", st)
+		t.Fatalf("after idling: %+v", st)
 	}
-	ask(t, s, id, "Wie lautete das Codewort? Und liegt werte.csv noch unter /workspace/inputs? Prüfe es mit ls.", nil)
+	ask(t, s, id, "What was the code word? And is values.csv still in /workspace/inputs? Check with ls.", nil)
 	c := getChat(t, id).Chat
 	if c.State != "active" || c.SlotID == old {
-		t.Fatalf("nicht in frischer Sandbox fortgesetzt: %+v (alt %s)", c, old)
+		t.Fatalf("not resumed in a fresh sandbox: %+v (old %s)", c, old)
 	}
 	txt := lastAssistantText(t, id)
-	mustContain(t, txt, "Kiefer-42", "Gedächtnis nach Fortsetzen")
-	mustContain(t, txt, "werte.csv", "Eingabe in neuer Sandbox")
+	mustContain(t, txt, "Kiefer-42", "memory after resuming")
+	mustContain(t, txt, "values.csv", "input in the new sandbox")
 }
 
 func TestManualCompaction(t *testing.T) {
 	requireE2E(t)
 	id := newChat(t, "cli", false)
 	s := subscribe(t, id)
-	ask(t, s, id, "Merke dir: Das Projekt heißt Rotkehlchen. Antworte nur mit OK.", nil)
-	// Automatik aus, damit die niedrige E2E-Schwelle nicht vorher kompaktiert.
+	ask(t, s, id, "Remember: the project is called Rotkehlchen. Reply only with OK.", nil)
+	// Automation off, so that the low E2E threshold does not compact beforehand.
 	call(t, "POST", "/api/chats/"+id+"/commands", map[string]string{"command": "/autocompact off"}, nil)
 	if getChat(t, id).Chat.AutoCompact {
-		t.Fatal("/autocompact off wirkt nicht")
+		t.Fatal("/autocompact off has no effect")
 	}
-	// Genug Verlauf, damit pi etwas zum Zusammenfassen hat (sonst: "Nothing to compact").
-	// Das Lesen mit read bringt den Inhalt sicher in den Kontext.
-	uploadFile(t, id, "messungen.txt", bigText(1, 300))
-	ask(t, s, id, "Lies /workspace/inputs/messungen.txt vollständig mit dem Werkzeug read (nicht mit bash) und nenne die höchste Temperatur.", nil)
+	// Enough history so that pi has something to summarise (otherwise: "Nothing to compact").
+	// Reading with read reliably brings the content into the context.
+	uploadFile(t, id, "measurements.txt", bigText(1, 300))
+	ask(t, s, id, "Read /workspace/inputs/measurements.txt completely with the tool read (not with bash) and give the highest temperature.", nil)
 	var cmds []struct{ Name, Source string }
 	call(t, "GET", "/api/chats/"+id+"/commands", nil, &cmds)
 	names := ""
 	for _, c := range cmds {
 		names += c.Name + "(" + c.Source + ") "
 	}
-	mustContain(t, names, "compact(builtin)", "Befehlsliste")
-	mustContain(t, names, "skill:", "Befehle von pi")
+	mustContain(t, names, "compact(builtin)", "command list")
+	mustContain(t, names, "skill:", "pi's commands")
 	from := s.len()
-	if code := call(t, "POST", "/api/chats/"+id+"/commands", map[string]string{"command": "/compact Projektnamen unbedingt behalten"}, nil); code != 200 {
+	if code := call(t, "POST", "/api/chats/"+id+"/commands", map[string]string{"command": "/compact be sure to keep the project name"}, nil); code != 200 {
 		t.Fatalf("/compact: %d", code)
 	}
 	ev, _ := s.waitFor(t, from, 3*time.Minute, "compaction_end", func(ev map[string]any) bool { return piType(ev) == "compaction_end" })
@@ -280,17 +280,17 @@ func TestManualCompaction(t *testing.T) {
 		time.Sleep(200 * time.Millisecond)
 	}
 	if getChat(t, id).Chat.Compactions != 1 {
-		t.Fatal("Kompaktierung nicht gespeichert")
+		t.Fatal("compaction not saved")
 	}
-	ask(t, s, id, "Wie heißt das Projekt?", nil)
-	mustContain(t, lastAssistantText(t, id), "Rotkehlchen", "Gedächtnis nach Kompaktierung")
+	ask(t, s, id, "What is the project called?", nil)
+	mustContain(t, lastAssistantText(t, id), "Rotkehlchen", "memory after compaction")
 	if getChat(t, id).Chat.Compactions != 1 {
-		t.Fatal("trotz /autocompact off automatisch kompaktiert")
+		t.Fatal("compacted automatically despite /autocompact off")
 	}
 }
 
-// Die Auto-Kompaktierung braucht eine niedrige Schwelle (./dev.sh e2e setzt
-// AGW_COMPACT_RESERVE_TOKENS so, dass sie bei rund 10.000 Tokens greift).
+// Auto-compaction needs a low threshold (./dev.sh e2e sets
+// AGW_COMPACT_RESERVE_TOKENS so that it kicks in at about 10,000 tokens).
 func TestAutoCompaction(t *testing.T) {
 	requireE2E(t)
 	var cfg struct {
@@ -298,21 +298,21 @@ func TestAutoCompaction(t *testing.T) {
 	}
 	call(t, "GET", "/api/config", nil, &cfg)
 	if cfg.Reserve < 900000 {
-		t.Skipf("Schwelle zu hoch für einen Test (reserve %d); ./dev.sh e2e verwenden", cfg.Reserve)
+		t.Skipf("threshold too high for a test (reserve %d); use ./dev.sh e2e", cfg.Reserve)
 	}
 	id := newChat(t, "cli", false)
 	s := subscribe(t, id)
-	ask(t, s, id, "Merke dir das Codewort Wacholder-7. Antworte nur mit OK.", nil)
-	// Kontext füllen: große Dateien mit read lesen lassen, bis pi selbst kompaktiert.
+	ask(t, s, id, "Remember the code word Wacholder-7. Reply only with OK.", nil)
+	// Fill the context: have large files read with read until pi compacts by itself.
 	for i := 0; i < 4 && s.count(func(ev map[string]any) bool { return piType(ev) == "compaction_start" }) == 0; i++ {
-		name := fmt.Sprintf("teil%d.txt", i)
+		name := fmt.Sprintf("part%d.txt", i)
 		uploadFile(t, id, name, bigText(10+i, 300))
-		ask(t, s, id, "Lies /workspace/inputs/"+name+" vollständig mit dem Werkzeug read (nicht mit bash) und nenne die niedrigste Feuchte.", nil)
+		ask(t, s, id, "Read /workspace/inputs/"+name+" completely with the tool read (not with bash) and give the lowest humidity.", nil)
 	}
 	ev, _ := s.waitFor(t, 0, 2*time.Minute, "compaction_start (threshold)", func(ev map[string]any) bool { return piType(ev) == "compaction_start" })
 	d := ev["data"].(map[string]any)
 	if d["reason"] != "threshold" && d["reason"] != "overflow" {
-		t.Fatalf("Grund: %v", d["reason"])
+		t.Fatalf("reason: %v", d["reason"])
 	}
 	s.waitFor(t, 0, 3*time.Minute, "compaction_end", func(ev map[string]any) bool { return piType(ev) == "compaction_end" })
 	deadline := time.Now().Add(20 * time.Second)
@@ -321,7 +321,7 @@ func TestAutoCompaction(t *testing.T) {
 	}
 	f := getChat(t, id)
 	if f.Chat.Compactions < 1 {
-		t.Fatal("automatische Kompaktierung nicht gespeichert")
+		t.Fatal("automatic compaction not saved")
 	}
 	var comp map[string]any
 	for _, m := range f.Messages {
@@ -330,21 +330,21 @@ func TestAutoCompaction(t *testing.T) {
 		}
 	}
 	if comp["reason"] != "threshold" && comp["reason"] != "overflow" {
-		t.Fatalf("Eintrag: %v", comp)
+		t.Fatalf("entry: %v", comp)
 	}
 	if tb, _ := comp["tokensBefore"].(float64); tb < 5000 {
-		t.Fatalf("tokensBefore unplausibel: %v", comp["tokensBefore"])
+		t.Fatalf("tokensBefore implausible: %v", comp["tokensBefore"])
 	}
-	ask(t, s, id, "Wie lautete das Codewort?", nil)
-	mustContain(t, lastAssistantText(t, id), "Wacholder-7", "Gedächtnis nach Auto-Kompaktierung")
+	ask(t, s, id, "What was the code word?", nil)
+	mustContain(t, lastAssistantText(t, id), "Wacholder-7", "memory after auto-compaction")
 }
 
-// Subagenten: Werkzeugaufrufe sichtbar, Kosten am Proxy erfasst.
+// Subagents: tool calls visible, costs recorded at the proxy.
 func TestSubagentsVisibleAndBilled(t *testing.T) {
 	requireE2E(t)
 	id := newChatWith(t, map[string]any{"variant": "cli", "internet": false, "max_subagents": 2})
 	s := subscribe(t, id)
-	ask(t, s, id, "Nutze das subagent-Werkzeug mit dem Agenten scout im Vordergrund (async: false), der mit bash 'python3 --version' ausführt. Nenne danach nur die Version.", nil)
+	ask(t, s, id, "Use the subagent tool with the agent scout in the foreground (async: false), which runs 'python3 --version' with bash. Then give only the version.", nil)
 	var f fullChat
 	deadline := time.Now().Add(20 * time.Second)
 	for time.Now().Before(deadline) {
@@ -362,10 +362,10 @@ func TestSubagentsVisibleAndBilled(t *testing.T) {
 		confirmed = confirmed || e.Confirmed
 	}
 	if !sawBash {
-		t.Fatalf("Werkzeugaufruf des Subagenten nicht sichtbar: %+v", f.Subagent)
+		t.Fatalf("subagent tool call not visible: %+v", f.Subagent)
 	}
 	if !confirmed {
-		t.Fatal("kein Subagenten-Eintrag am Proxy belegt")
+		t.Fatal("no subagent entry confirmed at the proxy")
 	}
 	mains := 0
 	for _, m := range f.Messages {
@@ -374,7 +374,7 @@ func TestSubagentsVisibleAndBilled(t *testing.T) {
 		}
 	}
 	if f.Chat.LLMCalls <= mains || f.Chat.CostOther <= 0 {
-		t.Fatalf("Subagenten-Aufrufe nicht abgerechnet: %d Aufrufe, %d Hauptantworten, cost_other %v", f.Chat.LLMCalls, mains, f.Chat.CostOther)
+		t.Fatalf("subagent calls not billed: %d calls, %d main replies, cost_other %v", f.Chat.LLMCalls, mains, f.Chat.CostOther)
 	}
 	var calls []struct {
 		Main bool    `json:"main"`
@@ -386,16 +386,16 @@ func TestSubagentsVisibleAndBilled(t *testing.T) {
 		sum += c.Cost
 	}
 	if d := sum - f.Chat.Cost; d > 1e-9 || d < -1e-9 {
-		t.Fatalf("Summe der Aufrufe %v ≠ Chatkosten %v", sum, f.Chat.Cost)
+		t.Fatalf("sum of the calls %v ≠ chat cost %v", sum, f.Chat.Cost)
 	}
 }
 
-// Grenze 0: Ein gestarteter Subagent führt zum Abbruch durch den Orchestrator.
+// Limit 0: a started subagent leads to an abort by the orchestrator.
 func TestSubagentLimitEnforced(t *testing.T) {
 	requireE2E(t)
 	id := newChatWith(t, map[string]any{"variant": "cli", "internet": false, "max_subagents": 0})
 	s := subscribe(t, id)
-	ask(t, s, id, "Nutze das subagent-Werkzeug mit dem Agenten scout im Hintergrund, der mit bash 'sleep 20; uname -m' ausführt, und warte mit bg_wait auf das Ergebnis.", nil)
+	ask(t, s, id, "Use the subagent tool with the agent scout in the background, which runs 'sleep 20; uname -m' with bash, and wait for the result with bg_wait.", nil)
 	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
 		f := getChat(t, id)
@@ -404,34 +404,34 @@ func TestSubagentLimitEnforced(t *testing.T) {
 				return
 			}
 		}
-		// pi-subagents kann den Start auch selbst verweigern (kooperative Ebene): dann gibt es keinen Lauf.
+		// pi-subagents can also refuse the start itself (cooperative layer): then there is no run.
 		if f.Chat.Subagents == 0 && !f.Chat.Running {
 			txt := lastAssistantText(t, id)
 			if txt != "" {
-				t.Logf("kein Subagent gestartet (kooperative Ebene griff): %s", trunc(txt, 200))
+				t.Logf("no subagent started (cooperative layer applied): %s", trunc(txt, 200))
 				return
 			}
 		}
 		time.Sleep(time.Second)
 	}
-	t.Fatal("Grenze 0 nicht durchgesetzt")
+	t.Fatal("limit 0 not enforced")
 }
 
-// Harte Grenze am Proxy, auch für Aufrufe an pi vorbei. Seit E9 erreicht nur der Container von pi
-// den Proxy (die Ausführungs-Sandbox hat kein Netz zum Orchestrator); der Test ruft ihn dort mit
-// Node direkt auf.
+// Hard limit at the proxy, also for calls bypassing pi. Since E9 only pi's container reaches
+// the proxy (the execution sandbox has no network to the orchestrator); the test calls it there
+// directly with Node.
 func TestProxyConcurrencyLimitHard(t *testing.T) {
 	requireE2E(t)
 	id := newChatWith(t, map[string]any{"variant": "cli", "internet": false, "max_subagents": 0})
 	c := piContainerOf(t, id)
-	script := `const body=JSON.stringify({model:"deepseek-flash",stream:true,messages:[{role:"user",content:"Zähle langsam von 1 bis 40, jede Zahl in eine eigene Zeile."}]});
-Promise.all([1,2,3].map(()=>fetch("http://orchestrator:18481/llm/deepseek/chat/completions",{method:"POST",headers:{"content-type":"application/json"},body}).then(async r=>{console.log(r.status);await r.text()}).catch(e=>console.log("FEHLER",e.message))))`
+	script := `const body=JSON.stringify({model:"deepseek-flash",stream:true,messages:[{role:"user",content:"Count slowly from 1 to 40, each number on its own line."}]});
+Promise.all([1,2,3].map(()=>fetch("http://orchestrator:18481/llm/deepseek/chat/completions",{method:"POST",headers:{"content-type":"application/json"},body}).then(async r=>{console.log(r.status);await r.text()}).catch(e=>console.log("ERROR",e.message))))`
 	out, _ := dockerExec(t, c, "node", "-e", script)
 	if !strings.Contains(out, "429") {
-		t.Fatalf("keine 429 bei drei gleichzeitigen Aufrufen und Grenze 1: %q", out)
+		t.Fatalf("no 429 with three concurrent calls and limit 1: %q", out)
 	}
 	if !strings.Contains(out, "200") {
-		t.Fatalf("kein Aufruf durchgelassen: %q", out)
+		t.Fatalf("no call let through: %q", out)
 	}
 	f := getChat(t, id)
 	found := false
@@ -439,24 +439,24 @@ Promise.all([1,2,3].map(()=>fetch("http://orchestrator:18481/llm/deepseek/chat/c
 		found = found || sc.Op == "agent_limit"
 	}
 	if !found {
-		t.Fatal("Grenzverletzung nicht protokolliert")
+		t.Fatal("limit violation not logged")
 	}
 	if f.Chat.LLMCalls < 1 {
-		t.Fatal("direkter Aufruf aus der Sandbox nicht abgerechnet")
+		t.Fatal("direct call from the sandbox not billed")
 	}
 }
 
-// Anhänge: hochgeladene Datei hängt an der Nachricht, der Agent kennt Namen und Ort.
+// Attachments: the uploaded file is attached to the message, the agent knows name and location.
 func TestMessageAttachments(t *testing.T) {
 	requireE2E(t)
 	id := newChat(t, "cli", false)
 	s := subscribe(t, id)
-	uploadFile(t, id, "zahlen.csv", "wert\n3\n4\n5\n")
-	if code := call(t, "POST", "/api/chats/"+id+"/messages", map[string]any{"text": "x", "attachments": []string{"gibtsnicht.csv"}}, nil); code != 400 {
-		t.Fatalf("unbekannter Anhang: %d", code)
+	uploadFile(t, id, "numbers.csv", "value\n3\n4\n5\n")
+	if code := call(t, "POST", "/api/chats/"+id+"/messages", map[string]any{"text": "x", "attachments": []string{"doesnotexist.csv"}}, nil); code != 400 {
+		t.Fatalf("unknown attachment: %d", code)
 	}
 	from := s.len()
-	if code := call(t, "POST", "/api/chats/"+id+"/messages", map[string]any{"text": "Wie groß ist die Summe der Spalte wert im Anhang? Nur die Zahl.", "attachments": []string{"zahlen.csv"}}, nil); code != 200 {
+	if code := call(t, "POST", "/api/chats/"+id+"/messages", map[string]any{"text": "What is the sum of the column value in the attachment? Only the number.", "attachments": []string{"numbers.csv"}}, nil); code != 200 {
 		t.Fatalf("senden: %d", code)
 	}
 	s.waitFor(t, from, 3*time.Minute, "agent_settled", func(ev map[string]any) bool { return piType(ev) == "agent_settled" })
@@ -465,34 +465,34 @@ func TestMessageAttachments(t *testing.T) {
 		Content []struct{ Text string } `json:"content"`
 	}
 	_ = json.Unmarshal(f.Messages[0].Message, &u)
-	mustContain(t, u.Content[0].Text, "[Anhänge unter /workspace/inputs/]\n- zahlen.csv", "Anhang-Block in der Nachricht")
-	mustContain(t, lastAssistantText(t, id), "12", "Summe aus dem Anhang")
+	mustContain(t, u.Content[0].Text, "[Attachments in /workspace/inputs/]\n- numbers.csv", "attachment block in the message")
+	mustContain(t, lastAssistantText(t, id), "12", "sum from the attachment")
 }
 
-// Typst: der Agent nutzt den Skill und die eingebauten Pakete ohne Internet.
+// Typst: the agent uses the skill and the built-in packages without internet.
 func TestTypstDocument(t *testing.T) {
 	requireE2E(t)
 	id := newChat(t, "cli", false)
 	s := subscribe(t, id)
-	ask(t, s, id, "Erstelle mit Typst in /workspace/bericht.typ eine Seite mit Überschrift „Testbericht“ und einer kleinen cetz-Grafik (Kreis), übersetze sie mit typst compile zu bericht.pdf und nenne nur die Größe des PDF in Bytes.", nil)
+	ask(t, s, id, "Use Typst to create a page in /workspace/report.typ with the heading \"Test report\" and a small cetz graphic (circle), compile it with typst compile to report.pdf and give only the size of the PDF in bytes.", nil)
 	calls := strings.Join(toolCalls(t, id), "\n")
-	mustContain(t, calls, "typst compile", "typst aufgerufen")
-	mustContain(t, calls, "@preview/cetz", "eingebautes Paket genutzt")
+	mustContain(t, calls, "typst compile", "typst called")
+	mustContain(t, calls, "@preview/cetz", "built-in package used")
 	c := containerOf(t, id)
-	out, err := dockerExec(t, c, "sh", "-c", "test -s /workspace/bericht.pdf && head -c 5 /workspace/bericht.pdf")
+	out, err := dockerExec(t, c, "sh", "-c", "test -s /workspace/report.pdf && head -c 5 /workspace/report.pdf")
 	if err != nil || !strings.HasPrefix(out, "%PDF") {
-		t.Fatalf("kein PDF entstanden: %q %v", out, err)
+		t.Fatalf("no PDF produced: %q %v", out, err)
 	}
 }
 
-// Anzeige-Bilder: Der Agent zeichnet mit matplotlib ein PNG und zeigt es per Markdown. Der Orchestrator
-// sichert es nach der Antwort in S3; es bleibt abrufbar, wenn der Chat ruht (Sandbox weg).
+// Display images: the agent draws a PNG with matplotlib and shows it via Markdown. The orchestrator
+// saves it to S3 after the reply; it stays retrievable when the chat is idle (sandbox gone).
 func TestAgentImageShownAndKept(t *testing.T) {
 	requireE2E(t)
 	id := newChat(t, "cli", false)
 	s := subscribe(t, id)
-	ask(t, s, id, "Zeichne mit matplotlib ein Liniendiagramm von y = x² für x von 0 bis 5, speichere es als "+
-		"/workspace/quadrat.png und zeige es in deiner Antwort als Markdown-Bild. Sonst nur ein kurzer Satz.", nil)
+	ask(t, s, id, "Use matplotlib to draw a line chart of y = x² for x from 0 to 5, save it as "+
+		"/workspace/square.png and show it in your reply as a Markdown image. Otherwise only a short sentence.", nil)
 	f := getChat(t, id)
 	ref := regexp.MustCompile(`!\[[^\]]*\]\(\s*<?([^)\s>]+)`)
 	var msg, path string
@@ -513,11 +513,11 @@ func TestAgentImageShownAndKept(t *testing.T) {
 		}
 	}
 	if path == "" {
-		t.Fatalf("kein Markdown-Bild in der Antwort: %q", trunc(lastAssistantText(t, id), 400))
+		t.Fatalf("no Markdown image in the reply: %q", trunc(lastAssistantText(t, id), 400))
 	}
 	mustContain(t, strings.Join(toolCalls(t, id), "\n"), "savefig", "matplotlib savefig")
 	if code := call(t, "POST", "/api/chats/"+id+"/suspend", nil, nil); code != 200 {
-		t.Fatalf("ruhen lassen: %d", code)
+		t.Fatalf("let idle: %d", code)
 	}
 	get := func(p string) (int, http.Header, []byte) {
 		req, _ := http.NewRequest("GET", base+"/api/chats/"+id+"/images?path="+url.QueryEscape(p)+"&msg="+url.QueryEscape(msg), nil)
@@ -532,54 +532,54 @@ func TestAgentImageShownAndKept(t *testing.T) {
 	}
 	code, h, body := get(path)
 	if code != 200 || !bytes.HasPrefix(body, []byte("\x89PNG\r\n\x1a\n")) {
-		t.Fatalf("Bild nach dem Ruhen: %d %q (Pfad %s, Antwort %s)", code, trunc(string(body), 200), path, msg)
+		t.Fatalf("image after idling: %d %q (path %s, reply %s)", code, trunc(string(body), 200), path, msg)
 	}
 	if h.Get("Content-Type") != "image/png" || h.Get("X-Content-Type-Options") != "nosniff" || !strings.HasPrefix(h.Get("Cache-Control"), "private") {
-		t.Fatalf("Kopfzeilen: %v", h)
+		t.Fatalf("headers: %v", h)
 	}
 	if code, _, _ := get("/etc/passwd"); code != 400 {
 		t.Fatalf("/etc/passwd: %d", code)
 	}
-	if code, _, _ := get("/workspace/gibtsnicht.png"); code != 404 {
-		t.Fatalf("nicht gesichertes Bild bei ruhendem Chat: %d", code)
+	if code, _, _ := get("/workspace/doesnotexist.png"); code != 404 {
+		t.Fatalf("unsaved image with an idle chat: %d", code)
 	}
 	if n := len(getChat(t, id).Artifacts); n != 0 {
-		t.Fatalf("Anzeige-Bild als Artefakt geführt: %d", n)
+		t.Fatalf("display image listed as an artifact: %d", n)
 	}
 }
 
-// Dateien in /workspace überstehen das Ruhen: gesichert nach dem Lauf, in der
-// frischen Sandbox wiederhergestellt; /tmp nicht.
+// Files in /workspace survive idling: saved after the run, restored in the
+// fresh sandbox; /tmp does not.
 func TestWorkspaceSurvivesSuspend(t *testing.T) {
 	requireE2E(t)
 	id := newChat(t, "cli", false)
 	s := subscribe(t, id)
-	ask(t, s, id, "Erledige mit bash, ohne Rückfrage: 1. Zeichne mit matplotlib ein Liniendiagramm von y = 2x für x von 0 bis 4 "+
-		"und speichere es als /workspace/plot.png. 2. Schreibe das Wort Tanne-77 in die Datei /workspace/notiz.txt. "+
-		"3. Schreibe das Wort weg in /tmp/fluechtig.txt. Antworte danach nur mit einem kurzen Satz.", nil)
+	ask(t, s, id, "Do this with bash, without asking back: 1. Use matplotlib to draw a line chart of y = 2x for x from 0 to 4 "+
+		"and save it as /workspace/plot.png. 2. Write the word Tanne-77 into the file /workspace/note.txt. "+
+		"3. Write the word gone into /tmp/volatile.txt. Then reply only with a short sentence.", nil)
 	old := containerOf(t, id)
-	if out, err := dockerExec(t, old, "sh", "-c", "head -c 4 /workspace/plot.png | tail -c 3; cat /workspace/notiz.txt /tmp/fluechtig.txt"); err != nil ||
+	if out, err := dockerExec(t, old, "sh", "-c", "head -c 4 /workspace/plot.png | tail -c 3; cat /workspace/note.txt /tmp/volatile.txt"); err != nil ||
 		!strings.Contains(out, "PNG") || !strings.Contains(out, "Tanne-77") {
-		t.Fatalf("Dateien nicht angelegt: %q %v", out, err)
+		t.Fatalf("files not created: %q %v", out, err)
 	}
 	if code := call(t, "POST", "/api/chats/"+id+"/suspend", nil, nil); code != 200 {
-		t.Fatalf("Ruhen: %d", code)
+		t.Fatalf("idle: %d", code)
 	}
 	w := getChat(t, id).Chat.Workspace
 	if w == nil || w.SavedAt == "" || w.Files < 2 || w.SkippedReason != "" {
-		t.Fatalf("Arbeitsbereich nicht gesichert: %+v", w)
+		t.Fatalf("workspace not saved: %+v", w)
 	}
-	ask(t, s, id, "Führe ls -la /workspace aus, gib den Inhalt von /workspace/notiz.txt wörtlich wieder und prüfe mit ls, "+
-		"ob /tmp/fluechtig.txt noch existiert. Antworte kurz.", nil)
+	ask(t, s, id, "Run ls -la /workspace, repeat the content of /workspace/note.txt verbatim and check with ls "+
+		"whether /tmp/volatile.txt still exists. Reply briefly.", nil)
 	fresh := containerOf(t, id)
 	if fresh == old {
-		t.Fatal("nicht in frischer Sandbox fortgesetzt")
+		t.Fatal("not resumed in a fresh sandbox")
 	}
 	txt := lastAssistantText(t, id)
-	mustContain(t, txt, "Tanne-77", "Inhalt von notiz.txt nach dem Fortsetzen")
-	mustContain(t, txt, "plot.png", "plot.png nach dem Fortsetzen")
-	out, _ := dockerExec(t, fresh, "sh", "-c", "head -c 4 /workspace/plot.png | tail -c 3; echo; cat /workspace/notiz.txt; test -e /tmp/fluechtig.txt && echo TMP-DA || echo TMP-WEG")
-	for _, want := range []string{"PNG", "Tanne-77", "TMP-WEG"} {
-		mustContain(t, out, want, "Zustand der frischen Sandbox")
+	mustContain(t, txt, "Tanne-77", "content of note.txt after resuming")
+	mustContain(t, txt, "plot.png", "plot.png after resuming")
+	out, _ := dockerExec(t, fresh, "sh", "-c", "head -c 4 /workspace/plot.png | tail -c 3; echo; cat /workspace/note.txt; test -e /tmp/volatile.txt && echo TMP-THERE || echo TMP-GONE")
+	for _, want := range []string{"PNG", "Tanne-77", "TMP-GONE"} {
+		mustContain(t, out, want, "state of the fresh sandbox")
 	}
 }

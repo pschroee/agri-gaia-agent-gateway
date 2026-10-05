@@ -1,6 +1,6 @@
-// Package llmproxy leitet die Modellaufrufe der Sandboxen an den Anbieter
-// weiter. Der Schlüssel bleibt beim Orchestrator; durchgelassen werden nur
-// POST-Aufrufe mit einem Modell aus dem Katalog.
+// Package llmproxy forwards the sandboxes' model calls to the provider.
+// The key stays with the orchestrator; only POST calls with a model from
+// the catalog are let through.
 package llmproxy
 
 import (
@@ -26,8 +26,8 @@ const (
 	maxConcurrent = 32
 )
 
-// allowedPaths sind die Endpunkte je API-Art; alles andere (Files, Batches,
-// Fine-Tuning …) bleibt dem Agenten verschlossen.
+// allowedPaths are the endpoints per API kind; everything else (files, batches,
+// fine-tuning …) stays closed to the agent.
 var allowedPaths = map[string][]string{
 	"openai-completions": {"chat/completions"},
 	"openai-responses":   {"responses"},
@@ -40,18 +40,18 @@ type Proxy struct {
 	rec Recorder
 
 	mu       sync.Mutex
-	inFlight map[string]int // je Chat
+	inFlight map[string]int // per chat
 }
 
-// SetRecorder schaltet Zuordnung und Abrechnung ein. Ohne Recorder (Tests)
-// wird nichts erfasst und nicht nach Herkunft geprüft.
+// SetRecorder turns on attribution and billing. Without a recorder (tests)
+// nothing is recorded and the origin is not checked.
 func (p *Proxy) SetRecorder(r Recorder) { p.rec = r }
 
 func New(cat *config.Catalog) *Proxy {
 	return &Proxy{cat: cat, sem: make(chan struct{}, maxConcurrent), inFlight: map[string]int{}}
 }
 
-// enter zählt einen laufenden Aufruf des Chats; false, wenn die Grenze erreicht ist.
+// enter counts a running call of the chat; false if the limit is reached.
 func (p *Proxy) enter(chatID string, max int) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -70,15 +70,15 @@ func (p *Proxy) leave(chatID string) {
 	}
 }
 
-// modelOf liest das Modell streng: genau ein Schlüssel, der ohne Rücksicht
-// auf Groß-/Kleinschreibung "model" heißt, exakt so geschrieben und als
-// String. encoding/json ordnet Schlüssel sonst tolerant zu (letzter Treffer
-// gewinnt), der Anbieter aber exakt – so ließe sich die Liste umgehen.
+// modelOf reads the model strictly: exactly one key that, ignoring case,
+// is called "model", spelled exactly like that and a
+// string. encoding/json otherwise matches keys leniently (last match
+// wins), the provider exactly – that would allow bypassing the list.
 func modelOf(body []byte) (string, error) {
 	dec := json.NewDecoder(bytes.NewReader(body))
 	tok, err := dec.Token()
 	if err != nil || tok != json.Delim('{') {
-		return "", errors.New("Anfrage ist kein JSON-Objekt")
+		return "", errors.New("request is not a JSON object")
 	}
 	model, found := "", 0
 	for dec.More() {
@@ -96,11 +96,11 @@ func modelOf(body []byte) (string, error) {
 		}
 		found++
 		if key != "model" || json.Unmarshal(val, &model) != nil {
-			return "", errors.New("Feld model mehrdeutig oder kein String")
+			return "", errors.New("field model ambiguous or not a string")
 		}
 	}
 	if found != 1 {
-		return "", errors.New("Feld model fehlt oder ist mehrfach vorhanden")
+		return "", errors.New("field model missing or present more than once")
 	}
 	return model, nil
 }
@@ -114,17 +114,17 @@ func deny(w http.ResponseWriter, code int, msg string) {
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	rest, ok := strings.CutPrefix(r.URL.Path, "/llm/")
 	if !ok {
-		deny(w, http.StatusNotFound, "unbekannter Pfad")
+		deny(w, http.StatusNotFound, "unknown path")
 		return
 	}
 	provID, subPath, _ := strings.Cut(rest, "/")
 	prov, ok := p.cat.Provider(provID)
 	if !ok {
-		deny(w, http.StatusNotFound, "unbekannter Anbieter "+provID)
+		deny(w, http.StatusNotFound, "unknown provider "+provID)
 		return
 	}
 	if r.Method != http.MethodPost {
-		deny(w, http.StatusMethodNotAllowed, "nur POST")
+		deny(w, http.StatusMethodNotAllowed, "POST only")
 		return
 	}
 	var chatID, slotID, srcIP string
@@ -134,8 +134,8 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		att = p.rec.Attribute(srcIP)
 		chatID, slotID = att.ChatID, att.SlotID
 		if chatID == "" {
-			slog.Warn("LLM-Proxy: Aufruf ohne zugewiesenen Platz abgewiesen", "von", srcIP)
-			deny(w, http.StatusForbidden, "Aufruf keinem Chat zuzuordnen")
+			slog.Warn("LLM proxy: call without an assigned slot refused", "from", srcIP)
+			deny(w, http.StatusForbidden, "call cannot be attributed to a chat")
 			return
 		}
 	}
@@ -146,15 +146,15 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if !pathOK {
-		slog.Warn("LLM-Proxy: Pfad abgewiesen", "anbieter", provID, "pfad", subPath)
-		deny(w, http.StatusForbidden, "Pfad nicht freigegeben: "+subPath)
+		slog.Warn("LLM proxy: path refused", "provider", provID, "path", subPath)
+		deny(w, http.StatusForbidden, "path not allowed: "+subPath)
 		return
 	}
 	if p.rec != nil {
 		if !p.enter(chatID, att.MaxConcurrent) {
-			slog.Warn("LLM-Proxy: Grenze gleichzeitiger Agenten erreicht", "chat", chatID, "grenze", att.MaxConcurrent)
+			slog.Warn("LLM proxy: limit of concurrent agents reached", "chat", chatID, "limit", att.MaxConcurrent)
 			p.rec.LimitHit(chatID, att.MaxConcurrent)
-			deny(w, http.StatusTooManyRequests, "Grenze gleichzeitiger Agenten dieses Chats erreicht (höchstens "+strconv.Itoa(att.MaxConcurrent)+")")
+			deny(w, http.StatusTooManyRequests, "limit of concurrent agents of this chat reached (at most "+strconv.Itoa(att.MaxConcurrent)+")")
 			return
 		}
 		defer p.leave(chatID)
@@ -163,28 +163,28 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case p.sem <- struct{}{}:
 		defer func() { <-p.sem }()
 	default:
-		deny(w, http.StatusTooManyRequests, "zu viele gleichzeitige Anfragen")
+		deny(w, http.StatusTooManyRequests, "too many concurrent requests")
 		return
 	}
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxBody+1))
 	if err != nil || len(body) > maxBody {
-		deny(w, http.StatusRequestEntityTooLarge, "Anfrage zu groß")
+		deny(w, http.StatusRequestEntityTooLarge, "request too large")
 		return
 	}
 	model, err := modelOf(body)
 	if err != nil {
-		slog.Warn("LLM-Proxy: Anfrage abgewiesen", "anbieter", provID, "grund", err)
+		slog.Warn("LLM proxy: request refused", "provider", provID, "reason", err)
 		deny(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if _, _, ok := p.cat.Lookup(provID + "/" + model); !ok {
-		slog.Warn("LLM-Proxy: Modell abgewiesen", "anbieter", provID, "modell", model)
-		deny(w, http.StatusForbidden, "Modell nicht freigegeben: "+model)
+		slog.Warn("LLM proxy: model refused", "provider", provID, "model", model)
+		deny(w, http.StatusForbidden, "model not allowed: "+model)
 		return
 	}
 	target, err := url.Parse(prov.Upstream)
 	if err != nil {
-		deny(w, http.StatusBadGateway, "Upstream-Adresse ungültig")
+		deny(w, http.StatusBadGateway, "upstream address invalid")
 		return
 	}
 	started := time.Now()
@@ -227,8 +227,8 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		},
 		FlushInterval: -1,
 		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, err error) {
-			slog.Error("LLM-Proxy: Upstream-Fehler", "anbieter", provID, "fehler", err)
-			deny(w, http.StatusBadGateway, "Upstream nicht erreichbar")
+			slog.Error("LLM proxy: upstream error", "provider", provID, "error", err)
+			deny(w, http.StatusBadGateway, "upstream not reachable")
 		},
 	}
 	rp.ServeHTTP(w, r)

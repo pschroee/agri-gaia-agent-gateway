@@ -1,6 +1,6 @@
-// Package artifacts legt Dateien in S3 (RustFS) ab und vermittelt die
-// Bestätigung durch den Nutzer: Ein Upload wartet, bis der Nutzer in der
-// Oberfläche entscheidet. Durchgesetzt wird das hier im Orchestrator, nicht
+// Package artifacts stores files in S3 (RustFS) and mediates the
+// confirmation by the user: an upload waits until the user decides in the
+// UI. This is enforced here in the orchestrator, not
 // in pi.
 package artifacts
 
@@ -18,9 +18,9 @@ import (
 	"github.com/minio/minio-go/v7/pkg/credentials"
 )
 
-var ErrTimeout = errors.New("keine Entscheidung innerhalb der Wartezeit")
+var ErrTimeout = errors.New("no decision within the waiting time")
 
-// Broker verbindet wartende Uploads mit den Entscheidungen aus der API.
+// Broker connects waiting uploads with the decisions from the API.
 type Broker struct {
 	mu      sync.Mutex
 	waiters map[string]chan bool
@@ -42,7 +42,7 @@ func (b *Broker) Register(id string) *Waiter {
 	return &Waiter{b: b, id: id, ch: ch}
 }
 
-// Resolve liefert die Entscheidung an den Wartenden. false, wenn keiner wartet.
+// Resolve delivers the decision to the waiter. false if nobody is waiting.
 func (b *Broker) Resolve(id string, approve bool) bool {
 	b.mu.Lock()
 	ch, ok := b.waiters[id]
@@ -60,7 +60,7 @@ func (b *Broker) Pending() int {
 	return len(b.waiters)
 }
 
-// Wait blockiert bis zur Entscheidung. Zeitüberschreitung gilt als Ablehnung.
+// Wait blocks until the decision. A timeout counts as rejection.
 func (w *Waiter) Wait(ctx context.Context, timeout time.Duration) (bool, error) {
 	t := time.NewTimer(timeout)
 	defer t.Stop()
@@ -84,7 +84,7 @@ func (w *Waiter) cancel() {
 	w.b.mu.Unlock()
 }
 
-// SanitizeName macht aus einer Angabe des Agenten einen flachen Dateinamen.
+// SanitizeName turns a name given by the agent into a flat file name.
 func SanitizeName(name string) string {
 	name = strings.ReplaceAll(name, "\\", "/")
 	name = strings.TrimSpace(path.Base(strings.TrimSpace(name)))
@@ -102,13 +102,13 @@ func SanitizeName(name string) string {
 	}, name)
 }
 
-// IsText schätzt, ob der Anfang einer Datei Text ist (für die Vorschau).
+// IsText estimates whether the start of a file is text (for the preview).
 func IsText(b []byte) bool {
 	if len(b) > 4096 {
 		b = b[:4096]
 	}
 	for len(b) > 0 && !utf8.Valid(b) && len(b) > 4088 {
-		b = b[:len(b)-1] // abgeschnittenes Zeichen am Ende
+		b = b[:len(b)-1] // truncated character at the end
 	}
 	if !utf8.Valid(b) {
 		return false
@@ -121,7 +121,7 @@ func IsText(b []byte) bool {
 	return true
 }
 
-// S3 ist die Ablage in RustFS (S3-kompatibel).
+// S3 is the store in RustFS (S3-compatible).
 type S3 struct {
 	c      *minio.Client
 	bucket string
