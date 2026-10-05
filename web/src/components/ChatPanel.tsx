@@ -52,6 +52,7 @@ import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTr
 import { Textarea } from "@/components/ui/textarea"
 import { useChatStream } from "@/hooks/useChatStream"
 import { useFlag } from "@/hooks/useFlag"
+import { useNow } from "@/hooks/useNow"
 import { useAgentTree } from "@/hooks/useAgentTree"
 import { useModelSwitch } from "@/hooks/useModelSwitch"
 import { useSlashCommands } from "@/hooks/useSlashCommands"
@@ -63,6 +64,7 @@ import { answerCostSum, costSplit } from "@/lib/llmcalls"
 import { contextTooLarge } from "@/lib/modelswitch"
 import { expectQueued, holdReasonText, queuePreview, queueRows, type QueueRow } from "@/lib/queue"
 import { runningCount } from "@/lib/background"
+import { countViolations } from "@/lib/delegationTemplates"
 import { chatRunSince } from "@/lib/runtime"
 import { assignRuns, groupRuns, limitNotices, subagentLimitLabel } from "@/lib/subagents"
 import { todoTimeline } from "@/lib/tasks"
@@ -77,13 +79,15 @@ type Props = {
   onChanged: () => void
   /** Meldet den Beginn des laufenden Durchgangs (ms) für die Chatliste; undefined, wenn nichts läuft. */
   onRunSince?: (since: number | undefined) => void
+  /** Eingebettet ins Seitenpanel der Plattform: ohne Zurück-Knopf (die Chatliste ist eine Auswahl). */
+  embed?: boolean
 }
 
 const errText = (e: unknown) => (e instanceof Error ? e.message : String(e))
 
 type Outbox = ReturnType<typeof useChatStream>["outbox"]
 
-export function ChatPanel({ chatId, runId, config, modelName, onChanged, onRunSince }: Props) {
+export function ChatPanel({ chatId, runId, config, modelName, onChanged, onRunSince, embed }: Props) {
   const s = useChatStream(chatId)
   const { chat } = s
   const runSince = chatRunSince(chat, s.transcript)
@@ -207,6 +211,7 @@ export function ChatPanel({ chatId, runId, config, modelName, onChanged, onRunSi
           answersCost={answersCost}
           connected={s.connected}
           runSince={runSince}
+          embed={embed}
           subagentsMenu={
             <SubagentsMenu
               chatId={chat.id}
@@ -325,6 +330,7 @@ export function ChatPanel({ chatId, runId, config, modelName, onChanged, onRunSi
         ) : (
           <>
             {runs.length > 0 && <SubagentBar chatId={chat.id} root={agentRoot} />}
+            <DelegationStrip chat={chat} violations={countViolations(s.socketCalls)} onOpen={() => setSheetOpen(true)} />
             <Transcript
               transcript={s.transcript}
               chatId={chat.id}
@@ -392,6 +398,41 @@ export function ChatPanel({ chatId, runId, config, modelName, onChanged, onRunSi
   )
 }
 
+/** Delegation und Übergriffe auf einen Blick, auch in schmaler Ansicht (Details im Seitenblatt). */
+function DelegationStrip({ chat, violations, onOpen }: { chat: Chat; violations: number; onOpen: () => void }) {
+  const d = chat.delegation
+  const now = useNow(30_000, !!d?.expires_at)
+  if (!d && violations === 0) return null
+  const expired = d?.expires_at ? new Date(d.expires_at).getTime() < now : false
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      className={cn(
+        "flex w-full flex-wrap items-center gap-x-2 border-b px-3 py-1 text-left text-xs lg:pointer-events-none",
+        violations > 0 ? "border-red-200 bg-red-50 text-red-800" : "bg-muted/40 text-muted-foreground",
+      )}
+      title="Delegation und Socket-Protokoll öffnen"
+    >
+      {d ? (
+        <span>
+          Delegation: {d.rules.length} {d.rules.length === 1 ? "Regel" : "Regeln"}
+          {d.expires_at && (expired ? ", abgelaufen" : `, bis ${new Date(d.expires_at).toLocaleString("de-DE", { dateStyle: "short", timeStyle: "short" })}`)}
+          {d.enforce === false && ", nur protokolliert"}
+        </span>
+      ) : (
+        <span>Ohne Delegation</span>
+      )}
+      {violations > 0 && (
+        <span className="font-medium">
+          · {violations} {violations === 1 ? "Übergriff" : "Übergriffe"}
+          {d?.enforce === false ? " protokolliert" : " abgewiesen"}
+        </span>
+      )}
+    </button>
+  )
+}
+
 function ChatHeader({
   chat,
   modelName,
@@ -403,7 +444,9 @@ function ChatHeader({
   tasksMenu,
   onChat,
   sidePanel,
+  embed,
 }: {
+  embed?: boolean
   chat: Chat
   modelName: (id: string) => string
   config?: Config
@@ -447,7 +490,7 @@ function ChatHeader({
   return (
     <header className="border-b px-3 py-2.5 sm:px-4">
       <div className="flex flex-wrap items-center gap-2">
-        <Button size="icon-sm" variant="ghost" className="md:hidden" asChild>
+        <Button size="icon-sm" variant="ghost" className={embed ? "hidden" : "md:hidden"} asChild>
           <a href="#/chats" title="Zurück zur Chatliste" aria-label="Zurück zur Chatliste">
             <ArrowLeftIcon />
           </a>
