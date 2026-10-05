@@ -25,7 +25,7 @@ By default the API is protected by a static token (`AGW_AUTH_MODE=token`, `AGW_A
 PKCE, confidential client `agw-agent`, sessions kept server-side), so the UI can be embedded as an iframe in the
 platform frontend (`AGW_FRAME_ANCESTORS`, compact layout at `/?embed=1`) and log in silently with `prompt=none`.
 Chats then belong to the logged-in user, and the per-chat token exchange uses that user's own token instead of a
-fixed account. Settings are listed in `.env.example`, details in `docs/entwurf.md`.
+fixed account. Settings are listed in `.env.example`, details in `docs/design.md`.
 
 ## Layout
 
@@ -38,7 +38,7 @@ fixed account. Settings are listed in `.env.example`, details in `docs/entwurf.m
 | `web/` | web UI (React, Vite), embedded into the orchestrator binary |
 | `third_party/` | adapted copies of `pi-subagents` and `pi-intercom` (MIT, see `VENDORED.md` in each) |
 | `e2e/` | end-to-end tests against a real model |
-| `docs/` | design notes from the thesis (German) |
+| `docs/` | design notes from the thesis |
 
 ## Development
 
@@ -53,7 +53,7 @@ Requires Docker and Go; `.env` from `.env.example` (never committed).
 ./dev.sh stop
 ```
 
-The HTTP API is described in `API.md`; design decisions and their rationale in `docs/entwurf.md`.
+The HTTP API is described in `API.md`; design decisions and their rationale in `docs/design.md`.
 
 ## License
 
