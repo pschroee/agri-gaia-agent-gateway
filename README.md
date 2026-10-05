@@ -18,6 +18,15 @@ What it does:
   `agw-agent` (`azp`), via OAuth 2.0 Token Exchange (RFC 8693) at the platform's Keycloak.
 - **Confirmation by the user** for writing calls, artifacts and internet access; a web UI and a CLI.
 
+## Login through the platform
+
+By default the API is protected by a static token (`AGW_AUTH_MODE=token`, `AGW_API_TOKEN`). With
+`AGW_AUTH_MODE=oidc` the orchestrator logs users in through the platform's Keycloak (authorization code flow with
+PKCE, confidential client `agw-agent`, sessions kept server-side), so the UI can be embedded as an iframe in the
+platform frontend (`AGW_FRAME_ANCESTORS`, compact layout at `/?embed=1`) and log in silently with `prompt=none`.
+Chats then belong to the logged-in user, and the per-chat token exchange uses that user's own token instead of a
+fixed account. Settings are listed in `.env.example`, details in `docs/entwurf.md`.
+
 ## Layout
 
 | Path | Content |
