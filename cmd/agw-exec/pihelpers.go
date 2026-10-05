@@ -16,17 +16,17 @@ import (
 	"unicode/utf8"
 )
 
-// --- Container von pi ---
+// --- pi's container ---
 
 const (
 	nodeBin = "/usr/local/bin/node"
 	piCLI   = "/usr/local/lib/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js"
 )
 
-// piEntry ersetzt das frühere entrypoint.sh (P3: pi braucht keine Shell).
-// Die Konfiguration kommt base64-kodiert aus der Umgebung und landet im
-// tmpfs unter /agent; danach ersetzt sich der Prozess durch pi, das damit
-// PID 1 wird.
+// piEntry replaces the former entrypoint.sh (P3: pi needs no shell).
+// The configuration comes base64-encoded from the environment and ends up in
+// the tmpfs under /agent; afterwards the process replaces itself with pi, which
+// thus becomes PID 1.
 func piEntry(args []string) error {
 	for _, d := range []string{"/agent/config", "/agent/sessions"} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
@@ -45,7 +45,7 @@ func piEntry(args []string) error {
 		}
 		_ = os.Unsetenv(env)
 	}
-	// Beim Bau installierte pi-Pakete (pi-subagents, rpiv-todo) sichtbar machen.
+	// Make the pi packages installed at build time (pi-subagents, rpiv-todo) visible.
 	_ = os.Remove("/agent/config/npm")
 	if err := os.Symlink("/opt/agw/pihome/npm", "/agent/config/npm"); err != nil {
 		return err
@@ -60,10 +60,10 @@ func piEntry(args []string) error {
 	return syscall.Exec(nodeBin, argv, os.Environ())
 }
 
-// put schreibt stdin nach p (Eltern werden angelegt), höchstens 256 MiB.
+// put writes stdin to p (parents are created), at most 256 MiB.
 func put(p string, r io.Reader) error {
 	if !filepath.IsAbs(p) || strings.ContainsRune(p, 0) {
-		return errors.New("Pfad muss absolut sein")
+		return errors.New("path must be absolute")
 	}
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		return err
@@ -73,7 +73,7 @@ func put(p string, r io.Reader) error {
 		return err
 	}
 	if len(data) > 256<<20 {
-		return errors.New("zu groß")
+		return errors.New("too large")
 	}
 	tmp := p + ".agw-tmp"
 	if err := os.WriteFile(tmp, data, 0o644); err != nil {
@@ -84,9 +84,9 @@ func put(p string, r io.Reader) error {
 
 var inputRe = regexp.MustCompile(`^([0-9a-f-]{36})_(.+?)(?:_\d+)?_input\.md$`)
 
-// pollSubagents liest neue, vollständige Zeilen aus den Sitzungsdateien der
-// Subagenten ab den übergebenen Positionen (früher ein Python-Skript; im
-// Container von pi gibt es kein Python mehr).
+// pollSubagents reads new, complete lines from the subagents' session files
+// from the given offsets onwards (formerly a Python script; pi's container
+// no longer has Python).
 func pollSubagents(in io.Reader, out io.Writer, root, statusGlob string) error {
 	var req struct {
 		Offsets map[string]int64 `json:"offsets"`
@@ -150,9 +150,9 @@ func pollSubagents(in io.Reader, out io.Writer, root, statusGlob string) error {
 	return json.NewEncoder(out).Encode(res)
 }
 
-// runInfo: Name und Zustand eines Subagenten-Laufs aus den Statusdateien von pi-subagents
-// (async-subagent-runs/<Lauf>/status.json), geordnet nach der Sitzungsdatei des Kindes. Nur so
-// lassen sich die Sitzungsordner (eigene Kennung) den Läufen von pi-subagents zuordnen.
+// runInfo: name and state of a subagent run from pi-subagents' status files
+// (async-subagent-runs/<run>/status.json), keyed by the child's session file. Only this way
+// can the session folders (own ID) be matched to the runs of pi-subagents.
 type runInfo struct {
 	Agent     string `json:"agent,omitempty"`
 	Label     string `json:"label,omitempty"`
@@ -165,7 +165,7 @@ type runInfo struct {
 
 var childSessionRe = regexp.MustCompile(`^/agent/sessions/[^/]+/([0-9a-fA-F-]{8,64})/run-(\d+)/session\.jsonl$`)
 
-// childKey: Kennung des Laufs wie sock.SessionKey (bei parallelen Kindern mit #n).
+// childKey: ID of the run like sock.SessionKey (with #n for parallel children).
 func childKey(file string) string {
 	m := childSessionRe.FindStringSubmatch(file)
 	if m == nil {
@@ -203,7 +203,7 @@ func subagentRuns(glob string) map[string]runInfo {
 	if len(paths) > 256 {
 		paths = paths[len(paths)-256:]
 	}
-	var own []status // Statusdatei des Kindes selbst: gewinnt gegen die Zeile im Workflow
+	var own []status // the child's own status file: wins over the line in the workflow
 	for _, p := range paths {
 		f, err := os.Open(p)
 		if err != nil {
@@ -255,7 +255,7 @@ func subagentRuns(glob string) map[string]runInfo {
 	return out
 }
 
-// killNode beendet alle node-Prozesse außer PID 1 (pi) und sich selbst.
+// killNode kills all node processes except PID 1 (pi) and itself.
 func killNode(proc string) int {
 	ents, _ := os.ReadDir(proc)
 	self := os.Getpid()
@@ -276,17 +276,17 @@ func killNode(proc string) int {
 	return n
 }
 
-// --- Ausführungs-Sandbox ---
+// --- execution sandbox ---
 
-// idle ist PID 1 der Ausführungs-Sandbox: Es tut nichts, räumt aber
-// verwaiste Prozesse ab (Hintergrundprozesse des Agenten landen hier).
-// PID 1 läuft als Agent-Nutzer; der Agent kann ihm also jedes Signal
-// schicken. Deshalb nimmt idle alle Signale an (signal.Notify ohne Liste) und
-// verwirft alles außer SIGCHLD: Ohne das beendeten Signale mit Standardaktion
-// „Kern“ (QUIT, ABRT, TRAP, SYS, ILL, SEGV, BUS, FPE) oder „Ende“ (STKFLT,
-// USR1, …) die Sandbox (Code-Review H2). SIGKILL und SIGSTOP stellt der
-// Kernel PID 1 innerhalb des Namensraums nicht zu. Der Orchestrator entfernt
-// Container mit SIGKILL von außen.
+// idle is PID 1 of the execution sandbox: it does nothing but reap
+// orphaned processes (the agent's background processes end up here).
+// PID 1 runs as the agent user; the agent can therefore send it any
+// signal. That is why idle accepts all signals (signal.Notify without a list) and
+// discards everything except SIGCHLD: otherwise signals with the default action
+// "core" (QUIT, ABRT, TRAP, SYS, ILL, SEGV, BUS, FPE) or "terminate" (STKFLT,
+// USR1, …) would end the sandbox (code review H2). The kernel does not deliver
+// SIGKILL and SIGSTOP to PID 1 inside the namespace. The orchestrator removes
+// containers with SIGKILL from outside.
 func idle() {
 	sigs := make(chan os.Signal, 64)
 	signal.Notify(sigs)

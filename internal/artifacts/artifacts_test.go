@@ -17,15 +17,15 @@ func TestBrokerApprove(t *testing.T) {
 	go func() {
 		time.Sleep(20 * time.Millisecond)
 		if !b.Resolve("a1", true) {
-			t.Error("Resolve fand keinen Wartenden")
+			t.Error("Resolve found no waiter")
 		}
 	}()
 	approved, err := w.Wait(context.Background(), time.Second)
 	if err != nil || !approved {
-		t.Fatalf("erwartet bestätigt: %v %v", approved, err)
+		t.Fatalf("expected approved: %v %v", approved, err)
 	}
 	if b.Resolve("a1", false) {
-		t.Fatal("zweites Resolve griff")
+		t.Fatal("second Resolve took effect")
 	}
 }
 
@@ -34,10 +34,10 @@ func TestBrokerTimeoutIsRejection(t *testing.T) {
 	w := b.Register("a2")
 	approved, err := w.Wait(context.Background(), 30*time.Millisecond)
 	if approved || err != ErrTimeout {
-		t.Fatalf("Zeitüberschreitung als Ablehnung erwartet: %v %v", approved, err)
+		t.Fatalf("expected timeout as rejection: %v %v", approved, err)
 	}
 	if b.Pending() != 0 {
-		t.Fatal("Wartender nach Zeitüberschreitung nicht entfernt")
+		t.Fatal("waiter not removed after timeout")
 	}
 }
 
@@ -47,7 +47,7 @@ func TestBrokerCancelledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if approved, err := w.Wait(ctx, time.Second); approved || err == nil {
-		t.Fatalf("abgebrochener Kontext: %v %v", approved, err)
+		t.Fatalf("cancelled context: %v %v", approved, err)
 	}
 }
 
@@ -56,7 +56,7 @@ func TestBrokerResolveBeforeWait(t *testing.T) {
 	w := b.Register("a4")
 	b.Resolve("a4", true)
 	if ok, err := w.Wait(context.Background(), time.Second); !ok || err != nil {
-		t.Fatalf("Entscheidung vor Wait ging verloren: %v %v", ok, err)
+		t.Fatalf("decision before Wait got lost: %v %v", ok, err)
 	}
 }
 
@@ -75,39 +75,39 @@ func TestBrokerConcurrent(t *testing.T) {
 
 func TestSanitizeName(t *testing.T) {
 	cases := map[string]string{
-		"bericht.csv":      "bericht.csv",
+		"report.csv":       "report.csv",
 		"../../etc/passwd": "passwd",
 		"a/b/c.txt":        "c.txt",
-		"  leer  .txt ":    "leer  .txt",
+		"  empty  .txt ":   "empty  .txt",
 		"":                 "",
 		"..":               "",
 		"Größe ä.txt":      "Größe ä.txt",
 	}
 	for in, want := range cases {
 		if got := SanitizeName(in); got != want {
-			t.Errorf("SanitizeName(%q) = %q, erwartet %q", in, got, want)
+			t.Errorf("SanitizeName(%q) = %q, want %q", in, got, want)
 		}
 	}
 }
 
 func TestIsText(t *testing.T) {
 	if !IsText([]byte("a,b\n1,2\n")) || IsText([]byte{0x89, 'P', 'N', 'G', 0, 1}) {
-		t.Fatal("IsText falsch")
+		t.Fatal("IsText wrong")
 	}
 }
 
-// Integration gegen RustFS: AGW_TEST_S3_ENDPOINT, RUSTFS_ACCESS_KEY, RUSTFS_SECRET_KEY.
+// Integration against RustFS: AGW_TEST_S3_ENDPOINT, RUSTFS_ACCESS_KEY, RUSTFS_SECRET_KEY.
 func TestS3Integration(t *testing.T) {
 	ep := os.Getenv("AGW_TEST_S3_ENDPOINT")
 	if ep == "" {
-		t.Skip("AGW_TEST_S3_ENDPOINT nicht gesetzt")
+		t.Skip("AGW_TEST_S3_ENDPOINT not set")
 	}
 	ctx := context.Background()
 	s, err := NewS3(ctx, ep, os.Getenv("RUSTFS_ACCESS_KEY"), os.Getenv("RUSTFS_SECRET_KEY"), "agw-test-"+time.Now().Format("150405"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	data := []byte("hallo welt")
+	data := []byte("hello world")
 	if err := s.Put(ctx, "pending/x/1", bytes.NewReader(data), int64(len(data)), "text/plain"); err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +115,7 @@ func TestS3Integration(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, _, err := s.Get(ctx, "pending/x/1"); err == nil {
-		t.Fatal("Quelle nach Move noch vorhanden")
+		t.Fatal("source still present after Move")
 	}
 	r, size, err := s.Get(ctx, "x/output/a.txt")
 	if err != nil {
@@ -123,8 +123,8 @@ func TestS3Integration(t *testing.T) {
 	}
 	got, _ := io.ReadAll(r)
 	r.Close()
-	if size != int64(len(data)) || string(got) != "hallo welt" {
-		t.Fatalf("gelesen: %q (%d)", got, size)
+	if size != int64(len(data)) || string(got) != "hello world" {
+		t.Fatalf("read: %q (%d)", got, size)
 	}
 	if err := s.Delete(ctx, "x/output/a.txt"); err != nil {
 		t.Fatal(err)

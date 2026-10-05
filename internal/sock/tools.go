@@ -1,21 +1,21 @@
 package sock
 
-// Werkzeug-Endpunkte am Socket von pi (E9). Die Extension exec-bridge.ts
-// ersetzt in pi die Werkzeuge bash, read, write, edit, grep, find und ls
-// durch Fassungen, die jede Operation hierher schicken. Der Orchestrator führt
-// sie in der Ausführungs-Sandbox aus und trägt jede in tool_executions ein.
+// Tool endpoints at pi's socket (E9). The extension exec-bridge.ts
+// replaces pi's tools bash, read, write, edit, grep, find and ls
+// with versions that send every operation here. The orchestrator executes
+// them in the execution sandbox and records each one in tool_executions.
 //
-//	POST /tool/op      eine Dateioperation oder Suche, Antwort JSON
-//	POST /tool/bash    Befehl, Antwort als NDJSON-Strom; Schließen der Verbindung bricht ab
-//	POST /tool/upload  mcp_upload_artifact: Datei aus der Ausführungs-Sandbox als Artefakt
-//	POST /tool/workflow workflowScript von pi-subagents: Worker in der Ausführungs-Sandbox,
-//	                   NDJSON in beide Richtungen auf einer Verbindung (Schließen bricht ab)
-//	POST /tool/bg/start  bash mit run_in_background: Hintergrundaufgabe starten, Antwort sofort
-//	POST /tool/bg/output bg_output: Stand und Ende der Ausgabe einer Hintergrundaufgabe
-//	POST /tool/bg/stop   bg_stop: Hintergrundaufgabe beenden
+//	POST /tool/op      a file operation or search, JSON response
+//	POST /tool/bash    command, response as an NDJSON stream; closing the connection aborts
+//	POST /tool/upload  mcp_upload_artifact: file from the execution sandbox as an artifact
+//	POST /tool/workflow workflowScript of pi-subagents: worker in the execution sandbox,
+//	                   NDJSON in both directions on one connection (closing aborts)
+//	POST /tool/bg/start  bash with run_in_background: start a background task, immediate response
+//	POST /tool/bg/output bg_output: state and tail of the output of a background task
+//	POST /tool/bg/stop   bg_stop: end a background task
 //
-// Der Socket von pi ist nur im Container von pi eingehängt; die
-// Ausführungs-Sandbox hat einen eigenen Socket ohne diese Endpunkte.
+// pi's socket is mounted only in the pi container; the execution
+// sandbox has its own socket without these endpoints.
 
 import (
 	"bufio"
@@ -44,33 +44,33 @@ import (
 	"agw/internal/store"
 )
 
-// ToolRunner führt Operationen in der Ausführungs-Sandbox aus (execbox.Client).
+// ToolRunner executes operations in the execution sandbox (execbox.Client).
 type ToolRunner interface {
 	Run(ctx context.Context, req execproto.Request, onData func([]byte)) (execproto.Frame, error)
 }
 
-// DuplexRunner führt eine Operation mit weiteren Eingaben aus (workflow; execbox.Client).
+// DuplexRunner executes an operation with further input (workflow; execbox.Client).
 type DuplexRunner interface {
 	RunDuplex(ctx context.Context, req execproto.Request, input <-chan []byte, onData func([]byte)) (execproto.Frame, error)
 }
 
-// BackgroundTasks sind die Hintergrundaufgaben des Platzes (bgtask.Registry).
+// BackgroundTasks are the background tasks of the slot (bgtask.Registry).
 type BackgroundTasks interface {
 	Start(ctx context.Context, p bgtask.StartParams) (store.BackgroundTask, error)
 	Output(ctx context.Context, chatID, id string) (store.BackgroundTask, string, error)
 	Stop(ctx context.Context, chatID, id, by string) (store.BackgroundTask, error)
 	Max() int
-	// Adopt übernimmt einen laufenden Vordergrundbefehl als Hintergrundaufgabe.
+	// Adopt takes over a running foreground command as a background task.
 	Adopt(ctx context.Context, p bgtask.StartParams, logPath string, soFar []byte, cancel context.CancelFunc) (*bgtask.Adopted, error)
 }
 
-// ToolRecorder speichert eine ausgeführte Operation (Manager).
+// ToolRecorder stores an executed operation (manager).
 type ToolRecorder interface {
 	RecordToolExecution(e store.ToolExecution)
 }
 
-// toolOps: welche Operationen ein Werkzeug auslösen darf. pi ruft sie nur so
-// auf; die Liste hält das Protokoll lesbar und schließt Mischformen aus.
+// toolOps: which operations a tool may trigger. pi only calls them this way;
+// the list keeps the log readable and rules out mixed forms.
 var toolOps = map[string][]string{
 	"bash":  {execproto.OpBash},
 	"read":  {execproto.OpAccess, execproto.OpRead, execproto.OpImageType, execproto.OpStat, execproto.OpReadLines},
@@ -81,16 +81,16 @@ var toolOps = map[string][]string{
 	"find":  {execproto.OpGlob, execproto.OpStat},
 }
 
-// UploadTool ist das MCP-Werkzeug, dessen Datei in der Ausführungs-Sandbox liegt.
+// UploadTool is the MCP tool whose file is in the execution sandbox.
 const UploadTool = "mcp_upload_artifact"
 
-// Werkzeuge der Hintergrundaufgaben (bash mit run_in_background startet sie).
+// Tools of the background tasks (bash with run_in_background starts them).
 const (
 	BgOutputTool = "bg_output"
 	BgStopTool   = "bg_stop"
 )
 
-// ExecutedTools sind die Werkzeuge, deren Ausführung am Socket belegt wird.
+// ExecutedTools are the tools whose execution is recorded at the socket.
 func ExecutedTools() []string {
 	out := []string{UploadTool, BgOutputTool, BgStopTool}
 	for k := range toolOps {
@@ -101,9 +101,9 @@ func ExecutedTools() []string {
 
 var sessionRe = regexp.MustCompile(`^/agent/sessions/[^/]+/([0-9a-fA-F-]{8,64})/run-(\d+)/session\.jsonl$`)
 
-// SessionKey macht aus dem Pfad der Sitzungsdatei die Kennung für das
-// Protokoll: "main" für die Hauptsitzung, sonst die Kennung des
-// Subagenten-Laufs (bei parallelen Kindern mit #n), wie in subagent_entries.
+// SessionKey turns the path of the session file into the ID for the
+// log: "main" for the main session, otherwise the ID of the
+// subagent run (with #n for parallel children), as in subagent_entries.
 func SessionKey(file string) string {
 	m := sessionRe.FindStringSubmatch(file)
 	if m == nil {
@@ -132,7 +132,7 @@ type toolRequest struct {
 	Tool        string            `json:"tool"`
 	SessionFile string            `json:"sessionFile"`
 	Req         execproto.Request `json:"req"`
-	// nur /tool/upload
+	// only /tool/upload
 	Path string `json:"path"`
 	Name string `json:"name"`
 }
@@ -141,24 +141,24 @@ type toolHandler struct {
 	*handler
 	run ToolRunner
 	rec ToolRecorder
-	// Grenzen je Platz (N4): höchstens maxToolRequests Anfragen zugleich, und Operationen mit
-	// großem Inhalt (read, write, Upload) belegen ein Byte-Budget. Ein read kann bis zu
-	// MaxFileBytes liefern, die im Orchestrator als Rohdaten, JSON und Antwort mehrfach im
-	// Speicher stehen; ohne Grenze belegten 64 parallele reads mehrere GB.
+	// Limits per slot (N4): at most maxToolRequests requests at once, and operations with
+	// large content (read, write, upload) take from a byte budget. A read can return up to
+	// MaxFileBytes, which sit in the orchestrator's memory several times over as raw data, JSON
+	// and response; without a limit, 64 parallel reads took several GB.
 	slots chan struct{}
 	bytes *semaphore.Weighted
-	bg    BackgroundTasks // nil: keine Hintergrundaufgaben
-	fg    *Foreground     // laufende Vordergrundbefehle (Stopp, Umwandlung durch den Nutzer)
+	bg    BackgroundTasks // nil: no background tasks
+	fg    *Foreground     // running foreground commands (stop, conversion by the user)
 }
 
 const (
 	maxToolRequests = 32
-	// toolByteBudget: zwei reads an der Grenze (MaxFileBytes) zugleich.
+	// toolByteBudget: two reads at the limit (MaxFileBytes) at once.
 	toolByteBudget = 2 * execproto.MaxFileBytes
 )
 
-// acquire hält eine Anfrage an, bis die Grenzen des Platzes sie zulassen; weight ist der
-// erwartete Inhalt in Bytes (0: nur die Anzahl zählt).
+// acquire holds a request until the slot's limits allow it; weight is the
+// expected content in bytes (0: only the count matters).
 func (th *toolHandler) acquire(ctx context.Context, weight int64) (func(), error) {
 	select {
 	case th.slots <- struct{}{}:
@@ -180,22 +180,22 @@ func (th *toolHandler) acquire(ctx context.Context, weight int64) (func(), error
 	}, nil
 }
 
-// NewPiHandler bedient den Socket von pi: MCP und die Werkzeug-Endpunkte (ohne Hintergrundaufgaben).
+// NewPiHandler serves pi's socket: MCP and the tool endpoints (without background tasks).
 func NewPiHandler(slotID string, b Backend, maxBytes int64, run ToolRunner, rec ToolRecorder) http.Handler {
 	return NewPiHandlerBg(slotID, b, maxBytes, run, rec, nil)
 }
 
-// NewPiHandlerBg ist NewPiHandler mit den Hintergrundaufgaben des Platzes.
+// NewPiHandlerBg is NewPiHandler with the slot's background tasks.
 func NewPiHandlerBg(slotID string, b Backend, maxBytes int64, run ToolRunner, rec ToolRecorder, bg BackgroundTasks) http.Handler {
 	return NewPiHandlerFg(slotID, b, maxBytes, run, rec, bg, NewForeground())
 }
 
-// NewPiHandlerFg ist NewPiHandlerBg mit dem Register der Vordergrundbefehle, über das der Nutzer
-// einen laufenden Befehl stoppt oder in eine Hintergrundaufgabe umwandelt.
+// NewPiHandlerFg is NewPiHandlerBg with the register of foreground commands, through which the user
+// stops a running command or converts it into a background task.
 func NewPiHandlerFg(slotID string, b Backend, maxBytes int64, run ToolRunner, rec ToolRecorder, bg BackgroundTasks, fg *Foreground) http.Handler {
 	h := newHandler(slotID, b, maxBytes)
-	h.run = run      // Plattform-Uploads über MCP lesen aus derselben Ausführungs-Sandbox
-	h.apiVia = "api" // REST-Endpunkt am Socket von pi: das HTTP-Werkzeug der Variante api
+	h.run = run      // platform uploads via MCP read from the same execution sandbox
+	h.apiVia = "api" // REST endpoint at pi's socket: the HTTP tool of the variant api
 	th := &toolHandler{handler: h, run: run, rec: rec, slots: make(chan struct{}, maxToolRequests), bytes: semaphore.NewWeighted(toolByteBudget), bg: bg, fg: fg}
 	mux := http.NewServeMux()
 	mux.Handle("/mcp", h.mcp)
@@ -210,9 +210,9 @@ func NewPiHandlerFg(slotID string, b Backend, maxBytes int64, run ToolRunner, re
 	return h.withPlatformAPI(mux)
 }
 
-// decode liest und prüft die Anfrage; bei einem Fehler ist die Antwort schon geschrieben. Vor
-// dem Lesen des Rumpfs gelten die Grenzen des Platzes (N4); release gibt sie wieder frei und
-// ist auch bei einem Fehler aufzurufen.
+// decode reads and checks the request; on an error the response has already been written. The
+// slot's limits (N4) apply before reading the body; release frees them again and must
+// be called on an error too.
 func (th *toolHandler) decode(w http.ResponseWriter, r *http.Request, bash bool) (tr toolRequest, chat string, release func(), ok bool) {
 	release = func() {}
 	rel, err := th.acquire(r.Context(), max(r.ContentLength, 0))
@@ -224,7 +224,7 @@ func (th *toolHandler) decode(w http.ResponseWriter, r *http.Request, bash bool)
 	if !ok {
 		return tr, chat, release, false
 	}
-	// Ein read (auch für den Upload) kann bis zu Max liefern: zusätzlich belegen.
+	// A read (also for the upload) can return up to Max: reserve that in addition.
 	extra := int64(0)
 	switch {
 	case r.URL.Path == "/tool/upload":
@@ -291,7 +291,7 @@ func contains(l []string, s string) bool {
 	return false
 }
 
-// digest sammelt Prüfsumme, Größe und einen Auszug (Anfang und Ende) der Ausgabe.
+// digest collects checksum, size and an excerpt (start and end) of the output.
 type digest struct {
 	h     hash.Hash
 	n     int64
@@ -322,14 +322,14 @@ func (d *digest) Write(p []byte) {
 func (d *digest) Excerpt() string {
 	s := string(d.head)
 	if d.n > int64(len(d.head)+len(d.tail)) {
-		s += fmt.Sprintf("\n… [%d Bytes ausgelassen] …\n", d.n-int64(len(d.head)+len(d.tail)))
+		s += fmt.Sprintf("\n… [%d bytes omitted] …\n", d.n-int64(len(d.head)+len(d.tail)))
 	}
 	s += string(d.tail)
 	return noNUL(s)
 }
 
-// noNUL: Postgres nimmt kein NUL in text und kein \u0000 in jsonb an (K1). Der Auszug
-// ersetzt es durch U+2400 (␀); Prüfsumme und Größe gelten für die echten Bytes.
+// noNUL: Postgres accepts no NUL in text and no \u0000 in jsonb (K1). The excerpt
+// replaces it with U+2400 (␀); checksum and size apply to the real bytes.
 func noNUL(s string) string {
 	return strings.ToValidUTF8(strings.ReplaceAll(s, "\x00", "\u2400"), "\uFFFD")
 }
@@ -338,15 +338,15 @@ func (d *digest) Sum() string { return hex.EncodeToString(d.h.Sum(nil)) }
 
 const excerptBytes = 4096
 
-// summarize kürzt die Argumente für das Protokoll; Dateiinhalte stehen nur als
-// Größe und Prüfsumme darin.
+// summarize shortens the arguments for the log; file contents appear only as
+// size and checksum.
 func summarize(req execproto.Request) json.RawMessage {
 	m := map[string]any{}
 	switch req.Op {
 	case execproto.OpBash, execproto.OpBg:
 		c := req.Command
 		if len(c) > 4000 {
-			c = strings.ToValidUTF8(c[:4000], "") + " … [gekürzt]"
+			c = strings.ToValidUTF8(c[:4000], "") + " … [truncated]"
 		}
 		m["command"], m["cwd"] = c, req.Cwd
 		if req.Timeout > 0 {
@@ -415,22 +415,22 @@ func (th *toolHandler) op(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, f)
 }
 
-// bash streamt die Ausgabe als NDJSON: {"data":"<base64>"} je Stück und zum
-// Schluss {"done":true,"exit":n} bzw. {"done":true,"error":…,"code":…}.
+// bash streams the output as NDJSON: {"data":"<base64>"} per chunk and at the
+// end {"done":true,"exit":n} or {"done":true,"error":…,"code":…}.
 //
-// Der Befehl läuft in einem eigenen Kontext, damit der Nutzer ihn stoppen (Code "stopped") oder in
-// eine Hintergrundaufgabe umwandeln kann (Code "backgrounded", Kennung in background): Dann endet
-// der Werkzeugaufruf sofort, der Befehl läuft weiter, und seine Ausgabe geht an die Aufgabe. Die
-// Zeitgrenze des Befehls hält deshalb der Orchestrator, nicht agw-exec; nach einer Umwandlung gilt
-// sie nicht mehr. Schließt pi die Verbindung (Abbruch), endet der Befehl wie bisher.
+// The command runs in its own context so that the user can stop it (code "stopped") or convert
+// it into a background task (code "backgrounded", ID in background): then the tool call ends
+// immediately, the command keeps running, and its output goes to the task. The command's
+// timeout is therefore enforced by the orchestrator, not agw-exec; after a conversion it no longer
+// applies. If pi closes the connection (abort), the command ends as before.
 func (th *toolHandler) bash(w http.ResponseWriter, r *http.Request) {
 	tr, chat, release, ok := th.decode(w, r, true)
 	defer release()
 	if !ok {
 		return
 	}
-	// Die ganze Ausgabe landet in einer Datei, deren Pfad der Orchestrator aus der toolCallId
-	// bildet (H1); die Bridge nennt ihn dem Modell wie pi.
+	// The full output ends up in a file whose path the orchestrator derives from the toolCallId
+	// (H1); the bridge tells the model the path, as pi does.
 	tr.Req.Spill = execproto.SpillPath(tr.ToolCallID)
 	args := summarize(tr.Req)
 	start := time.Now()
@@ -447,7 +447,7 @@ func (th *toolHandler) bash(w http.ResponseWriter, r *http.Request) {
 	op := th.fg.add(tr.ToolCallID, chat, opCancel)
 	finished := make(chan struct{})
 	defer close(op.done)
-	// Abbruch durch pi (Verbindung zu), solange der Befehl nicht umgewandelt ist.
+	// Abort by pi (connection closed), as long as the command has not been converted.
 	var detached atomic.Bool
 	go func() {
 		select {
@@ -470,8 +470,8 @@ func (th *toolHandler) bash(w http.ResponseWriter, r *http.Request) {
 	req.Timeout = 0
 	req.Env = withToolCallEnv(req.Env, tr.ToolCallID, SessionKey(tr.SessionFile))
 
-	// Bis zur Umwandlung geht die Ausgabe an pi; danach an die Hintergrundaufgabe. soFar hält das
-	// Ende der bisherigen Ausgabe für die Aufgabe.
+	// Until the conversion the output goes to pi; after that to the background task. soFar keeps the
+	// tail of the output so far for the task.
 	var mu sync.Mutex
 	var adopted *bgtask.Adopted
 	soFar := bgtask.NewTail(bgtask.TailBytes)
@@ -548,7 +548,7 @@ func (th *toolHandler) bash(w http.ResponseWriter, r *http.Request) {
 				timer.Stop()
 			}
 			th.fg.remove(tr.ToolCallID, op)
-			// Der Vordergrundteil ist ausgeführt; der Rest steht in background_tasks.
+			// The foreground part has been executed; the rest is in background_tasks.
 			th.record(chat, tr, execproto.OpBash, args, execproto.Frame{Error: "moved to background as " + a.Task.ID, Code: "backgrounded"}, nil, d, start)
 			_ = enc.Encode(execproto.Frame{Done: true, Code: "backgrounded", Background: a.Task.ID, FullOutputPath: tr.Req.Spill})
 			mu.Unlock()
@@ -564,12 +564,12 @@ func (th *toolHandler) bash(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// ToolCallEnv: Umgebungsvariable, über die agw-artifact die Kennung des Werkzeugaufrufs erfährt (für die
-// Anzeige des Artefakts im Verlauf). Der Orchestrator setzt sie nach der Prüfung selbst.
+// ToolCallEnv: environment variable through which agw-artifact learns the ID of the tool call (for
+// showing the artifact in the history). The orchestrator sets it itself after the check.
 const ToolCallEnv = "PI_AGW_TOOL_CALL_ID"
 
-// SessionEnv: Sitzung des Aufrufs („main“ oder Subagenten-Lauf, wie SessionKey), für die Zuordnung von
-// Bestätigungen und Socket-Aufrufen in der UI.
+// SessionEnv: session of the call ("main" or subagent run, like SessionKey), for mapping
+// approvals and socket calls in the UI.
 const SessionEnv = "PI_AGW_SESSION"
 
 func withToolCallEnv(env map[string]string, id, session string) map[string]string {
@@ -582,14 +582,14 @@ func withToolCallEnv(env map[string]string, id, session string) map[string]strin
 	return out
 }
 
-// InternetStater meldet den Internet-Schalter eines Chats (Manager). Die Extension web-gate.ts in pi
-// blendet damit web_search und web_extract ein und aus.
+// InternetStater reports a chat's internet switch (manager). The extension web-gate.ts in pi
+// uses it to show and hide web_search and web_extract.
 type InternetStater interface {
 	InternetOn(ctx context.Context, chatID string) bool
 }
 
-// internetState: GET /tool/internet → {"enabled": bool}. Durchgesetzt wird der Schalter am Web-Proxy;
-// das hier steuert nur, ob die Werkzeuge dem Modell angeboten werden.
+// internetState: GET /tool/internet → {"enabled": bool}. The switch is enforced at the web proxy;
+// this only controls whether the tools are offered to the model.
 func (th *toolHandler) internetState(w http.ResponseWriter, r *http.Request) {
 	chat, err := th.chat("tool", "tool", "internet")
 	if err != nil {
@@ -603,9 +603,9 @@ func (th *toolHandler) internetState(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"enabled": on})
 }
 
-// upload: mcp_upload_artifact nennt einen Pfad; die Datei liegt in der
-// Ausführungs-Sandbox. Der Orchestrator liest sie dort (protokolliert wie ein
-// read) und reicht sie an den Upload mit Bestätigung weiter.
+// upload: mcp_upload_artifact names a path; the file is in the
+// execution sandbox. The orchestrator reads it there (logged like a
+// read) and passes it on to the upload with confirmation.
 func (th *toolHandler) upload(w http.ResponseWriter, r *http.Request) {
 	tr, chat, release, ok := th.decode(w, r, false)
 	defer release()
@@ -633,7 +633,7 @@ func (th *toolHandler) upload(w http.ResponseWriter, r *http.Request) {
 			msg = err.Error()
 		}
 		if f.Code == "EFBIG" {
-			th.b.LogCall(th.slot, chat, "mcp", "upload", tr.Path, "abgewiesen: zu groß")
+			th.b.LogCall(th.slot, chat, "mcp", "upload", tr.Path, "refused: too large")
 			msg = fmt.Sprintf("file larger than %d MB", th.max>>20)
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"error": msg})
@@ -655,15 +655,15 @@ func (th *toolHandler) upload(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, res)
 }
 
-// WorkflowTool: Unter diesem Werkzeug läuft das Skript eines Workflows (subagent mit
-// workflowScript); die Ausführung wird wie jede andere protokolliert.
+// WorkflowTool: the script of a workflow (subagent with workflowScript) runs under this
+// tool; the execution is logged like any other.
 const WorkflowTool = "subagent"
 
-// workflow: Die Bridge (remote-worker.mjs) ersetzt den Worker-Thread, in dem pi-subagents das
-// Skript eines Workflows ausführt. Erste Zeile der Anfrage: toolCallId, Sitzung und der
-// Quelltext des Workers (von pi-subagents, nicht vom Agenten); danach je Zeile eine Nachricht
-// des Hosts {"m": …}. Die Antwort trägt je Zeile, was der Worker in der Ausführungs-Sandbox
-// schreibt, und zum Schluss {"done":true,"exit":n}. Beide Richtungen laufen gleichzeitig.
+// workflow: the bridge (remote-worker.mjs) replaces the worker thread in which pi-subagents runs
+// the script of a workflow. First line of the request: toolCallId, session and the
+// worker's source code (from pi-subagents, not from the agent); after that one host message
+// {"m": …} per line. The response carries, line by line, what the worker writes in the execution
+// sandbox, and at the end {"done":true,"exit":n}. Both directions run at the same time.
 func (th *toolHandler) workflow(w http.ResponseWriter, r *http.Request) {
 	dr, ok := th.run.(DuplexRunner)
 	if !ok {
@@ -708,7 +708,7 @@ func (th *toolHandler) workflow(w http.ResponseWriter, r *http.Request) {
 	}
 	defer release()
 	ctx := r.Context()
-	// Nachrichten des Hosts; die erste („start“) trägt das Skript des Agenten fürs Protokoll.
+	// Messages from the host; the first one ("start") carries the agent's script for the log.
 	var script string
 	scriptSeen := make(chan struct{})
 	input := make(chan []byte, 64)
@@ -760,7 +760,7 @@ func (th *toolHandler) workflow(w http.ResponseWriter, r *http.Request) {
 	sum := sha256.Sum256([]byte(script))
 	sc := script
 	if len(sc) > 4000 {
-		sc = strings.ToValidUTF8(sc[:4000], "") + " … [gekürzt]"
+		sc = strings.ToValidUTF8(sc[:4000], "") + " … [truncated]"
 	}
 	args, _ := json.Marshal(map[string]any{"workflowScript": noNUL(sc), "bytes": len(script), "sha256": hex.EncodeToString(sum[:])})
 	th.record(chat, toolRequest{ToolCallID: tr.ToolCallID, Tool: tr.Tool, SessionFile: tr.SessionFile}, execproto.OpWorkflow, args, f, err, d, start)
@@ -776,7 +776,7 @@ func (th *toolHandler) workflow(w http.ResponseWriter, r *http.Request) {
 	_ = rc.Flush()
 }
 
-// readLine liest eine Zeile (ohne „\n“) mit Obergrenze.
+// readLine reads a line (without "\n") with an upper limit.
 func readLine(r *bufio.Reader, max int) ([]byte, error) {
 	var buf []byte
 	for {

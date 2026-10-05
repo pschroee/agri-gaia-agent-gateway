@@ -66,25 +66,25 @@ func tarNames(t *testing.T, data []byte) map[string]string {
 	}
 }
 
-// Das Archiv stammt aus der Sandbox und ist vom Agenten gestaltbar: Nur
-// unbedenkliche Einträge werden eingespielt.
+// The archive comes from the sandbox and can be shaped by the agent: only
+// harmless entries are restored.
 func TestFilterWorkspaceArchive(t *testing.T) {
 	in := makeTarGz(t, []tarEntry{
 		{name: "./", typ: tar.TypeDir},
 		{name: "./plot.png", typ: tar.TypeReg, body: "png"},
 		{name: "./sub/", typ: tar.TypeDir},
-		{name: "./sub/skript.py", typ: tar.TypeReg, body: "print(1)"},
-		{name: "./link", typ: tar.TypeSymlink, link: "/etc/passwd"},     // Symlink bleibt Symlink
-		{name: "./hard", typ: tar.TypeLink, link: "./plot.png"},         // harter Link im Archiv: ok
-		{name: "./hardaus", typ: tar.TypeLink, link: "/etc/passwd"},     // harter Link nach außen: weg
-		{name: "../aussen.txt", typ: tar.TypeReg, body: "x"},            // ..: weg
-		{name: "/abs.txt", typ: tar.TypeReg, body: "x"},                 // absolut: weg
-		{name: "./a/../../b.txt", typ: tar.TypeReg, body: "x"},          // ..: weg
-		{name: "./inputs/daten.csv", typ: tar.TypeReg, body: "x"},       // kommt aus den Eingaben: weg
-		{name: "./home", typ: tar.TypeSymlink, link: "/home/agent"},     // Symlink auf Ordner …
-		{name: "./home/.bashrc", typ: tar.TypeReg, body: "boese"},       // … darunter schreiben: weg
-		{name: "./fifo", typ: tar.TypeFifo},                             // FIFO: weg
-		{name: "./link", typ: tar.TypeReg, body: "ersetzt den Symlink"}, // Symlink ersetzen: weg
+		{name: "./sub/script.py", typ: tar.TypeReg, body: "print(1)"},
+		{name: "./link", typ: tar.TypeSymlink, link: "/etc/passwd"},      // symlink stays a symlink
+		{name: "./hard", typ: tar.TypeLink, link: "./plot.png"},          // hard link within the archive: ok
+		{name: "./hardout", typ: tar.TypeLink, link: "/etc/passwd"},      // hard link to the outside: dropped
+		{name: "../outside.txt", typ: tar.TypeReg, body: "x"},            // ..: dropped
+		{name: "/abs.txt", typ: tar.TypeReg, body: "x"},                  // absolute: dropped
+		{name: "./a/../../b.txt", typ: tar.TypeReg, body: "x"},           // ..: dropped
+		{name: "./inputs/data.csv", typ: tar.TypeReg, body: "x"},         // comes from the inputs: dropped
+		{name: "./home", typ: tar.TypeSymlink, link: "/home/agent"},      // symlink to a folder …
+		{name: "./home/.bashrc", typ: tar.TypeReg, body: "evil"},         // … writing below it: dropped
+		{name: "./fifo", typ: tar.TypeFifo},                              // FIFO: dropped
+		{name: "./link", typ: tar.TypeReg, body: "replaces the symlink"}, // replacing the symlink: dropped
 	})
 	var out bytes.Buffer
 	kept, dropped, err := filterWorkspaceArchive(bytes.NewReader(in), &out, 1<<20)
@@ -92,7 +92,7 @@ func TestFilterWorkspaceArchive(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := tarNames(t, out.Bytes())
-	want := map[string]string{"plot.png": "png", "sub/": "", "sub/skript.py": "print(1)", "link": "->/etc/passwd", "hard": "->plot.png", "home": "->/home/agent"}
+	want := map[string]string{"plot.png": "png", "sub/": "", "sub/script.py": "print(1)", "link": "->/etc/passwd", "hard": "->plot.png", "home": "->/home/agent"}
 	var gk, wk []string
 	for k := range got {
 		gk = append(gk, k+"="+got[k])
@@ -103,7 +103,7 @@ func TestFilterWorkspaceArchive(t *testing.T) {
 	sort.Strings(gk)
 	sort.Strings(wk)
 	if strings.Join(gk, ",") != strings.Join(wk, ",") {
-		t.Fatalf("übernommen:\n%v\nerwartet:\n%v", gk, wk)
+		t.Fatalf("kept:\n%v\nwant:\n%v", gk, wk)
 	}
 	if kept != 6 || dropped != 8 {
 		t.Fatalf("kept=%d dropped=%d", kept, dropped)
@@ -111,26 +111,26 @@ func TestFilterWorkspaceArchive(t *testing.T) {
 }
 
 func TestFilterWorkspaceArchiveLimitAndGarbage(t *testing.T) {
-	in := makeTarGz(t, []tarEntry{{name: "gross.bin", typ: tar.TypeReg, body: strings.Repeat("x", 100)}})
+	in := makeTarGz(t, []tarEntry{{name: "large.bin", typ: tar.TypeReg, body: strings.Repeat("x", 100)}})
 	if _, _, err := filterWorkspaceArchive(bytes.NewReader(in), io.Discard, 50); err == nil {
-		t.Fatal("Grenze beim Entpacken nicht durchgesetzt")
+		t.Fatal("limit not enforced when unpacking")
 	}
-	if _, _, err := filterWorkspaceArchive(strings.NewReader("kein gzip"), io.Discard, 50); err == nil {
-		t.Fatal("kein Fehler bei kaputtem Archiv")
+	if _, _, err := filterWorkspaceArchive(strings.NewReader("not gzip"), io.Discard, 50); err == nil {
+		t.Fatal("no error for a broken archive")
 	}
 }
 
-// Das Sicherungsskript schließt inputs/ und Paket- und Cache-Ordner aus, in find
-// (Größe, Fingerabdruck) und tar gleichermaßen.
+// The backup script excludes inputs/ and package and cache folders, in find
+// (size, fingerprint) and tar alike.
 func TestWorkspaceSaveScriptExcludes(t *testing.T) {
 	for _, x := range []string{"-path ./inputs", "--exclude=./inputs"} {
 		if !strings.Contains(workspaceSaveScript, x) {
-			t.Errorf("fehlt: %s", x)
+			t.Errorf("missing: %s", x)
 		}
 	}
 	for _, x := range []string{"node_modules", ".venv", "__pycache__", ".cache"} {
 		if !strings.Contains(workspaceSaveScript, "-name "+x) || !strings.Contains(workspaceSaveScript, "--exclude="+x) {
-			t.Errorf("Ausschluss %s fehlt in find oder tar", x)
+			t.Errorf("exclusion %s missing in find or tar", x)
 		}
 	}
 }
@@ -148,29 +148,29 @@ func TestSnapshotWorkspaceParsing(t *testing.T) {
 	if err != nil || s.Status != "SKIP" || s.Files != 3 || s.Size != 999 {
 		t.Fatalf("%+v %v", s, err)
 	}
-	s, err = snapshotWorkspace(ctx, stubExec{out: append([]byte("DATA fp 1 3\n"), "gz"...)}, 100, "alt")
+	s, err = snapshotWorkspace(ctx, stubExec{out: append([]byte("DATA fp 1 3\n"), "gz"...)}, 100, "old")
 	if err != nil || s.Status != "DATA" || string(s.Archive) != "gz" || s.Fingerprint != "fp" {
 		t.Fatalf("%+v %v", s, err)
 	}
-	// Mehr als die harte Obergrenze (Datei während des Packens gewachsen): ausgelassen.
+	// More than the hard upper bound (file grew while packing): skipped.
 	big := append([]byte("DATA fp 1 3\n"), bytes.Repeat([]byte("x"), int(workspaceArchiveCap(100))+1)...)
 	s, err = snapshotWorkspace(ctx, stubExec{out: big, err: errors.New("exit 141")}, 100, "")
 	if err != nil || s.Status != "SKIP" || s.Archive != nil {
 		t.Fatalf("%+v %v", s, err)
 	}
-	if _, err := snapshotWorkspace(ctx, stubExec{out: []byte("Unsinn")}, 100, ""); err == nil {
-		t.Fatal("unerwartete Ausgabe nicht erkannt")
+	if _, err := snapshotWorkspace(ctx, stubExec{out: []byte("nonsense")}, 100, ""); err == nil {
+		t.Fatal("unexpected output not detected")
 	}
 }
 
 func TestFormatMB(t *testing.T) {
-	if got := formatMB(1258291); got != "1,2 MB" {
+	if got := formatMB(1258291); got != "1.2 MB" {
 		t.Fatal(got)
 	}
 }
 
-// Nach einem Lauf wird /workspace gesichert, beim Fortsetzen in der frischen
-// Sandbox vor dem ersten Auftrag eingespielt.
+// After a run /workspace is backed up, and on resuming it is restored in the
+// fresh sandbox before the first message.
 func TestWorkspaceSavedAfterRunAndRestoredOnResume(t *testing.T) {
 	e := setup(t)
 	ctx := context.Background()
@@ -181,13 +181,13 @@ func TestWorkspaceSavedAfterRunAndRestoredOnResume(t *testing.T) {
 	archive := makeTarGz(t, []tarEntry{
 		{name: "./", typ: tar.TypeDir},
 		{name: "./plot.png", typ: tar.TypeReg, body: "png"},
-		{name: "./notiz.txt", typ: tar.TypeReg, body: "hallo"},
+		{name: "./note.txt", typ: tar.TypeReg, body: "hello"},
 	})
 	a := e.agent(0)
 	a.mu.Lock()
 	a.wsOut = append([]byte("DATA fp1 2 8\n"), archive...)
 	a.mu.Unlock()
-	if _, err := e.m.Send(ctx, c.ID, "Erzeuge Dateien"); err != nil {
+	if _, err := e.m.Send(ctx, c.ID, "Create files"); err != nil {
 		t.Fatal(err)
 	}
 	waitSettled(t, e, c.ID)
@@ -198,19 +198,19 @@ func TestWorkspaceSavedAfterRunAndRestoredOnResume(t *testing.T) {
 		}
 	}
 	if err != nil || w.Files != 2 || w.Size != 8 || w.Fingerprint != "fp1" || w.ObjectKey != c.ID+"/workspace.tar.gz" {
-		t.Fatalf("nicht gesichert: %+v %v", w, err)
+		t.Fatalf("not backed up: %+v %v", w, err)
 	}
 	e.blobs.mu.Lock()
 	stored := e.blobs.m[w.ObjectKey]
 	e.blobs.mu.Unlock()
 	if !bytes.Equal(stored, archive) {
-		t.Fatal("Archiv nicht in der Ablage")
+		t.Fatal("archive not in storage")
 	}
 	v, _ := e.m.View(ctx, c.ID)
 	if v.Workspace == nil || v.Workspace.Files != 2 || v.Workspace.SavedAt == nil {
-		t.Fatalf("API-Feld: %+v", v.Workspace)
+		t.Fatalf("API field: %+v", v.Workspace)
 	}
-	// Ruhen: Das Skript läuft noch einmal (Fingerabdruck fp1 → unverändert, nichts Neues).
+	// Idling: the script runs once more (fingerprint fp1 → unchanged, nothing new).
 	a.mu.Lock()
 	a.wsOut = []byte("SAME fp1 2 8\n")
 	before := a.wsSaves
@@ -222,35 +222,35 @@ func TestWorkspaceSavedAfterRunAndRestoredOnResume(t *testing.T) {
 	after := a.wsSaves
 	a.mu.Unlock()
 	if after != before+1 {
-		t.Fatalf("beim Ruhen nicht gesichert: %d → %d", before, after)
+		t.Fatalf("not backed up when idling: %d → %d", before, after)
 	}
-	if _, err := e.m.Send(ctx, c.ID, "Liste die Dateien"); err != nil {
+	if _, err := e.m.Send(ctx, c.ID, "List the files"); err != nil {
 		t.Fatal(err)
 	}
 	waitSettled(t, e, c.ID)
 	fresh := resumedAgent(e)
 	if fresh == nil || fresh == a {
-		t.Fatal("keine frische Sandbox")
+		t.Fatal("no fresh sandbox")
 	}
 	fresh.mu.Lock()
 	restored, late := fresh.wsRestored, fresh.wsLatePrompt
 	fresh.mu.Unlock()
 	got := tarNames(t, restored)
-	if got["plot.png"] != "png" || got["notiz.txt"] != "hallo" || len(got) != 2 {
-		t.Fatalf("eingespielt: %v", got)
+	if got["plot.png"] != "png" || got["note.txt"] != "hello" || len(got) != 2 {
+		t.Fatalf("restored: %v", got)
 	}
 	if late {
-		t.Fatal("Arbeitsbereich erst nach dem ersten Auftrag eingespielt")
+		t.Fatal("workspace only restored after the first message")
 	}
 }
 
-// Über der Grenze wird nicht gesichert; die letzte gültige Sicherung bleibt, und
-// der Chat erfährt es einmal.
+// Above the limit nothing is backed up; the last valid backup stays, and the
+// chat is told once.
 func TestWorkspaceOverLimitKeepsLastBackup(t *testing.T) {
 	e := setup(t)
 	e.m.opt.WorkspaceMaxBytes = 100
 	ctx := context.Background()
-	c, _ := e.m.Create(ctx, NewChat{Title: "gross"})
+	c, _ := e.m.Create(ctx, NewChat{Title: "large"})
 	events, cancel := e.m.Subscribe(c.ID)
 	defer cancel()
 	a := e.agent(0)
@@ -258,7 +258,7 @@ func TestWorkspaceOverLimitKeepsLastBackup(t *testing.T) {
 	a.mu.Lock()
 	a.wsOut = append([]byte("DATA fp1 1 1\n"), archive...)
 	a.mu.Unlock()
-	if _, err := e.m.Send(ctx, c.ID, "eins"); err != nil {
+	if _, err := e.m.Send(ctx, c.ID, "one"); err != nil {
 		t.Fatal(err)
 	}
 	waitSettled(t, e, c.ID)
@@ -267,46 +267,46 @@ func TestWorkspaceOverLimitKeepsLastBackup(t *testing.T) {
 	a.mu.Lock()
 	a.wsOut = []byte("SKIP fp2 5 300000000\n")
 	a.mu.Unlock()
-	if _, err := e.m.Send(ctx, c.ID, "zwei"); err != nil {
+	if _, err := e.m.Send(ctx, c.ID, "two"); err != nil {
 		t.Fatal(err)
 	}
 	waitSettled(t, e, c.ID)
 	w := waitWorkspace(t, e, c.ID, func(w store.Workspace) bool { return w.SkippedReason != nil })
-	if w.Fingerprint != "fp1" || w.Files != 1 || !strings.Contains(*w.SkippedReason, "286,1 MB") {
-		t.Fatalf("nach Überschreitung: %+v %s", w, *w.SkippedReason)
+	if w.Fingerprint != "fp1" || w.Files != 1 || !strings.Contains(*w.SkippedReason, "286.1 MB") {
+		t.Fatalf("after exceeding: %+v %s", w, *w.SkippedReason)
 	}
 	ev := waitEvent(t, events, "error", "")
-	if msg := ev.Data.(map[string]string)["message"]; !strings.HasPrefix(msg, "Arbeitsbereich nicht gesichert") || !strings.Contains(msg, "Sicherung von") {
-		t.Fatalf("Hinweis: %q", msg)
+	if msg := ev.Data.(map[string]string)["message"]; !strings.HasPrefix(msg, "Workspace not saved") || !strings.Contains(msg, "backup from") {
+		t.Fatalf("notice: %q", msg)
 	}
 	e.blobs.mu.Lock()
 	stored := e.blobs.m[c.ID+"/workspace.tar.gz"]
 	e.blobs.mu.Unlock()
 	if !bytes.Equal(stored, archive) {
-		t.Fatal("letzte gültige Sicherung überschrieben")
+		t.Fatal("last valid backup overwritten")
 	}
-	// Wieder unter der Grenze, Stand wie gesichert: Vermerk verschwindet.
+	// Below the limit again, state as backed up: the note disappears.
 	a.mu.Lock()
 	a.wsOut = []byte("SAME fp1 1 1\n")
 	a.mu.Unlock()
-	if _, err := e.m.Send(ctx, c.ID, "drei"); err != nil {
+	if _, err := e.m.Send(ctx, c.ID, "three"); err != nil {
 		t.Fatal(err)
 	}
 	waitSettled(t, e, c.ID)
 	waitWorkspace(t, e, c.ID, func(w store.Workspace) bool { return w.SkippedReason == nil })
 }
 
-// Scheitert das Einspielen, wird in dieser Sandbox nicht gesichert: Ein leerer
-// Arbeitsbereich darf die gültige Sicherung nicht überschreiben.
+// If restoring fails, nothing is backed up in this sandbox: an empty workspace
+// must not overwrite the valid backup.
 func TestWorkspaceRestoreFailureProtectsBackup(t *testing.T) {
 	e := setup(t)
 	ctx := context.Background()
-	c, _ := e.m.Create(ctx, NewChat{Title: "kaputt"})
+	c, _ := e.m.Create(ctx, NewChat{Title: "broken"})
 	a := e.agent(0)
 	a.mu.Lock()
 	a.wsOut = append([]byte("DATA fp1 1 1\n"), makeTarGz(t, []tarEntry{{name: "a.txt", typ: tar.TypeReg, body: "a"}})...)
 	a.mu.Unlock()
-	if _, err := e.m.Send(ctx, c.ID, "eins"); err != nil {
+	if _, err := e.m.Send(ctx, c.ID, "one"); err != nil {
 		t.Fatal(err)
 	}
 	waitSettled(t, e, c.ID)
@@ -314,31 +314,31 @@ func TestWorkspaceRestoreFailureProtectsBackup(t *testing.T) {
 	if _, err := e.m.Suspend(ctx, c.ID); err != nil {
 		t.Fatal(err)
 	}
-	// Ablage verändert: Prüfsumme stimmt nicht mehr.
+	// Storage altered: the checksum no longer matches.
 	e.blobs.mu.Lock()
-	e.blobs.m[c.ID+"/workspace.tar.gz"] = []byte("verändert")
+	e.blobs.m[c.ID+"/workspace.tar.gz"] = []byte("altered")
 	e.blobs.mu.Unlock()
-	if _, err := e.m.Send(ctx, c.ID, "zwei"); err != nil {
+	if _, err := e.m.Send(ctx, c.ID, "two"); err != nil {
 		t.Fatal(err)
 	}
 	waitSettled(t, e, c.ID)
-	time.Sleep(100 * time.Millisecond) // Hintergrundarbeit nach agent_settled
+	time.Sleep(100 * time.Millisecond) // background work after agent_settled
 	fresh := resumedAgent(e)
 	if fresh == nil || fresh == a {
-		t.Fatal("keine frische Sandbox")
+		t.Fatal("no fresh sandbox")
 	}
 	fresh.mu.Lock()
 	restored, saves := fresh.wsRestored, fresh.wsSaves
 	fresh.mu.Unlock()
 	if restored != nil {
-		t.Error("verändertes Archiv eingespielt")
+		t.Error("altered archive restored")
 	}
 	if saves != 0 {
-		t.Errorf("nach gescheitertem Einspielen %d-mal gesichert", saves)
+		t.Errorf("backed up %d times after a failed restore", saves)
 	}
 	w, _ := e.st.GetWorkspace(ctx, c.ID)
 	if w.Fingerprint != "fp1" {
-		t.Fatalf("Sicherung verändert: %+v", w)
+		t.Fatalf("backup changed: %+v", w)
 	}
 }
 
@@ -351,11 +351,11 @@ func waitWorkspace(t *testing.T, e *env, chatID string, ok func(store.Workspace)
 			return w
 		}
 	}
-	t.Fatalf("Arbeitsbereich nicht im erwarteten Zustand: %+v", w)
+	t.Fatalf("workspace not in the expected state: %+v", w)
 	return w
 }
 
-// resumedAgent ist die Sandbox, in der ein Chat fortgesetzt wurde (switch_session).
+// resumedAgent is the sandbox in which a chat was resumed (switch_session).
 func resumedAgent(e *env) *fakeAgent {
 	e.mu.Lock()
 	defer e.mu.Unlock()

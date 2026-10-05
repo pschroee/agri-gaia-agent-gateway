@@ -1,6 +1,6 @@
-// Package pool hält je Anbindungsvariante vorgestartete Sandboxen bereit
-// (Warm-Pool, E7). Jeder Platz wird genau einmal vergeben und danach
-// zerstört, nie in den Pool zurückgelegt.
+// Package pool keeps pre-started sandboxes ready per binding variant
+// (warm pool, E7). Every slot is assigned exactly once and destroyed
+// afterwards, never put back into the pool.
 package pool
 
 import (
@@ -23,8 +23,8 @@ const (
 )
 
 var (
-	ErrNoIdleSlot     = errors.New("kein freier Platz im Pool")
-	ErrUnknownVariant = errors.New("unbekannte Anbindungsvariante")
+	ErrNoIdleSlot     = errors.New("no free slot in the pool")
+	ErrUnknownVariant = errors.New("unknown binding variant")
 )
 
 type CreateFunc[W any] func(ctx context.Context, slotID, variant string) (W, error)
@@ -36,7 +36,7 @@ type Activity struct {
 	Since time.Time `json:"since"`
 }
 
-// Info ist die Sicht der Status-API auf einen Platz.
+// Info is the status API's view of a slot.
 type Info struct {
 	ID         string     `json:"id"`
 	Variant    string     `json:"variant"`
@@ -66,8 +66,8 @@ func (s *Slot[W]) State() State {
 	return s.state
 }
 
-// ChatID ist die Bindung des Platzes. Der Socket des Platzes leitet daraus ab,
-// für welchen Chat eine Anfrage gilt.
+// ChatID is the slot's binding. The slot's socket derives from it
+// which chat a request is for.
 func (s *Slot[W]) ChatID() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -101,7 +101,7 @@ func (s *Slot[W]) Info() Info {
 	return i
 }
 
-// Sperrreihenfolge: Pool.mu vor Slot.mu.
+// Lock order: Pool.mu before Slot.mu.
 type Pool[W any] struct {
 	create  CreateFunc[W]
 	destroy DestroyFunc[W]
@@ -111,7 +111,7 @@ type Pool[W any] struct {
 	slots   map[string]*Slot[W]
 	lastErr map[string]string
 	wake    chan struct{}
-	idleCh  chan struct{} // wird bei jedem neuen freien Platz geschlossen und ersetzt
+	idleCh  chan struct{} // closed and replaced on every new free slot
 	ctx     context.Context
 	wg      sync.WaitGroup
 
@@ -170,8 +170,8 @@ func (p *Pool[W]) loop(ctx context.Context) {
 	}
 }
 
-// fill startet fehlende Plätze parallel und wartet auf alle. Liefert true,
-// wenn ein Start fehlschlug.
+// fill starts missing slots in parallel and waits for all. Returns true
+// if a start failed.
 func (p *Pool[W]) fill(ctx context.Context) bool {
 	type job struct{ slot *Slot[W] }
 	var jobs []job
@@ -208,8 +208,8 @@ func (p *Pool[W]) fill(ctx context.Context) bool {
 				return
 			}
 			if ctx.Err() != nil {
-				// Erst nach Beginn des Herunterfahrens fertig: hier abbauen, nicht in einer eigenen
-				// Goroutine, sonst kehrte Shutdown zurück, bevor der Container weg ist.
+				// Finished only after shutdown began: tear down here, not in a separate
+				// goroutine, otherwise Shutdown would return before the container is gone.
 				delete(p.slots, s.ID)
 				p.mu.Unlock()
 				p.destroy(context.WithoutCancel(ctx), w)
@@ -234,7 +234,7 @@ func (p *Pool[W]) LastError(variant string) string {
 	return p.lastErr[variant]
 }
 
-// Acquire vergibt einen freien Platz der Variante an einen Chat.
+// Acquire assigns a free slot of the variant to a chat.
 func (p *Pool[W]) Acquire(variant, chatID string) (*Slot[W], error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -261,8 +261,8 @@ func (p *Pool[W]) Acquire(variant, chatID string) (*Slot[W], error) {
 	return best, nil
 }
 
-// AcquireWait wartet bis zu timeout auf einen freien Platz. Auch Varianten
-// mit Zielgröße 0 werden bei Bedarf einmalig gestartet.
+// AcquireWait waits up to timeout for a free slot. Variants
+// with target size 0 are also started once on demand.
 func (p *Pool[W]) AcquireWait(ctx context.Context, variant, chatID string, timeout time.Duration) (*Slot[W], error) {
 	deadline := time.After(timeout)
 	for {
@@ -319,7 +319,7 @@ func (p *Pool[W]) spawnOnDemandLocked(variant string) {
 	}()
 }
 
-// Release zerstört einen vergebenen Platz (Einmalvergabe).
+// Release destroys an assigned slot (single assignment).
 func (p *Pool[W]) Release(ctx context.Context, s *Slot[W]) {
 	s.mu.Lock()
 	if s.state == StateStopping {
@@ -366,7 +366,7 @@ func (p *Pool[W]) Snapshot() []Info {
 	return out
 }
 
-// Shutdown wartet auf laufende Starts und zerstört alle Plätze.
+// Shutdown waits for running starts and destroys all slots.
 func (p *Pool[W]) Shutdown(ctx context.Context) {
 	p.wg.Wait()
 	p.mu.Lock()
@@ -388,7 +388,7 @@ func (p *Pool[W]) Shutdown(ctx context.Context) {
 }
 
 func newID() string {
-	b := make([]byte, 6) // 48 Bit: Kollisionen praktisch ausgeschlossen
+	b := make([]byte, 6) // 48 bits: collisions practically ruled out
 	_, _ = rand.Read(b)
 	return "p-" + hex.EncodeToString(b)
 }

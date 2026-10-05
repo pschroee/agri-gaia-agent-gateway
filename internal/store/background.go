@@ -11,27 +11,27 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// Zustände einer Hintergrundaufgabe (Tabelle background_tasks).
+// States of a background task (table background_tasks).
 const (
 	BgRunning   = "running"
-	BgExited    = "exited"    // der Befehl ist geendet (Exit-Code)
-	BgFailed    = "failed"    // nicht gestartet oder mit Fehler abgebrochen
-	BgTimeout   = "timeout"   // Zeitgrenze des Aufrufs erreicht
-	BgStopped   = "stopped"   // bg_stop des Agenten oder Stopp in der UI (stopped_by)
-	BgLost      = "lost"      // Ausführungs-Sandbox oder Verbindung weg, Orchestrator neu gestartet
-	BgSuspended = "suspended" // beim Ruhen des Chats mit der Sandbox beendet
-	BgClosed    = "closed"    // nur in alten Zeilen: Chat beendet (Beenden gibt es seit 30.09.2026 nicht mehr)
+	BgExited    = "exited"    // the command has ended (exit code)
+	BgFailed    = "failed"    // not started or aborted with an error
+	BgTimeout   = "timeout"   // timeout of the call reached
+	BgStopped   = "stopped"   // bg_stop by the agent or stop in the UI (stopped_by)
+	BgLost      = "lost"      // execution sandbox or connection gone, orchestrator restarted
+	BgSuspended = "suspended" // ended together with the sandbox when the chat went idle
+	BgClosed    = "closed"    // only in old rows: chat closed (closing no longer exists since 2026-09-30)
 )
 
-// BackgroundTask ist eine Hintergrundaufgabe (bash mit run_in_background). Der Orchestrator
-// startet und verfolgt sie selbst; Befehl, Ausgabe (Prüfsumme, Auszug) und Ende sind belegt
-// wie jede Ausführung in tool_executions.
+// BackgroundTask is a background task (bash with run_in_background). The orchestrator
+// starts and follows it itself; command, output (checksum, excerpt) and end are proven
+// like every execution in tool_executions.
 type BackgroundTask struct {
 	ID            string     `json:"id"` // bg-<seq>
 	Seq           int        `json:"seq"`
 	ChatID        string     `json:"chat_id"`
 	SlotID        string     `json:"slot_id"`
-	Session       string     `json:"session"` // "main" oder Lauf des Subagenten
+	Session       string     `json:"session"` // "main" or run of the subagent
 	ToolCallID    string     `json:"tool_call_id"`
 	Command       string     `json:"command"`
 	Cwd           string     `json:"cwd,omitempty"`
@@ -46,17 +46,17 @@ type BackgroundTask struct {
 	OutputLines   int64      `json:"output_lines"`
 	OutputExcerpt string     `json:"output_excerpt,omitempty"`
 	OutputSHA256  string     `json:"output_sha256,omitempty"`
-	// Tail: die letzten Zeilen der Ausgabe (höchstens einige KiB), für Anzeige und Meldung.
+	// Tail: the last lines of the output (at most a few KiB), for display and the note.
 	Tail          string     `json:"tail,omitempty"`
 	NotifiedAt    *time.Time `json:"notified_at,omitempty"`
 	Woke          bool       `json:"woke,omitempty"`
 	NoticePending bool       `json:"notice_pending,omitempty"`
 }
 
-// BgID: Kennung einer Hintergrundaufgabe im Chat.
+// BgID: ID of a background task within the chat.
 func BgID(seq int) string { return fmt.Sprintf("bg-%d", seq) }
 
-// ParseBgID liest „bg-<n>“; 0, wenn es keine gültige Kennung ist.
+// ParseBgID reads "bg-<n>"; 0 if it is not a valid ID.
 func ParseBgID(id string) int {
 	rest, ok := strings.CutPrefix(strings.TrimSpace(id), "bg-")
 	if !ok || rest == "" || len(rest) > 9 || rest[0] == '0' {
@@ -91,8 +91,8 @@ func scanBg(rows pgx.Rows) ([]BackgroundTask, error) {
 	return out, rows.Err()
 }
 
-// CreateBackgroundTask legt eine laufende Aufgabe mit der nächsten Nummer des Chats an. LogPath
-// bildet logPath aus der Nummer (sie steht erst nach dem Einfügen fest).
+// CreateBackgroundTask creates a running task with the chat's next number. LogPath
+// builds logPath from the number (it is only known after the insert).
 func (s *Store) CreateBackgroundTask(ctx context.Context, t BackgroundTask, logPath func(seq int) string) (BackgroundTask, error) {
 	if t.Session == "" {
 		t.Session = "main"
@@ -109,13 +109,13 @@ RETURNING `+bgCols, t.ChatID, t.SlotID, t.Session, t.ToolCallID, t.Command, t.Cw
 		list, err := scanBg(rows)
 		var pe *pgconn.PgError
 		if err != nil && errors.As(err, &pe) && pe.Code == "23505" && attempt < 5 {
-			continue // gleichzeitig angelegt: nächste Nummer
+			continue // created concurrently: next number
 		}
 		if err != nil {
 			return BackgroundTask{}, err
 		}
 		if len(list) != 1 {
-			return BackgroundTask{}, errors.New("Hintergrundaufgabe: keine Zeile")
+			return BackgroundTask{}, errors.New("background task: no row")
 		}
 		created := list[0]
 		if logPath != nil {
@@ -128,9 +128,9 @@ RETURNING `+bgCols, t.ChatID, t.SlotID, t.Session, t.ToolCallID, t.Command, t.Cw
 	}
 }
 
-// FinishBackgroundTask trägt das Ende einer laufenden Aufgabe ein. false: Sie war schon beendet
-// (etwa beim Ruhen des Chats vorab markiert); dann bleibt der frühere Zustand stehen, und nur die
-// Angaben zur Ausgabe werden ergänzt.
+// FinishBackgroundTask records the end of a running task. false: it had already ended
+// (e.g. marked in advance when the chat went idle); then the earlier state stays, and only the
+// output details are added.
 func (s *Store) FinishBackgroundTask(ctx context.Context, t BackgroundTask) (bool, error) {
 	ended := time.Now()
 	if t.EndedAt != nil {
@@ -148,7 +148,7 @@ WHERE chat_id=$1 AND seq=$2 AND state='running'`,
 	if tag.RowsAffected() == 1 {
 		return true, nil
 	}
-	// Schon beendet: die Ausgabe (die der Orchestrator bis zuletzt mitgelesen hat) nachtragen.
+	// Already ended: add the output (which the orchestrator kept reading until the end).
 	_, err = s.pool.Exec(ctx, `
 UPDATE background_tasks SET output_bytes=$3, output_lines=$4, output_excerpt=$5, output_sha256=$6, tail=$7
 WHERE chat_id=$1 AND seq=$2 AND output_sha256=''`,
@@ -156,8 +156,8 @@ WHERE chat_id=$1 AND seq=$2 AND output_sha256=''`,
 	return false, err
 }
 
-// EndRunningBackground beendet alle laufenden Aufgaben eines Chats mit state (suspended, closed,
-// lost) und reason; notice: dem Agenten beim nächsten Auftrag einmal sagen.
+// EndRunningBackground ends all running tasks of a chat with state (suspended, closed,
+// lost) and reason; notice: tell the agent once with the next request.
 func (s *Store) EndRunningBackground(ctx context.Context, chatID, state, reason string, notice bool) ([]BackgroundTask, error) {
 	if !isUUID(chatID) {
 		return []BackgroundTask{}, nil
@@ -171,7 +171,7 @@ WHERE chat_id=$1 AND state='running' RETURNING `+bgCols, chatID, state, reason, 
 	return scanBg(rows)
 }
 
-// EndAllRunningBackground: nach einem Neustart des Orchestrators läuft keine Aufgabe mehr.
+// EndAllRunningBackground: after a restart of the orchestrator no task is running anymore.
 func (s *Store) EndAllRunningBackground(ctx context.Context, reason string) (int64, error) {
 	tag, err := s.pool.Exec(ctx, `UPDATE background_tasks SET state='lost', error=$1, ended_at=now(), notice_pending=true WHERE state='running'`, reason)
 	return tag.RowsAffected(), err
@@ -206,21 +206,21 @@ func (s *Store) GetBackgroundTask(ctx context.Context, chatID string, seq int) (
 	return list[0], nil
 }
 
-// MarkBackgroundNotified hält fest, dass der Agent die Meldung bekommen hat (woke: sie hat einen
-// neuen Durchgang gestartet).
+// MarkBackgroundNotified records that the agent received the note (woke: it started a
+// new turn).
 func (s *Store) MarkBackgroundNotified(ctx context.Context, chatID string, seq int, woke bool) error {
 	_, err := s.pool.Exec(ctx, `UPDATE background_tasks SET notified_at=now(), woke=$3 WHERE chat_id=$1 AND seq=$2`, chatID, seq, woke)
 	return err
 }
 
-// MarkBackgroundWoke: Die Meldung dieser Aufgabe hat einen Durchgang ohne Nutzer gestartet
-// (Weckruf). Gezählt werden Weckrufe in chat_turns (WakesSince).
+// MarkBackgroundWoke: the note of this task started a turn without the user
+// (wake-up). Wake-ups are counted in chat_turns (WakesSince).
 func (s *Store) MarkBackgroundWoke(ctx context.Context, chatID string, seq int) error {
 	_, err := s.pool.Exec(ctx, `UPDATE background_tasks SET woke=true WHERE chat_id=$1 AND seq=$2`, chatID, seq)
 	return err
 }
 
-// BackgroundNotices: beim Ruhen beendete Aufgaben, die der Agent noch nicht kennt.
+// BackgroundNotices: tasks ended while idling that the agent does not know about yet.
 func (s *Store) BackgroundNotices(ctx context.Context, chatID string) ([]BackgroundTask, error) {
 	if !isUUID(chatID) {
 		return []BackgroundTask{}, nil
@@ -232,7 +232,7 @@ func (s *Store) BackgroundNotices(ctx context.Context, chatID string) ([]Backgro
 	return scanBg(rows)
 }
 
-// ClearBackgroundNotices: dem Agenten gesagt.
+// ClearBackgroundNotices: the agent has been told.
 func (s *Store) ClearBackgroundNotices(ctx context.Context, chatID string, seqs []int) error {
 	if len(seqs) == 0 {
 		return nil

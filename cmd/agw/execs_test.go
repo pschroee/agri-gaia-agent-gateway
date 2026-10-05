@@ -18,7 +18,7 @@ const execsJSON = `{"summary":{"confirmed":2,"unexecuted":1,"unrequested":1,"mis
 {"tool_call_id":"call_09_x","state":"unrequested","tool":"bash","executed_tool":"bash","requested":false,"executed":true,"session":"main","ops":["bash"],"error":"aborted","duration_ms":5,"started_at":"2026-09-29T10:00:04Z","execution_ids":[4]},
 {"tool_call_id":"call_03_d","state":"internal","tool":"todo","requested":true,"executed":false,"main":true,"ops":[],"duration_ms":0,"execution_ids":[]}],
 "executions":[
-{"id":1,"session":"main","tool_call_id":"call_00_a","tool":"bash","op":"bash","args":{"command":"python3 skript.py","cwd":"/workspace"},"exit_code":0,"output_bytes":3,"started_at":"2026-09-29T10:00:01Z","duration_ms":1234},
+{"id":1,"session":"main","tool_call_id":"call_00_a","tool":"bash","op":"bash","args":{"command":"python3 script.py","cwd":"/workspace"},"exit_code":0,"output_bytes":3,"started_at":"2026-09-29T10:00:01Z","duration_ms":1234},
 {"id":2,"session":"9017da63-d08d-43ab-b978-e86cb7afc45b","tool_call_id":"call_01_b","tool":"edit","op":"read","args":{"path":"/workspace/a.py"},"output_bytes":3,"started_at":"2026-09-29T10:00:02Z","duration_ms":3},
 {"id":3,"session":"9017da63-d08d-43ab-b978-e86cb7afc45b","tool_call_id":"call_01_b","tool":"edit","op":"write","args":{"path":"/workspace/a.py","bytes":4},"output_bytes":0,"started_at":"2026-09-29T10:00:02Z","duration_ms":4},
 {"id":4,"session":"main","tool_call_id":"call_09_x","tool":"bash","op":"bash","args":{"command":"sleep 99"},"error":"aborted","output_bytes":0,"started_at":"2026-09-29T10:00:04Z","duration_ms":5}]}`
@@ -44,17 +44,17 @@ func TestChatExecs(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("code %d: %s", code, errw)
 	}
-	for _, want := range []string{"Beleg", "belegt", "NICHT AUSGEFÜHRT", "NICHT ANGEFORDERT", "Hauptagent", "Subagent 9017da63", "read, write",
-		"python3 skript.py", "/workspace/a.py", "aborted", "Exit 0", "2 belegt", "2 auffällig", "call_02_c"} {
+	for _, want := range []string{"Evidence", "confirmed", "NOT EXECUTED", "NOT REQUESTED", "main agent", "Subagent 9017da63", "read, write",
+		"python3 script.py", "/workspace/a.py", "aborted", "exit 0", "2 confirmed", "2 suspicious", "call_02_c"} {
 		if !strings.Contains(out, want) {
-			t.Errorf("Ausgabe ohne %q:\n%s", want, out)
+			t.Errorf("output without %q:\n%s", want, out)
 		}
 	}
 	if strings.Contains(out, "todo") {
-		t.Errorf("Werkzeug ohne Sandbox in der Liste:\n%s", out)
+		t.Errorf("tool without sandbox in the list:\n%s", out)
 	}
 	code, out, _ = run("chat", "execs", "c1", "--flagged")
-	if code != 0 || strings.Contains(out, "python3 skript.py") || !strings.Contains(out, "call_09_x") {
+	if code != 0 || strings.Contains(out, "python3 script.py") || !strings.Contains(out, "call_09_x") {
 		t.Errorf("--flagged: %d\n%s", code, out)
 	}
 	code, out, _ = run("chat", "execs", "c1", "--json")

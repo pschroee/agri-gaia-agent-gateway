@@ -23,32 +23,32 @@ func TestReadEventsBasic(t *testing.T) {
 		"data: {\"kind\":\"chat\",\"data\":{\"id\":\"c1\"}}\r\n\r\n"
 	got := collect(t, in)
 	if len(got) != 2 {
-		t.Fatalf("2 Ereignisse erwartet, %d erhalten: %+v", len(got), got)
+		t.Fatalf("expected 2 events, got %d: %+v", len(got), got)
 	}
 	if got[0].Kind != "pi" || got[0].PiType() != "agent_start" {
-		t.Errorf("erstes Ereignis falsch: %+v", got[0])
+		t.Errorf("first event wrong: %+v", got[0])
 	}
 	if got[1].Kind != "chat" {
-		t.Errorf("zweites Ereignis falsch: %+v", got[1])
+		t.Errorf("second event wrong: %+v", got[1])
 	}
 }
 
 func TestReadEventsMultilineAndTrailing(t *testing.T) {
-	// Mehrere data-Zeilen werden mit \n verbunden; ein Ereignis ohne abschließende Leerzeile
-	// am Stromende wird trotzdem geliefert; ungültiges JSON wird übersprungen.
+	// Several data lines are joined with \n; an event without a trailing blank line
+	// at the end of the stream is still delivered; invalid JSON is skipped.
 	in := "data: {\"kind\":\"error\",\n" +
 		"data: \"data\":{\"message\":\"x\"}}\n\n" +
-		"event: foo\nid: 3\ndata: kaputt\n\n" +
+		"event: foo\nid: 3\ndata: broken\n\n" +
 		"data: {\"kind\":\"artifact\",\"data\":{}}"
 	got := collect(t, in)
 	if len(got) != 2 || got[0].Kind != "error" || got[1].Kind != "artifact" {
-		t.Fatalf("unerwartet: %+v", got)
+		t.Fatalf("unexpected: %+v", got)
 	}
 }
 
 func TestPiTypeOnlyForPi(t *testing.T) {
 	ev := Event{Kind: "chat", Data: []byte(`{"type":"agent_start"}`)}
 	if ev.PiType() != "" {
-		t.Errorf("PiType bei kind=chat sollte leer sein")
+		t.Errorf("PiType for kind=chat should be empty")
 	}
 }

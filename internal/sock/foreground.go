@@ -1,8 +1,8 @@
 package sock
 
-// Laufende Vordergrundbefehle (bash ohne run_in_background) eines Platzes. Der Nutzer kann einen
-// davon stoppen oder in eine Hintergrundaufgabe umwandeln (wie Strg+B in Claude Code); der Agent
-// erfährt beides aus dem Ergebnis des Werkzeugaufrufs.
+// Running foreground commands (bash without run_in_background) of a slot. The user can stop one
+// of them or convert it into a background task (like Ctrl+B in Claude Code); the agent
+// learns about either from the result of the tool call.
 
 import (
 	"context"
@@ -13,13 +13,13 @@ import (
 	"agw/internal/store"
 )
 
-// Fehler der Steuerung; die API macht daraus 404 bzw. 409.
+// Control errors; the API turns them into 404 and 409 respectively.
 var (
-	ErrNoForeground = errors.New("kein laufender Befehl mit dieser toolCallId")
-	ErrNoBackground = errors.New("Hintergrundaufgaben sind auf diesem Platz nicht verfügbar")
+	ErrNoForeground = errors.New("no running command with this toolCallId")
+	ErrNoBackground = errors.New("background tasks are not available on this slot")
 )
 
-// Foreground führt die laufenden Vordergrundbefehle eines Platzes.
+// Foreground keeps track of the running foreground commands of a slot.
 type Foreground struct {
 	mu  sync.Mutex
 	ops map[string]*fgOp // toolCallId
@@ -32,7 +32,7 @@ type fgOp struct {
 	cancel  context.CancelFunc
 	stopped atomic.Bool
 	detach  chan detachReq
-	done    chan struct{} // der Handler nimmt keine Umwandlung mehr an (Befehl beendet oder umgewandelt)
+	done    chan struct{} // the handler no longer accepts a conversion (command ended or converted)
 }
 
 type detachReq struct {
@@ -45,10 +45,10 @@ type detachResult struct {
 	err  error
 }
 
-// add legt die Steuerung eines Befehls an. Eingetragen wird er nur, wenn die Kennung frei ist:
-// user_bash kommt immer mit derselben Kennung, und Subagenten können Kennungen wiederholen. Ein
-// zweiter Befehl mit derselben Kennung läuft dann ohne Stopp und Umwandlung, statt dem ersten die
-// Steuerung zu nehmen (Code-Review 30.09.2026).
+// add creates the control of a command. It is registered only if the ID is free:
+// user_bash always comes with the same ID, and subagents can repeat IDs. A
+// second command with the same ID then runs without stop and conversion, instead of taking
+// control away from the first (code review 2026-09-30).
 func (f *Foreground) add(id, chat string, cancel context.CancelFunc) *fgOp {
 	op := &fgOp{chat: chat, cancel: cancel, detach: make(chan detachReq), done: make(chan struct{})}
 	if id == "user_bash" {
@@ -80,7 +80,7 @@ func (f *Foreground) get(chat, id string) (*fgOp, error) {
 	return op, nil
 }
 
-// Running nennt die toolCallIds der laufenden Vordergrundbefehle des Chats.
+// Running lists the toolCallIds of the chat's running foreground commands.
 func (f *Foreground) Running(chat string) []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -93,7 +93,7 @@ func (f *Foreground) Running(chat string) []string {
 	return out
 }
 
-// Stop bricht den Befehl ab; der Agent bekommt „Command stopped by the user“ samt bisheriger Ausgabe.
+// Stop aborts the command; the agent gets "Command stopped by the user" along with the output so far.
 func (f *Foreground) Stop(chat, toolCallID string) error {
 	op, err := f.get(chat, toolCallID)
 	if err != nil {
@@ -104,9 +104,9 @@ func (f *Foreground) Stop(chat, toolCallID string) error {
 	return nil
 }
 
-// Background wandelt den Befehl in eine Hintergrundaufgabe um: Er läuft weiter, der Werkzeugaufruf
-// endet sofort mit dem Hinweis auf die Aufgabe, und ihr Ende meldet der Orchestrator wie bei jeder
-// Hintergrundaufgabe.
+// Background converts the command into a background task: it keeps running, the tool call
+// ends immediately with a pointer to the task, and the orchestrator reports its end as for any
+// background task.
 func (f *Foreground) Background(ctx context.Context, chat, toolCallID string) (store.BackgroundTask, error) {
 	op, err := f.get(chat, toolCallID)
 	if err != nil {

@@ -14,22 +14,22 @@ import (
 	"agw/internal/execproto"
 )
 
-// Pfade in der Ausführungs-Sandbox (images/agw-basis/Dockerfile, Ziel exec).
+// Paths in the execution sandbox (images/agw-basis/Dockerfile, target exec).
 var (
 	nodePath       = "/usr/local/bin/node"
 	workflowRunner = "/opt/agw/workflow/runner.cjs"
 )
 
-// runWorkflow führt das Skript eines Workflows von pi-subagents (workflowScript) in einem
-// eigenen Node-Prozess als Agent-Nutzer aus, statt in einem Worker-Thread des pi-Prozesses
-// (Entscheidung des Verfassers zu P4b). req.Data ist der Quelltext des Workers von
-// pi-subagents; er kommt aus dem pi-Prozess, nicht vom Agenten. Der Agent liefert nur das
-// Skript, das pi-subagents dem Worker in der Nachricht „start“ schickt.
+// runWorkflow runs the script of a pi-subagents workflow (workflowScript) in its own
+// Node process as the agent user, instead of in a worker thread of the pi process
+// (the author's decision on P4b). req.Data is the source of the pi-subagents worker;
+// it comes from the pi process, not from the agent. The agent only supplies the
+// script that pi-subagents sends to the worker in the "start" message.
 //
-// Protokoll mit runner.cjs: erste Zeile {"source": …}, danach je Zeile eine Nachricht des
-// Hosts {"m": …}; zurück je Zeile {"m": …} (Nachricht des Workers) oder {"__agw":"error", …}.
-// Jede Zeile des Runners geht als Datenrahmen zum Orchestrator. Was dort ankommt, ist Ausgabe
-// von Code des Agenten und wird im pi-Prozess geprüft, bevor pi-subagents es sieht.
+// Protocol with runner.cjs: first line {"source": …}, then one host message per line
+// {"m": …}; back one line each {"m": …} (worker message) or {"__agw":"error", …}.
+// Every line of the runner goes to the orchestrator as a data frame. What arrives there is output
+// of the agent's code and is checked in the pi process before pi-subagents sees it.
 func runWorkflow(ctx context.Context, req execproto.Request, input <-chan []byte, emit func(execproto.Frame)) {
 	cmd := exec.Command(nodePath, workflowRunner)
 	cmd.Dir = "/"
@@ -60,7 +60,7 @@ func runWorkflow(ctx context.Context, req execproto.Request, input <-chan []byte
 				return
 			}
 		}
-		// Ende der Eingaben: Der Host braucht den Worker nicht mehr.
+		// End of input: the host no longer needs the worker.
 		_ = stdin.Close()
 	}()
 	readDone := make(chan struct{})
@@ -83,7 +83,7 @@ func runWorkflow(ctx context.Context, req execproto.Request, input <-chan []byte
 		emit(execproto.Frame{Done: true, Error: "aborted", Code: "aborted"})
 		return
 	}
-	_ = syscall.Kill(-pgid, syscall.SIGKILL) // Nachzügler des Skripts
+	_ = syscall.Kill(-pgid, syscall.SIGKILL) // stragglers of the script
 	code := 0
 	var ee *exec.ExitError
 	if errors.As(werr, &ee) {

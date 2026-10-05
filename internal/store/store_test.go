@@ -9,14 +9,14 @@ import (
 	"time"
 )
 
-// Tests gegen eine echte Postgres. AGW_TEST_DATABASE_URL setzen, etwa
+// Tests against a real Postgres. Set AGW_TEST_DATABASE_URL, e.g.
 // postgres://agwpoc:<pw>@127.0.0.1:18482/agwpoc?sslmode=disable.
-// Jeder Test bekommt ein eigenes Schema.
+// Every test gets its own schema.
 func open(t *testing.T) *Store {
 	t.Helper()
 	url := os.Getenv("AGW_TEST_DATABASE_URL")
 	if url == "" {
-		t.Skip("AGW_TEST_DATABASE_URL nicht gesetzt")
+		t.Skip("AGW_TEST_DATABASE_URL not set")
 	}
 	ctx := context.Background()
 	s, err := OpenSchema(ctx, url, "test_"+time.Now().Format("150405_000000"))
@@ -35,7 +35,7 @@ func TestChatLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	if c.ID == "" || c.State != StateActive || !c.Internet {
-		t.Fatalf("neuer Chat: %+v", c)
+		t.Fatalf("new chat: %+v", c)
 	}
 	if err := s.SetState(ctx, c.ID, StateDormant); err != nil {
 		t.Fatal(err)
@@ -48,7 +48,7 @@ func TestChatLifecycle(t *testing.T) {
 		t.Fatalf("GetChat: %+v %v", got, err)
 	}
 	if _, err := s.GetChat(ctx, "00000000-0000-0000-0000-000000000000"); err != ErrNotFound {
-		t.Fatalf("ErrNotFound erwartet, bekam %v", err)
+		t.Fatalf("expected ErrNotFound, got %v", err)
 	}
 	list, err := s.ListChats(ctx)
 	if err != nil || len(list) != 1 {
@@ -77,7 +77,7 @@ func TestMessagesAndUsageTotals(t *testing.T) {
 		t.Fatalf("Tokens: %+v", got.Tokens)
 	}
 	if got.Cost < 0.00149 || got.Cost > 0.00151 {
-		t.Fatalf("Kosten: %v", got.Cost)
+		t.Fatalf("cost: %v", got.Cost)
 	}
 }
 
@@ -86,7 +86,7 @@ func TestSessionRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	c, _ := s.CreateChat(ctx, NewChat{Title: "x", Model: "m/m", Variant: "cli"})
 	if b, err := s.LoadSession(ctx, c.ID); err != nil || b != nil {
-		t.Fatalf("leere Sitzung: %q %v", b, err)
+		t.Fatalf("empty session: %q %v", b, err)
 	}
 	data := []byte("{\"type\":\"session\"}\n{\"type\":\"message\"}\n")
 	if err := s.SaveSession(ctx, c.ID, data); err != nil {
@@ -94,7 +94,7 @@ func TestSessionRoundTrip(t *testing.T) {
 	}
 	b, err := s.LoadSession(ctx, c.ID)
 	if err != nil || string(b) != string(data) {
-		t.Fatalf("Sitzung: %q %v", b, err)
+		t.Fatalf("session: %q %v", b, err)
 	}
 }
 
@@ -116,7 +116,7 @@ func TestArtifactsUpsertAndCount(t *testing.T) {
 	}
 	list, _ := s.ListArtifacts(ctx, c.ID)
 	if len(list) != 2 {
-		t.Fatalf("Artefakte: %+v", list)
+		t.Fatalf("artifacts: %+v", list)
 	}
 	got, err := s.GetArtifact(ctx, c.ID, KindOutput, "r.csv")
 	if err != nil || got.Size != 12 {
@@ -124,7 +124,7 @@ func TestArtifactsUpsertAndCount(t *testing.T) {
 	}
 	chat, _ := s.GetChat(ctx, c.ID)
 	if chat.ArtifactCount != 1 {
-		t.Fatalf("artifact_count zählt nur Ergebnisse: %d", chat.ArtifactCount)
+		t.Fatalf("artifact_count counts only results: %d", chat.ArtifactCount)
 	}
 }
 
@@ -132,7 +132,7 @@ func TestApprovalDecideOnlyOnce(t *testing.T) {
 	s := open(t)
 	ctx := context.Background()
 	c, _ := s.CreateChat(ctx, NewChat{Title: "x", Model: "m/m", Variant: "cli"})
-	ap, err := s.CreateApproval(ctx, Approval{ChatID: c.ID, Kind: "artifact_upload", Via: "mcp", Name: "n.txt", Size: 5, SHA256: "bb", ContentType: "text/plain", PendingKey: "pending/x", Preview: "hallo"})
+	ap, err := s.CreateApproval(ctx, Approval{ChatID: c.ID, Kind: "artifact_upload", Via: "mcp", Name: "n.txt", Size: 5, SHA256: "bb", ContentType: "text/plain", PendingKey: "pending/x", Preview: "hello"})
 	if err != nil || ap.State != ApprovalPending || ap.ID == "" {
 		t.Fatalf("CreateApproval: %+v %v", ap, err)
 	}
@@ -142,16 +142,16 @@ func TestApprovalDecideOnlyOnce(t *testing.T) {
 	}
 	pend, _ := s.ListApprovals(ctx, ApprovalPending, "")
 	if len(pend) != 1 {
-		t.Fatalf("offene: %d", len(pend))
+		t.Fatalf("open: %d", len(pend))
 	}
 	d, ok, err := s.DecideApproval(ctx, ap.ID, ApprovalApproved)
 	if err != nil || !ok || d.State != ApprovalApproved || d.DecidedAt == nil {
-		t.Fatalf("Entscheidung: %+v %v %v", d, ok, err)
+		t.Fatalf("decision: %+v %v %v", d, ok, err)
 	}
-	// Zweite Entscheidung ändert nichts.
+	// A second decision changes nothing.
 	d2, ok, err := s.DecideApproval(ctx, ap.ID, ApprovalRejected)
 	if err != nil || ok || d2.State != ApprovalApproved {
-		t.Fatalf("zweite Entscheidung: %+v %v %v", d2, ok, err)
+		t.Fatalf("second decision: %+v %v %v", d2, ok, err)
 	}
 	n, err := s.ExpirePendingApprovals(ctx)
 	if err != nil || n != 0 {
@@ -167,7 +167,7 @@ func TestSocketCalls(t *testing.T) {
 	if err != nil || sc.ID == 0 {
 		t.Fatalf("AddSocketCall: %+v %v", sc, err)
 	}
-	if _, err := s.AddSocketCall(ctx, SocketCall{SlotID: "p-2", Via: "cli", Op: "upload", Result: "nicht zugewiesen"}); err != nil {
+	if _, err := s.AddSocketCall(ctx, SocketCall{SlotID: "p-2", Via: "cli", Op: "upload", Result: "not assigned"}); err != nil {
 		t.Fatal(err)
 	}
 	list, _ := s.ListSocketCalls(ctx, c.ID)
@@ -176,7 +176,7 @@ func TestSocketCalls(t *testing.T) {
 	}
 }
 
-// Die nach Tarif berechneten Kosten haben Vorrang vor pis eigenem Wert.
+// The cost computed by tariff takes precedence over pi's own value.
 func TestBilledCostOverridesPiCost(t *testing.T) {
 	s := open(t)
 	ctx := context.Background()
@@ -185,16 +185,16 @@ func TestBilledCostOverridesPiCost(t *testing.T) {
 	if _, err := s.AppendBilledMessage(ctx, c.ID, asst, &Billing{Cost: 0.001, Peak: false}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.AppendMessage(ctx, c.ID, asst); err != nil { // ohne Berechnung: pis Wert
+	if _, err := s.AppendMessage(ctx, c.ID, asst); err != nil { // without computation: pi's value
 		t.Fatal(err)
 	}
 	got, _ := s.GetChat(ctx, c.ID)
 	if got.Cost < 0.00299 || got.Cost > 0.00301 {
-		t.Fatalf("Summe: %v, erwartet 0.003", got.Cost)
+		t.Fatalf("sum: %v, expected 0.003", got.Cost)
 	}
 	msgs, _ := s.Messages(ctx, c.ID)
 	if msgs[0].Cost == nil || *msgs[0].Cost != 0.001 || msgs[0].Peak == nil || *msgs[0].Peak || msgs[1].Cost != nil {
-		t.Fatalf("Nachrichten: %+v %+v", msgs[0], msgs[1])
+		t.Fatalf("messages: %+v %+v", msgs[0], msgs[1])
 	}
 	_, total, _ := s.Totals(ctx)
 	if total < 0.00299 {
@@ -207,7 +207,7 @@ func TestCompactionAndContext(t *testing.T) {
 	ctx := context.Background()
 	c, _ := s.CreateChat(ctx, NewChat{Title: "k", Model: "m/m", Variant: "cli", AutoCompact: true})
 	if !c.AutoCompact || c.Compactions != 0 || c.Context != nil {
-		t.Fatalf("neu: %+v", c)
+		t.Fatalf("new: %+v", c)
 	}
 	comp := json.RawMessage(`{"role":"compaction","reason":"threshold","tokensBefore":9000,"estimatedTokensAfter":2000,"usage":{"input":9000,"output":300,"totalTokens":9300,"cost":{"total":0.003}}}`)
 	if _, err := s.AppendBilledMessage(ctx, c.ID, comp, &Billing{Cost: 0.0015}); err != nil {
@@ -224,18 +224,18 @@ func TestCompactionAndContext(t *testing.T) {
 	}
 	got, _ := s.GetChat(ctx, c.ID)
 	if got.AutoCompact || got.Compactions != 1 || !strings.Contains(string(got.Context), `"tokens": 2100`) && !strings.Contains(string(got.Context), `"tokens":2100`) {
-		t.Fatalf("nachher: %+v ctx=%s", got, got.Context)
+		t.Fatalf("after: %+v ctx=%s", got, got.Context)
 	}
 	if got.Cost < 0.00149 || got.Cost > 0.00151 || got.Tokens.Total != 9300 {
-		t.Fatalf("Kompaktierung nicht abgerechnet: %v %+v", got.Cost, got.Tokens)
+		t.Fatalf("compaction not billed: %v %+v", got.Cost, got.Tokens)
 	}
 	cmds, _ := s.Commands(ctx, c.ID)
 	if !strings.Contains(string(cmds), "skill:x") {
-		t.Fatalf("Befehle: %s", cmds)
+		t.Fatalf("commands: %s", cmds)
 	}
 }
 
-// Kosten kommen aus den am Proxy erfassten Aufrufen, sobald es welche gibt.
+// Cost comes from the calls captured at the proxy as soon as there are any.
 func TestLLMCallsAreAuthoritative(t *testing.T) {
 	s := open(t)
 	ctx := context.Background()
@@ -244,7 +244,7 @@ func TestLLMCallsAreAuthoritative(t *testing.T) {
 	_, _ = s.AppendBilledMessage(ctx, c.ID, asst, &Billing{Cost: 0.001})
 	got, _ := s.GetChat(ctx, c.ID)
 	if got.Cost != 0.001 || got.LLMCalls != 0 || got.MaxSubagents != 2 {
-		t.Fatalf("ohne Proxy-Aufrufe: %+v", got)
+		t.Fatalf("without proxy calls: %+v", got)
 	}
 	now := time.Now()
 	_, err := s.AddLLMCall(ctx, LLMCall{ChatID: c.ID, SlotID: "p", SourceIP: "10.0.0.2", Model: "m/m", ResponseID: "r-main", Status: 200, Input: 10, Output: 5, Cost: 0.001, StartedAt: now, ToolCalls: json.RawMessage(`[{"name":"bash"}]`)})
@@ -254,38 +254,38 @@ func TestLLMCallsAreAuthoritative(t *testing.T) {
 	_, _ = s.AddLLMCall(ctx, LLMCall{ChatID: c.ID, SlotID: "p", SourceIP: "10.0.0.2", Model: "m/m", ResponseID: "r-sub", Status: 200, Input: 100, Output: 50, CacheRead: 30, Cost: 0.004, StartedAt: now})
 	got, _ = s.GetChat(ctx, c.ID)
 	if got.LLMCalls != 2 || got.Cost < 0.00499 || got.Cost > 0.00501 || got.CostOther < 0.00399 || got.CostOther > 0.00401 || got.Tokens.Input != 110 || got.Tokens.CacheRead != 30 {
-		t.Fatalf("mit Proxy-Aufrufen: %+v", got)
+		t.Fatalf("with proxy calls: %+v", got)
 	}
 	calls, _ := s.ListLLMCalls(ctx, c.ID)
 	if len(calls) != 2 || !calls[0].Main || calls[1].Main {
-		t.Fatalf("Hauptsitzung falsch erkannt: %+v", calls)
+		t.Fatalf("main session detected wrongly: %+v", calls)
 	}
 	_, total, _ := s.Totals(ctx)
 	if total < 0.00499 {
 		t.Fatalf("Totals: %v", total)
 	}
-	// Subagenten-Einträge: nur neue zurück, bestätigt über den Proxy
+	// Subagent entries: only new ones returned, confirmed via the proxy
 	es := []SubagentEntry{
 		{ChatID: c.ID, RunID: "run1", EntryID: "a", Agent: "scout", Kind: "tool_call", Payload: json.RawMessage(`{"name":"bash"}`), ResponseID: "r-sub"},
 		{ChatID: c.ID, RunID: "run1", EntryID: "b", Agent: "scout", Kind: "tool_result", Payload: json.RawMessage(`{"text":"ok"}`)},
 	}
 	added, err := s.AddSubagentEntries(ctx, es)
 	if err != nil || len(added) != 2 || !added[0].Confirmed || added[1].Confirmed {
-		t.Fatalf("Einträge: %+v %v", added, err)
+		t.Fatalf("entries: %+v %v", added, err)
 	}
 	added, _ = s.AddSubagentEntries(ctx, es)
 	if len(added) != 0 {
-		t.Fatal("doppelte Einträge gespeichert")
+		t.Fatal("duplicate entries stored")
 	}
 	if n, _ := s.SubagentRunCount(ctx, c.ID); n != 1 {
-		t.Fatalf("Läufe: %d", n)
+		t.Fatalf("runs: %d", n)
 	}
 	if err := s.SetMaxSubagents(ctx, c.ID, 0); err != nil {
 		t.Fatal(err)
 	}
 	got, _ = s.GetChat(ctx, c.ID)
 	if got.MaxSubagents != 0 || got.Subagents != 1 {
-		t.Fatalf("nach Grenze: %+v", got)
+		t.Fatalf("after limit: %+v", got)
 	}
 }
 
@@ -297,18 +297,18 @@ func TestWorkspaceSaveSkipAndChatField(t *testing.T) {
 		t.Fatal(err)
 	}
 	if c.Workspace != nil {
-		t.Fatalf("neuer Chat hat schon einen Arbeitsbereich: %+v", c.Workspace)
+		t.Fatalf("new chat already has a workspace: %+v", c.Workspace)
 	}
 	if _, err := s.GetWorkspace(ctx, c.ID); err != ErrNotFound {
-		t.Fatalf("GetWorkspace ohne Eintrag: %v", err)
+		t.Fatalf("GetWorkspace without entry: %v", err)
 	}
-	// Ausgelassen, bevor je gesichert wurde: Feld mit Grund, aber ohne saved_at.
-	if err := s.SkipWorkspace(ctx, c.ID, "zu groß", 300<<20); err != nil {
+	// Skipped before anything was ever backed up: field with reason, but without saved_at.
+	if err := s.SkipWorkspace(ctx, c.ID, "too large", 300<<20); err != nil {
 		t.Fatal(err)
 	}
 	c, _ = s.GetChat(ctx, c.ID)
-	if c.Workspace == nil || c.Workspace.SavedAt != nil || c.Workspace.SkippedReason == nil || *c.Workspace.SkippedReason != "zu groß" || *c.Workspace.SkippedSize != 300<<20 {
-		t.Fatalf("nach Auslassen: %+v", c.Workspace)
+	if c.Workspace == nil || c.Workspace.SavedAt != nil || c.Workspace.SkippedReason == nil || *c.Workspace.SkippedReason != "too large" || *c.Workspace.SkippedSize != 300<<20 {
+		t.Fatalf("after skipping: %+v", c.Workspace)
 	}
 	w := Workspace{ChatID: c.ID, ObjectKey: c.ID + "/workspace.tar.gz", Fingerprint: "fp1",
 		WorkspaceInfo: WorkspaceInfo{Size: 1234, ArchiveSize: 500, Files: 3, SHA256: "abc"}}
@@ -317,26 +317,26 @@ func TestWorkspaceSaveSkipAndChatField(t *testing.T) {
 	}
 	got, err := s.GetWorkspace(ctx, c.ID)
 	if err != nil || got.ObjectKey != w.ObjectKey || got.Fingerprint != "fp1" || got.Files != 3 || got.SavedAt == nil || got.SkippedReason != nil {
-		t.Fatalf("nach Sichern: %+v %v", got, err)
+		t.Fatalf("after backup: %+v %v", got, err)
 	}
-	// Erneut ausgelassen: Die letzte gültige Sicherung bleibt.
-	_ = s.SkipWorkspace(ctx, c.ID, "zu groß", 1<<30)
+	// Skipped again: the last valid backup stays.
+	_ = s.SkipWorkspace(ctx, c.ID, "too large", 1<<30)
 	got, _ = s.GetWorkspace(ctx, c.ID)
 	if got.ObjectKey != w.ObjectKey || got.Size != 1234 || got.SkippedReason == nil {
-		t.Fatalf("Sicherung nach Auslassen verloren: %+v", got)
+		t.Fatalf("backup lost after skipping: %+v", got)
 	}
 	c, _ = s.GetChat(ctx, c.ID)
 	b, _ := json.Marshal(c)
-	if !strings.Contains(string(b), `"workspace":{"size":1234,"archive_size":500,"files":3`) || !strings.Contains(string(b), `"skipped_reason":"zu groß"`) {
-		t.Fatalf("API-Feld: %s", b)
+	if !strings.Contains(string(b), `"workspace":{"size":1234,"archive_size":500,"files":3`) || !strings.Contains(string(b), `"skipped_reason":"too large"`) {
+		t.Fatalf("API field: %s", b)
 	}
 	if strings.Contains(string(b), "fp1") || strings.Contains(string(b), "workspace.tar.gz") {
-		t.Fatalf("interne Angaben im API-Feld: %s", b)
+		t.Fatalf("internal details in the API field: %s", b)
 	}
 	_ = s.ClearWorkspaceSkip(ctx, c.ID)
 	got, _ = s.GetWorkspace(ctx, c.ID)
 	if got.SkippedReason != nil || got.SkippedAt != nil {
-		t.Fatalf("Vermerk nicht gelöscht: %+v", got)
+		t.Fatalf("note not cleared: %+v", got)
 	}
 }
 
@@ -359,47 +359,47 @@ func TestToolExecutions(t *testing.T) {
 		t.Fatalf("List: %+v %v", list, err)
 	}
 	if list[0].ExitCode == nil || *list[0].ExitCode != 3 || list[0].DurationMs != 12 || !list[0].StartedAt.Equal(now) || string(list[0].Args) != `{"command": "exit 3"}` {
-		t.Fatalf("erster Eintrag: %+v args=%s", list[0], list[0].Args)
+		t.Fatalf("first entry: %+v args=%s", list[0], list[0].Args)
 	}
 	if list[1].ExitCode != nil || list[1].Session != "run-1" || list[1].Error != "ENOENT" || string(list[1].Args) != "{}" {
-		t.Fatalf("zweiter Eintrag: %+v", list[1])
+		t.Fatalf("second entry: %+v", list[1])
 	}
 }
 
-// K1: Postgres lehnt NUL in text (\x00) und jsonb (\u0000) ab. Ein Eintrag mit Binärausgabe
-// darf trotzdem nicht verloren gehen.
+// K1: Postgres rejects NUL in text (\x00) and jsonb (\u0000). An entry with binary output
+// must not get lost nevertheless.
 func TestToolExecutionWithNUL(t *testing.T) {
 	s := open(t)
 	ctx := context.Background()
 	c, _ := s.CreateChat(ctx, NewChat{Title: "x", Model: "m/m", Variant: "cli"})
 	now := time.Now().UTC()
 	e, err := s.AddToolExecution(ctx, ToolExecution{ChatID: c.ID, SlotID: "p", ToolCallID: "call_nul", Tool: "read", Op: "read",
-		Args: json.RawMessage(`{"path":"/workspace/a\u0000b.png"}`), Error: "kaputt\x00", OutputExcerpt: "\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR",
+		Args: json.RawMessage(`{"path":"/workspace/a\u0000b.png"}`), Error: "broken\x00", OutputExcerpt: "\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR",
 		OutputSHA256: "ab", OutputBytes: 16, StartedAt: now})
 	if err != nil || e.ID == 0 {
-		t.Fatalf("Eintrag mit NUL: %v", err)
+		t.Fatalf("entry with NUL: %v", err)
 	}
 	list, _ := s.ListToolExecutions(ctx, c.ID)
 	if len(list) != 1 || strings.ContainsRune(list[0].OutputExcerpt, 0) || !strings.Contains(list[0].OutputExcerpt, "IHDR") ||
 		strings.ContainsRune(list[0].Error, 0) || strings.Contains(string(list[0].Args), `\u0000`) || !strings.Contains(string(list[0].Args), "a") {
-		t.Fatalf("gespeichert: %+v args=%s", list, list[0].Args)
+		t.Fatalf("stored: %+v args=%s", list, list[0].Args)
 	}
-	// Scheitert der Eintrag aus einem anderen Grund (hier: kein gültiges JSON), bleibt eine
-	// Ersatzzeile ohne Auszug, damit der Abgleich die Ausführung nicht als fehlend meldet.
-	e, err = s.AddToolExecution(ctx, ToolExecution{ChatID: c.ID, SlotID: "p", ToolCallID: "call_kaputt", Tool: "bash", Op: "bash",
+	// If the insert fails for another reason (here: no valid JSON), a fallback row without
+	// excerpt remains, so that the reconciliation does not report the execution as missing.
+	e, err = s.AddToolExecution(ctx, ToolExecution{ChatID: c.ID, SlotID: "p", ToolCallID: "call_broken", Tool: "bash", Op: "bash",
 		Args: json.RawMessage(`{"command":`), OutputExcerpt: "x", OutputSHA256: "cd", OutputBytes: 1, StartedAt: now})
 	if err != nil || e.ID == 0 {
-		t.Fatalf("Ersatzzeile: %v", err)
+		t.Fatalf("fallback row: %v", err)
 	}
 	list, _ = s.ListToolExecutions(ctx, c.ID)
-	if len(list) != 2 || list[1].ToolCallID != "call_kaputt" || list[1].OutputExcerpt != "" || list[1].OutputSHA256 != "cd" ||
-		!strings.Contains(list[1].Error, "nicht vollständig gespeichert") {
-		t.Fatalf("Ersatzzeile: %+v", list)
+	if len(list) != 2 || list[1].ToolCallID != "call_broken" || list[1].OutputExcerpt != "" || list[1].OutputSHA256 != "cd" ||
+		!strings.Contains(list[1].Error, "not stored completely") {
+		t.Fatalf("fallback row: %+v", list)
 	}
 }
 
-// M1: Der Proxy hält fest, ob eine Antwort vollständig war; die Sitzung liefert Hinweise, dass pi
-// einen Aufruf abgewiesen hat (nicht fälschungssicher, nur für die Anzeige).
+// M1: the proxy records whether a reply was complete; the session provides hints that pi
+// refused a call (not tamper-proof, for display only).
 func TestLLMCallCompletenessAndRejections(t *testing.T) {
 	s := open(t)
 	ctx := context.Background()
@@ -414,7 +414,7 @@ func TestLLMCallCompletenessAndRejections(t *testing.T) {
 	}
 	calls, _ := s.ListLLMCalls(ctx, c.ID)
 	if len(calls) != 2 || calls[0].FinishReason != "tool_calls" || !calls[0].Complete || calls[1].Complete || calls[1].FinishReason != "" {
-		t.Fatalf("Aufrufe: %+v", calls)
+		t.Fatalf("calls: %+v", calls)
 	}
 	msg := func(v string) json.RawMessage { return json.RawMessage(v) }
 	_, _ = s.AppendMessage(ctx, c.ID, msg(`{"role":"toolResult","toolCallId":"call_a","toolName":"grep","content":[{"type":"text","text":"Tool grep not found"}],"isError":true}`))
@@ -423,7 +423,7 @@ func TestLLMCallCompletenessAndRejections(t *testing.T) {
 		Payload: msg(`{"name":"read","text":"Validation failed for tool \"read\"","is_error":true,"tool_call_id":"call_c"}`)}})
 	rej, err := s.ToolRejections(ctx, c.ID)
 	if err != nil || len(rej) != 2 || rej["call_a"] != "Tool grep not found" || !strings.Contains(rej["call_c"], "Validation failed") {
-		t.Fatalf("Abweisungen: %v %v", rej, err)
+		t.Fatalf("rejections: %v %v", rej, err)
 	}
 }
 
@@ -439,18 +439,18 @@ func TestChatOwner(t *testing.T) {
 		t.Fatal(err)
 	}
 	if a.Owner != "sub-anna" || b.Owner != "" {
-		t.Fatalf("Besitzer: %q %q", a.Owner, b.Owner)
+		t.Fatalf("owner: %q %q", a.Owner, b.Owner)
 	}
 	if o, err := s.ChatOwner(ctx, a.ID); err != nil || o != "sub-anna" {
 		t.Fatalf("ChatOwner: %q %v", o, err)
 	}
 	if o, err := s.ChatOwner(ctx, b.ID); err != nil || o != "" {
-		t.Fatalf("ohne Besitzer: %q %v", o, err)
+		t.Fatalf("without owner: %q %v", o, err)
 	}
 	if _, err := s.ChatOwner(ctx, "00000000-0000-0000-0000-000000000000"); err != ErrNotFound {
-		t.Fatalf("unbekannt: %v", err)
+		t.Fatalf("unknown: %v", err)
 	}
-	if _, err := s.ChatOwner(ctx, "kein-uuid"); err != ErrNotFound {
-		t.Fatalf("keine UUID: %v", err)
+	if _, err := s.ChatOwner(ctx, "not-a-uuid"); err != ErrNotFound {
+		t.Fatalf("not a UUID: %v", err)
 	}
 }

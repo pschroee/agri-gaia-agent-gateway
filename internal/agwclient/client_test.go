@@ -22,10 +22,10 @@ func TestCreateChatNoSlot(t *testing.T) {
 	defer srv.Close()
 	_, err := New(srv.URL).CreateChat(context.Background(), CreateChatRequest{})
 	if !errors.Is(err, ErrNoSlot) {
-		t.Fatalf("ErrNoSlot erwartet, erhalten: %v", err)
+		t.Fatalf("expected ErrNoSlot, got: %v", err)
 	}
-	if !strings.Contains(err.Error(), "Kein freier Platz im Pool") {
-		t.Errorf("Meldung unverständlich: %q", err)
+	if !strings.Contains(err.Error(), "No free slot in the pool") {
+		t.Errorf("message unclear: %q", err)
 	}
 }
 
@@ -33,7 +33,7 @@ func TestCreateChatSendsOptionalFields(t *testing.T) {
 	var body map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.URL.Path != "/api/chats" {
-			t.Errorf("falscher Aufruf %s %s", r.Method, r.URL.Path)
+			t.Errorf("wrong call %s %s", r.Method, r.URL.Path)
 		}
 		json.NewDecoder(r.Body).Decode(&body)
 		w.WriteHeader(http.StatusCreated)
@@ -46,26 +46,26 @@ func TestCreateChatSendsOptionalFields(t *testing.T) {
 		t.Fatal(err)
 	}
 	if chat.ID != "c1" {
-		t.Errorf("ID falsch: %+v", chat)
+		t.Errorf("wrong ID: %+v", chat)
 	}
 	if body["model"] != "m" || body["internet"] != false {
-		t.Errorf("Rumpf falsch: %v", body)
+		t.Errorf("wrong body: %v", body)
 	}
 	if _, ok := body["variant"]; ok {
-		t.Errorf("leere Variante sollte fehlen: %v", body)
+		t.Errorf("empty variant should be absent: %v", body)
 	}
 }
 
 func TestAPIErrorMessage(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusConflict)
-		io.WriteString(w, `{"error":"offene Bestätigung"}`)
+		io.WriteString(w, `{"error":"pending approval"}`)
 	}))
 	defer srv.Close()
 	_, err := New(srv.URL).Suspend(context.Background(), "c1")
 	var ae *APIError
-	if !errors.As(err, &ae) || ae.Status != 409 || ae.Message != "offene Bestätigung" {
-		t.Fatalf("APIError erwartet, erhalten %#v", err)
+	if !errors.As(err, &ae) || ae.Status != 409 || ae.Message != "pending approval" {
+		t.Fatalf("expected APIError, got %#v", err)
 	}
 }
 
@@ -83,7 +83,7 @@ func TestDecide(t *testing.T) {
 		t.Fatal(err)
 	}
 	if gotPath != "POST /api/approvals/a1" || body["approve"] != true || a.State != "approved" {
-		t.Errorf("falsch: %s %v %+v", gotPath, body, a)
+		t.Errorf("wrong: %s %v %+v", gotPath, body, a)
 	}
 }
 
@@ -91,12 +91,12 @@ func TestUploadMultipart(t *testing.T) {
 	dir := t.TempDir()
 	p1 := filepath.Join(dir, "a.txt")
 	p2 := filepath.Join(dir, "b.csv")
-	os.WriteFile(p1, []byte("hallo"), 0o644)
+	os.WriteFile(p1, []byte("hello"), 0o644)
 	os.WriteFile(p2, []byte("x,y"), 0o644)
 	got := map[string]string{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/chats/c1/files" {
-			t.Errorf("Pfad %s", r.URL.Path)
+			t.Errorf("path %s", r.URL.Path)
 		}
 		mr, err := r.MultipartReader()
 		if err != nil {
@@ -108,7 +108,7 @@ func TestUploadMultipart(t *testing.T) {
 				break
 			}
 			if part.FormName() != "file" {
-				t.Errorf("Feld %q", part.FormName())
+				t.Errorf("field %q", part.FormName())
 			}
 			b, _ := io.ReadAll(part)
 			got[part.FileName()] = string(b)
@@ -121,30 +121,30 @@ func TestUploadMultipart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(arts) != 2 || got["a.txt"] != "hallo" || got["b.csv"] != "x,y" {
-		t.Errorf("falsch: %+v %v", arts, got)
+	if len(arts) != 2 || got["a.txt"] != "hello" || got["b.csv"] != "x,y" {
+		t.Errorf("wrong: %+v %v", arts, got)
 	}
 }
 
 func TestDownloadEscapesNameAndKind(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.EscapedPath() != "/api/chats/c1/artifacts/mein%20bericht.md" || r.URL.Query().Get("kind") != "input" {
-			t.Errorf("falsch: %s ?%s", r.URL.EscapedPath(), r.URL.RawQuery)
+		if r.URL.EscapedPath() != "/api/chats/c1/artifacts/my%20report.md" || r.URL.Query().Get("kind") != "input" {
+			t.Errorf("wrong: %s ?%s", r.URL.EscapedPath(), r.URL.RawQuery)
 		}
-		io.WriteString(w, "inhalt")
+		io.WriteString(w, "content")
 	}))
 	defer srv.Close()
 	var sb strings.Builder
-	n, err := New(srv.URL).Download(context.Background(), "c1", "mein bericht.md", "input", &sb)
-	if err != nil || n != 6 || sb.String() != "inhalt" {
-		t.Errorf("falsch: %d %v %q", n, err, sb.String())
+	n, err := New(srv.URL).Download(context.Background(), "c1", "my report.md", "input", &sb)
+	if err != nil || n != 7 || sb.String() != "content" {
+		t.Errorf("wrong: %d %v %q", n, err, sb.String())
 	}
 }
 
 func TestUnreachable(t *testing.T) {
 	_, err := New("http://127.0.0.1:1").Models(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "nicht erreichbar") {
-		t.Errorf("verständliche Meldung erwartet: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "not reachable") {
+		t.Errorf("expected a clear message: %v", err)
 	}
 }
 
@@ -153,7 +153,7 @@ func TestCommandsAndRunCommand(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == "GET" && r.URL.Path == "/api/chats/c1/commands":
-			io.WriteString(w, `[{"name":"compact","description":"d","source":"builtin","args":"[Anweisungen]"},{"name":"skill:x","source":"skill"}]`)
+			io.WriteString(w, `[{"name":"compact","description":"d","source":"builtin","args":"[instructions]"},{"name":"skill:x","source":"skill"}]`)
 		case r.Method == "POST" && r.URL.Path == "/api/chats/c1/commands":
 			json.NewDecoder(r.Body).Decode(&got)
 			io.WriteString(w, `{"ok":true,"resumed":true,"result":{"a":1}}`)
@@ -161,26 +161,26 @@ func TestCommandsAndRunCommand(t *testing.T) {
 			var b map[string]bool
 			json.NewDecoder(r.Body).Decode(&b)
 			if b["enabled"] {
-				t.Errorf("enabled=false erwartet: %v", b)
+				t.Errorf("expected enabled=false: %v", b)
 			}
 			io.WriteString(w, `{"id":"c1","auto_compact":false,"compactions":3,"context":{"tokens":null,"window":1000,"percent":null,"threshold_tokens":900,"reserve_tokens":100,"keep_recent_tokens":50,"updated_at":"x"}}`)
 		default:
-			t.Errorf("unerwartet %s %s", r.Method, r.URL.Path)
+			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
 		}
 	}))
 	defer srv.Close()
 	c := New(srv.URL)
 	ctx := context.Background()
 	cmds, err := c.Commands(ctx, "c1")
-	if err != nil || len(cmds) != 2 || cmds[0].Args != "[Anweisungen]" || cmds[1].Source != "skill" {
+	if err != nil || len(cmds) != 2 || cmds[0].Args != "[instructions]" || cmds[1].Source != "skill" {
 		t.Fatalf("Commands: %v %+v", err, cmds)
 	}
-	res, err := c.RunCommand(ctx, "c1", "/compact Fokus")
+	res, err := c.RunCommand(ctx, "c1", "/compact focus")
 	if err != nil || !res.OK || !res.Resumed || string(res.Result) != `{"a":1}` {
 		t.Fatalf("RunCommand: %v %+v", err, res)
 	}
-	if got["command"] != "/compact Fokus" {
-		t.Errorf("Rumpf = %v", got)
+	if got["command"] != "/compact focus" {
+		t.Errorf("body = %v", got)
 	}
 	ch, err := c.SetAutoCompact(ctx, "c1", false)
 	if err != nil || ch.AutoCompact || ch.Compactions != 3 || ch.Context == nil || ch.Context.Tokens != nil || ch.Context.Percent != nil || ch.Context.ThresholdTokens != 900 {
@@ -242,14 +242,14 @@ func TestSubagentsAndLLMCalls(t *testing.T) {
 		t.Fatal(err)
 	}
 	if v, ok := gotCreate["max_subagents"]; !ok || v != float64(0) {
-		t.Errorf("max_subagents 0 muss gesendet werden: %v", gotCreate)
+		t.Errorf("max_subagents 0 must be sent: %v", gotCreate)
 	}
 	gotCreate = nil
 	if _, err := c.CreateChat(ctx, CreateChatRequest{}); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := gotCreate["max_subagents"]; ok {
-		t.Errorf("ohne Angabe darf max_subagents fehlen: %v", gotCreate)
+		t.Errorf("without a value max_subagents may be absent: %v", gotCreate)
 	}
 
 	ch, err := c.SetMaxSubagents(ctx, "c1", 3)
@@ -257,7 +257,7 @@ func TestSubagentsAndLLMCalls(t *testing.T) {
 		t.Fatal(err)
 	}
 	if gotMax["max"] != float64(3) || ch.MaxSubagents != 3 || ch.Subagents != 1 || ch.LLMCalls != 4 || ch.CostOther != 0.001 {
-		t.Errorf("SetMaxSubagents: rumpf=%v chat=%+v", gotMax, ch)
+		t.Errorf("SetMaxSubagents: body=%v chat=%+v", gotMax, ch)
 	}
 
 	calls, err := c.LLMCalls(ctx, "c1")

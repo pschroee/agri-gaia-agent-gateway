@@ -62,14 +62,14 @@ func portOf(t *testing.T, raw string) int {
 	return n
 }
 
-// setup: Proxy vor einem HTTP- und einem HTTPS-Ziel auf 127.0.0.1, das in den Tests als öffentlich
-// gilt; „intern.test“ zeigt auf 10.0.0.5, „ziel.test“ auf das Ziel.
+// setup: proxy in front of an HTTP and an HTTPS target on 127.0.0.1, which counts as public in the
+// tests; "internal.test" points to 10.0.0.5, "target.test" to the target.
 func setup(t *testing.T, g *gate) (client *http.Client, target, tlsTarget *httptest.Server, searx *httptest.Server) {
 	t.Helper()
 	target = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		io.WriteString(w, "hallo von "+r.Host+r.URL.Path)
+		io.WriteString(w, "hello from "+r.Host+r.URL.Path)
 	}))
-	tlsTarget = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "sicher") }))
+	tlsTarget = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "secure") }))
 	searx = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, `{"results":[],"q":"`+r.URL.Query().Get("q")+`"}`)
 	}))
@@ -79,9 +79,9 @@ func setup(t *testing.T, g *gate) (client *http.Client, target, tlsTarget *httpt
 		Allow: func(ip net.IP) bool { return ip.IsLoopback() },
 		Lookup: func(_ context.Context, host string) ([]net.IPAddr, error) {
 			switch host {
-			case "ziel.test":
+			case "target.test":
 				return []net.IPAddr{{IP: net.ParseIP("127.0.0.1")}}, nil
-			case "intern.test":
+			case "internal.test":
 				return []net.IPAddr{{IP: net.ParseIP("10.0.0.5")}}, nil
 			}
 			return nil, &net.DNSError{Err: "no such host", Name: host}
@@ -96,20 +96,20 @@ func setup(t *testing.T, g *gate) (client *http.Client, target, tlsTarget *httpt
 func TestGate(t *testing.T) {
 	g := &gate{}
 	c, target, _, _ := setup(t, g)
-	u := "http://ziel.test:" + strconv.Itoa(portOf(t, target.URL)) + "/x"
+	u := "http://target.test:" + strconv.Itoa(portOf(t, target.URL)) + "/x"
 	if resp, err := c.Get(u); err != nil || resp.StatusCode != 403 {
-		t.Fatalf("unbekannte Quelle: %v %v", resp, err)
+		t.Fatalf("unknown source: %v %v", resp, err)
 	}
 	if len(g.recs) != 0 {
-		t.Fatal("unbekannte Quelle protokolliert")
+		t.Fatal("unknown source logged")
 	}
 	g.known = true
 	resp, err := c.Get(u)
 	if err != nil || resp.StatusCode != 403 {
-		t.Fatalf("Internet aus: %v %v", resp, err)
+		t.Fatalf("internet off: %v %v", resp, err)
 	}
 	if b, _ := io.ReadAll(resp.Body); !strings.Contains(string(b), "internet access is off") || g.last().Denied == "" {
-		t.Fatalf("Grund: %q %+v", b, g.last())
+		t.Fatalf("reason: %q %+v", b, g.last())
 	}
 }
 
@@ -117,33 +117,33 @@ func TestForwardAndBlock(t *testing.T) {
 	g := &gate{known: true, internet: true}
 	c, target, tlsTarget, _ := setup(t, g)
 	port := strconv.Itoa(portOf(t, target.URL))
-	resp, err := c.Get("http://ziel.test:" + port + "/seite")
+	resp, err := c.Get("http://target.test:" + port + "/page")
 	if err != nil || resp.StatusCode != 200 {
 		t.Fatalf("http: %v %v", resp, err)
 	}
 	b, _ := io.ReadAll(resp.Body)
-	if string(b) != "hallo von ziel.test:"+port+"/seite" {
-		t.Fatalf("Antwort: %q", b)
+	if string(b) != "hello from target.test:"+port+"/page" {
+		t.Fatalf("response: %q", b)
 	}
-	if r := g.last(); r.Host != "ziel.test" || r.Status != 200 || r.BytesDown == 0 || r.Path != "/seite" || r.Denied != "" {
-		t.Fatalf("Protokoll: %+v", r)
+	if r := g.last(); r.Host != "target.test" || r.Status != 200 || r.BytesDown == 0 || r.Path != "/page" || r.Denied != "" {
+		t.Fatalf("log: %+v", r)
 	}
-	// HTTPS über CONNECT
-	resp, err = c.Get("https://ziel.test:" + strconv.Itoa(portOf(t, tlsTarget.URL)) + "/")
+	// HTTPS through CONNECT
+	resp, err = c.Get("https://target.test:" + strconv.Itoa(portOf(t, tlsTarget.URL)) + "/")
 	if err != nil || resp.StatusCode != 200 {
 		t.Fatalf("https: %v %v", resp, err)
 	}
 	b, _ = io.ReadAll(resp.Body)
 	resp.Body.Close()
-	if string(b) != "sicher" {
-		t.Fatalf("https-Antwort: %q", b)
+	if string(b) != "secure" {
+		t.Fatalf("https response: %q", b)
 	}
 	c.CloseIdleConnections()
 	for _, bad := range []string{
-		"http://intern.test:" + port + "/",     // interne Adresse
-		"http://10.0.0.7:" + port + "/",        // interne Adresse direkt
-		"http://ziel.test:" + port + "1/",      // anderer Port
-		"http://gibtsnicht.test:" + port + "/", // nicht auflösbar
+		"http://internal.test:" + port + "/",     // internal address
+		"http://10.0.0.7:" + port + "/",          // internal address directly
+		"http://target.test:" + port + "1/",      // other port
+		"http://doesnotexist.test:" + port + "/", // not resolvable
 	} {
 		if resp, err := c.Get(bad); err != nil || resp.StatusCode != 403 {
 			t.Errorf("%s: %v %v", bad, resp, err)
@@ -151,7 +151,7 @@ func TestForwardAndBlock(t *testing.T) {
 	}
 }
 
-// Node tunnelt mit NODE_USE_ENV_PROXY auch HTTP per CONNECT: zu SearXNG und zu Port 80.
+// With NODE_USE_ENV_PROXY Node also tunnels HTTP through CONNECT: to SearXNG and to port 80.
 func TestConnectForHTTP(t *testing.T) {
 	g := &gate{known: true, internet: true}
 	c, target, _, _ := setup(t, g)
@@ -159,7 +159,7 @@ func TestConnectForHTTP(t *testing.T) {
 	proxyURL, _ := pu(&http.Request{URL: &url.URL{Scheme: "https", Host: "x"}})
 	for _, tc := range []struct{ host, want string }{
 		{"searxng:8080", `"q":"tunnel"`},
-		{"ziel.test:" + strconv.Itoa(portOf(t, target.URL)), "hallo von"},
+		{"target.test:" + strconv.Itoa(portOf(t, target.URL)), "hello from"},
 	} {
 		conn, err := net.Dial("tcp", proxyURL.Host)
 		if err != nil {
@@ -183,20 +183,20 @@ func TestConnectForHTTP(t *testing.T) {
 func TestSearxng(t *testing.T) {
 	g := &gate{known: true, internet: true}
 	c, _, _, _ := setup(t, g)
-	resp, err := c.Get("http://searxng:8080/search?q=schwein&format=json")
+	resp, err := c.Get("http://searxng:8080/search?q=pig&format=json")
 	if err != nil || resp.StatusCode != 200 {
 		t.Fatalf("searxng: %v %v", resp, err)
 	}
 	b, _ := io.ReadAll(resp.Body)
-	if !strings.Contains(string(b), `"q":"schwein"`) {
-		t.Fatalf("Antwort: %q", b)
+	if !strings.Contains(string(b), `"q":"pig"`) {
+		t.Fatalf("response: %q", b)
 	}
-	// Ohne Internet auch keine Suche.
+	// Without internet no search either.
 	g.mu.Lock()
 	g.internet = false
 	g.mu.Unlock()
 	if resp, _ := c.Get("http://searxng:8080/search?q=x"); resp.StatusCode != 403 {
-		t.Fatalf("Suche ohne Internet: %d", resp.StatusCode)
+		t.Fatalf("search without internet: %d", resp.StatusCode)
 	}
 }
 
@@ -209,12 +209,12 @@ func TestPublic(t *testing.T) {
 		"203.0.113.9": false,
 	} {
 		if got := p.public(net.ParseIP(ip)); got != want {
-			t.Errorf("%s: öffentlich = %v", ip, got)
+			t.Errorf("%s: public = %v", ip, got)
 		}
 	}
 }
 
-// Ein offener Tunnel schließt sich, sobald der Chat kein Internet mehr hat.
+// An open tunnel closes as soon as the chat no longer has internet.
 func TestTunnelClosedWhenInternetOff(t *testing.T) {
 	old := RecheckEvery
 	RecheckEvery = 50 * time.Millisecond
@@ -222,7 +222,7 @@ func TestTunnelClosedWhenInternetOff(t *testing.T) {
 	g := &gate{known: true, internet: true}
 	c, target, _, _ := setup(t, g)
 	proxyURL, _ := c.Transport.(*http.Transport).Proxy(&http.Request{URL: &url.URL{Scheme: "https", Host: "x"}})
-	host := "ziel.test:" + strconv.Itoa(portOf(t, target.URL))
+	host := "target.test:" + strconv.Itoa(portOf(t, target.URL))
 	conn, err := net.Dial("tcp", proxyURL.Host)
 	if err != nil {
 		t.Fatal(err)
@@ -238,12 +238,12 @@ func TestTunnelClosedWhenInternetOff(t *testing.T) {
 	g.mu.Unlock()
 	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
 	if _, err := br.ReadByte(); err == nil || errors.Is(err, os.ErrDeadlineExceeded) {
-		t.Fatalf("Tunnel nicht geschlossen: %v", err)
+		t.Fatalf("tunnel not closed: %v", err)
 	}
 	deadline := time.Now().Add(2 * time.Second)
 	for !strings.Contains(g.last().Denied, "internet switched off") {
 		if time.Now().After(deadline) {
-			t.Fatalf("Protokoll: %+v", g.last())
+			t.Fatalf("log: %+v", g.last())
 		}
 		time.Sleep(20 * time.Millisecond)
 	}

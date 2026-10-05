@@ -13,12 +13,12 @@ import (
 	"testing"
 )
 
-// fakePlatform ist Keycloak und Backend in einem: /token gibt Token aus, alles
-// andere verlangt das zuletzt ausgegebene Token.
+// fakePlatform is Keycloak and backend in one: /token issues tokens, everything
+// else requires the token issued last.
 type fakePlatform struct {
 	mu      sync.Mutex
-	n       int    // ausgegebene Token
-	valid   string // gültiges Token
+	n       int    // tokens issued
+	valid   string // valid token
 	grants  []string
 	reqs    []string
 	bodies  []string
@@ -69,13 +69,13 @@ func newClient(t *testing.T, f *fakePlatform, max int) (*Client, *httptest.Serve
 func TestNewDisabledWithoutURL(t *testing.T) {
 	c, err := New(Config{})
 	if c != nil || err != nil {
-		t.Fatalf("ohne URL erwartet nil, nil: %v %v", c, err)
+		t.Fatalf("without URL expected nil, nil: %v %v", c, err)
 	}
 	if _, err := c.Do(context.Background(), "", Request{Method: "GET", Path: "/datasets"}); err != ErrNotConfigured {
-		t.Fatalf("erwartet ErrNotConfigured: %v", err)
+		t.Fatalf("expected ErrNotConfigured: %v", err)
 	}
 	if _, err := New(Config{APIURL: "https://x"}); err == nil {
-		t.Fatal("ohne Zugangsdaten erwartet Fehler")
+		t.Fatal("without credentials expected an error")
 	}
 }
 
@@ -88,14 +88,14 @@ func TestDoLoginCompactAndReuse(t *testing.T) {
 			t.Fatal(err)
 		}
 		if res.Status != "ok" || res.HTTPStatus != 200 || res.Body != `[{"id":1,"name":"mnist"}]` {
-			t.Fatalf("Antwort: %+v", res)
+			t.Fatalf("response: %+v", res)
 		}
 	}
 	if len(f.grants) != 1 || f.grants[0] != "password:frontend" {
-		t.Fatalf("erwartet genau eine Anmeldung über frontend: %v", f.grants)
+		t.Fatalf("expected exactly one login via frontend: %v", f.grants)
 	}
 	if f.reqs[0] != "GET /api/datasets?limit=5" {
-		t.Fatalf("Pfad: %v", f.reqs)
+		t.Fatalf("path: %v", f.reqs)
 	}
 }
 
@@ -106,14 +106,14 @@ func TestDoReloginOn401(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.mu.Lock()
-	f.valid = "widerrufen"
+	f.valid = "revoked"
 	f.mu.Unlock()
 	res, err := c.Do(context.Background(), "", Request{Method: "GET", Path: "/models"})
 	if err != nil || res.HTTPStatus != 200 {
-		t.Fatalf("nach 401 erneut anmelden: %+v %v", res, err)
+		t.Fatalf("log in again after 401: %+v %v", res, err)
 	}
 	if len(f.grants) != 2 {
-		t.Fatalf("Anmeldungen: %v", f.grants)
+		t.Fatalf("logins: %v", f.grants)
 	}
 }
 
@@ -121,10 +121,10 @@ func TestDoWrongPassword(t *testing.T) {
 	f := &fakePlatform{}
 	srv := httptest.NewServer(f)
 	defer srv.Close()
-	c, _ := New(Config{APIURL: srv.URL, TokenURL: srv.URL + "/token", User: "test", Password: "falsch"})
+	c, _ := New(Config{APIURL: srv.URL, TokenURL: srv.URL + "/token", User: "test", Password: "wrong"})
 	_, err := c.Do(context.Background(), "", Request{Method: "GET", Path: "/datasets"})
 	if err == nil || !strings.Contains(err.Error(), "invalid_grant") {
-		t.Fatalf("erwartet Anmeldefehler: %v", err)
+		t.Fatalf("expected login error: %v", err)
 	}
 }
 
@@ -140,9 +140,9 @@ func TestDoTruncatesAndLocation(t *testing.T) {
 		t.Fatal(err)
 	}
 	if res.HTTPStatus != 202 || !res.Truncated || len(res.Body) != 10 || res.Location != "/tasks/7" {
-		t.Fatalf("Antwort: %+v", res)
+		t.Fatalf("response: %+v", res)
 	}
-	if !strings.Contains(res.Text(), "gekürzt") || !strings.Contains(res.Text(), "Location: /tasks/7") {
+	if !strings.Contains(res.Text(), "truncated") || !strings.Contains(res.Text(), "Location: /tasks/7") {
 		t.Fatalf("Text: %s", res.Text())
 	}
 }
@@ -155,7 +155,7 @@ func TestDoPlatformErrorIsResult(t *testing.T) {
 	c, _ := newClient(t, f, 0)
 	res, err := c.Do(context.Background(), "", Request{Method: "GET", Path: "/datasets/99"})
 	if err != nil || res.Status != "error" || res.HTTPStatus != 404 || !strings.Contains(res.Text(), "Not Found") {
-		t.Fatalf("Antwort: %+v %v", res, err)
+		t.Fatalf("response: %+v %v", res, err)
 	}
 }
 
@@ -173,19 +173,19 @@ func TestNormalize(t *testing.T) {
 		{Method: "GET", Path: "/users/me"},
 		{Method: "TRACE", Path: "/datasets"},
 		{Method: "GET", Path: "/datasets", Body: json.RawMessage(`{}`)},
-		{Method: "POST", Path: "/train/config", Body: json.RawMessage(`{kaputt`)},
+		{Method: "POST", Path: "/train/config", Body: json.RawMessage(`{broken`)},
 	}
 	for _, r := range bad {
 		if _, err := Normalize(r); err == nil {
-			t.Errorf("erwartet Ablehnung: %+v", r)
+			t.Errorf("expected refusal: %+v", r)
 		}
 	}
 	r, err := Normalize(Request{Method: "post", Path: "/train/config", Body: json.RawMessage("{ \"a\" : 1 }")})
 	if err != nil || r.Method != "POST" || string(r.Body) != `{"a":1}` || !r.Writes() {
-		t.Fatalf("Normalisierung: %+v %v", r, err)
+		t.Fatalf("normalization: %+v %v", r, err)
 	}
 	if r, err := Normalize(Request{Path: "/urlsx"}); err != nil || r.Method != "GET" || r.Writes() {
-		t.Fatalf("leere Methode heißt GET, /urlsx ist nicht gesperrt: %+v %v", r, err)
+		t.Fatalf("empty method means GET, /urlsx is not blocked: %+v %v", r, err)
 	}
 }
 
@@ -208,11 +208,11 @@ func TestToolsBuild(t *testing.T) {
 	for _, c := range cases {
 		tool, ok := Lookup(c.tool)
 		if !ok {
-			t.Fatalf("Werkzeug %s fehlt", c.tool)
+			t.Fatalf("tool %s missing", c.tool)
 		}
 		r, err := tool.Build(json.RawMessage(c.args))
 		if err != nil || r.String() != c.want {
-			t.Errorf("%s %s: %q %v, erwartet %q", c.tool, c.args, r.String(), err, c.want)
+			t.Errorf("%s %s: %q %v, expected %q", c.tool, c.args, r.String(), err, c.want)
 		}
 	}
 	bad := []struct{ tool, args string }{
@@ -230,7 +230,7 @@ func TestToolsBuild(t *testing.T) {
 	for _, c := range bad {
 		tool, _ := Lookup(c.tool)
 		if r, err := tool.Build(json.RawMessage(c.args)); err == nil {
-			t.Errorf("%s %s: erwartet Fehler, gebaut %s", c.tool, c.args, r)
+			t.Errorf("%s %s: expected error, built %s", c.tool, c.args, r)
 		}
 	}
 }
@@ -245,13 +245,13 @@ func TestCreateTrainingBody(t *testing.T) {
 	_ = json.Unmarshal(r.Body, &got)
 	if r.String() != "POST /train/config" || got["dataset_id"] != float64(2) || got["export_config"] != nil ||
 		got["train_config"].(map[string]any)["epochs"] != float64(1) {
-		t.Fatalf("Körper: %s", r.Body)
+		t.Fatalf("body: %s", r.Body)
 	}
 	if _, present := got["export_config"]; !present {
-		t.Fatal("export_config muss als null mitgehen (Backend liest es mit itemgetter)")
+		t.Fatal("export_config must be sent as null (the backend reads it with itemgetter)")
 	}
 	if !tool.Write {
-		t.Fatal("create_training muss als schreibend gelten")
+		t.Fatal("create_training must count as writing")
 	}
 }
 
@@ -260,13 +260,13 @@ func TestToolSchemas(t *testing.T) {
 	for _, tool := range Tools {
 		for _, n := range []string{tool.Name, tool.CLI} {
 			if o, ok := seen[n]; ok && o != tool.Name {
-				t.Fatalf("Name doppelt: %s (%s, %s)", n, o, tool.Name)
+				t.Fatalf("duplicate name: %s (%s, %s)", n, o, tool.Name)
 			}
 			seen[n] = tool.Name
 		}
 		s := tool.Schema()
 		if s["type"] != "object" {
-			t.Fatalf("%s: Schema ohne type object", tool.Name)
+			t.Fatalf("%s: schema without type object", tool.Name)
 		}
 		if _, err := json.Marshal(s); err != nil {
 			t.Fatal(err)
@@ -274,7 +274,7 @@ func TestToolSchemas(t *testing.T) {
 	}
 }
 
-// testdata/openapi.json ist die OpenAPI-Beschreibung der Instanz vom 05.10.2026.
+// testdata/openapi.json is the OpenAPI description of the instance from 2026-10-05.
 func TestOpenAPIDigest(t *testing.T) {
 	raw, err := os.ReadFile("testdata/openapi.json")
 	if err != nil {
@@ -284,17 +284,17 @@ func TestOpenAPIDigest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(all) > DefaultMaxResult || !strings.Contains(string(all), "(130 Operationen") {
-		t.Fatalf("Verzeichnis zu groß oder unvollständig: %d Bytes", len(all))
+	if len(all) > DefaultMaxResult || !strings.Contains(string(all), "(130 operations") {
+		t.Fatalf("index too large or incomplete: %d bytes", len(all))
 	}
-	if !strings.Contains(string(all), "POST /datasets — Create Dataset · Körper: multipart/form-data") {
-		t.Fatalf("Zeile für POST /datasets fehlt:\n%s", all)
+	if !strings.Contains(string(all), "POST /datasets — Create Dataset · body: multipart/form-data") {
+		t.Fatalf("line for POST /datasets missing:\n%s", all)
 	}
 	train, _ := openAPIDigest(raw, "/train")
 	if strings.Contains(string(train), "/datasets") || !strings.Contains(string(train), "GET /train/containers/{train_container_id}/logs — Get Train Container Logs · query: tail, max_length") {
 		t.Fatalf("Filter /train:\n%s", train)
 	}
-	t.Logf("Verzeichnis: %d Bytes", len(all))
+	t.Logf("index: %d bytes", len(all))
 }
 
 func TestDigestAppliedOnlyOnSuccess(t *testing.T) {
@@ -309,11 +309,11 @@ func TestDigestAppliedOnlyOnSuccess(t *testing.T) {
 	}
 	res, err := c.Do(context.Background(), "", req)
 	if err != nil || !strings.HasPrefix(res.Body, "GET /a — A") {
-		t.Fatalf("Verdichtung: %+v %v", res, err)
+		t.Fatalf("digest: %+v %v", res, err)
 	}
 }
 
-// Review K1: GETs, die im Backend schreiben, brauchen eine Bestätigung.
+// Review K1: GETs that write in the backend need an approval.
 func TestWritingGETs(t *testing.T) {
 	cases := []struct {
 		r    Request
@@ -334,16 +334,16 @@ func TestWritingGETs(t *testing.T) {
 	tool, _ := Lookup("request")
 	r, err := tool.Build(json.RawMessage(`{"method":"get","path":"/train/containers/3/model"}`))
 	if err != nil || !r.Writes() {
-		t.Fatalf("Rohzugriff auf schreibendes GET: %+v %v", r, err)
+		t.Fatalf("raw access to a writing GET: %+v %v", r, err)
 	}
-	// Doppelter Schlüssel: der letzte gilt, und genau der wird geprüft.
+	// Duplicate key: the last one wins, and exactly that one is checked.
 	r, err = tool.Build(json.RawMessage(`{"method":"GET","method":"POST","path":"/datasets"}`))
 	if err != nil || r.Method != "POST" || !r.Writes() {
-		t.Fatalf("doppelte Methode: %+v %v", r, err)
+		t.Fatalf("duplicate method: %+v %v", r, err)
 	}
 }
 
-// Review K2: Geheimnisse kommen nie beim Agenten an.
+// Review K2: secrets never reach the agent.
 func TestRedactAndNetworkBlocked(t *testing.T) {
 	f := &fakePlatform{respond: func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -356,69 +356,69 @@ func TestRedactAndNetworkBlocked(t *testing.T) {
 	}
 	for _, leak := range []string{"EK", `"pw"`, "AK"} {
 		if strings.Contains(res.Body, leak) {
-			t.Fatalf("Geheimnis %s im Ergebnis: %s", leak, res.Body)
+			t.Fatalf("secret %s in the result: %s", leak, res.Body)
 		}
 	}
 	if !strings.Contains(res.Body, "12345678901234567890") || !strings.Contains(res.Body, `"name":"x"`) || !strings.Contains(res.Body, `"git_access_token":null`) {
-		t.Fatalf("zu viel geschwärzt oder Zahl verfälscht: %s", res.Body)
+		t.Fatalf("redacted too much or number altered: %s", res.Body)
 	}
 	for _, p := range []string{"/network", "/network/info", "/Network/1"} {
 		if _, err := Normalize(Request{Method: "GET", Path: p}); err == nil {
-			t.Errorf("%s muss gesperrt sein", p)
+			t.Errorf("%s must be blocked", p)
 		}
 	}
 }
 
-// Review W2: Do prüft selbst, auch ohne vorheriges Normalize.
+// Review W2: Do checks by itself, even without a prior Normalize.
 func TestDoNormalizes(t *testing.T) {
 	f := &fakePlatform{}
 	c, _ := newClient(t, f, 0)
 	res, err := c.Do(context.Background(), "", Request{Method: "GET", Path: "/urls/basic-auth"})
 	if err != nil || res.Status != "error" || len(f.reqs) != 0 {
-		t.Fatalf("gesperrter Pfad an Do vorbei: %+v %v %v", res, err, f.reqs)
+		t.Fatalf("blocked path got past Do: %+v %v %v", res, err, f.reqs)
 	}
 }
 
-// Review W3: Binärantworten gehen nicht in den Kontext.
+// Review W3: binary responses do not go into the context.
 func TestBinaryResponse(t *testing.T) {
 	f := &fakePlatform{respond: func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/zip")
-		w.Write([]byte("PK\x03\x04\x00\x01binär"))
+		w.Write([]byte("PK\x03\x04\x00\x01binary"))
 	}}
 	c, _ := newClient(t, f, 0)
 	res, _ := c.Do(context.Background(), "", Request{Method: "GET", Path: "/datasets/1/download"})
-	if !strings.HasPrefix(res.Body, "[Binärantwort, ") || strings.Contains(res.Body, "PK") {
-		t.Fatalf("Binärantwort: %q", res.Body)
+	if !strings.HasPrefix(res.Body, "[binary response, ") || strings.Contains(res.Body, "PK") {
+		t.Fatalf("binary response: %q", res.Body)
 	}
 }
 
-// Review W1: zu lange Abfragen werden abgewiesen statt in der Bestätigung gekürzt.
+// Review W1: overlong queries are refused instead of being truncated in the approval.
 func TestQueryLimits(t *testing.T) {
 	if _, err := Normalize(Request{Method: "GET", Path: "/x", Query: map[string]string{"a": strings.Repeat("x", 2000)}}); err == nil {
-		t.Fatal("langer Wert erwartet abgewiesen")
+		t.Fatal("long value expected refused")
 	}
 	q := map[string]string{}
 	for i := range 10 {
 		q[fmt.Sprint("k", i)] = strings.Repeat("x", 900)
 	}
 	if _, err := Normalize(Request{Method: "GET", Path: "/x", Query: q}); err == nil {
-		t.Fatal("lange Abfrage erwartet abgewiesen")
+		t.Fatal("long query expected refused")
 	}
 }
 
-// Review M3: Protokolle standardmäßig vom Ende, tail positiv.
+// Review M3: logs from the end by default, tail positive.
 func TestTrainingLogsTail(t *testing.T) {
 	tool, _ := Lookup("training_logs")
 	r, err := tool.Build(json.RawMessage(`{"train_container_id":2}`))
 	if err != nil || r.String() != "GET /train/containers/2/logs?tail=200" {
-		t.Fatalf("Standard: %s %v", r, err)
+		t.Fatalf("default: %s %v", r, err)
 	}
 	if _, err := tool.Build(json.RawMessage(`{"train_container_id":2,"tail":-1}`)); err == nil {
-		t.Fatal("negativer tail erwartet abgewiesen")
+		t.Fatal("negative tail expected refused")
 	}
 }
 
-// Review W4: Der Token-Endpunkt darf das Passwort nicht weiterleiten.
+// Review W4: the token endpoint must not forward the password.
 func TestTokenNoRedirect(t *testing.T) {
 	var hit bool
 	evil := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hit = true }))
@@ -427,11 +427,11 @@ func TestTokenNoRedirect(t *testing.T) {
 		http.Redirect(w, r, evil.URL, http.StatusTemporaryRedirect)
 	}))
 	defer srv.Close()
-	c, _ := New(Config{APIURL: srv.URL, TokenURL: srv.URL + "/token", User: "u", Password: "geheim"})
+	c, _ := New(Config{APIURL: srv.URL, TokenURL: srv.URL + "/token", User: "u", Password: "secret"})
 	if _, err := c.Do(context.Background(), "", Request{Method: "GET", Path: "/datasets"}); err == nil {
-		t.Fatal("Anmeldung über Weiterleitung erwartet fehlgeschlagen")
+		t.Fatal("login via redirect expected to fail")
 	}
 	if hit {
-		t.Fatal("Passwort an das Ziel der Weiterleitung geschickt")
+		t.Fatal("password sent to the redirect target")
 	}
 }

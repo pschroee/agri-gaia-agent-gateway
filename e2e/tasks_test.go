@@ -5,19 +5,19 @@ import (
 	"testing"
 )
 
-// Aufgabenliste (rpiv-todo, Werkzeug todo): Der Agent legt für eine kleine Aufgabe in drei
-// Schritten eine Liste an und arbeitet sie ab. Geprüft wird über die gespeicherten Nachrichten,
-// die auch die UI nach dem Neuladen liest: Jedes todo-Ergebnis trägt in details den
-// vollständigen Stand, und am Ende sind alle Aufgaben erledigt. Läuft in der MCP-Variante, weil
-// todo dort ausdrücklich in der Werkzeugliste stehen muss (die anderen laden es ohne Liste).
+// Task list (rpiv-todo, tool todo): the agent creates a list for a small task in three
+// steps and works through it. Checked via the stored messages, which the UI also reads
+// after reloading: every todo result carries the complete state in details, and at the
+// end all tasks are done. Runs in the MCP variant because todo must be listed explicitly
+// in the tool list there (the others load it without a list).
 func TestAgentTaskList(t *testing.T) {
 	requireE2E(t)
 	id := newChat(t, "mcp", false)
 	s := subscribe(t, id)
-	ask(t, s, id, "Lege mit dem Werkzeug todo eine Aufgabenliste mit genau drei Aufgaben an: "+
-		"1) Datei eins.txt mit dem Inhalt 1 schreiben, 2) Datei zwei.txt mit dem Inhalt 2 schreiben, "+
-		"3) beide Dateien mit read lesen. Arbeite sie der Reihe nach ab: jede Aufgabe vorher auf in_progress, "+
-		"danach auf completed setzen. Antworte am Ende mit einem Satz.", nil)
+	ask(t, s, id, "Use the tool todo to create a task list with exactly three tasks: "+
+		"1) write file one.txt with the content 1, 2) write file two.txt with the content 2, "+
+		"3) read both files with read. Work through them in order: set each task to in_progress before, "+
+		"and to completed after. Reply with one sentence at the end.", nil)
 
 	type task struct {
 		ID      int    `json:"id"`
@@ -44,10 +44,10 @@ func TestAgentTaskList(t *testing.T) {
 		}
 		results++
 		if r.Details == nil || r.Details.NextID < 1 {
-			t.Fatalf("todo-Ergebnis ohne details (vollständiger Stand): %s", trunc(string(m.Message), 400))
+			t.Fatalf("todo result without details (complete state): %s", trunc(string(m.Message), 400))
 		}
 		if r.IsError || r.Details.Error != "" {
-			t.Logf("todo abgewiesen: %s", r.Details.Error)
+			t.Logf("todo refused: %s", r.Details.Error)
 			continue
 		}
 		last = r.Details.Tasks
@@ -57,11 +57,11 @@ func TestAgentTaskList(t *testing.T) {
 			}
 		}
 	}
-	if results < 6 { // drei anlegen, mindestens drei abschließen
-		t.Fatalf("nur %d todo-Ergebnisse; Aufrufe: %v", results, toolCalls(t, id))
+	if results < 6 { // three to create, at least three to complete
+		t.Fatalf("only %d todo results; calls: %v", results, toolCalls(t, id))
 	}
 	if inProgress == 0 {
-		t.Error("keine Aufgabe war je in Arbeit")
+		t.Error("no task was ever in progress")
 	}
 	open := 0
 	for _, x := range last {
@@ -70,21 +70,21 @@ func TestAgentTaskList(t *testing.T) {
 		}
 	}
 	if len(last) < 3 || open > 0 {
-		t.Fatalf("Endstand: %+v", last)
+		t.Fatalf("final state: %+v", last)
 	}
-	t.Logf("%d todo-Ergebnisse, Endstand %+v", results, last)
+	t.Logf("%d todo results, final state %+v", results, last)
 }
 
-// Der Systemhinweis verlangt, den Status sauber zu führen: vor dem Beginn einer Aufgabe
-// in_progress, sofort nach dem Abschluss completed, am Ende nichts offen. Die
-// Aufforderung nennt die Status bewusst NICHT; geprüft wird, was der Systemhinweis allein bewirkt.
+// The system note demands keeping the status clean: in_progress before starting a task,
+// completed immediately after finishing it, nothing open at the end. The
+// prompt deliberately does NOT name the statuses; what is checked is what the system note alone achieves.
 func TestTaskStatusFollowsSystemNote(t *testing.T) {
 	requireE2E(t)
 	id := newChat(t, "mcp", false)
 	s := subscribe(t, id)
-	ask(t, s, id, "Erledige diese drei Schritte der Reihe nach und führe dabei eine Aufgabenliste: "+
-		"1) Schreibe a.txt mit dem Inhalt A. 2) Schreibe b.txt mit dem Inhalt B. 3) Lies beide Dateien. "+
-		"Antworte am Ende mit einem Satz.", nil)
+	ask(t, s, id, "Do these three steps in order and keep a task list while doing so: "+
+		"1) Write a.txt with the content A. 2) Write b.txt with the content B. 3) Read both files. "+
+		"Reply with one sentence at the end.", nil)
 
 	type task struct {
 		ID     int    `json:"id"`
@@ -108,9 +108,9 @@ func TestTaskStatusFollowsSystemNote(t *testing.T) {
 		snaps = append(snaps, r.Details.Tasks)
 	}
 	if len(snaps) == 0 {
-		t.Fatalf("keine Aufgabenliste geführt; Aufrufe: %v", toolCalls(t, id))
+		t.Fatalf("no task list kept; calls: %v", toolCalls(t, id))
 	}
-	// Je Aufgabe: Index des ersten Stands mit in_progress und mit completed.
+	// Per task: index of the first state with in_progress and with completed.
 	started, done := map[int]int{}, map[int]int{}
 	for i, snap := range snaps {
 		busy := 0
@@ -127,32 +127,32 @@ func TestTaskStatusFollowsSystemNote(t *testing.T) {
 				}
 			}
 		}
-		// Mehrere gleichzeitig in Arbeit ist erlaubt, wenn der Agent unabhängige Schritte parallel
-		// ausführt (so im Lauf vom 29.09.2026); geprüft wird die Reihenfolge je Aufgabe.
+		// Several in progress at once is allowed when the agent runs independent steps in parallel
+		// (as in the run of 2026-09-29); what is checked is the order per task.
 		_ = busy
 	}
 	for id, d := range done {
 		st, ok := started[id]
 		if !ok || st >= d {
-			t.Errorf("Aufgabe %d: nicht vor dem Abschluss auf in_progress gesetzt (in Arbeit %v, erledigt %d)", id, st, d)
+			t.Errorf("task %d: not set to in_progress before completion (in progress %v, done %d)", id, st, d)
 		}
 	}
-	// „Sofort“: keine zwei Aufgaben im selben Aufruf erledigt.
+	// "Immediately": no two tasks completed in the same call.
 	perSnap := map[int]int{}
 	for _, d := range done {
 		perSnap[d]++
 	}
 	for i, n := range perSnap {
 		if n > 1 {
-			t.Errorf("Stand %d: %d Aufgaben gesammelt erledigt statt einzeln", i, n)
+			t.Errorf("state %d: %d tasks completed together instead of one by one", i, n)
 		}
 	}
 	last := snaps[len(snaps)-1]
 	for _, x := range last {
 		if x.Status != "completed" && x.Status != "deleted" {
-			t.Errorf("Endstand offen: %+v", last)
+			t.Errorf("final state open: %+v", last)
 			break
 		}
 	}
-	t.Logf("%d Stände, begonnen %v, erledigt %v", len(snaps), started, done)
+	t.Logf("%d states, started %v, done %v", len(snaps), started, done)
 }

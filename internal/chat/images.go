@@ -1,11 +1,11 @@
 package chat
 
-// Anzeige-Bilder: Bilder, die der Agent in einer Antwort per Markdown zeigt
-// (![Beschreibung](/workspace/plot.png)). Die UI lädt nie fremde Adressen
-// (Markdown-Image-Exfiltration, Review K1); lokale Pfade aus der Sandbox holt
-// der Orchestrator selbst, prüft sie und legt sie in S3 ab. Das ist bewusst kein
-// Artefakt-Upload: Die Bilder gehen nur an die angemeldete UI, nicht als
-// Ergebnis nach draußen, und brauchen deshalb keine Bestätigung.
+// Display images: images the agent shows in an answer via Markdown
+// (![description](/workspace/plot.png)). The UI never loads foreign addresses
+// (Markdown image exfiltration, Review K1); the orchestrator fetches local paths
+// from the sandbox itself, checks them and stores them in S3. This is
+// deliberately not an artifact upload: the images only go to the logged-in UI,
+// not outside as a result, and therefore need no approval.
 
 import (
 	"bytes"
@@ -27,17 +27,17 @@ import (
 	"agw/internal/store"
 )
 
-// ErrImageUnavailable: Das Bild ist weder gesichert noch (noch) in der Sandbox lesbar,
-// oder die Datei ist kein erlaubtes Bild bzw. zu groß.
-var ErrImageUnavailable = errors.New("Bild nicht verfügbar")
+// ErrImageUnavailable: the image is neither saved nor (still) readable in the sandbox,
+// or the file is not a permitted image or is too large.
+var ErrImageUnavailable = errors.New("image not available")
 
-// DefaultImageMaxBytes gilt, wenn Options.ImageMaxBytes nicht gesetzt ist.
+// DefaultImageMaxBytes applies when Options.ImageMaxBytes is not set.
 const DefaultImageMaxBytes = 10 << 20
 
-// maxImageRefs begrenzt die Bilder, die nach einer Antwort gesichert werden.
+// maxImageRefs limits the images that are saved after an answer.
 const maxImageRefs = 20
 
-// imageRoots sind die Orte in der Sandbox, aus denen Bilder gelesen werden.
+// imageRoots are the locations in the sandbox from which images are read.
 var imageRoots = []string{"/workspace", "/tmp", "/home/agent"}
 
 var (
@@ -48,24 +48,24 @@ var (
 	imageRe    = regexp.MustCompile(`!\[[^\]\n]*\]\(\s*(?:<([^>\n]*)>|([^\s)]+))(?:\s+(?:"[^"\n]*"|'[^'\n]*'))?\s*\)`)
 )
 
-// NormalizeImagePath prüft einen Bildpfad aus einer Antwort und liefert ihn
-// absolut und bereinigt. Relative Pfade gelten ab /workspace. Erlaubt sind nur
-// Dateien unter /workspace, /tmp und /home/agent; Adressen mit Schema (http,
-// data, javascript …) und protokollrelative Adressen nie.
+// NormalizeImagePath checks an image path from an answer and returns it
+// absolute and cleaned. Relative paths are taken from /workspace. Only files
+// under /workspace, /tmp and /home/agent are allowed; addresses with a scheme
+// (http, data, javascript …) and protocol-relative addresses never.
 func NormalizeImagePath(p string) (string, error) {
 	p = strings.TrimSpace(p)
 	if rest, ok := strings.CutPrefix(p, "file://"); ok {
 		if !strings.HasPrefix(rest, "/") {
-			return "", fmt.Errorf("%w: file:// nur mit absolutem Pfad", ErrInvalid)
+			return "", fmt.Errorf("%w: file:// only with an absolute path", ErrInvalid)
 		}
 		p = rest
 	}
 	if p == "" || len(p) > 1024 || strings.HasPrefix(p, "//") || schemeRe.MatchString(p) {
-		return "", fmt.Errorf("%w: kein lokaler Bildpfad", ErrInvalid)
+		return "", fmt.Errorf("%w: not a local image path", ErrInvalid)
 	}
 	for _, r := range p {
 		if r < 0x20 || r == 0x7f {
-			return "", fmt.Errorf("%w: Steuerzeichen im Pfad", ErrInvalid)
+			return "", fmt.Errorf("%w: control character in the path", ErrInvalid)
 		}
 	}
 	if !strings.HasPrefix(p, "/") {
@@ -77,11 +77,11 @@ func NormalizeImagePath(p string) (string, error) {
 			return p, nil
 		}
 	}
-	return "", fmt.Errorf("%w: Bilder nur unter /workspace, /tmp oder /home/agent", ErrInvalid)
+	return "", fmt.Errorf("%w: images only under /workspace, /tmp or /home/agent", ErrInvalid)
 }
 
-// DetectImageType erkennt PNG, JPEG, GIF und WebP an den Magic Bytes. Alles
-// andere (auch SVG, das Skript enthalten kann) liefert "".
+// DetectImageType recognises PNG, JPEG, GIF and WebP by their magic bytes.
+// Anything else (including SVG, which can contain script) returns "".
 func DetectImageType(b []byte) string {
 	switch {
 	case bytes.HasPrefix(b, []byte("\x89PNG\r\n\x1a\n")):
@@ -96,8 +96,9 @@ func DetectImageType(b []byte) string {
 	return ""
 }
 
-// ImageRefs liefert die lokalen Bildpfade aus Markdown-Bildverweisen, bereinigt,
-// ohne Doppelte und ohne Verweise in Code. Fremde Adressen fallen heraus.
+// ImageRefs returns the local image paths from Markdown image references,
+// cleaned, without duplicates and without references in code. Foreign addresses
+// are dropped.
 func ImageRefs(markdown string) []string {
 	text := inlineRe.ReplaceAllString(fenceRe.ReplaceAllString(markdown, ""), "")
 	var out []string
@@ -107,7 +108,7 @@ func ImageRefs(markdown string) []string {
 		if raw == "" {
 			raw = m[2]
 		}
-		if strings.Contains(raw, "%") { // wie die UI: Prozentkodierung auflösen
+		if strings.Contains(raw, "%") { // like the UI: decode percent-encoding
 			if d, err := url.PathUnescape(raw); err == nil {
 				raw = d
 			}
@@ -125,9 +126,9 @@ func ImageRefs(markdown string) []string {
 	return out
 }
 
-// MessageImageKey ist die Kennung einer Antwort für ihre Bilder: pis
-// responseId, sonst ts-<timestamp>. Beide stehen in der Nachricht selbst und
-// sind damit live (message_end) und nach dem Neuladen aus Postgres gleich.
+// MessageImageKey is an answer's ID for its images: pi's responseId,
+// otherwise ts-<timestamp>. Both are in the message itself and are therefore
+// the same live (message_end) and after reloading from Postgres.
 func MessageImageKey(msg json.RawMessage) string {
 	var m struct {
 		ResponseID string `json:"responseId"`
@@ -145,7 +146,7 @@ func MessageImageKey(msg json.RawMessage) string {
 	return ""
 }
 
-// ValidImageMsg prüft die Kennung einer Antwort (Zeichenvorrat und Länge).
+// ValidImageMsg checks an answer's ID (character set and length).
 func ValidImageMsg(s string) bool { return imageMsgRe.MatchString(s) }
 
 func imageObjectKey(chatID, msg, p string) string {
@@ -153,11 +154,11 @@ func imageObjectKey(chatID, msg, p string) string {
 	return path.Join(chatID, "images", hex.EncodeToString(sum[:]))
 }
 
-// readImageScript liest eine Datei in der Sandbox. realpath löst Symlinks auf;
-// liegt das Ziel außerhalb der erlaubten Orte, wird nichts gelesen. head -c
-// begrenzt die Menge (Grenze + 1, damit „zu groß“ erkennbar ist).
+// readImageScript reads a file in the sandbox. realpath resolves symlinks; if
+// the target lies outside the permitted locations, nothing is read. head -c
+// limits the amount (limit + 1, so that "too large" can be detected).
 const readImageScript = `p=$(realpath -e -- "$1") || exit 3
-case "$p" in /workspace/*|/tmp/*|/home/agent/*) ;; *) echo "Pfad außerhalb der erlaubten Orte" >&2; exit 4 ;; esac
+case "$p" in /workspace/*|/tmp/*|/home/agent/*) ;; *) echo "path outside the permitted locations" >&2; exit 4 ;; esac
 [ -f "$p" ] || exit 5
 exec head -c "$2" -- "$p"`
 
@@ -168,8 +169,8 @@ func (m *Manager) imageMax() int64 {
 	return DefaultImageMaxBytes
 }
 
-// imageLock serialisiert das Sichern der Bilder je Chat. detach wartet darauf,
-// damit eine laufende Sicherung nicht mit der Sandbox verschwindet.
+// imageLock serialises saving the images per chat. detach waits for it so
+// that a save in progress does not vanish with the sandbox.
 func (m *Manager) imageLock(chatID string) func() {
 	m.mu.Lock()
 	l, ok := m.imgMu[chatID]
@@ -182,8 +183,8 @@ func (m *Manager) imageLock(chatID string) func() {
 	return l.Unlock
 }
 
-// ensureImage liefert das gesicherte Bild oder liest es aus der Sandbox (a,
-// sonst die des aktiven Chats) und sichert es. Die erste Sicherung gilt.
+// ensureImage returns the saved image or reads it from the sandbox (a,
+// otherwise that of the active chat) and saves it. The first save wins.
 func (m *Manager) ensureImage(ctx context.Context, chatID, msg, p string, a Agent) (store.ChatImage, error) {
 	unlock := m.imageLock(chatID)
 	defer unlock()
@@ -200,35 +201,35 @@ func (m *Manager) ensureImage(ctx context.Context, chatID, msg, p string, a Agen
 		m.mu.Unlock()
 	}
 	if a == nil {
-		return store.ChatImage{}, fmt.Errorf("%w: nicht gesichert, und der Chat ruht", ErrImageUnavailable)
+		return store.ChatImage{}, fmt.Errorf("%w: not saved, and the chat is idle", ErrImageUnavailable)
 	}
 	max := m.imageMax()
 	data, err := execT(a, []string{"sh", "-c", readImageScript, "sh", p, strconv.FormatInt(max+1, 10)}, nil, callTimeout)
 	if err != nil {
-		return store.ChatImage{}, fmt.Errorf("%w: %s nicht lesbar: %v", ErrImageUnavailable, p, err)
+		return store.ChatImage{}, fmt.Errorf("%w: %s not readable: %v", ErrImageUnavailable, p, err)
 	}
 	if int64(len(data)) > max {
-		return store.ChatImage{}, fmt.Errorf("%w: %s ist größer als %d MB", ErrImageUnavailable, p, max>>20)
+		return store.ChatImage{}, fmt.Errorf("%w: %s is larger than %d MB", ErrImageUnavailable, p, max>>20)
 	}
 	ct := DetectImageType(data)
 	if ct == "" {
-		return store.ChatImage{}, fmt.Errorf("%w: %s ist kein Bild (PNG, JPEG, GIF, WebP)", ErrImageUnavailable, p)
+		return store.ChatImage{}, fmt.Errorf("%w: %s is not an image (PNG, JPEG, GIF, WebP)", ErrImageUnavailable, p)
 	}
 	sum := sha256.Sum256(data)
 	im := store.ChatImage{ChatID: chatID, Msg: msg, Path: p, ObjectKey: imageObjectKey(chatID, msg, p),
 		ContentType: ct, Size: int64(len(data)), SHA256: hex.EncodeToString(sum[:])}
 	if err := m.blobs.Put(ctx, im.ObjectKey, bytes.NewReader(data), im.Size, ct); err != nil {
-		return store.ChatImage{}, fmt.Errorf("Ablage: %w", err)
+		return store.ChatImage{}, fmt.Errorf("storage: %w", err)
 	}
 	if err := m.st.PutChatImage(ctx, im); err != nil {
 		return store.ChatImage{}, err
 	}
-	slog.Info("Anzeige-Bild gesichert", "chat", chatID, "antwort", msg, "pfad", p, "bytes", im.Size, "typ", ct)
+	slog.Info("display image saved", "chat", chatID, "answer", msg, "path", p, "bytes", im.Size, "type", ct)
 	return im, nil
 }
 
-// captureImages sichert nach einer fertigen Antwort die Bilder, auf die sie
-// verweist, im Hintergrund. Fehler werden nur protokolliert.
+// captureImages saves the images a finished answer refers to, in the
+// background. Errors are only logged.
 func (m *Manager) captureImages(chatID string, a Agent, msg json.RawMessage) {
 	var body struct {
 		Content []struct {
@@ -255,17 +256,17 @@ func (m *Manager) captureImages(chatID string, a Agent, msg json.RawMessage) {
 		ctx := context.Background()
 		for _, p := range refs {
 			if _, err := m.ensureImage(ctx, chatID, key, p, a); err != nil {
-				slog.Warn("Anzeige-Bild nicht gesichert", "chat", chatID, "antwort", key, "pfad", p, "fehler", err)
+				slog.Warn("display image not saved", "chat", chatID, "answer", key, "path", p, "err", err)
 			}
 		}
 	}()
 }
 
-// OpenImage liefert ein Anzeige-Bild für die UI: aus S3, sonst bei aktivem Chat
-// aus der Sandbox (und sichert es dabei).
+// OpenImage returns a display image for the UI: from S3, otherwise, if the chat
+// is active, from the sandbox (saving it on the way).
 func (m *Manager) OpenImage(ctx context.Context, chatID, msg, rawPath string) (store.ChatImage, io.ReadCloser, error) {
 	if !ValidImageMsg(msg) {
-		return store.ChatImage{}, nil, fmt.Errorf("%w: Kennung der Antwort", ErrInvalid)
+		return store.ChatImage{}, nil, fmt.Errorf("%w: answer ID", ErrInvalid)
 	}
 	p, err := NormalizeImagePath(rawPath)
 	if err != nil {
@@ -280,7 +281,7 @@ func (m *Manager) OpenImage(ctx context.Context, chatID, msg, rawPath string) (s
 	}
 	rc, _, err := m.blobs.Get(ctx, im.ObjectKey)
 	if err != nil {
-		return im, nil, fmt.Errorf("%w: Ablage: %v", ErrImageUnavailable, err)
+		return im, nil, fmt.Errorf("%w: storage: %v", ErrImageUnavailable, err)
 	}
 	return im, rc, nil
 }

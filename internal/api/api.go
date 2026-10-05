@@ -1,4 +1,4 @@
-// Package api stellt die HTTP-API (poc/API.md) und die Web-UI bereit.
+// Package api provides the HTTP API (poc/API.md) and the web UI.
 package api
 
 import (
@@ -32,39 +32,39 @@ type Server struct {
 	Pool    *pool.Pool[chat.Agent]
 	Cat     *config.Catalog
 	Env     config.Env
-	Web     fs.FS // Inhalt von web/dist; nil ohne gebaute UI
+	Web     fs.FS // contents of web/dist; nil without a built UI
 	Blocked []*net.IPNet
 
-	// Token schützt die API. Die Sandbox kennt es nicht; sie könnte die API
-	// sonst über host.docker.internal erreichen und etwa eigene Uploads bestätigen.
+	// Token protects the API. The sandbox does not know it; otherwise it could reach the API
+	// via host.docker.internal and, for example, approve its own uploads.
 	Token        string
-	AllowedHosts []string // erlaubte Host-Kopfzeilen (Schutz gegen DNS-Rebinding)
+	AllowedHosts []string // allowed Host headers (protection against DNS rebinding)
 
-	// Images liefert Anzeige-Bilder; nil heißt M (für Tests austauschbar).
+	// Images serves display images; nil means M (replaceable for tests).
 	Images ImageOpener
 
-	// OIDC: Anmeldung über den Keycloak der Plattform (AGW_AUTH_MODE=oidc); nil: token-Modus.
-	// Dann gehören Chats dem angemeldeten Nutzer, und Token gilt nicht.
+	// OIDC: login through the platform's Keycloak (AGW_AUTH_MODE=oidc); nil: token mode.
+	// Chats then belong to the logged-in user, and Token does not apply.
 	OIDC *oidc.Service
-	// FrameAncestors: Herkünfte, die die UI einbetten dürfen (leer: frame-ancestors 'none').
+	// FrameAncestors: origins allowed to embed the UI (empty: frame-ancestors 'none').
 	FrameAncestors []string
 }
 
 type userKey struct{}
 
-// UserFrom liefert den angemeldeten Nutzer (nur im oidc-Modus).
+// UserFrom returns the logged-in user (oidc mode only).
 func UserFrom(ctx context.Context) (oidc.User, bool) {
 	u, ok := ctx.Value(userKey{}).(oidc.User)
 	return u, ok
 }
 
-// ImageOpener liefert ein Anzeige-Bild einer Antwort (siehe chat.Manager.OpenImage).
+// ImageOpener serves a display image of a response (see chat.Manager.OpenImage).
 type ImageOpener interface {
 	OpenImage(ctx context.Context, chatID, msg, path string) (store.ChatImage, io.ReadCloser, error)
 }
 
-// base ist der Pfad der UI für den Browser ("" oder etwa "/agent", aus AGW_PUBLIC_URL). Ein Proxy
-// schneidet ihn vor dem Orchestrator ab; Weiterleitungen, Cookies und Anmeldelinks brauchen ihn.
+// base is the UI's path for the browser ("" or e.g. "/agent", from AGW_PUBLIC_URL). A proxy
+// strips it before the orchestrator; redirects, cookies and login links need it.
 func (s *Server) base() string {
 	if s.OIDC != nil {
 		return s.OIDC.Base()
@@ -72,13 +72,13 @@ func (s *Server) base() string {
 	return s.Env.BasePath
 }
 
-// CookieName ist das Anmelde-Cookie der Web-UI.
+// CookieName is the web UI's login cookie.
 const CookieName = "agw_token"
 
 const cspBase = "default-src 'self'; img-src 'self' data:; connect-src 'self'; script-src 'self'; " +
 	"style-src 'self' 'unsafe-inline'; font-src 'self' data:; base-uri 'none'; form-action 'self'; frame-ancestors "
 
-// csp: frame-ancestors aus AGW_FRAME_ANCESTORS (Einbettung in die Plattform), sonst 'none'.
+// csp: frame-ancestors from AGW_FRAME_ANCESTORS (embedding in the platform), otherwise 'none'.
 func (s *Server) csp() string {
 	if len(s.FrameAncestors) == 0 {
 		return cspBase + "'none'"
@@ -86,8 +86,8 @@ func (s *Server) csp() string {
 	return cspBase + strings.Join(s.FrameAncestors, " ")
 }
 
-// auth setzt Sicherheitskopfzeilen und verlangt für /api/ das Token (Bearer
-// oder Cookie), einen erlaubten Host und bei ändernden Anfragen gleiche Herkunft.
+// auth sets security headers and, for /api/, requires the token (bearer
+// or cookie), an allowed host and, for modifying requests, the same origin.
 func (s *Server) auth(next http.Handler) http.Handler {
 	cop := http.NewCrossOriginProtection()
 	policy := s.csp()
@@ -101,25 +101,25 @@ func (s *Server) auth(next http.Handler) http.Handler {
 			return
 		}
 		if len(s.AllowedHosts) > 0 && !slices.Contains(s.AllowedHosts, r.Host) {
-			slog.Warn("API: fremder Host abgewiesen", "host", r.Host)
-			writeErr(w, http.StatusForbidden, "unbekannter Host")
+			slog.Warn("API: foreign host refused", "host", r.Host)
+			writeErr(w, http.StatusForbidden, "unknown host")
 			return
 		}
 		if s.OIDC != nil {
 			u, ok := s.OIDC.SessionUser(r)
 			if !ok {
-				// login sagt der UI, wohin sie zur stillen Anmeldung (prompt=none) navigiert.
-				writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "nicht angemeldet", "login": s.base() + oidc.LoginPath})
+				// login tells the UI where to navigate for the silent login (prompt=none).
+				writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "not logged in", "login": s.base() + oidc.LoginPath})
 				return
 			}
 			r = r.WithContext(context.WithValue(r.Context(), userKey{}, u))
 		} else if !s.tokenOK(r) {
-			writeErr(w, http.StatusUnauthorized, "nicht angemeldet: den Anmeldelink aus ./dev.sh start öffnen")
+			writeErr(w, http.StatusUnauthorized, "not logged in: open the login link from ./dev.sh start")
 			return
 		}
 		if err := cop.Check(r); err != nil {
-			slog.Warn("API: Cross-Origin-Anfrage abgewiesen", "fehler", err)
-			writeErr(w, http.StatusForbidden, "Cross-Origin-Anfrage abgewiesen")
+			slog.Warn("API: cross-origin request refused", "error", err)
+			writeErr(w, http.StatusForbidden, "cross-origin request refused")
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -139,15 +139,15 @@ func (s *Server) tokenOK(r *http.Request) bool {
 	return subtle.ConstantTimeCompare([]byte(given), []byte(s.Token)) == 1
 }
 
-// login setzt das Anmelde-Cookie und leitet auf die UI weiter.
+// login sets the login cookie and redirects to the UI.
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	if s.OIDC != nil {
-		http.Redirect(w, r, s.base()+oidc.LoginPath, http.StatusSeeOther) // /login?token= gilt nur im token-Modus
+		http.Redirect(w, r, s.base()+oidc.LoginPath, http.StatusSeeOther) // /login?token= only applies in token mode
 		return
 	}
 	given := r.URL.Query().Get("token")
 	if s.Token == "" || subtle.ConstantTimeCompare([]byte(given), []byte(s.Token)) != 1 {
-		http.Error(w, "Anmeldung fehlgeschlagen: Token falsch", http.StatusUnauthorized)
+		http.Error(w, "login failed: wrong token", http.StatusUnauthorized)
 		return
 	}
 	http.SetCookie(w, &http.Cookie{Name: CookieName, Value: s.Token, Path: s.base() + "/", HttpOnly: true, SameSite: http.SameSiteStrictMode, MaxAge: 30 * 24 * 3600})
@@ -156,7 +156,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
-	// Routen eines Chats und einer Bestätigung prüfen zentral, ob sie dem Nutzer gehören (oidc).
+	// Routes of a chat and of an approval check centrally whether they belong to the user (oidc).
 	chat := func(pattern string, h http.HandlerFunc) { mux.Handle(pattern, s.ownChat(h)) }
 	mux.HandleFunc("GET /login", s.login)
 	if s.OIDC != nil {
@@ -200,7 +200,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/approvals", s.approvals)
 	mux.Handle("POST /api/approvals/{id}", s.ownApproval(s.decide))
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
-		writeErr(w, http.StatusNotFound, "unbekannter Endpunkt")
+		writeErr(w, http.StatusNotFound, "unknown endpoint")
 	})
 	if s.Web != nil {
 		mux.Handle("/", spa(s.Web))
@@ -208,7 +208,7 @@ func (s *Server) Handler() http.Handler {
 	return s.guard(s.auth(mux))
 }
 
-// Owners beantwortet, wem Chats und Bestätigungen gehören (chat.Manager).
+// Owners answers who owns chats and approvals (chat.Manager).
 type Owners interface {
 	ChatOwner(ctx context.Context, chatID string) (string, error)
 	ApprovalChat(ctx context.Context, approvalID string) (string, error)
@@ -216,9 +216,9 @@ type Owners interface {
 
 func (s *Server) owners() Owners { return s.M }
 
-// owns sagt, ob der Chat dem angemeldeten Nutzer gehört. Im token-Modus gehört jeder Chat dem
-// Inhaber des Tokens. Fremde und unbekannte Chats sind gleich (nicht gefunden), damit sich Kennungen
-// fremder Chats nicht erraten lassen.
+// owns reports whether the chat belongs to the logged-in user. In token mode every chat belongs to
+// the holder of the token. Foreign and unknown chats look the same (not found), so that identifiers
+// of foreign chats cannot be guessed.
 func (s *Server) owns(ctx context.Context, chatID string) (bool, error) {
 	if s.OIDC == nil {
 		return true, nil
@@ -237,7 +237,7 @@ func (s *Server) owns(ctx context.Context, chatID string) (bool, error) {
 	return owner == u.Sub, nil
 }
 
-// ownChat lässt eine Route unter /api/chats/{id} nur für Chats des Nutzers durch (sonst 404).
+// ownChat lets a route under /api/chats/{id} through only for the user's chats (otherwise 404).
 func (s *Server) ownChat(next http.HandlerFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ok, err := s.owns(r.Context(), r.PathValue("id"))
@@ -253,7 +253,7 @@ func (s *Server) ownChat(next http.HandlerFunc) http.Handler {
 	})
 }
 
-// ownApproval lässt eine Bestätigung nur entscheiden, wenn ihr Chat dem Nutzer gehört (sonst 404).
+// ownApproval only lets an approval be decided if its chat belongs to the user (otherwise 404).
 func (s *Server) ownApproval(next http.HandlerFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if s.OIDC != nil {
@@ -278,7 +278,7 @@ func (s *Server) ownApproval(next http.HandlerFunc) http.Handler {
 	})
 }
 
-// me: angemeldeter Nutzer und Anmeldeart.
+// me: logged-in user and login mode.
 func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 	if s.OIDC == nil {
 		writeJSON(w, 200, map[string]any{"mode": config.AuthToken})
@@ -288,16 +288,16 @@ func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"mode": config.AuthOIDC, "sub": u.Sub, "username": u.Username, "name": u.Name})
 }
 
-// guard weist Anfragen aus den Sandbox-Netzen ab. Die Sandboxen erreichen
-// den Orchestrator über das interne Netz; die API ist nur für den Nutzer.
+// guard refuses requests from the sandbox networks. The sandboxes reach
+// the orchestrator via the internal network; the API is for the user only.
 func (s *Server) guard(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		host, _, _ := net.SplitHostPort(r.RemoteAddr)
 		if ip := net.ParseIP(host); ip != nil {
 			for _, n := range s.Blocked {
 				if n.Contains(ip) {
-					slog.Warn("API-Zugriff aus Sandbox-Netz abgewiesen", "von", host, "pfad", r.URL.Path)
-					writeErr(w, http.StatusForbidden, "kein Zugriff aus dem Sandbox-Netz")
+					slog.Warn("API access from sandbox network refused", "from", host, "path", r.URL.Path)
+					writeErr(w, http.StatusForbidden, "no access from the sandbox network")
 					return
 				}
 			}
@@ -321,7 +321,7 @@ func spa(files fs.FS) http.Handler {
 		}
 		b, err := fs.ReadFile(files, "index.html")
 		if err != nil {
-			http.Error(w, "Web-UI nicht gebaut", http.StatusNotFound)
+			http.Error(w, "web UI not built", http.StatusNotFound)
 			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -362,7 +362,7 @@ func errCode(err error) int {
 }
 
 func fail(w http.ResponseWriter, err error) {
-	// Modellwechsel gesperrt: die Zahlen mitgeben, damit die UI fragen kann, ob erst kompaktiert wird.
+	// Model switch blocked: include the numbers so that the UI can ask whether to compact first.
 	var tooLarge *chat.ContextTooLargeError
 	if errors.As(err, &tooLarge) {
 		writeJSON(w, http.StatusConflict, map[string]any{"error": err.Error(), "code": "context_too_large", "details": tooLarge})
@@ -370,7 +370,7 @@ func fail(w http.ResponseWriter, err error) {
 	}
 	code := errCode(err)
 	if code >= 500 {
-		slog.Error("API-Fehler", "fehler", err)
+		slog.Error("API error", "error", err)
 	}
 	writeErr(w, code, err.Error())
 }
@@ -399,13 +399,13 @@ func (s *Server) config(w http.ResponseWriter, r *http.Request) {
 		"bg_wakes_per_hour":          o.BgWakesPerHour,
 		"bg_keepalive_s":             int(o.BgKeepAlive.Seconds()),
 		"auto_turns_max":             o.AutoTurnsMax,
-		// Werkzeuge, deren Ausführung am Socket belegt wird (E9, L6): Die UI gleicht damit ab,
-		// statt die Liste selbst zu führen.
+		// Tools whose execution is evidenced at the socket (E9, L6): the UI matches against them
+		// instead of keeping the list itself.
 		"executed_tools": chat.ExecutedToolNames(),
 	})
 }
 
-// workspaceMaxMB: Grenze der Sicherung von /workspace in MB, 0 = keine Sicherung.
+// workspaceMaxMB: limit of the /workspace backup in MB, 0 = no backup.
 func workspaceMaxMB(b int64) int64 {
 	switch {
 	case b < 0:
@@ -421,7 +421,7 @@ type slotView struct {
 	ContainerID   string `json:"container_id"`
 	ContainerName string `json:"container_name"`
 	Image         string `json:"image"`
-	// Ausführungs-Sandbox des Platzes (E9)
+	// execution sandbox of the slot (E9)
 	ExecContainerID   string `json:"exec_container_id,omitempty"`
 	ExecContainerName string `json:"exec_container_name,omitempty"`
 	ExecImage         string `json:"exec_image,omitempty"`
@@ -453,7 +453,7 @@ func (s *Server) pool(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if in.ChatID != "" {
-			// Kennung und Titel fremder Chats sieht der Nutzer nicht (oidc).
+			// The user does not see identifiers and titles of foreign chats (oidc).
 			if ok, _ := s.owns(r.Context(), in.ChatID); !ok {
 				v.ChatID, v.Activity = "", nil
 				if in.State == pool.StateAssigned {
@@ -502,14 +502,14 @@ func (s *Server) listChats(w http.ResponseWriter, r *http.Request) {
 func (s *Server) createChat(w http.ResponseWriter, r *http.Request) {
 	var req chat.NewChat
 	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil && err != io.EOF {
-		writeErr(w, 400, "ungültiges JSON")
+		writeErr(w, 400, "invalid JSON")
 		return
 	}
 	req.Owner = ""
 	if s.OIDC != nil {
 		u, ok := UserFrom(r.Context())
 		if !ok || u.Sub == "" {
-			writeErr(w, http.StatusUnauthorized, "nicht angemeldet")
+			writeErr(w, http.StatusUnauthorized, "not logged in")
 			return
 		}
 		req.Owner = u.Sub
@@ -517,7 +517,7 @@ func (s *Server) createChat(w http.ResponseWriter, r *http.Request) {
 	c, err := s.M.Create(r.Context(), req)
 	if err != nil {
 		if errors.Is(err, chat.ErrNoSlot) {
-			writeErr(w, http.StatusServiceUnavailable, "Kein freier Platz im Pool, bitte kurz warten.")
+			writeErr(w, http.StatusServiceUnavailable, "No free slot in the pool, please wait a moment.")
 			return
 		}
 		fail(w, err)
@@ -555,11 +555,11 @@ func (s *Server) send(w http.ResponseWriter, r *http.Request) {
 		Attachments []string `json:"attachments"`
 	}
 	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
-		writeErr(w, 400, "ungültiges JSON")
+		writeErr(w, 400, "invalid JSON")
 		return
 	}
 	if len(req.Attachments) > 20 {
-		writeErr(w, 400, "höchstens 20 Anhänge je Nachricht")
+		writeErr(w, 400, "at most 20 attachments per message")
 		return
 	}
 	res, err := s.M.SendWithAttachments(r.Context(), r.PathValue("id"), req.Text, req.Attachments)
@@ -572,7 +572,7 @@ func (s *Server) send(w http.ResponseWriter, r *http.Request) {
 
 func sendFail(w http.ResponseWriter, err error) {
 	if errors.Is(err, chat.ErrNoSlot) {
-		writeErr(w, http.StatusServiceUnavailable, "Kein freier Platz im Pool, bitte kurz warten.")
+		writeErr(w, http.StatusServiceUnavailable, "No free slot in the pool, please wait a moment.")
 		return
 	}
 	fail(w, err)
@@ -604,7 +604,7 @@ func (s *Server) flushQueue(w http.ResponseWriter, r *http.Request) {
 	res, err := s.M.FlushQueue(r.Context(), r.PathValue("id"))
 	if err != nil {
 		if errors.Is(err, chat.ErrRunning) {
-			writeErr(w, http.StatusConflict, "Der Agent arbeitet gerade; die Nachrichten gehen mit dem Ende des Laufs.")
+			writeErr(w, http.StatusConflict, "The agent is working; the messages go out when the run ends.")
 			return
 		}
 		sendFail(w, err)
@@ -616,7 +616,7 @@ func (s *Server) flushQueue(w http.ResponseWriter, r *http.Request) {
 func (s *Server) unqueue(w http.ResponseWriter, r *http.Request) {
 	if err := s.M.Unqueue(r.Context(), r.PathValue("id"), r.PathValue("qid")); err != nil {
 		if errors.Is(err, chat.ErrQueueDelivered) {
-			writeErr(w, http.StatusConflict, "Die Nachricht ist schon an den Agenten übergeben.")
+			writeErr(w, http.StatusConflict, "The message has already been handed to the agent.")
 			return
 		}
 		fail(w, err)
@@ -641,7 +641,7 @@ func (s *Server) internet(w http.ResponseWriter, r *http.Request) {
 		Enabled *bool `json:"enabled"`
 	}
 	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<10)).Decode(&req); err != nil || req.Enabled == nil {
-		writeErr(w, 400, `erwartet {"enabled": true|false}`)
+		writeErr(w, 400, `expected {"enabled": true|false}`)
 		return
 	}
 	c, err := s.M.SetInternet(r.Context(), r.PathValue("id"), *req.Enabled)
@@ -692,7 +692,7 @@ func (s *Server) setModel(w http.ResponseWriter, r *http.Request) {
 		CompactFirst bool   `json:"compact_first"`
 	}
 	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<10)).Decode(&req); err != nil || req.Model == "" {
-		writeErr(w, 400, `erwartet {"model": "anbieter/modell", "compact_first": false}`)
+		writeErr(w, 400, `expected {"model": "provider/model", "compact_first": false}`)
 		return
 	}
 	c, err := s.M.SetModel(r.Context(), r.PathValue("id"), req.Model, req.CompactFirst)
@@ -708,7 +708,7 @@ func (s *Server) setEffort(w http.ResponseWriter, r *http.Request) {
 		Level string `json:"level"`
 	}
 	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<10)).Decode(&req); err != nil || req.Level == "" {
-		writeErr(w, 400, `erwartet {"level": "off|minimal|low|medium|high|xhigh|max"}`)
+		writeErr(w, 400, `expected {"level": "off|minimal|low|medium|high|xhigh|max"}`)
 		return
 	}
 	c, err := s.M.SetThinkingLevel(r.Context(), r.PathValue("id"), req.Level)
@@ -724,7 +724,7 @@ func (s *Server) autocompact(w http.ResponseWriter, r *http.Request) {
 		Enabled *bool `json:"enabled"`
 	}
 	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<10)).Decode(&req); err != nil || req.Enabled == nil {
-		writeErr(w, 400, `erwartet {"enabled": true|false}`)
+		writeErr(w, 400, `expected {"enabled": true|false}`)
 		return
 	}
 	c, err := s.M.SetAutoCompact(r.Context(), r.PathValue("id"), *req.Enabled)
@@ -740,7 +740,7 @@ func (s *Server) maxSubagents(w http.ResponseWriter, r *http.Request) {
 		Max *int `json:"max"`
 	}
 	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<10)).Decode(&req); err != nil || req.Max == nil {
-		writeErr(w, 400, `erwartet {"max": <Zahl>}`)
+		writeErr(w, 400, `expected {"max": <number>}`)
 		return
 	}
 	c, err := s.M.SetMaxSubagents(r.Context(), r.PathValue("id"), *req.Max)
@@ -760,8 +760,8 @@ func (s *Server) llmCalls(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, calls)
 }
 
-// toolExecutions: Abgleich angefordert (Proxy) ↔ ausgeführt (Orchestrator) je toolCallId (E9).
-// background: Hintergrundaufgaben des Chats (laufende mit dem aktuellen Stand des Platzes).
+// toolExecutions: matching requested (proxy) ↔ executed (orchestrator) per toolCallId (E9).
+// background: the chat's background tasks (running ones with the slot's current state).
 func (s *Server) background(w http.ResponseWriter, r *http.Request) {
 	list, err := s.M.BackgroundTasks(r.Context(), r.PathValue("id"))
 	if err != nil {
@@ -771,7 +771,7 @@ func (s *Server) background(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, list)
 }
 
-// stopBackground: Hintergrundaufgabe auf Wunsch des Nutzers beenden; 409, wenn sie nicht läuft.
+// stopBackground: stop a background task at the user's request; 409 if it is not running.
 func (s *Server) stopBackground(w http.ResponseWriter, r *http.Request) {
 	t, err := s.M.StopBackground(r.Context(), r.PathValue("id"), r.PathValue("bg"))
 	if err != nil {
@@ -804,17 +804,17 @@ func (s *Server) runCommand(w http.ResponseWriter, r *http.Request) {
 		Command string `json:"command"`
 	}
 	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil || strings.TrimSpace(req.Command) == "" {
-		writeErr(w, 400, `erwartet {"command": "/…"}`)
+		writeErr(w, 400, `expected {"command": "/…"}`)
 		return
 	}
 	res, err := s.M.RunCommand(r.Context(), r.PathValue("id"), req.Command)
 	if err != nil {
 		if errors.Is(err, chat.ErrNoSlot) {
-			writeErr(w, http.StatusServiceUnavailable, "Kein freier Platz im Pool, bitte kurz warten.")
+			writeErr(w, http.StatusServiceUnavailable, "No free slot in the pool, please wait a moment.")
 			return
 		}
 		if errors.Is(err, chat.ErrRunning) {
-			writeErr(w, http.StatusConflict, "Der Agent arbeitet gerade; /compact geht erst danach.")
+			writeErr(w, http.StatusConflict, "The agent is working; /compact only works afterwards.")
 			return
 		}
 		fail(w, err)
@@ -865,13 +865,13 @@ func (s *Server) download(w http.ResponseWriter, r *http.Request) {
 	_, _ = io.Copy(w, rc)
 }
 
-// image liefert ein Bild, das der Agent in einer Antwort zeigt. Der Typ kommt
-// aus den Magic Bytes (nur PNG, JPEG, GIF, WebP), nie aus der Dateiendung.
+// image serves an image the agent shows in a response. The type comes
+// from the magic bytes (PNG, JPEG, GIF, WebP only), never from the file extension.
 func (s *Server) image(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	p, msg := q.Get("path"), q.Get("msg")
 	if p == "" || msg == "" {
-		writeErr(w, 400, "erwartet ?path=<Pfad in der Sandbox>&msg=<Kennung der Antwort>")
+		writeErr(w, 400, "expected ?path=<path in the sandbox>&msg=<identifier of the response>")
 		return
 	}
 	var src ImageOpener = s.M
@@ -880,7 +880,7 @@ func (s *Server) image(w http.ResponseWriter, r *http.Request) {
 	}
 	im, rc, err := src.OpenImage(r.Context(), r.PathValue("id"), msg, p)
 	if err != nil {
-		w.Header().Set("Cache-Control", "no-store") // später vielleicht verfügbar
+		w.Header().Set("Cache-Control", "no-store") // possibly available later
 		fail(w, err)
 		return
 	}
@@ -889,7 +889,7 @@ func (s *Server) image(w http.ResponseWriter, r *http.Request) {
 	h.Set("Content-Type", im.ContentType)
 	h.Set("Content-Length", fmt.Sprint(im.Size))
 	h.Set("X-Content-Type-Options", "nosniff")
-	// Je (Antwort, Pfad) gilt die erste Sicherung; der Inhalt ändert sich nicht mehr.
+	// Per (response, path) the first backup applies; the content no longer changes.
 	h.Set("Cache-Control", "private, max-age=86400")
 	h.Set("Content-Disposition", mime.FormatMediaType("inline", map[string]string{"filename": filepath.Base(im.Path)}))
 	_, _ = io.Copy(w, rc)
@@ -899,13 +899,13 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request) {
 	max := s.M.Options().ArtifactMaxBytes
 	r.Body = http.MaxBytesReader(w, r.Body, 20*max+(1<<20))
 	if err := r.ParseMultipartForm(32 << 20); err != nil {
-		writeErr(w, 400, "Upload nicht lesbar: "+err.Error())
+		writeErr(w, 400, "upload unreadable: "+err.Error())
 		return
 	}
 	var out []store.Artifact
 	for _, fh := range r.MultipartForm.File["file"] {
 		if fh.Size > max {
-			writeErr(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("%s ist größer als %d MB", fh.Filename, max>>20))
+			writeErr(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("%s is larger than %d MB", fh.Filename, max>>20))
 			return
 		}
 		f, err := fh.Open()
@@ -927,7 +927,7 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request) {
 		out = append(out, a)
 	}
 	if len(out) == 0 {
-		writeErr(w, 400, "keine Datei im Feld file")
+		writeErr(w, 400, "no file in field file")
 		return
 	}
 	writeJSON(w, http.StatusCreated, out)
@@ -941,7 +941,7 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 	}
 	fl, ok := w.(http.Flusher)
 	if !ok {
-		writeErr(w, 500, "Streaming nicht möglich")
+		writeErr(w, 500, "streaming not possible")
 		return
 	}
 	ch, cancel := s.M.Subscribe(id)
@@ -950,7 +950,7 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("X-Accel-Buffering", "no")
 	w.WriteHeader(200)
-	_, _ = io.WriteString(w, ": verbunden\n\n")
+	_, _ = io.WriteString(w, ": connected\n\n")
 	fl.Flush()
 	ping := time.NewTicker(15 * time.Second)
 	defer ping.Stop()
@@ -1016,7 +1016,7 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request) {
 		Approve *bool `json:"approve"`
 	}
 	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<10)).Decode(&req); err != nil || req.Approve == nil {
-		writeErr(w, 400, `erwartet {"approve": true|false}`)
+		writeErr(w, 400, `expected {"approve": true|false}`)
 		return
 	}
 	a, err := s.M.Decide(r.Context(), r.PathValue("id"), *req.Approve)
@@ -1027,7 +1027,7 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, a)
 }
 
-// ParseSubnets liest eine kommagetrennte Liste von CIDR-Angaben.
+// ParseSubnets reads a comma-separated list of CIDR ranges.
 func ParseSubnets(s string) ([]*net.IPNet, error) {
 	var out []*net.IPNet
 	for _, part := range strings.Split(s, ",") {

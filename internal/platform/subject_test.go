@@ -12,11 +12,11 @@ import (
 	"agw/internal/oidc/oidctest"
 )
 
-var errNoSession = errors.New("Anmeldung des Nutzers abgelaufen; Chat in der Plattform öffnen")
+var errNoSession = errors.New("user login expired; open the chat in the platform")
 
-// subjectSetup: nachgebildeter Realm (Token-Austausch prüft die Signatur des subject_token) und eine
-// API, die den sub jedes eingehenden Tokens festhält. Chats gehören Nutzern laut owners; Nutzer ohne
-// Eintrag in tokens haben keine Sitzung.
+// subjectSetup: simulated realm (token exchange checks the signature of the subject_token) and an
+// API that records the sub of every incoming token. Chats belong to users according to owners; users
+// without an entry in tokens have no session.
 func subjectSetup(t *testing.T, owners map[string]string, live map[string]oidctest.User) (*Client, *oidctest.Issuer, func() []string) {
 	t.Helper()
 	is := oidctest.New(t)
@@ -53,7 +53,7 @@ func subjectSetup(t *testing.T, owners map[string]string, live map[string]oidcte
 	}
 }
 
-// Der Austausch nimmt das Token des Chat-Besitzers; zwei Chats zweier Nutzer bekommen verschiedene sub.
+// The exchange takes the chat owner's token; two chats of two users get different subs.
 func TestSubjectFromChatOwner(t *testing.T) {
 	anna := oidctest.User{Sub: "sub-anna", Username: "anna"}
 	bert := oidctest.User{Sub: "sub-bert", Username: "bert"}
@@ -70,38 +70,38 @@ func TestSubjectFromChatOwner(t *testing.T) {
 	}
 	ex := is.Exchanges()
 	if len(ex) != 2 || ex[0].SubjectSub != "sub-anna" || ex[1].SubjectSub != "sub-bert" {
-		t.Fatalf("Austausche: %+v", ex)
+		t.Fatalf("exchanges: %+v", ex)
 	}
 	if got := strings.Join(seen(), ","); got != "sub-anna,sub-bert,sub-anna" {
-		t.Fatalf("an der API: %s", got)
+		t.Fatalf("at the API: %s", got)
 	}
 	if strings.Join(logged, ",") != "chat-a=sub-anna,chat-b=sub-bert" {
-		t.Fatalf("Protokoll: %v", logged)
+		t.Fatalf("log: %v", logged)
 	}
 }
 
-// Ohne Sitzung des Besitzers scheitert der Aufruf mit klarer Meldung; getauscht wird nichts.
+// Without the owner's session the call fails with a clear message; nothing is exchanged.
 func TestSubjectMissingSession(t *testing.T) {
 	c, is, seen := subjectSetup(t, map[string]string{"chat-a": "sub-anna"}, map[string]oidctest.User{})
 	_, err := c.Do(context.Background(), "chat-a", Request{Method: "GET", Path: "/datasets"})
-	if err == nil || !strings.Contains(err.Error(), "Anmeldung des Nutzers abgelaufen; Chat in der Plattform öffnen") {
-		t.Fatalf("erwartet Fehler zur Anmeldung: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "user login expired; open the chat in the platform") {
+		t.Fatalf("expected login error: %v", err)
 	}
 	if len(is.Exchanges()) != 0 || len(seen()) != 0 {
-		t.Fatal("trotz fehlender Sitzung getauscht oder aufgerufen")
+		t.Fatal("exchanged or called despite missing session")
 	}
 }
 
-// Mit Subject braucht New weder Nutzer noch Passwort.
+// With Subject, New needs neither user nor password.
 func TestSubjectConfig(t *testing.T) {
 	sub := func(context.Context, string) (string, error) { return "", nil }
 	if _, err := New(Config{APIURL: "https://api.example", Subject: sub}); err != nil {
-		t.Fatalf("ohne Austausch: %v", err)
+		t.Fatalf("without exchange: %v", err)
 	}
 	if _, err := New(Config{APIURL: "https://api.example", Subject: sub, Exchange: true, ClientSecret: "s"}); err == nil {
-		t.Fatal("Austausch ohne Token-URL angenommen")
+		t.Fatal("exchange without token URL accepted")
 	}
 	if _, err := New(Config{APIURL: "https://api.example"}); err == nil {
-		t.Fatal("ohne Subject und ohne Passwort angenommen")
+		t.Fatal("accepted without Subject and without password")
 	}
 }

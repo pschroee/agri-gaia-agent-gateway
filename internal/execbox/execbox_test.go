@@ -15,8 +15,8 @@ import (
 	"agw/internal/execproto"
 )
 
-// Der Test startet den echten Überwacher lokal (ohne Docker und ohne
-// Nutzerwechsel) und spricht ihn über den Client an.
+// The test starts the real supervisor locally (without Docker and without
+// switching users) and talks to it through the client.
 
 var bin string
 
@@ -55,7 +55,7 @@ func (d *localDialer) dial(ctx context.Context) (io.WriteCloser, io.Reader, func
 
 func TestRunConcurrentStreamAndCancel(t *testing.T) {
 	if _, err := os.Stat("/bin/bash"); err != nil {
-		t.Skip("bash fehlt")
+		t.Skip("bash missing")
 	}
 	dir := t.TempDir()
 	d := &localDialer{}
@@ -91,18 +91,18 @@ func TestRunConcurrentStreamAndCancel(t *testing.T) {
 	start := time.Now()
 	f, err = c.Run(cctx, execproto.Request{Op: execproto.OpBash, Command: "sleep 30", Cwd: dir}, nil)
 	if err == nil || f.Code != "aborted" || time.Since(start) > 5*time.Second {
-		t.Fatalf("Abbruch: %v %+v nach %v", err, f, time.Since(start))
+		t.Fatalf("abort: %v %+v after %v", err, f, time.Since(start))
 	}
 	if d.dials != 1 {
-		t.Fatalf("%d Verbindungen statt einer", d.dials)
+		t.Fatalf("%d connections instead of one", d.dials)
 	}
 }
 
-// Stirbt der Überwacher, enden laufende Aufrufe mit ErrLost, der nächste
-// startet ihn neu.
+// If the supervisor dies, running calls end with ErrLost, the next one
+// restarts it.
 func TestReconnectAfterLoss(t *testing.T) {
 	if _, err := os.Stat("/bin/bash"); err != nil {
-		t.Skip("bash fehlt")
+		t.Skip("bash missing")
 	}
 	dir := t.TempDir()
 	d := &localDialer{}
@@ -120,26 +120,26 @@ func TestReconnectAfterLoss(t *testing.T) {
 	select {
 	case err := <-done:
 		if err != ErrLost {
-			t.Fatalf("erwartet ErrLost, bekam %v", err)
+			t.Fatalf("expected ErrLost, got %v", err)
 		}
 	case <-time.After(5 * time.Second):
-		t.Fatal("Aufruf endet nicht, obwohl der Überwacher weg ist")
+		t.Fatal("call does not end although the supervisor is gone")
 	}
 	f, err := c.Run(context.Background(), execproto.Request{Op: execproto.OpStat, Path: dir}, nil)
 	if err != nil || f.Error != "" || d.dials != 2 {
-		t.Fatalf("Neustart: %v %+v (%d Verbindungen)", err, f, d.dials)
+		t.Fatalf("restart: %v %+v (%d connections)", err, f, d.dials)
 	}
 	c.Close()
 	if _, err := c.Run(context.Background(), execproto.Request{Op: execproto.OpStat, Path: dir}, nil); err != ErrClosed {
-		t.Fatalf("nach Close: %v", err)
+		t.Fatalf("after Close: %v", err)
 	}
-	if _, err := c.Run(context.Background(), execproto.Request{Op: "read", Path: "relativ"}, nil); err == nil {
-		t.Fatal("ungültige Anfrage angenommen")
+	if _, err := c.Run(context.Background(), execproto.Request{Op: "read", Path: "relative"}, nil); err == nil {
+		t.Fatal("invalid request accepted")
 	}
 }
 
-// scriptedDialer ist ein Überwacher im Testprozess: bash liefert n Datenrahmen und dann Done,
-// alle anderen Operationen sofort Done.
+// scriptedDialer is a supervisor in the test process: bash delivers n data frames and then Done,
+// all other operations Done immediately.
 func scriptedDialer(n int) Dialer {
 	return func(ctx context.Context) (io.WriteCloser, io.Reader, func(), error) {
 		inR, inW := io.Pipe()
@@ -168,8 +168,8 @@ func scriptedDialer(n int) Dialer {
 	}
 }
 
-// M4: Ein langsamer Leser (pi liest die Ausgabe eines Befehls nicht ab) hält weder die anderen
-// Operationen des Platzes auf, noch geht sein Done-Rahmen verloren.
+// M4: a slow reader (pi does not read a command's output) neither holds up the other
+// operations of the slot, nor is its Done frame lost.
 func TestSlowReaderDoesNotBlockOthers(t *testing.T) {
 	c := New(scriptedDialer(2000))
 	defer c.Close()
@@ -191,21 +191,21 @@ func TestSlowReaderDoesNotBlockOthers(t *testing.T) {
 	sctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	if f, err := c.Run(sctx, execproto.Request{Op: execproto.OpStat, Path: "/"}, nil); err != nil || !f.Done {
-		t.Fatalf("stat hinter langsamem Leser: %+v %v nach %v", f, err, time.Since(start))
+		t.Fatalf("stat behind slow reader: %+v %v after %v", f, err, time.Since(start))
 	}
 	close(release)
 	select {
 	case f := <-bashDone:
 		if f.Exit == nil || *f.Exit != 0 || got != 2000 {
-			t.Fatalf("bash: %+v, %d Bytes", f, got)
+			t.Fatalf("bash: %+v, %d bytes", f, got)
 		}
 	case <-time.After(10 * time.Second):
-		t.Fatal("Done-Rahmen des langsamen Lesers fehlt")
+		t.Fatal("Done frame of the slow reader missing")
 	}
 }
 
-// M4: Über der Puffergrenze verwirft der Client Daten, bricht die Operation ab und meldet es
-// im Done-Rahmen, statt unbegrenzt Speicher zu belegen.
+// M4: above the buffer limit the client discards data, aborts the operation and reports it
+// in the Done frame, instead of taking unlimited memory.
 func TestSlowReaderOverflow(t *testing.T) {
 	old := maxQueuedBytes
 	maxQueuedBytes = 100
@@ -222,14 +222,14 @@ func TestSlowReaderOverflow(t *testing.T) {
 		}
 	})
 	if err != nil || f.Code != "EOVERFLOW" || !strings.Contains(f.Error, "overflow") {
-		t.Fatalf("Überlauf: %+v %v", f, err)
+		t.Fatalf("overflow: %+v %v", f, err)
 	}
 }
 
-// Hintergrundaufgabe über den Client: onStart meldet die Prozessgruppe vor der Ausgabe.
+// Background task through the client: onStart reports the process group before the output.
 func TestRunBackground(t *testing.T) {
 	if _, err := os.Stat("/bin/bash"); err != nil {
-		t.Skip("bash fehlt")
+		t.Skip("bash missing")
 	}
 	dir := t.TempDir()
 	t.Setenv("AGW_EXEC_BG_DIR", dir)
@@ -237,12 +237,12 @@ func TestRunBackground(t *testing.T) {
 	c := New(d.dial)
 	defer c.Close()
 	var events []string
-	f, err := c.RunBackground(context.Background(), execproto.Request{Op: execproto.OpBg, Command: "echo eins; exit 4", Cwd: dir, Spill: execproto.BgLogPath(3)},
+	f, err := c.RunBackground(context.Background(), execproto.Request{Op: execproto.OpBg, Command: "echo one; exit 4", Cwd: dir, Spill: execproto.BgLogPath(3)},
 		func(pgid int) { events = append(events, "start") }, func(b []byte) { events = append(events, strings.TrimSpace(string(b))) })
 	if err != nil || f.Exit == nil || *f.Exit != 4 {
-		t.Fatalf("Ende: %+v %v", f, err)
+		t.Fatalf("end: %+v %v", f, err)
 	}
-	if strings.Join(events, ",") != "start,eins" {
-		t.Fatalf("Reihenfolge: %v", events)
+	if strings.Join(events, ",") != "start,one" {
+		t.Fatalf("order: %v", events)
 	}
 }

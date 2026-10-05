@@ -1,17 +1,17 @@
 package chat
 
-// Arbeitsbereich je Chat: /workspace überlebt das Ruhen. Nach jedem
-// abgeschlossenen Lauf und beim Ruhen packt der Orchestrator /workspace in der
-// Sandbox (ohne inputs/ und ohne Paket- und Cache-Ordner) als tar.gz und legt
-// es in S3 unter <chat>/workspace.tar.gz ab; beim Fortsetzen spielt er es in
-// die frische Sandbox ein, bevor der erste Auftrag kommt.
+// Workspace per chat: /workspace survives idling. After every completed run
+// and when idling, the orchestrator packs /workspace in the sandbox (without
+// inputs/ and without package and cache folders) as tar.gz and stores it in S3
+// under <chat>/workspace.tar.gz; on resuming it restores it into the fresh
+// sandbox before the first message arrives.
 //
-// Das Archiv stammt aus der Sandbox desselben Chats und ist damit vom Agenten
-// gestaltbar. Vor dem Einspielen liest der Orchestrator es deshalb selbst und
-// reicht nur unbedenkliche Einträge weiter (normale Dateien, Ordner, Symlinks,
-// harte Links innerhalb des Archivs; keine absoluten Pfade, kein "..", nichts
-// unter einem Symlink, nichts unter inputs/). Ausgepackt wird als Agent-Nutzer
-// ohne Besitzer aus dem Archiv.
+// The archive comes from the sandbox of the same chat and can therefore be
+// shaped by the agent. Before restoring, the orchestrator therefore reads it
+// itself and passes on only harmless entries (regular files, folders,
+// symlinks, hard links within the archive; no absolute paths, no "..", nothing
+// under a symlink, nothing under inputs/). It is unpacked as the agent user
+// without the owners from the archive.
 
 import (
 	"archive/tar"
@@ -33,34 +33,33 @@ import (
 	"agw/internal/store"
 )
 
-// DefaultWorkspaceMaxBytes gilt, wenn Options.WorkspaceMaxBytes 0 ist.
+// DefaultWorkspaceMaxBytes applies when Options.WorkspaceMaxBytes is 0.
 const DefaultWorkspaceMaxBytes = 200 << 20
 
-// workspaceTimeout begrenzt Packen und Auspacken.
+// workspaceTimeout limits packing and unpacking.
 const workspaceTimeout = 2 * time.Minute
 
-// WorkspaceExcludes sind Ordnernamen, die nie gesichert werden, gleich in
-// welcher Tiefe: nachinstallierte Pakete und Caches (Entscheidung des Nutzers:
-// Pakete bleiben nicht erhalten). inputs/ auf oberster Ebene kommt ohnehin aus
-// den Eingaben des Chats.
+// WorkspaceExcludes are folder names that are never backed up, at whatever
+// depth: packages installed later and caches (the user's decision: packages
+// are not kept). inputs/ at the top level comes from the chat's inputs anyway.
 var WorkspaceExcludes = []string{"node_modules", ".venv", "__pycache__", ".cache"}
 
 func workspaceObjectKey(chatID string) string { return path.Join(chatID, "workspace.tar.gz") }
 
-// workspaceSaveScript (bash, als Agent-Nutzer) ermittelt Fingerabdruck,
-// Dateizahl und Größe von /workspace und packt es, wenn es sich seit der letzten
-// Sicherung geändert hat und unter der Grenze liegt. Erste Zeile der Ausgabe:
+// workspaceSaveScript (bash, as the agent user) determines fingerprint, file
+// count and size of /workspace and packs it if it has changed since the last
+// backup and is below the limit. First line of the output:
 //
-//	SAME <fp> <dateien> <bytes>   unverändert
-//	SKIP <fp> <dateien> <bytes>   über der Grenze, nichts gepackt
-//	DATA <fp> <dateien> <bytes>   danach folgt das tar.gz
+//	SAME <fp> <files> <bytes>   unchanged
+//	SKIP <fp> <files> <bytes>   above the limit, nothing packed
+//	DATA <fp> <files> <bytes>   followed by the tar.gz
 //
-// Der Fingerabdruck zählt nur Dateien, Ordner und Symlinks (anderes wird beim
-// Einspielen verworfen), bei Ordnern ohne Größe und Zeit (die ändern sich auch
-// durch ausgeschlossene Unterordner wie __pycache__); --format=posix erhält die Zeiten auf die Nanosekunde,
-// damit der Stand nach dem Einspielen wieder denselben Fingerabdruck hat.
-// head -c begrenzt die Ausgabe hart (wächst eine Datei während des Packens).
-// tar-Status 1 (Datei während des Lesens geändert) gilt als Erfolg.
+// The fingerprint counts only files, folders and symlinks (anything else is
+// dropped on restore), for folders without size and time (those also change
+// through excluded subfolders such as __pycache__); --format=posix keeps the times to the nanosecond,
+// so that the state after restoring has the same fingerprint again.
+// head -c limits the output hard (if a file grows while packing).
+// tar status 1 (file changed while being read) counts as success.
 var workspaceSaveScript = `# agw:workspace-save
 set -o pipefail
 max=$1; last=$2; cap=$3
@@ -73,8 +72,8 @@ if [ "$size" -gt "$max" ]; then echo "SKIP $fp $files $size"; exit 0; fi
 echo "DATA $fp $files $size"
 ( tar -C /workspace --exclude=./inputs` + tarExcludes() + ` --format=posix --warning=no-file-changed --warning=no-file-removed -czf - . ; rc=$?; [ "$rc" -le 1 ] ) | head -c "$cap"`
 
-// workspaceRestoreScript packt einen (vom Orchestrator gefilterten) tar-Strom
-// nach /workspace aus, ohne Besitzer aus dem Archiv.
+// workspaceRestoreScript unpacks a tar stream (filtered by the orchestrator)
+// into /workspace, without the owners from the archive.
 const workspaceRestoreScript = `# agw:workspace-restore
 exec tar -C /workspace -xf - --no-same-owner --delay-directory-restore`
 
@@ -98,20 +97,20 @@ type execer interface {
 	Exec(ctx context.Context, cmd []string, stdin io.Reader) ([]byte, error)
 }
 
-// wsSnapshot ist das Ergebnis des Sicherungsskripts.
+// wsSnapshot is the result of the backup script.
 type wsSnapshot struct {
 	Status      string // SAME, SKIP, DATA
 	Fingerprint string
 	Files       int
 	Size        int64
-	Archive     []byte // nur bei DATA
+	Archive     []byte // only for DATA
 }
 
-// workspaceArchiveCap ist die harte Obergrenze für das Archiv (tar-Köpfe,
-// Auffüllung auf 512 Bytes je Datei, Wachstum während des Packens).
+// workspaceArchiveCap is the hard upper bound for the archive (tar headers,
+// padding to 512 bytes per file, growth while packing).
 func workspaceArchiveCap(limit int64) int64 { return 2*limit + 16<<20 }
 
-// snapshotWorkspace führt das Sicherungsskript in der Sandbox aus.
+// snapshotWorkspace runs the backup script in the sandbox.
 func snapshotWorkspace(ctx context.Context, a execer, limit int64, lastFP string) (wsSnapshot, error) {
 	if lastFP == "" {
 		lastFP = "-"
@@ -126,7 +125,7 @@ func snapshotWorkspace(ctx context.Context, a execer, limit int64, lastFP string
 		if err != nil {
 			return s, err
 		}
-		return s, fmt.Errorf("unerwartete Ausgabe des Sicherungsskripts: %q", truncate(string(head), 200))
+		return s, fmt.Errorf("unexpected output of the backup script: %q", truncate(string(head), 200))
 	}
 	s.Status, s.Fingerprint = f[0], f[1]
 	s.Files, _ = strconv.Atoi(f[2])
@@ -136,10 +135,10 @@ func snapshotWorkspace(ctx context.Context, a execer, limit int64, lastFP string
 		return s, err
 	case "DATA":
 	default:
-		return s, fmt.Errorf("unerwarteter Status %q", s.Status)
+		return s, fmt.Errorf("unexpected status %q", s.Status)
 	}
 	if int64(len(rest)) > capBytes {
-		// Während des Packens gewachsen: wie über der Grenze behandeln.
+		// Grew while packing: treat as above the limit.
 		s.Status = "SKIP"
 		s.Size = max(s.Size, int64(len(rest)))
 		return s, nil
@@ -151,14 +150,14 @@ func snapshotWorkspace(ctx context.Context, a execer, limit int64, lastFP string
 	return s, nil
 }
 
-// filterWorkspaceArchive liest ein tar.gz und schreibt die unbedenklichen
-// Einträge als unkomprimiertes tar nach w. Liefert die Zahl der übernommenen
-// und der verworfenen Einträge. maxContent begrenzt die Summe der Dateigrößen
-// (Schutz gegen Archive, die beim Entpacken übergroß werden).
+// filterWorkspaceArchive reads a tar.gz and writes the harmless entries as an
+// uncompressed tar to w. Returns the number of kept and of dropped entries.
+// maxContent limits the sum of the file sizes (protection against archives
+// that become oversized when unpacked).
 func filterWorkspaceArchive(r io.Reader, w io.Writer, maxContent int64) (kept, dropped int, err error) {
 	gz, err := gzip.NewReader(r)
 	if err != nil {
-		return 0, 0, fmt.Errorf("kein gzip: %w", err)
+		return 0, 0, fmt.Errorf("not gzip: %w", err)
 	}
 	defer gz.Close()
 	tr := tar.NewReader(gz)
@@ -172,7 +171,7 @@ func filterWorkspaceArchive(r io.Reader, w io.Writer, maxContent int64) (kept, d
 			break
 		}
 		if err != nil {
-			return kept, dropped, fmt.Errorf("Archiv beschädigt: %w", err)
+			return kept, dropped, fmt.Errorf("archive corrupt: %w", err)
 		}
 		name, ok := safeArchivePath(h.Name)
 		if !ok || underSymlink(name, symlinks) {
@@ -180,7 +179,7 @@ func filterWorkspaceArchive(r io.Reader, w io.Writer, maxContent int64) (kept, d
 			continue
 		}
 		if name == "." {
-			continue // Wurzel: /workspace gibt es schon
+			continue // root: /workspace already exists
 		}
 		out := &tar.Header{Name: name, Mode: h.Mode & 0o7777 &^ 0o6000, ModTime: h.ModTime, Format: tar.FormatPAX}
 		switch h.Typeflag {
@@ -190,7 +189,7 @@ func filterWorkspaceArchive(r io.Reader, w io.Writer, maxContent int64) (kept, d
 		case tar.TypeReg, tar.TypeRegA:
 			total += h.Size
 			if total > maxContent {
-				return kept, dropped, fmt.Errorf("Inhalt größer als %d Bytes", maxContent)
+				return kept, dropped, fmt.Errorf("content larger than %d bytes", maxContent)
 			}
 			out.Typeflag, out.Size = tar.TypeReg, h.Size
 		case tar.TypeSymlink:
@@ -206,11 +205,11 @@ func filterWorkspaceArchive(r io.Reader, w io.Writer, maxContent int64) (kept, d
 				continue
 			}
 			out.Typeflag, out.Linkname = tar.TypeLink, target
-		default: // FIFOs, Geräte und alles andere
+		default: // FIFOs, devices and everything else
 			dropped++
 			continue
 		}
-		// Ein Name, der schon als anderer Typ vorkam, wird nicht ersetzt.
+		// A name that already occurred as another type is not replaced.
 		if symlinks[name] || (regular[name] && out.Typeflag != tar.TypeReg) {
 			dropped++
 			continue
@@ -220,7 +219,7 @@ func filterWorkspaceArchive(r io.Reader, w io.Writer, maxContent int64) (kept, d
 		}
 		if out.Typeflag == tar.TypeReg {
 			if _, err := io.CopyN(tw, tr, h.Size); err != nil {
-				return kept, dropped, fmt.Errorf("Archiv beschädigt: %w", err)
+				return kept, dropped, fmt.Errorf("archive corrupt: %w", err)
 			}
 			regular[name] = true
 		}
@@ -232,8 +231,8 @@ func filterWorkspaceArchive(r io.Reader, w io.Writer, maxContent int64) (kept, d
 	return kept, dropped, tw.Close()
 }
 
-// safeArchivePath bereinigt einen Namen aus dem Archiv. Abgelehnt: absolute
-// Pfade, "..", Steuerzeichen und alles unter inputs/ (kommt aus den Eingaben).
+// safeArchivePath cleans a name from the archive. Refused: absolute paths,
+// "..", control characters and everything under inputs/ (comes from the inputs).
 func safeArchivePath(name string) (string, bool) {
 	if name == "" || strings.HasPrefix(name, "/") || len(name) > 4096 {
 		return "", false
@@ -255,8 +254,8 @@ func safeArchivePath(name string) (string, bool) {
 	return p, true
 }
 
-// underSymlink: liegt der Pfad unter einem Symlink aus demselben Archiv? Dann
-// würde tar beim Auspacken dem Symlink folgen.
+// underSymlink: does the path lie under a symlink from the same archive? Then
+// tar would follow the symlink when unpacking.
 func underSymlink(p string, symlinks map[string]bool) bool {
 	for i := 0; i < len(p); i++ {
 		if p[i] == '/' && symlinks[p[:i]] {
@@ -266,7 +265,7 @@ func underSymlink(p string, symlinks map[string]bool) bool {
 	return false
 }
 
-// restoreWorkspaceArchive filtert das Archiv und packt es in der Sandbox aus.
+// restoreWorkspaceArchive filters the archive and unpacks it in the sandbox.
 func restoreWorkspaceArchive(ctx context.Context, a execer, archive []byte, maxContent int64) (kept, dropped int, err error) {
 	pr, pw := io.Pipe()
 	var ferr error
@@ -278,7 +277,7 @@ func restoreWorkspaceArchive(ctx context.Context, a execer, archive []byte, maxC
 		pw.CloseWithError(ferr)
 	}()
 	_, err = a.Exec(ctx, []string{"sh", "-c", workspaceRestoreScript}, pr)
-	pr.CloseWithError(errors.New("abgebrochen"))
+	pr.CloseWithError(errors.New("aborted"))
 	wg.Wait()
 	if ferr != nil {
 		return kept, dropped, ferr
@@ -295,7 +294,7 @@ func (m *Manager) workspaceMax() int64 {
 
 func (m *Manager) workspaceEnabled() bool { return m.opt.WorkspaceMaxBytes >= 0 }
 
-// workspaceLock serialisiert Sichern und Einspielen je Chat.
+// workspaceLock serialises backing up and restoring per chat.
 func (m *Manager) workspaceLock(chatID string) func() {
 	m.mu.Lock()
 	l, ok := m.wsMu[chatID]
@@ -308,9 +307,10 @@ func (m *Manager) workspaceLock(chatID string) func() {
 	return l.Unlock
 }
 
-// saveWorkspace sichert /workspace der Sandbox des Chats, falls es sich
-// geändert hat. Über der Grenze wird nichts gesichert; die letzte gültige
-// Sicherung bleibt, und der Chat bekommt einen Hinweis.
+// saveWorkspace backs up /workspace of the chat's sandbox if it has changed.
+// Above the limit nothing is backed up; the last valid backup stays, and the
+// chat gets a notice. The reason and the notice are matched by the web UI and
+// the CLI (web/src/hooks/useChatStream.ts) and stay German for now.
 func (m *Manager) saveWorkspace(ctx context.Context, chatID string, l *live) error {
 	if !m.workspaceEnabled() {
 		return nil
@@ -319,7 +319,7 @@ func (m *Manager) saveWorkspace(ctx context.Context, chatID string, l *live) err
 	defer unlock()
 	select {
 	case <-l.stop:
-		return nil // Sandbox schon abgebaut
+		return nil // sandbox already torn down
 	default:
 	}
 	m.mu.Lock()
@@ -347,7 +347,7 @@ func (m *Manager) saveWorkspace(ctx context.Context, chatID string, l *live) err
 		}
 		return nil
 	case "SKIP":
-		reason := fmt.Sprintf("%s in /workspace, Grenze %s", formatMB(snap.Size), formatMB(limit))
+		reason := fmt.Sprintf("%s in /workspace, limit %s", formatMB(snap.Size), formatMB(limit))
 		if err := m.st.SkipWorkspace(ctx, chatID, reason, snap.Size); err != nil {
 			return err
 		}
@@ -355,13 +355,13 @@ func (m *Manager) saveWorkspace(ctx context.Context, chatID string, l *live) err
 		announce := l.wsSkippedFP != snap.Fingerprint
 		l.wsSkippedFP = snap.Fingerprint
 		m.mu.Unlock()
-		slog.Warn("Arbeitsbereich NICHT gesichert: über der Grenze", "chat", chatID, "bytes", snap.Size, "dateien", snap.Files, "grenze", limit)
+		slog.Warn("workspace NOT backed up: above the limit", "chat", chatID, "bytes", snap.Size, "files", snap.Files, "limit", limit)
 		if announce {
-			msg := "Arbeitsbereich nicht gesichert: " + reason + "."
+			msg := "Workspace not saved: " + reason + "."
 			if prev.SavedAt != nil {
-				msg += " Beim Fortsetzen gilt die Sicherung von " + prev.SavedAt.Local().Format("02.01. 15:04") + "."
+				msg += " Resuming uses the backup from " + prev.SavedAt.Local().Format("2006-01-02 15:04") + "."
 			} else {
-				msg += " Es gibt noch keine Sicherung; ruht der Chat, gehen die Dateien verloren."
+				msg += " There is no backup yet; if the chat goes idle, the files are lost."
 			}
 			m.publish(chatID, Event{Kind: "error", Data: map[string]string{"message": msg}})
 		}
@@ -369,13 +369,13 @@ func (m *Manager) saveWorkspace(ctx context.Context, chatID string, l *live) err
 		return nil
 	}
 	if prev.ObjectKey == "" && snap.Files == 0 {
-		return nil // nie gesichert und nichts da
+		return nil // never backed up and nothing there
 	}
 	sum := sha256.Sum256(snap.Archive)
 	w := store.Workspace{ChatID: chatID, ObjectKey: workspaceObjectKey(chatID), Fingerprint: snap.Fingerprint,
 		WorkspaceInfo: store.WorkspaceInfo{Size: snap.Size, ArchiveSize: int64(len(snap.Archive)), Files: snap.Files, SHA256: hex.EncodeToString(sum[:])}}
 	if err := m.blobs.Put(ctx, w.ObjectKey, bytes.NewReader(snap.Archive), w.ArchiveSize, "application/gzip"); err != nil {
-		return fmt.Errorf("Ablage: %w", err)
+		return fmt.Errorf("storage: %w", err)
 	}
 	if err := m.st.PutWorkspace(ctx, w); err != nil {
 		return err
@@ -383,14 +383,14 @@ func (m *Manager) saveWorkspace(ctx context.Context, chatID string, l *live) err
 	m.mu.Lock()
 	l.wsSkippedFP = ""
 	m.mu.Unlock()
-	slog.Info("Arbeitsbereich gesichert", "chat", chatID, "dateien", snap.Files, "bytes", snap.Size, "archiv", w.ArchiveSize)
+	slog.Info("workspace backed up", "chat", chatID, "files", snap.Files, "bytes", snap.Size, "archive", w.ArchiveSize)
 	m.publishChat(ctx, chatID)
 	return nil
 }
 
-// restoreWorkspace spielt die letzte Sicherung in eine frische Sandbox ein.
-// Scheitert das, wird in dieser Sandbox nicht mehr gesichert, damit ein leerer
-// Arbeitsbereich die gültige Sicherung nicht überschreibt.
+// restoreWorkspace restores the last backup into a fresh sandbox. If that
+// fails, nothing is backed up in this sandbox any more, so that an empty
+// workspace does not overwrite the valid backup.
 func (m *Manager) restoreWorkspace(ctx context.Context, chatID string, l *live) workspaceRestore {
 	if !m.workspaceEnabled() {
 		return workspaceRestore{Disabled: true}
@@ -416,7 +416,7 @@ func (m *Manager) restoreWorkspace(ctx context.Context, chatID string, l *live) 
 	limit := max(m.workspaceMax(), w.Size)
 	rc, _, err := m.blobs.Get(ctx, w.ObjectKey)
 	if err != nil {
-		return failed(fmt.Errorf("Ablage: %w", err))
+		return failed(fmt.Errorf("storage: %w", err))
 	}
 	data, err := io.ReadAll(io.LimitReader(rc, workspaceArchiveCap(limit)+1))
 	rc.Close()
@@ -424,39 +424,39 @@ func (m *Manager) restoreWorkspace(ctx context.Context, chatID string, l *live) 
 		return failed(err)
 	}
 	if sum := sha256.Sum256(data); hex.EncodeToString(sum[:]) != w.SHA256 {
-		return failed(errors.New("Prüfsumme des Archivs stimmt nicht"))
+		return failed(errors.New("archive checksum does not match"))
 	}
 	kept, dropped, err := restoreWorkspaceArchive(ctx, l.slot.Worker, data, 2*limit+16<<20)
 	if err != nil {
 		return failed(err)
 	}
 	if dropped > 0 {
-		slog.Warn("Arbeitsbereich: Einträge verworfen", "chat", chatID, "verworfen", dropped)
+		slog.Warn("workspace: entries dropped", "chat", chatID, "dropped", dropped)
 	}
-	slog.Info("Arbeitsbereich eingespielt", "chat", chatID, "einträge", kept, "dateien", w.Files, "bytes", w.Size)
+	slog.Info("workspace restored", "chat", chatID, "entries", kept, "files", w.Files, "bytes", w.Size)
 	return res
 }
 
-// workspaceRestore beschreibt das Einspielen beim Fortsetzen (für die Schritte in der UI).
+// workspaceRestore describes the restore on resuming (for the steps in the UI).
 type workspaceRestore struct {
 	Disabled bool  // AGW_WORKSPACE_MAX_MB=0
-	Found    bool  // es gab eine Sicherung
-	Size     int64 // Summe der Dateigrößen laut Sicherung
+	Found    bool  // there was a backup
+	Size     int64 // sum of the file sizes according to the backup
 	Files    int
-	Err      error // Einspielen gescheitert (in dieser Sandbox wird nicht gesichert)
+	Err      error // restore failed (nothing is backed up in this sandbox)
 }
 
 func (m *Manager) workspaceRestoreFailed(chatID string, l *live, err error) {
 	m.mu.Lock()
 	l.wsNoSave = true
 	m.mu.Unlock()
-	slog.Error("Arbeitsbereich nicht eingespielt", "chat", chatID, "fehler", err)
-	m.publish(chatID, Event{Kind: "error", Data: map[string]string{"message": "Arbeitsbereich konnte nicht wiederhergestellt werden (" + err.Error() +
-		"). In dieser Sandbox wird nicht gesichert, damit die letzte Sicherung erhalten bleibt."}})
+	slog.Error("workspace not restored", "chat", chatID, "err", err)
+	m.publish(chatID, Event{Kind: "error", Data: map[string]string{"message": "Workspace could not be restored (" + err.Error() +
+		"). Nothing is backed up in this sandbox, so that the last backup is kept."}})
 }
 
-// workspaceContext: Ein Abbruch der Anfrage (Nutzer schließt die Verbindung)
-// bricht die Sicherung nicht ab, eine Frist (Herunterfahren) schon.
+// workspaceContext: cancelling the request (the user closes the connection)
+// does not abort the backup, a deadline (shutdown) does.
 func workspaceContext(ctx context.Context) (context.Context, context.CancelFunc) {
 	base := context.WithoutCancel(ctx)
 	if dl, ok := ctx.Deadline(); ok && time.Until(dl) < workspaceTimeout {
@@ -465,9 +465,9 @@ func workspaceContext(ctx context.Context) (context.Context, context.CancelFunc)
 	return context.WithTimeout(base, workspaceTimeout)
 }
 
-// formatMB schreibt Bytes als „1,2 MB“ (Dezimalkomma, 1 MB = 2^20 Bytes wie die Grenze).
+// formatMB writes bytes as "1.2 MB" (1 MB = 2^20 bytes like the limit).
 func formatMB(n int64) string {
-	return strings.Replace(strconv.FormatFloat(float64(n)/(1<<20), 'f', 1, 64), ".", ",", 1) + " MB"
+	return strconv.FormatFloat(float64(n)/(1<<20), 'f', 1, 64) + " MB"
 }
 
 func truncate(s string, n int) string {

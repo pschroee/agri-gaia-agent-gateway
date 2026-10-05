@@ -13,14 +13,14 @@ func TestQueueLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a, err := s.Enqueue(ctx, c.ID, "eins", nil)
+	a, err := s.Enqueue(ctx, c.ID, "one", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, _ := s.Enqueue(ctx, c.ID, "zwei", []string{"daten.csv"})
-	x, _ := s.Enqueue(ctx, c.ID, "drei", nil)
-	if a.ID == "" || len(a.Attachments) != 0 || b.Attachments[0] != "daten.csv" {
-		t.Fatalf("Einträge: %+v %+v", a, b)
+	b, _ := s.Enqueue(ctx, c.ID, "two", []string{"data.csv"})
+	x, _ := s.Enqueue(ctx, c.ID, "three", nil)
+	if a.ID == "" || len(a.Attachments) != 0 || b.Attachments[0] != "data.csv" {
+		t.Fatalf("entries: %+v %+v", a, b)
 	}
 	if got, _ := s.GetChat(ctx, c.ID); got.Queued != 3 {
 		t.Fatalf("Queued = %d", got.Queued)
@@ -29,33 +29,33 @@ func TestQueueLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := s.RemoveQueued(ctx, c.ID, x.ID); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("zweites Entfernen: %v", err)
+		t.Fatalf("second removal: %v", err)
 	}
 	list, _ := s.ListQueue(ctx, c.ID)
-	if len(list) != 2 || list[0].Text != "eins" || list[1].Text != "zwei" {
-		t.Fatalf("Liste: %+v", list)
+	if len(list) != 2 || list[0].Text != "one" || list[1].Text != "two" {
+		t.Fatalf("list: %+v", list)
 	}
 	claimed, err := s.ClaimQueue(ctx, c.ID)
 	if err != nil || len(claimed) != 2 || claimed[0].ID != a.ID || claimed[1].ID != b.ID {
-		t.Fatalf("Übergabe: %+v %v", claimed, err)
+		t.Fatalf("delivery: %+v %v", claimed, err)
 	}
 	if list, _ := s.ListQueue(ctx, c.ID); len(list) != 0 {
-		t.Fatalf("nach Übergabe offen: %+v", list)
+		t.Fatalf("open after delivery: %+v", list)
 	}
 	if err := s.RemoveQueued(ctx, c.ID, a.ID); !errors.Is(err, ErrDelivered) {
-		t.Fatalf("Entfernen nach Übergabe: %v", err)
+		t.Fatalf("removal after delivery: %v", err)
 	}
 	if again, _ := s.ClaimQueue(ctx, c.ID); len(again) != 0 {
-		t.Fatalf("doppelt übergeben: %+v", again)
+		t.Fatalf("delivered twice: %+v", again)
 	}
-	// Zurücknehmen (pi hat nicht angenommen): wieder offen, Reihenfolge bleibt.
+	// Withdraw (pi did not accept): open again, order stays.
 	if err := s.UnclaimQueue(ctx, []string{a.ID, b.ID}); err != nil {
 		t.Fatal(err)
 	}
 	if list, _ := s.ListQueue(ctx, c.ID); len(list) != 2 || list[0].ID != a.ID {
-		t.Fatalf("nach Zurücknehmen: %+v", list)
+		t.Fatalf("after withdrawing: %+v", list)
 	}
 	if got, _ := s.GetChat(ctx, c.ID); got.Queued != 2 {
-		t.Fatalf("Queued nach Zurücknehmen = %d", got.Queued)
+		t.Fatalf("Queued after withdrawing = %d", got.Queued)
 	}
 }

@@ -9,35 +9,35 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// Durchgänge (Review 3, H1/H2): Jeder Auftrag an pi ist ein Durchgang mit Auslöser und Herkunft.
-// Für die Evaluation belegt das, was der Nutzer beauftragt hat und was der Orchestrator von sich aus
-// übergab; der Manager zählt daran die Weckrufe je Stunde und die Durchgänge ohne Nutzer in Folge.
+// Turns (Review 3, H1/H2): every request to pi is a turn with a trigger and an origin.
+// For the evaluation this proves what the user asked for and what the orchestrator delivered on its
+// own; the manager uses it to count wake-ups per hour and consecutive turns without the user.
 
-// Auslöser eines Durchgangs.
+// Trigger of a turn.
 const (
-	TriggerUser  = "user"  // der Nutzer hat gesendet (Nachricht, „Jetzt senden“)
-	TriggerQueue = "queue" // beim Laufende übergeben, mindestens eine Nachricht des Nutzers darunter
-	TriggerWake  = "wake"  // nur Meldungen des Orchestrators, ohne Zutun des Nutzers (Weckruf)
+	TriggerUser  = "user"  // the user sent something (message, "Send now")
+	TriggerQueue = "queue" // delivered at the end of a run, with at least one user message among it
+	TriggerWake  = "wake"  // only orchestrator notes, without the user's involvement (wake-up)
 )
 
-// Herkunft eines Auftrags an pi.
+// Origin of a request to pi.
 const (
-	OriginUser   = "user"   // nur Text des Nutzers
-	OriginSystem = "system" // nur Meldungen des Orchestrators
-	OriginMixed  = "mixed"  // beides
+	OriginUser   = "user"   // only text from the user
+	OriginSystem = "system" // only orchestrator notes
+	OriginMixed  = "mixed"  // both
 )
 
-// Source ist ein Teil eines Auftrags, in Reihenfolge.
+// Source is a part of a request, in order.
 type Source struct {
-	Kind    string   `json:"kind"`               // QueueUser oder QueueSystem
-	Type    string   `json:"type,omitempty"`     // bei system: NoteBackground, NoteSandbox, NoteLanguage
-	Refs    []string `json:"refs,omitempty"`     // bei system: betroffene Aufgaben
-	QueueID string   `json:"queue_id,omitempty"` // Eintrag der Warteschlange, falls eingereiht
-	// Marker: Marke des Zauns um die Daten aus der Sandbox (nur system, wenn es Daten gibt).
+	Kind    string   `json:"kind"`               // QueueUser or QueueSystem
+	Type    string   `json:"type,omitempty"`     // for system: NoteBackground, NoteSandbox, NoteLanguage
+	Refs    []string `json:"refs,omitempty"`     // for system: affected tasks
+	QueueID string   `json:"queue_id,omitempty"` // queue entry, if enqueued
+	// Marker: marker of the fence around the data from the sandbox (only system, if there is data).
 	Marker string `json:"marker,omitempty"`
 }
 
-// Turn ist ein Durchgang.
+// Turn is a turn.
 type Turn struct {
 	ID        int64     `json:"id"`
 	ChatID    string    `json:"chat_id"`
@@ -48,7 +48,7 @@ type Turn struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
-// CreateTurn legt einen Durchgang an (vor dem Auftrag an pi; scheitert er, DeleteTurn).
+// CreateTurn creates a turn (before the request to pi; if that fails, DeleteTurn).
 func (s *Store) CreateTurn(ctx context.Context, chatID, trigger, origin string, sources []Source, queueIDs []string) (int64, error) {
 	if sources == nil {
 		sources = []Source{}
@@ -64,14 +64,14 @@ func (s *Store) CreateTurn(ctx context.Context, chatID, trigger, origin string, 
 	return id, err
 }
 
-// DeleteTurn nimmt einen Durchgang zurück, dessen Auftrag pi nicht angenommen hat.
+// DeleteTurn withdraws a turn whose request pi did not accept.
 func (s *Store) DeleteTurn(ctx context.Context, id int64) error {
 	_, err := s.pool.Exec(ctx, `DELETE FROM chat_turns WHERE id=$1`, id)
 	return err
 }
 
-// FirstTurnLanguage liefert die bevorzugte Sprache des Chats, solange er noch keinen Durchgang hat;
-// sonst (und ohne Angabe) "".
+// FirstTurnLanguage returns the chat's preferred language as long as it has no turn yet;
+// otherwise (and if not given) "".
 func (s *Store) FirstTurnLanguage(ctx context.Context, chatID string) (string, error) {
 	if !isUUID(chatID) {
 		return "", nil
@@ -84,7 +84,7 @@ func (s *Store) FirstTurnLanguage(ctx context.Context, chatID string) (string, e
 	return lang, err
 }
 
-// Turns liefert die Durchgänge eines Chats in Reihenfolge.
+// Turns returns a chat's turns in order.
 func (s *Store) Turns(ctx context.Context, chatID string) ([]Turn, error) {
 	out := []Turn{}
 	if !isUUID(chatID) {
@@ -108,14 +108,14 @@ func (s *Store) Turns(ctx context.Context, chatID string) ([]Turn, error) {
 	return out, rows.Err()
 }
 
-// WakesSince zählt die Weckrufe (Durchgänge ohne Zutun des Nutzers) eines Chats seit since.
+// WakesSince counts a chat's wake-ups (turns without the user's involvement) since since.
 func (s *Store) WakesSince(ctx context.Context, chatID string, since time.Time) (int, error) {
 	var n int
 	err := s.pool.QueryRow(ctx, `SELECT count(*) FROM chat_turns WHERE chat_id=$1 AND trigger=$2 AND created_at >= $3`, chatID, TriggerWake, since).Scan(&n)
 	return n, err
 }
 
-// AutoTurnsInRow zählt die Weckrufe seit dem letzten Durchgang, an dem der Nutzer beteiligt war.
+// AutoTurnsInRow counts the wake-ups since the last turn the user was involved in.
 func (s *Store) AutoTurnsInRow(ctx context.Context, chatID string) (int, error) {
 	var n int
 	err := s.pool.QueryRow(ctx, `

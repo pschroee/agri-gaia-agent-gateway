@@ -1,5 +1,5 @@
 {
-  "_hinweis": "Modellkatalog des Orchestrators. Schlüssel stehen nie hier, sondern in .env unter api_key_env. pi_builtin: pi kennt das Modell selbst (Preise, compat); es wird nur auf den Proxy umgeleitet. Eigene pricing-Angaben (USD je 1 Mio. Tokens) haben Vorrang vor pis Register. tariff: Spitzenzeiten in UTC; außerhalb gilt offpeak_factor.",
+  "_hinweis": "Model catalogue of the orchestrator. Keys are never stored here but in .env under api_key_env. pi_builtin: pi knows the model itself (prices, compat); it is only redirected to the proxy. Own pricing entries (USD per 1M tokens) take precedence over pi's registry. tariff: peak windows in UTC; outside them offpeak_factor applies.",
   "default": "deepseek/deepseek-flash",
   "providers": [
     {
@@ -22,7 +22,7 @@
           }
         ],
         "offpeak_factor": 0.5,
-        "note": "DeepSeek: außerhalb der Spitzenzeiten halber Preis. Chinesische Feiertage (dort ebenfalls Nebentarif) werden als Spitzenzeit gerechnet; die Kosten sind also eine obere Schranke.",
+        "note": "DeepSeek: half price outside peak hours. Chinese public holidays (also off-peak there) are billed as peak time, so the costs are an upper bound.",
         "source": "https://api-docs.deepseek.com/quick_start/pricing",
         "retrieved": "2026-09-29"
       },
@@ -30,12 +30,12 @@
         {
           "id": "deepseek-flash",
           "pi_builtin": true,
-          "note": "Preise im pi-Register = Spitzentarif"
+          "note": "Prices in the pi registry = peak tariff"
         },
         {
           "id": "deepseek-v4-pro",
           "pi_builtin": true,
-          "note": "Preise im pi-Register = Spitzentarif"
+          "note": "Prices in the pi registry = peak tariff"
         }
       ]
     }

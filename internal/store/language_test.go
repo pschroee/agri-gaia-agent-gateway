@@ -5,36 +5,36 @@ import (
 	"testing"
 )
 
-// Die bevorzugte Sprache wird am Chat gespeichert und gilt für die Meldung nur bis zum ersten Durchgang.
+// The preferred language is stored on the chat and applies to the note only until the first turn.
 func TestChatLanguageAndFirstTurn(t *testing.T) {
 	s := open(t)
 	ctx := context.Background()
 	c, err := s.CreateChat(ctx, NewChat{Title: "t", Model: "m", Variant: "cli", Language: "en-US"})
 	if err != nil || c.Language != "en-US" {
-		t.Fatalf("angelegt: %+v %v", c, err)
+		t.Fatalf("created: %+v %v", c, err)
 	}
 	if got, _ := s.GetChat(ctx, c.ID); got.Language != "en-US" {
-		t.Fatalf("gelesen: %q", got.Language)
+		t.Fatalf("read: %q", got.Language)
 	}
 	if lang, err := s.FirstTurnLanguage(ctx, c.ID); err != nil || lang != "en-US" {
-		t.Fatalf("vor dem ersten Durchgang: %q %v", lang, err)
+		t.Fatalf("before the first turn: %q %v", lang, err)
 	}
 	tid, _ := s.CreateTurn(ctx, c.ID, TriggerUser, OriginMixed, nil, nil)
 	if lang, err := s.FirstTurnLanguage(ctx, c.ID); err != nil || lang != "" {
-		t.Fatalf("nach dem ersten Durchgang: %q %v", lang, err)
+		t.Fatalf("after the first turn: %q %v", lang, err)
 	}
-	_ = s.DeleteTurn(ctx, tid) // zurückgenommener Durchgang: wieder der erste
+	_ = s.DeleteTurn(ctx, tid) // withdrawn turn: the first one again
 	if lang, _ := s.FirstTurnLanguage(ctx, c.ID); lang != "en-US" {
-		t.Fatalf("nach dem Zurücknehmen: %q", lang)
+		t.Fatalf("after withdrawing: %q", lang)
 	}
 	plain, _ := s.CreateChat(ctx, NewChat{Title: "t", Model: "m", Variant: "cli"})
 	if plain.Language != "" {
-		t.Fatalf("ohne Angabe: %q", plain.Language)
+		t.Fatalf("not given: %q", plain.Language)
 	}
 	if lang, err := s.FirstTurnLanguage(ctx, plain.ID); err != nil || lang != "" {
-		t.Fatalf("ohne Angabe: %q %v", lang, err)
+		t.Fatalf("not given: %q %v", lang, err)
 	}
-	if lang, err := s.FirstTurnLanguage(ctx, "kein-chat"); err != nil || lang != "" {
-		t.Fatalf("unbekannter Chat: %q %v", lang, err)
+	if lang, err := s.FirstTurnLanguage(ctx, "no-chat"); err != nil || lang != "" {
+		t.Fatalf("unknown chat: %q %v", lang, err)
 	}
 }

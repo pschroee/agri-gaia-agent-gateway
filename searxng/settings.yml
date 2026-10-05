@@ -1,6 +1,6 @@
-# SearXNG des PoC: nur für den Web-Proxy des Orchestrators (web_search aus pi-searxng-suite).
-# Kein Port am Host; erreichbar nur im Netz agwpoc_search. Den Geheimschlüssel setzt
-# SEARXNG_SECRET aus poc/.env (legt ./dev.sh an).
+# SearXNG of the PoC: only for the orchestrator's web proxy (web_search from pi-searxng-suite).
+# No port on the host; reachable only in the network agwpoc_search. The secret key is set by
+# SEARXNG_SECRET from .env (created by ./dev.sh).
 use_default_settings: true
 
 general:
@@ -8,7 +8,7 @@ general:
   enable_metrics: false
 
 server:
-  secret_key: "wird-durch-SEARXNG_SECRET-ersetzt"
+  secret_key: "replaced-by-SEARXNG_SECRET"
   limiter: false
   public_instance: false
   image_proxy: false

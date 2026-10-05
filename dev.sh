@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
-# Entwicklungsskript für den PoC (Stufe 1). Aufruf aus beliebigem Verzeichnis.
+# Development script for the PoC (stage 1). Can be called from any directory.
 #
-#   ./dev.sh init     .env anlegen (falls fehlt), Abbilder bauen, Web-UI-Abhängigkeiten holen
-#   ./dev.sh start    Abbild agw-basis bauen und Orchestrator, Postgres, RustFS und die Paket-
-#                     Zwischenspeicher (npm-cache, pip-cache) starten, mit
-#                     Hot Reload: Web-UI über Vite auf :18484, Orchestrator baut sich bei
-#                     Go-Änderungen im Container neu. ./dev.sh start --prod baut das feste Abbild
-#   ./dev.sh stop     alles anhalten und Sandboxen abbauen (Daten bleiben erhalten)
-#   ./dev.sh status   Dienste, Sandboxen und Pool anzeigen
-#   ./dev.sh logs     Protokoll des Orchestrators verfolgen
-#   ./dev.sh test     schnelle Tests (Go mit Postgres, ohne Docker; Web), rund 30 s
-#   ./dev.sh test --full   zusätzlich Docker-Integration, S3 und Platztests, rund 5 min (vor dem Push)
-#   ./dev.sh e2e      Ende-zu-Ende-Tests mit echtem Modell (kostet Cent-Beträge); startet den
-#                     Orchestrator dafür mit niedriger Kompaktierungsschwelle und danach wieder normal
-#   ./dev.sh cli ...  CLI agw gegen den laufenden Orchestrator (z. B. ./dev.sh cli pool)
-#   ./dev.sh reset    ALLES löschen: Container, Sandboxen, Volumes (Chats, Artefakte), Netze, Abbilder
+#   ./dev.sh init     create .env (if missing), build images, fetch web UI dependencies
+#   ./dev.sh start    build the agw-basis image and start the orchestrator, Postgres, RustFS and the
+#                     package caches (npm-cache, pip-cache), with
+#                     hot reload: web UI via Vite on :18484, the orchestrator rebuilds itself in the
+#                     container on Go changes. ./dev.sh start --prod builds the fixed image
+#   ./dev.sh stop     stop everything and remove sandboxes (data is kept)
+#   ./dev.sh status   show services, sandboxes and pool
+#   ./dev.sh logs     follow the orchestrator log
+#   ./dev.sh test     fast tests (Go with Postgres, without Docker; web), about 30 s
+#   ./dev.sh test --full   additionally Docker integration, S3 and slot tests, about 5 min (before pushing)
+#   ./dev.sh e2e      end-to-end tests with a real model (costs a few cents); starts the
+#                     orchestrator with a low compaction threshold for it and normally again afterwards
+#   ./dev.sh cli ...  CLI agw against the running orchestrator (e.g. ./dev.sh cli pool)
+#   ./dev.sh reset    delete EVERYTHING: containers, sandboxes, volumes (chats, artifacts), networks, images
 set -euo pipefail
 
 cd "$(dirname "$0")"
@@ -29,10 +29,10 @@ HTTP_PORT=${AGW_HTTP_PORT:-18480}
 info() { printf '\033[1;32m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m!!\033[0m %s\n' "$*" >&2; }
 
-need() { command -v "$1" >/dev/null || { warn "$1 fehlt"; exit 1; }; }
+need() { command -v "$1" >/dev/null || { warn "$1 is missing"; exit 1; }; }
 
-# Betriebsart des letzten Starts: hot (Standard) oder prod. Alle Compose-Aufrufe
-# nutzen dieselben Dateien, sonst ersetzte etwa ./dev.sh e2e den Hot-Reload-Container.
+# Mode of the last start: hot (default) or prod. All Compose calls use the
+# same files, otherwise e.g. ./dev.sh e2e would replace the hot-reload container.
 mode() { cat "$DEVDIR/mode" 2>/dev/null || echo prod; }
 dc() {
   if [[ "$(mode)" == hot ]]; then docker compose -f compose.yaml -f compose.hot.yaml "$@"
@@ -41,10 +41,10 @@ dc() {
 build_flag() { [[ "$(mode)" == hot ]] || echo --build; }
 
 ensure_dist() {
-  # web/embed.go bettet web/dist ein; ohne gebaute UI lässt sich der Orchestrator nicht bauen.
+  # web/embed.go embeds web/dist; without a built UI the orchestrator cannot be built.
   [[ -f web/dist/index.html ]] && return
   [[ -d web/node_modules ]] || (cd web && npm install --no-audit --no-fund >/dev/null)
-  info "baue Web-UI einmalig (für die eingebettete Fassung)"
+  info "building the web UI once (for the embedded version)"
   (cd web && npm run build >/dev/null)
 }
 
@@ -54,16 +54,16 @@ wait_api() {
     curl -fsS -o /dev/null "http://127.0.0.1:$HTTP_PORT/" 2>/dev/null && return 0
     sleep 1
   done
-  warn "Orchestrator antwortet nicht, siehe ./dev.sh logs"; return 1
+  warn "orchestrator does not respond, see ./dev.sh logs"; return 1
 }
 
 vite_running() { [[ -f "$DEVDIR/vite.pid" ]] && kill -0 "$(cat "$DEVDIR/vite.pid")" 2>/dev/null; }
 
 start_vite() {
-  vite_running && { info "Vite läuft bereits"; return; }
+  vite_running && { info "Vite is already running"; return; }
   [[ -d web/node_modules ]] || (cd web && npm install --no-audit --no-fund >/dev/null)
-  info "starte Vite (Hot Reload der Web-UI) auf 127.0.0.1:$VITE_PORT"
-  # set -m: eigene Prozessgruppe, damit stop auch die Kindprozesse von Vite beendet
+  info "starting Vite (hot reload of the web UI) on 127.0.0.1:$VITE_PORT"
+  # set -m: own process group, so that stop also ends Vite's child processes
   set -m
   (cd web && exec ./node_modules/.bin/vite --host 127.0.0.1 --port "$VITE_PORT" --strictPort) \
     >"$DEVDIR/vite.log" 2>&1 </dev/null &
@@ -74,45 +74,45 @@ start_vite() {
     curl -fsS -o /dev/null "http://127.0.0.1:$VITE_PORT/" 2>/dev/null && return 0
     sleep 0.5
   done
-  warn "Vite startet nicht, siehe poc/$DEVDIR/vite.log"
+  warn "Vite does not start, see $DEVDIR/vite.log"
 }
 
 stop_vite() {
   vite_running || { rm -f "$DEVDIR/vite.pid"; return 0; }
-  info "halte Vite an"
+  info "stopping Vite"
   kill -TERM -- "-$(cat "$DEVDIR/vite.pid")" 2>/dev/null || kill -TERM "$(cat "$DEVDIR/vite.pid")" 2>/dev/null || true
   rm -f "$DEVDIR/vite.pid"
 }
 
 ensure_env() {
   if [[ ! -f .env ]]; then
-    info ".env fehlt, lege sie aus .env.example mit Zufallswerten an"
+    info ".env is missing, creating it from .env.example with random values"
     cp .env.example .env
     sed -i.bak \
       -e "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=$(openssl rand -hex 16)/" \
       -e "s/^RUSTFS_ACCESS_KEY=.*/RUSTFS_ACCESS_KEY=agw$(openssl rand -hex 8)/" \
       -e "s/^RUSTFS_SECRET_KEY=.*/RUSTFS_SECRET_KEY=$(openssl rand -hex 20)/" .env
     rm -f .env.bak
-    warn "DEEPSEEK_API_KEY in poc/.env eintragen"
+    warn "enter DEEPSEEK_API_KEY in .env"
   fi
   if ! grep -q '^AGW_API_TOKEN=.\{32,\}' .env; then
-    info "lege AGW_API_TOKEN in .env an"
+    info "creating AGW_API_TOKEN in .env"
     sed -i.bak '/^AGW_API_TOKEN=/d' .env && rm -f .env.bak
     echo "AGW_API_TOKEN=$(openssl rand -hex 24)" >> .env
   fi
   if ! grep -q '^SEARXNG_SECRET=.\{32,\}' .env; then
-    info "lege SEARXNG_SECRET in .env an"
+    info "creating SEARXNG_SECRET in .env"
     sed -i.bak '/^SEARXNG_SECRET=/d' .env && rm -f .env.bak
     echo "SEARXNG_SECRET=$(openssl rand -hex 24)" >> .env
   fi
   if grep -q '^DEEPSEEK_API_KEY=sk-\.\.\.$' .env; then
-    warn "DEEPSEEK_API_KEY in poc/.env ist noch der Platzhalter"
+    warn "DEEPSEEK_API_KEY in .env is still the placeholder"
   fi
 }
 
 build_sandbox_image() {
-  # E9: zwei Abbilder aus einem Dockerfile, Ausführungs-Sandbox und Container von pi.
-  info "baue Sandbox-Abbilder $IMAGE (Ausführung) und $PI_IMAGE (pi)"
+  # E9: two images from one Dockerfile, execution sandbox and pi's container.
+  info "building sandbox images $IMAGE (execution) and $PI_IMAGE (pi)"
   docker build -q -f images/agw-basis/Dockerfile --target exec -t "$IMAGE" . >/dev/null
   docker build -q -f images/agw-basis/Dockerfile --target pi -t "$PI_IMAGE" . >/dev/null
 }
@@ -121,7 +121,7 @@ remove_sandboxes() {
   local ids nets
   ids=$(docker ps -aq --filter "label=$LABEL")
   if [[ -n "$ids" ]]; then
-    info "entferne $(wc -w <<<"$ids" | tr -d ' ') Sandbox(en)"
+    info "removing $(wc -w <<<"$ids" | tr -d ' ') sandbox(es)"
     docker rm -f $ids >/dev/null
   fi
   nets=$(docker network ls -q --filter "label=agwpoc.slotnet")
@@ -136,16 +136,16 @@ remove_sandboxes() {
 cmd_init() {
   need docker; need go; need npm
   ensure_env
-  info "Go-Abhängigkeiten"
+  info "Go dependencies"
   go mod download
   if [[ -f web/package.json ]]; then
-    info "Web-UI-Abhängigkeiten"
+    info "web UI dependencies"
     (cd web && npm install --no-audit --no-fund)
   fi
   build_sandbox_image
-  info "baue Orchestrator"
+  info "building orchestrator"
   docker compose build -q orchestrator
-  info "fertig. Starten mit ./dev.sh start"
+  info "done. Start with ./dev.sh start"
 }
 
 cmd_start() {
@@ -160,26 +160,26 @@ cmd_start() {
   local token; token=$(sed -n 's/^AGW_API_TOKEN=//p' .env)
   if [[ "$m" == hot ]]; then
     ensure_dist
-    info "starte Orchestrator (Hot Reload aus dem Quelltext), Postgres, RustFS und Paket-Zwischenspeicher"
+    info "starting orchestrator (hot reload from source), Postgres, RustFS and package caches"
     dc up -d --wait --remove-orphans
-    info "warte auf den ersten Bau des Orchestrators (beim ersten Mal rund eine Minute)"
+    info "waiting for the first orchestrator build (about a minute the first time)"
     wait_api
     start_vite
-    info "Web-UI mit Hot Reload (einmal anmelden): http://127.0.0.1:$VITE_PORT/login?token=${token}"
-    info "eingebettete Fassung ohne Hot Reload: http://127.0.0.1:$HTTP_PORT (Stand von web/dist)"
-    info "Go-Änderungen baut der Container selbst neu, verfolgen mit ./dev.sh logs"
+    info "web UI with hot reload (log in once): http://127.0.0.1:$VITE_PORT/login?token=${token}"
+    info "embedded version without hot reload: http://127.0.0.1:$HTTP_PORT (state of web/dist)"
+    info "the container rebuilds Go changes itself, follow with ./dev.sh logs"
   else
-    info "starte Orchestrator (festes Abbild), Postgres, RustFS und Paket-Zwischenspeicher"
+    info "starting orchestrator (fixed image), Postgres, RustFS and package caches"
     dc up -d --build --wait --remove-orphans
     wait_api
-    info "Web-UI (einmal anmelden): http://127.0.0.1:$HTTP_PORT/login?token=${token}"
+    info "web UI (log in once): http://127.0.0.1:$HTTP_PORT/login?token=${token}"
   fi
-  info "RustFS-Konsole: http://127.0.0.1:${AGW_S3_CONSOLE_PORT:-18483}"
+  info "RustFS console: http://127.0.0.1:${AGW_S3_CONSOLE_PORT:-18483}"
 }
 
 cmd_stop() {
   stop_vite
-  info "halte Dienste an"
+  info "stopping services"
   dc stop
   remove_sandboxes
 }
@@ -188,11 +188,11 @@ cmd_status() {
   dc ps
   echo
   if [[ "$(mode)" == hot ]]; then
-    if vite_running; then info "Hot Reload an, Vite: http://127.0.0.1:$VITE_PORT"
-    else warn "Hot Reload an, Vite läuft aber nicht (./dev.sh start)"; fi
+    if vite_running; then info "hot reload on, Vite: http://127.0.0.1:$VITE_PORT"
+    else warn "hot reload on, but Vite is not running (./dev.sh start)"; fi
     echo
   fi
-  info "Sandboxen"
+  info "sandboxes"
   docker ps -a --filter "label=$LABEL" --format 'table {{.Names}}\t{{.Status}}\t{{.Label "agwpoc.variant"}}\t{{.Networks}}'
   echo
   if curl -fsS "http://127.0.0.1:${AGW_HTTP_PORT:-18480}/" >/dev/null 2>&1; then
@@ -202,15 +202,15 @@ cmd_status() {
 
 cmd_logs() { dc logs -f --tail=200 orchestrator; }
 
-# net_hygiene: entfernt leere Testnetze abgebrochener Läufe und warnt, wenn ein Docker-Netz die Adresse
-# der Plattform-API überdeckt. Docker vergibt freie /16 der Reihe nach aus 172.17–172.31; die API der
-# Instanz liegt im VPN bei 172.25.198.41. Ein Netz in 172.25.0.0/16 leitet sie in der Docker-VM ins Leere
-# (am 05.10.2026 zweimal passiert). Die Netze des PoC und der Tests liegen deshalb fest in 10.231.x.
+# net_hygiene: removes empty test networks of aborted runs and warns when a Docker network covers the
+# address of the platform API. Docker assigns free /16s in order from 172.17–172.31; the instance's API
+# is at 172.25.198.41 in the VPN. A network in 172.25.0.0/16 routes it into nowhere inside the Docker VM
+# (happened twice on 2026-10-05). The networks of the PoC and the tests are therefore fixed in 10.231.x.
 net_hygiene() {
   local n
   for n in $(docker network ls --format '{{.Name}}' --filter name=agwpoc_test_); do
     if [[ "$(docker network inspect "$n" --format '{{len .Containers}}' 2>/dev/null)" == 0 ]]; then
-      docker network rm "$n" >/dev/null 2>&1 && info "leeres Testnetz $n entfernt"
+      docker network rm "$n" >/dev/null 2>&1 && info "removed empty test network $n"
     fi
   done
   local url=${AGW_PLATFORM_API_URL:-}
@@ -228,19 +228,19 @@ for line in sys.stdin:
         if "/" in s and ":" not in s and ip in ipaddress.ip_network(s, strict=False):
             print(parts[0], s)' "$ip" |
     while read -r n sub; do
-      warn "Docker-Netz $n ($sub) überdeckt die Plattform-API $host ($ip); aus Containern ist sie dann unerreichbar. Entfernen: docker network rm $n"
+      warn "Docker network $n ($sub) covers the platform API $host ($ip); it is then unreachable from containers. Remove: docker network rm $n"
     done
 }
 
-# stage <name> <befehl…>: eine Teststufe mit Dauer; die Ausgabe kommt zeilenweise (grep --line-buffered),
-# sonst sähe ein langer Lauf bis zum Ende wie ein Hänger aus.
+# stage <name> <command…>: one test stage with its duration; output comes line by line (grep --line-buffered),
+# otherwise a long run would look like a hang until the end.
 stage() {
   local name=$1; shift
   local t0=$SECONDS
   info "$name"
   "$@"
   local rc=$?
-  if [[ $rc -ne 0 ]]; then warn "$name fehlgeschlagen ($((SECONDS - t0)) s)"; return $rc; fi
+  if [[ $rc -ne 0 ]]; then warn "$name failed ($((SECONDS - t0)) s)"; return $rc; fi
   info "$name: ok ($((SECONDS - t0)) s)"
 }
 
@@ -250,7 +250,7 @@ go_unit() {
 }
 
 go_docker() {
-  # Nur die Pakete mit Docker-Tests, damit sie nicht mit allen übrigen um Docker konkurrieren.
+  # Only the packages with Docker tests, so they do not compete with all the others for Docker.
   AGW_DOCKER_TESTS=1 \
   AGW_TEST_DATABASE_URL="postgres://agwpoc:${POSTGRES_PASSWORD}@127.0.0.1:${AGW_PG_PORT:-18482}/agwpoc?sslmode=disable" \
     sh -c 'go test -count=1 ./internal/sandbox/ && go test -count=1 -run TestWorkspaceRoundTripInSandbox ./internal/chat/' 2>&1 \
@@ -264,9 +264,9 @@ go_s3() {
 }
 
 go_slots() {
-  # E9: ein ganzer Platz (pi ohne Shell, Ausführungs-Sandbox, exec-bridge.ts) mit geskriptetem
-  # Modell, dazu der Gleichlauf der Umleitung mit pis eingebauten Werkzeugen (Test-Abbild
-  # agw-parity). Im Go-Container, weil Unix-Sockets auf dem Mac nur innerhalb der Docker-VM gehen.
+  # E9: a whole slot (pi without a shell, execution sandbox, exec-bridge.ts) with a scripted
+  # model, plus the parity of the redirection with pi's built-in tools (test image
+  # agw-parity). In a Go container because Unix sockets on the Mac only work inside the Docker VM.
   docker build -q -f images/agw-basis/Dockerfile --target parity -t agwpoc/agw-parity:dev . >/dev/null || return 1
   docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v agwpoc_sockets:/run/agw \
     -v "$PWD":/src:ro -v agwpoc_gomod:/go/pkg/mod -v agwpoc_gocache:/root/.cache/go-build -w /src \
@@ -285,28 +285,28 @@ cmd_test() {
   set -a; . ./.env; set +a
   local t0=$SECONDS
   if $full && [[ "$(mode)" == hot ]]; then
-    warn "Hot Reload läuft: Während der Docker-Tests keine Go-Datei speichern, sonst baut der Orchestrator neu und stört die Tests."
+    warn "hot reload is running: do not save any Go file during the Docker tests, otherwise the orchestrator rebuilds and disturbs the tests."
   fi
   net_hygiene
   dc up -d --wait postgres rustfs >/dev/null
   ensure_dist
-  stage "Go-Tests (Unit, Postgres, -race; ohne Docker)" go_unit || exit 1
-  if [[ -f web/package.json ]]; then stage "Web-Tests" web_unit || exit 1; fi
+  stage "Go tests (unit, Postgres, -race; without Docker)" go_unit || exit 1
+  if [[ -f web/package.json ]]; then stage "web tests" web_unit || exit 1; fi
   if $full; then
     build_sandbox_image
-    stage "Docker-Integration (Sandbox, Arbeitsbereich)" go_docker || exit 1
-    stage "S3-Integration (im Docker-Netz)" go_s3 || exit 1
-    stage "Platztests mit geskriptetem Modell (E9, Hintergrund, Subagenten, Gleichlauf)" go_slots || exit 1
+    stage "Docker integration (sandbox, workspace)" go_docker || exit 1
+    stage "S3 integration (in the Docker network)" go_s3 || exit 1
+    stage "slot tests with a scripted model (E9, background, subagents, parity)" go_slots || exit 1
   else
-    info "Docker-, S3- und Platztests übersprungen; vor dem Push: ./dev.sh test --full"
+    info "Docker, S3 and slot tests skipped; before pushing: ./dev.sh test --full"
   fi
-  info "alle Tests grün ($((SECONDS - t0)) s)"
+  info "all tests green ($((SECONDS - t0)) s)"
 }
 
 cmd_e2e() {
   ensure_env
   build_sandbox_image
-  info "starte Orchestrator mit niedriger Kompaktierungsschwelle (greift ab rund 10.000 Tokens)"
+  info "starting orchestrator with a low compaction threshold (kicks in at about 10,000 tokens)"
   ensure_dist
   AGW_COMPACT_RESERVE_TOKENS=990000 AGW_COMPACT_KEEP_RECENT_TOKENS=2000 AGW_POOL_SIZE_CLI=2 AGW_POOL_SIZE_MCP=1 \
     dc up -d $(build_flag) --wait >/dev/null
@@ -316,10 +316,10 @@ cmd_e2e() {
   AGW_E2E=1 go test -count=1 -v -timeout 45m ./e2e/ "$@" || rc=$?
   dc logs --no-color orchestrator > e2e/letzter-lauf.log 2>&1 || true
   if grep -q -E "panic|fatal error" e2e/letzter-lauf.log; then
-    warn "Orchestrator ist während der Tests abgestürzt, siehe e2e/letzter-lauf.log"; rc=1
+    warn "orchestrator crashed during the tests, see e2e/letzter-lauf.log"; rc=1
   fi
-  info "Protokoll des Orchestrators: e2e/letzter-lauf.log"
-  info "starte Orchestrator wieder mit normalen Einstellungen"
+  info "orchestrator log: e2e/letzter-lauf.log"
+  info "restarting orchestrator with normal settings"
   dc up -d --wait >/dev/null
   wait_api || true
   return $rc
@@ -329,21 +329,21 @@ cmd_cli() { set -a; . ./.env; set +a; go run ./cmd/agw "$@"; }
 
 cmd_reset() {
   if [[ "${1:-}" != "-y" ]]; then
-    read -r -p "Wirklich ALLES löschen (Chats, Artefakte, Paket-Zwischenspeicher, Volumes, Netze, Abbilder)? [j/N] " a
-    [[ "$a" == "j" || "$a" == "J" ]] || { info "abgebrochen"; exit 0; }
+    read -r -p "Really delete EVERYTHING (chats, artifacts, package caches, volumes, networks, images)? [y/N] " a
+    [[ "$a" == "y" || "$a" == "Y" || "$a" == "j" || "$a" == "J" ]] || { info "aborted"; exit 0; }
   fi
   stop_vite
   remove_sandboxes
-  info "entferne Dienste, Volumes und Netze"
+  info "removing services, volumes and networks"
   docker compose -f compose.yaml -f compose.hot.yaml down -v --remove-orphans --rmi local
   for v in agwpoc_pg agwpoc_s3 agwpoc_sockets agwpoc_gomod agwpoc_gocache agwpoc_npmcache agwpoc_pipcache; do docker volume rm -f "$v" >/dev/null 2>&1 || true; done
-  # Arbeitsbereiche aus Test-Läufen (agwpoc_test_ws_*)
+  # workspaces from test runs (agwpoc_test_ws_*)
   docker volume ls -q --filter name=agwpoc_test_ | xargs -r docker volume rm -f >/dev/null 2>&1 || true
   for n in agwpoc_intern agwpoc_sandbox agwpoc_egress agwpoc_pkg agwpoc_search; do docker network rm "$n" >/dev/null 2>&1 || true; done
-  info "entferne Abbilder"
+  info "removing images"
   docker image rm -f "$IMAGE" "$PI_IMAGE" agwpoc/agw-parity:dev agwpoc/orchestrator:dev >/dev/null 2>&1 || true
   rm -rf web/dist "$DEVDIR"
-  info "zurückgesetzt. .env bleibt erhalten."
+  info "reset done. .env is kept."
 }
 
 case "${1:-}" in

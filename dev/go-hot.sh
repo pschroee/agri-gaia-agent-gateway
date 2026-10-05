@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Hot Reload für den Orchestrator (./dev.sh start). Läuft als PID 1 im
-# Container golang:1.26-bookworm mit dem Quelltext unter /src (schreibgeschützt).
-# Baut bei jeder Änderung an Go-Dateien, go.mod/go.sum oder schema.sql neu und
-# startet den Orchestrator neu. Scheitert der Bau, läuft die alte Fassung weiter.
+# Hot reload for the orchestrator (./dev.sh start). Runs as PID 1 in the
+# container golang:1.26-bookworm with the source under /src (read-only).
+# Rebuilds on every change to Go files, go.mod/go.sum or schema.sql and
+# restarts the orchestrator. If the build fails, the old version keeps running.
 set -u
 cd /src
 BIN=/tmp/orchestrator
@@ -20,14 +20,14 @@ build() {
   local t0=$SECONDS
   if go build -buildvcs=false -o "$BIN.neu" ./cmd/orchestrator; then
     mv "$BIN.neu" "$BIN"
-    log "gebaut in $((SECONDS - t0)) s"
+    log "built in $((SECONDS - t0)) s"
     return 0
   fi
-  log "Bau fehlgeschlagen, warte auf die nächste Änderung"
+  log "build failed, waiting for the next change"
   return 1
 }
 
-start() { "$BIN" & pid=$!; log "Orchestrator läuft (PID $pid)"; }
+start() { "$BIN" & pid=$!; log "orchestrator running (PID $pid)"; }
 
 stop() {
   [[ -n "$pid" ]] || return 0
@@ -48,11 +48,11 @@ start
 while true; do
   sleep 1 & wait $!
   [[ -n "$(changed)" ]] || continue
-  sleep 0.3 # mehrere gespeicherte Dateien zusammenfassen
+  sleep 0.3 # coalesce several saved files
   touch /tmp/stamp
-  log "Änderung erkannt, baue neu"
+  log "change detected, rebuilding"
   if build; then
-    log "starte Orchestrator neu (laufende Chats ruhen und lassen sich fortsetzen)"
+    log "restarting orchestrator (running chats go idle and can be resumed)"
     stop
     start
   fi

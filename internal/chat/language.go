@@ -1,12 +1,12 @@
 package chat
 
-// Sprache des Nutzers. Der Agent antwortet in der Sprache der letzten Nachricht des Nutzers (Regel im
-// Systemhinweis, internal/worker). Ist sie dort nicht erkennbar („ok“, ein Dateiname, nur Code), gilt
-// die bevorzugte Sprache laut Browser: Die Oberfläche gibt sie beim Anlegen des Chats mit (language,
-// BCP 47), und der Orchestrator sagt sie dem Agenten einmal, mit dem ersten Auftrag des Chats, als
-// Meldung in der üblichen Hülle (origin.go). In den Systemhinweis gehört sie nicht: Plätze starten,
-// bevor der Chat feststeht. Beim Fortsetzen bleibt die Sitzung von pi erhalten, die Meldung also im
-// Kontext; sie wird nicht wiederholt.
+// User language. The agent answers in the language of the user's last message (rule in the system
+// note, internal/worker). If it cannot be told from that message ("ok", a file name, only code), the
+// preferred language according to the browser applies: the UI passes it along when the chat is
+// created (language, BCP 47), and the orchestrator tells the agent once, with the chat's first
+// message, as a note in the usual envelope (origin.go). It does not belong in the system note: slots
+// start before the chat is known. On resuming, pi's session is kept, so the note stays in the
+// context; it is not repeated.
 
 import (
 	"context"
@@ -16,44 +16,44 @@ import (
 	"agw/internal/store"
 )
 
-// maxLanguageLen: längste zulässige Sprachangabe (BCP 47 sieht 35 Zeichen als Mindestpuffer vor).
+// maxLanguageLen: longest permitted language tag (BCP 47 recommends 35 characters as the minimum buffer).
 const maxLanguageLen = 35
 
-// NormalizeLanguage prüft eine Sprachangabe (BCP 47, etwa „en-US“): nur ASCII-Buchstaben, Ziffern und
-// Bindestriche, höchstens 35 Zeichen, Teile durch genau einen Bindestrich getrennt, erster Teil aus
-// Buchstaben. Leer (auch nur Leerraum) heißt „keine Angabe“.
+// NormalizeLanguage checks a language tag (BCP 47, e.g. "en-US"): only ASCII letters, digits and
+// hyphens, at most 35 characters, parts separated by exactly one hyphen, first part made of letters.
+// Empty (including whitespace only) means "not given".
 func NormalizeLanguage(s string) (string, error) {
 	s = strings.TrimSpace(s)
 	if s == "" {
 		return "", nil
 	}
 	if len(s) > maxLanguageLen {
-		return "", fmt.Errorf("%w: language darf höchstens %d Zeichen lang sein", ErrInvalid, maxLanguageLen)
+		return "", fmt.Errorf("%w: language must be at most %d characters long", ErrInvalid, maxLanguageLen)
 	}
 	for i, part := range strings.Split(s, "-") {
 		if part == "" {
-			return "", fmt.Errorf("%w: language ist keine Sprachangabe nach BCP 47", ErrInvalid)
+			return "", fmt.Errorf("%w: language is not a BCP 47 language tag", ErrInvalid)
 		}
 		for _, r := range part {
 			letter := r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z'
 			digit := r >= '0' && r <= '9'
 			if !letter && !(digit && i > 0) {
-				return "", fmt.Errorf("%w: language ist keine Sprachangabe nach BCP 47", ErrInvalid)
+				return "", fmt.Errorf("%w: language is not a BCP 47 language tag", ErrInvalid)
 			}
 		}
 	}
 	return s, nil
 }
 
-// languageNote ist die Meldung mit der bevorzugten Sprache (eine Zeile, keine Daten aus der Sandbox,
-// also ohne Zaun). Die Angabe ist geprüft (NormalizeLanguage) und kann die Zeile nicht verlassen.
+// languageNote is the note with the preferred language (one line, no data from the sandbox, hence
+// no fence). The tag has been checked (NormalizeLanguage) and cannot leave the line.
 func languageNote(lang string) systemNote {
 	return systemNote{Type: store.NoteLanguage, Refs: []string{lang},
-		Summary: "Bevorzugte Sprache des Nutzers laut Browser: " + lang +
-			". Antworte in der Sprache, in der der Nutzer schreibt; diese Angabe gilt nur, wenn das nicht erkennbar ist."}
+		Summary: "Preferred language of the user according to the browser: " + lang +
+			". Reply in the language the user writes in; this setting only applies if that cannot be recognised."}
 }
 
-// firstTurnLanguage: die Meldung zur Sprache, wenn der Chat eine Angabe hat und noch keinen Durchgang.
+// firstTurnLanguage: the language note, if the chat has a language and no turn yet.
 func (m *Manager) firstTurnLanguage(ctx context.Context, chatID string) *systemNote {
 	lang, err := m.st.FirstTurnLanguage(ctx, chatID)
 	if err != nil || lang == "" {

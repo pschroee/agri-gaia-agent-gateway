@@ -1,11 +1,10 @@
 package chat
 
-// Abgleich angeforderter und ausgeführter Werkzeugaufrufe (E9). Angefordert
-// heißt: Der LLM-Proxy hat den Aufruf mit seiner ID in der Antwort des
-// Anbieters gesehen (llm_calls.tool_calls). Ausgeführt heißt: Der
-// Orchestrator hat für diese ID eine Operation in der Ausführungs-Sandbox
-// ausgeführt (tool_executions). Beide Quellen liegen außerhalb der
-// Reichweite des Agenten.
+// Reconciliation of requested and executed tool calls (E9). Requested means:
+// the LLM proxy has seen the call with its ID in the provider's response
+// (llm_calls.tool_calls). Executed means: the orchestrator has executed an
+// operation for this ID in the execution sandbox (tool_executions). Both
+// sources lie outside the agent's reach.
 
 import (
 	"context"
@@ -20,37 +19,37 @@ import (
 )
 
 const (
-	RecConfirmed   = "confirmed"   // angefordert und ausgeführt: belegt
-	RecUnrequested = "unrequested" // ausgeführt, am Proxy aber nie angefordert
-	RecUnexecuted  = "unexecuted"  // angefordert, Werkzeug mit Ausführung, aber keine Ausführung
-	RecMismatch    = "mismatch"    // ausgeführt unter einem anderen Werkzeug als angefordert
-	RecInternal    = "internal"    // angefordert; das Werkzeug läuft nicht in der Sandbox (todo, subagent, mcp_ping …)
-	// Harmlose Ursachen für „angefordert, nicht ausgeführt“ (M1), getrennt von einer Umgehung:
-	RecAborted  = "aborted"  // die Antwort des Modells brach ab (am Proxy ohne finish_reason); pi führt nichts davon aus
-	RecRejected = "rejected" // laut Sitzung von pi abgewiesen (ungültige Argumente, Werkzeug ausgeblendet, Wächter); nicht fälschungssicher
+	RecConfirmed   = "confirmed"   // requested and executed: proven
+	RecUnrequested = "unrequested" // executed, but never requested at the proxy
+	RecUnexecuted  = "unexecuted"  // requested, a tool with execution, but no execution
+	RecMismatch    = "mismatch"    // executed under a different tool than requested
+	RecInternal    = "internal"    // requested; the tool does not run in the sandbox (todo, subagent, mcp_ping …)
+	// Harmless causes of "requested, not executed" (M1), kept apart from a bypass:
+	RecAborted  = "aborted"  // the model's response broke off (no finish_reason at the proxy); pi executes none of it
+	RecRejected = "rejected" // refused by pi according to the session (invalid arguments, tool hidden, guard); not tamper-proof
 )
 
 type ReconciledCall struct {
 	ToolCallID   string     `json:"tool_call_id"`
 	State        string     `json:"state"`
-	Tool         string     `json:"tool"` // angefordert, sonst ausgeführt
+	Tool         string     `json:"tool"` // requested, otherwise executed
 	ExecutedTool string     `json:"executed_tool,omitempty"`
 	Requested    bool       `json:"requested"`
 	Executed     bool       `json:"executed"`
-	Main         bool       `json:"main"`              // Anforderung in einer Antwort der Hauptsitzung
-	Session      string     `json:"session,omitempty"` // aus der Ausführung: "main" oder Lauf des Subagenten
+	Main         bool       `json:"main"`              // requested in a response of the main session
+	Session      string     `json:"session,omitempty"` // from the execution: "main" or the subagent's run
 	LLMCallID    int64      `json:"llm_call_id,omitempty"`
 	ResponseID   string     `json:"response_id,omitempty"`
-	Arguments    string     `json:"arguments,omitempty"` // angefordert (gekürzt)
+	Arguments    string     `json:"arguments,omitempty"` // requested (truncated)
 	RequestedAt  *time.Time `json:"requested_at,omitempty"`
 	StartedAt    *time.Time `json:"started_at,omitempty"`
 	Ops          []string   `json:"ops"`
-	// Reason: bei RecRejected die Fehlermeldung aus der Sitzung (nicht fälschungssicher).
+	// Reason: for RecRejected the error message from the session (not tamper-proof).
 	Reason       string  `json:"reason,omitempty"`
 	ExitCode     *int    `json:"exit_code,omitempty"`
 	Error        string  `json:"error,omitempty"`
 	DurationMs   int64   `json:"duration_ms"`
-	OutputSHA256 string  `json:"output_sha256,omitempty"` // der letzten Operation
+	OutputSHA256 string  `json:"output_sha256,omitempty"` // of the last operation
 	ExecutionIDs []int64 `json:"execution_ids"`
 }
 
@@ -58,7 +57,7 @@ type Reconciliation struct {
 	Calls      []ReconciledCall      `json:"calls"`
 	Summary    map[string]int        `json:"summary"`
 	Executions []store.ToolExecution `json:"executions"`
-	// ExecutedTools: Werkzeuge, deren Ausführung am Socket belegt wird (für die UI, L6).
+	// ExecutedTools: tools whose execution is proven at the socket (for the UI, L6).
 	ExecutedTools []string `json:"executed_tools"`
 }
 
@@ -70,10 +69,10 @@ var executedTools = func() map[string]bool {
 	return m
 }()
 
-// Reconcile gleicht ab. Reihenfolge: nach Zeitpunkt der Anforderung, sonst der
-// ersten Ausführung. rejected: Fehlermeldungen aus den Sitzungen je toolCallId
-// (store.ToolRejections), nur als Hinweis für nicht ausgeführte Aufrufe.
-// web/src/lib/evidence.ts bildet dasselbe in der UI nach.
+// Reconcile reconciles. Order: by time of the request, otherwise of the first
+// execution. rejected: error messages from the sessions per toolCallId
+// (store.ToolRejections), only as a hint for calls that were not executed.
+// web/src/lib/evidence.ts mirrors the same in the UI.
 func Reconcile(calls []store.LLMCall, execs []store.ToolExecution, rejected map[string]string) Reconciliation {
 	byID := map[string]*ReconciledCall{}
 	incomplete := map[string]bool{}
@@ -150,7 +149,7 @@ func Reconcile(calls []store.LLMCall, execs []store.ToolExecution, rejected map[
 	return Reconciliation{Calls: out, Summary: sum, Executions: execs, ExecutedTools: ExecutedToolNames()}
 }
 
-// ExecutedToolNames: Werkzeuge, deren Ausführung am Socket belegt wird, sortiert.
+// ExecutedToolNames: tools whose execution is proven at the socket, sorted.
 func ExecutedToolNames() []string {
 	out := sock.ExecutedTools()
 	sort.Strings(out)
@@ -176,13 +175,13 @@ func firstTime(c ReconciledCall) time.Time {
 	return time.Time{}
 }
 
-// RecordToolExecution speichert eine am Socket ausgeführte Operation und
-// meldet sie der UI (sock.ToolRecorder).
+// RecordToolExecution stores an operation executed at the socket and reports
+// it to the UI (sock.ToolRecorder).
 func (m *Manager) RecordToolExecution(e store.ToolExecution) {
 	rec, err := m.st.AddToolExecution(context.Background(), e)
 	if err != nil {
-		// Ein fehlender Eintrag fiele im Abgleich als „nicht ausgeführt“ auf.
-		slog.Error("Werkzeugausführung nicht gespeichert", "chat", e.ChatID, "id", e.ToolCallID, "fehler", err)
+		// A missing entry would show up in the reconciliation as "not executed".
+		slog.Error("tool execution not stored", "chat", e.ChatID, "id", e.ToolCallID, "err", err)
 		return
 	}
 	if e.ChatID != "" {
@@ -190,7 +189,7 @@ func (m *Manager) RecordToolExecution(e store.ToolExecution) {
 	}
 }
 
-// ToolExecutions liefert den Abgleich eines Chats.
+// ToolExecutions returns a chat's reconciliation.
 func (m *Manager) ToolExecutions(ctx context.Context, chatID string) (Reconciliation, error) {
 	if _, err := m.st.GetChat(ctx, chatID); err != nil {
 		return Reconciliation{}, err

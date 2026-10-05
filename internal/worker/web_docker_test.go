@@ -1,9 +1,9 @@
 package worker
 
-// Platztest der Websuche: echter Container von pi mit pi-searxng-suite und web-gate.ts, der
-// Web-Proxy läuft im Testprozess (Alias „orchestrator“ im Platz-Netz), SearXNG und die abgerufene
-// Seite spielt ein Testserver. Ohne Internet bietet pi die Werkzeuge nicht an; mit Internet gehen
-// Suche und Abruf über den Proxy und werden protokolliert.
+// Slot test of the web search: real pi container with pi-searxng-suite and web-gate.ts, the
+// web proxy runs in the test process (alias "orchestrator" in the slot network), a test server plays
+// SearXNG and the fetched page. Without internet pi does not offer the tools; with internet, search
+// and fetch go through the proxy and are logged.
 
 import (
 	"context"
@@ -48,12 +48,12 @@ func (b *webBackend) FinishWeb(int64, webproxy.Request) {}
 
 func TestSlotWebSearch(t *testing.T) {
 	if os.Getenv("AGW_E9_IN_DOCKER") != "1" {
-		t.Skip("läuft nur im Go-Container mit Docker-Socket (./dev.sh test)")
+		t.Skip("runs only in the Go container with the Docker socket (./dev.sh test)")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	fake := useFakeLLM()
-	// SearXNG und Zielseite im Testprozess.
+	// SearXNG and target page in the test process.
 	var qmu sync.Mutex
 	var queries []string
 	site := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -62,11 +62,11 @@ func TestSlotWebSearch(t *testing.T) {
 			queries = append(queries, r.URL.Query().Get("q"))
 			qmu.Unlock()
 			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprintf(w, `{"results":[{"title":"Treffer zu %s","url":"http://ziel.test/seite","content":"Kurztext","engine":"test"}]}`, r.URL.Query().Get("q"))
+			fmt.Fprintf(w, `{"results":[{"title":"Result for %s","url":"http://target.test/page","content":"Short text","engine":"test"}]}`, r.URL.Query().Get("q"))
 			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		io.WriteString(w, `<html><head><title>Schwanzbeißen</title></head><body><article><h1>Früh erkennen</h1><p>Die Schweine sind unruhig und manipulieren Gegenstände in der Bucht.</p></article></body></html>`)
+		io.WriteString(w, `<html><head><title>Tail biting</title></head><body><article><h1>Detect it early</h1><p>The pigs are restless and manipulate objects in the pen.</p></article></body></html>`)
 	})}
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -79,7 +79,7 @@ func TestSlotWebSearch(t *testing.T) {
 	su, _ := url.Parse("http://" + ln.Addr().String())
 	proxy := &webproxy.Proxy{Gate: b, Searx: su, HTTPPort: sitePort, Allow: func(ip net.IP) bool { return ip.IsLoopback() },
 		Lookup: func(_ context.Context, host string) ([]net.IPAddr, error) {
-			if host == "ziel.test" {
+			if host == "target.test" {
 				return []net.IPAddr{{IP: net.ParseIP("127.0.0.1")}}, nil
 			}
 			return nil, &net.DNSError{Err: "no such host", Name: host}
@@ -129,9 +129,9 @@ func TestSlotWebSearch(t *testing.T) {
 		for ev := range w.Events() {
 			switch ev.Type {
 			case "tool_execution_start":
-				// Der Nutzer erlaubt mitten im Durchgang Internet: Die Werkzeuge kommen vor dem
-				// nächsten Modellaufruf dazu (web-gate.ts, turn_start).
-				if strings.Contains(string(ev.Raw), "umschalten") {
+				// The user allows internet in the middle of the turn: the tools are added before the
+				// next model call (web-gate.ts, turn_start).
+				if strings.Contains(string(ev.Raw), "switch-on") {
 					b.internet.Store(true)
 				}
 			case "tool_execution_end":
@@ -164,7 +164,7 @@ func TestSlotWebSearch(t *testing.T) {
 		select {
 		case <-settled:
 		case <-ctx.Done():
-			t.Fatal("Lauf wird nicht fertig")
+			t.Fatal("run does not finish")
 		}
 	}
 	result := func(tool, contains string) end {
@@ -175,26 +175,26 @@ func TestSlotWebSearch(t *testing.T) {
 				return ends[is.ID]
 			}
 		}
-		t.Fatalf("nicht angefordert: %s %s", tool, contains)
+		t.Fatalf("not requested: %s %s", tool, contains)
 		return end{}
 	}
-	// Erst ohne Internet (das Werkzeug gibt es nicht), dann schaltet der Nutzer es ein, und Suche und
-	// Abruf gehen über den Proxy.
-	run("Websuche.",
-		callLine("web_search", map[string]any{"query": "ohne"}),
-		callLine("bash", map[string]any{"command": "echo umschalten"}),
-		callLine("web_search", map[string]any{"query": "schwanzbeissen"}),
-		callLine("web_extract", map[string]any{"url": "http://ziel.test:" + strconv.Itoa(sitePort) + "/seite"}),
-		// Subagenten dürfen, was der Hauptagent darf: auch der researcher sucht über denselben Proxy.
+	// First without internet (the tool does not exist), then the user switches it on, and search and
+	// fetch go through the proxy.
+	run("Web search.",
+		callLine("web_search", map[string]any{"query": "without"}),
+		callLine("bash", map[string]any{"command": "echo switch-on"}),
+		callLine("web_search", map[string]any{"query": "tailbiting"}),
+		callLine("web_extract", map[string]any{"url": "http://target.test:" + strconv.Itoa(sitePort) + "/page"}),
+		// Subagents may do what the main agent may do: the researcher also searches through the same proxy.
 		callLine("subagent", map[string]any{"agent": "researcher", "async": false,
-			"task": "R1\n" + callLine("web_search", map[string]any{"query": "subagentensuche"})}))
-	if r := result("web_search", "ohne"); !r.isError || !strings.Contains(strings.ToLower(r.text), "not found") {
-		t.Errorf("ohne Internet: %+v", r)
+			"task": "R1\n" + callLine("web_search", map[string]any{"query": "subagentsearch"})}))
+	if r := result("web_search", "without"); !r.isError || !strings.Contains(strings.ToLower(r.text), "not found") {
+		t.Errorf("without internet: %+v", r)
 	}
-	if r := result("web_search", "schwanzbeissen"); r.isError || !strings.Contains(r.text, "Treffer zu schwanzbeissen") {
+	if r := result("web_search", "tailbiting"); r.isError || !strings.Contains(r.text, "Result for tailbiting") {
 		t.Errorf("web_search: %+v", r)
 	}
-	if r := result("web_extract", "ziel.test"); r.isError || !strings.Contains(r.text, "manipulieren") {
+	if r := result("web_extract", "target.test"); r.isError || !strings.Contains(r.text, "manipulate") {
 		t.Errorf("web_extract: %+v", r)
 	}
 	b.wmu.Lock()
@@ -203,15 +203,15 @@ func TestSlotWebSearch(t *testing.T) {
 	for _, r := range b.web {
 		hosts = append(hosts, fmt.Sprintf("%s %s %d %s", r.Method, r.Host, r.Status, r.Denied))
 	}
-	if len(b.web) < 2 || b.web[0].Host != "searxng" || b.web[1].Host != "ziel.test" || b.web[0].Status != 200 || b.web[1].Status != 200 {
-		t.Errorf("Proxy-Protokoll: %v", hosts)
+	if len(b.web) < 2 || b.web[0].Host != "searxng" || b.web[1].Host != "target.test" || b.web[0].Status != 200 || b.web[1].Status != 200 {
+		t.Errorf("proxy log: %v", hosts)
 	}
-	// Die Kind-Sitzung läuft im selben Node-Prozess und nutzt den offenen Tunnel mit: belegt wird ihre
-	// Suche deshalb am nachgebildeten SearXNG, nicht an einem zweiten CONNECT.
+	// The child session runs in the same Node process and shares the open tunnel: its search is
+	// therefore proven at the simulated SearXNG, not by a second CONNECT.
 	qmu.Lock()
 	got := strings.Join(queries, ",")
 	qmu.Unlock()
-	if !strings.Contains(got, "subagentensuche") {
-		t.Errorf("Suche des Subagenten kam nicht an SearXNG an: %q", got)
+	if !strings.Contains(got, "subagentsearch") {
+		t.Errorf("the subagent's search did not reach SearXNG: %q", got)
 	}
 }

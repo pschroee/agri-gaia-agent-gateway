@@ -15,13 +15,13 @@ import (
 	"strings"
 )
 
-// DefaultURL ist die Adresse des Orchestrators, wenn nichts anderes angegeben ist.
+// DefaultURL is the orchestrator's address when nothing else is given.
 const DefaultURL = "http://127.0.0.1:18480"
 
-// ErrNoSlot: POST /api/chats mit 503 – der Pool hat keinen freien Platz.
-var ErrNoSlot = errors.New("Kein freier Platz im Pool")
+// ErrNoSlot: POST /api/chats with 503 – the pool has no free slot.
+var ErrNoSlot = errors.New("No free slot in the pool")
 
-// APIError ist eine Fehlerantwort des Servers ({"error": …}).
+// APIError is an error response from the server ({"error": …}).
 type APIError struct {
 	Status  int
 	Message string
@@ -29,15 +29,15 @@ type APIError struct {
 
 func (e *APIError) Error() string {
 	if e.Message == "" {
-		return fmt.Sprintf("Server antwortet mit %d %s", e.Status, http.StatusText(e.Status))
+		return fmt.Sprintf("server responded with %d %s", e.Status, http.StatusText(e.Status))
 	}
-	return fmt.Sprintf("Server antwortet mit %d: %s", e.Status, e.Message)
+	return fmt.Sprintf("server responded with %d: %s", e.Status, e.Message)
 }
 
 type Client struct {
 	BaseURL string
 	HTTP    *http.Client
-	Token   string // API-Token (AGW_API_TOKEN), als Bearer gesendet
+	Token   string // API token (AGW_API_TOKEN), sent as bearer
 }
 
 func New(baseURL string) *Client {
@@ -65,7 +65,7 @@ func (c *Client) request(ctx context.Context, method, path string, body io.Reade
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		return nil, fmt.Errorf("Orchestrator unter %s nicht erreichbar: %w", c.BaseURL, err)
+		return nil, fmt.Errorf("orchestrator at %s not reachable: %w", c.BaseURL, err)
 	}
 	if resp.StatusCode >= 300 {
 		defer resp.Body.Close()
@@ -84,8 +84,8 @@ func (c *Client) request(ctx context.Context, method, path string, body io.Reade
 	return resp, nil
 }
 
-// Do führt einen JSON-Aufruf aus. in (falls nicht nil) wird als JSON gesendet, die Antwort
-// nach out dekodiert (falls nicht nil).
+// Do performs a JSON call. in (if not nil) is sent as JSON, the response is decoded
+// into out (if not nil).
 func (c *Client) Do(ctx context.Context, method, path string, in, out any) error {
 	var body io.Reader
 	ct := ""
@@ -106,7 +106,7 @@ func (c *Client) Do(ctx context.Context, method, path string, in, out any) error
 		return nil
 	}
 	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
-		return fmt.Errorf("Antwort von %s %s nicht lesbar: %w", method, path, err)
+		return fmt.Errorf("response from %s %s not readable: %w", method, path, err)
 	}
 	return nil
 }
@@ -131,7 +131,7 @@ func (c *Client) Chats(ctx context.Context) (out []Chat, err error) {
 	return out, c.Do(ctx, "GET", "/api/chats", nil, &out)
 }
 
-// CreateChat holt einen Platz aus dem Pool. Bei 503 ist der Fehler ErrNoSlot (errors.Is).
+// CreateChat takes a slot from the pool. On 503 the error is ErrNoSlot (errors.Is).
 func (c *Client) CreateChat(ctx context.Context, req CreateChatRequest) (out Chat, err error) {
 	err = c.Do(ctx, "POST", "/api/chats", req, &out)
 	var ae *APIError
@@ -152,27 +152,27 @@ func (c *Client) Send(ctx context.Context, id, text string) (out SendResult, err
 	return out, c.Do(ctx, "POST", "/api/chats/"+esc(id)+"/messages", map[string]string{"text": text}, &out)
 }
 
-// Queue liefert die eingereihten Nachrichten.
+// Queue returns the queued messages.
 func (c *Client) Queue(ctx context.Context, id string) (out []QueueEntry, err error) {
 	return out, c.Do(ctx, "GET", "/api/chats/"+esc(id)+"/queue", nil, &out)
 }
 
-// FlushQueue übergibt zurückgehaltene Nachrichten jetzt (409, wenn der Agent arbeitet).
+// FlushQueue hands over held-back messages now (409 if the agent is working).
 func (c *Client) FlushQueue(ctx context.Context, id string) (out SendResult, err error) {
 	return out, c.Do(ctx, "POST", "/api/chats/"+esc(id)+"/queue/send", nil, &out)
 }
 
-// Unqueue entfernt eine eingereihte Nachricht (409, wenn schon übergeben).
+// Unqueue removes a queued message (409 if already handed over).
 func (c *Client) Unqueue(ctx context.Context, id, entry string) error {
 	return c.Do(ctx, "DELETE", "/api/chats/"+esc(id)+"/queue/"+esc(entry), nil, nil)
 }
 
-// Background liefert die Hintergrundaufgaben eines Chats.
+// Background returns the background tasks of a chat.
 func (c *Client) Background(ctx context.Context, id string) (out []BackgroundTask, err error) {
 	return out, c.Do(ctx, "GET", "/api/chats/"+esc(id)+"/background", nil, &out)
 }
 
-// StopBackground beendet eine Hintergrundaufgabe (409, wenn sie nicht läuft).
+// StopBackground stops a background task (409 if it is not running).
 func (c *Client) StopBackground(ctx context.Context, id, bg string) (out BackgroundTask, err error) {
 	return out, c.Do(ctx, "POST", "/api/chats/"+esc(id)+"/background/"+esc(bg)+"/stop", nil, &out)
 }
@@ -197,32 +197,32 @@ func (c *Client) SetAutoCompact(ctx context.Context, id string, enabled bool) (C
 	return c.chatAction(ctx, id, "autocompact", map[string]bool{"enabled": enabled})
 }
 
-// SetMaxSubagents setzt die Grenze für Subagenten (0 … max_subagents_limit); wirkt sofort.
+// SetMaxSubagents sets the limit for subagents (0 … max_subagents_limit); takes effect immediately.
 func (c *Client) SetMaxSubagents(ctx context.Context, id string, max int) (Chat, error) {
 	return c.chatAction(ctx, id, "subagents", map[string]int{"max": max})
 }
 
-// LLMCalls liefert alle am LLM-Proxy erfassten Modellaufrufe des Chats.
+// LLMCalls returns all model calls of the chat recorded at the LLM proxy.
 func (c *Client) LLMCalls(ctx context.Context, id string) (out []LLMCall, err error) {
 	return out, c.Do(ctx, "GET", "/api/chats/"+esc(id)+"/llm_calls", nil, &out)
 }
 
-// ToolExecutions liefert den Abgleich angefordert ↔ ausgeführt je toolCallId (E9).
+// ToolExecutions returns the reconciliation requested ↔ executed per toolCallId (E9).
 func (c *Client) ToolExecutions(ctx context.Context, id string) (out Reconciliation, err error) {
 	return out, c.Do(ctx, "GET", "/api/chats/"+esc(id)+"/tool_executions", nil, &out)
 }
 
-// Commands liefert die Slash-Befehle des Chats (eingebaute und die von pi).
+// Commands returns the chat's slash commands (built-in ones and pi's).
 func (c *Client) Commands(ctx context.Context, id string) (out []Command, err error) {
 	return out, c.Do(ctx, "GET", "/api/chats/"+esc(id)+"/commands", nil, &out)
 }
 
-// RunCommand führt einen Slash-Befehl aus, z. B. "/compact Fokus auf Code".
+// RunCommand runs a slash command, e.g. "/compact focus on code".
 func (c *Client) RunCommand(ctx context.Context, id, command string) (out CommandResult, err error) {
 	return out, c.Do(ctx, "POST", "/api/chats/"+esc(id)+"/commands", map[string]string{"command": command}, &out)
 }
 
-// Session schreibt die JSONL-Sitzungsdatei von pi nach w.
+// Session writes pi's JSONL session file to w.
 func (c *Client) Session(ctx context.Context, id string, w io.Writer) error {
 	resp, err := c.request(ctx, "GET", "/api/chats/"+esc(id)+"/session", nil, "")
 	if err != nil {
@@ -237,7 +237,7 @@ func (c *Client) Artifacts(ctx context.Context, id string) (out []Artifact, err 
 	return out, c.Do(ctx, "GET", "/api/chats/"+esc(id)+"/artifacts", nil, &out)
 }
 
-// Download schreibt das Artefakt nach w; kind ist "input" oder "output" (leer = output).
+// Download writes the artifact to w; kind is "input" or "output" (empty = output).
 func (c *Client) Download(ctx context.Context, id, name, kind string, w io.Writer) (int64, error) {
 	p := "/api/chats/" + esc(id) + "/artifacts/" + esc(name)
 	if kind != "" {
@@ -251,7 +251,7 @@ func (c *Client) Download(ctx context.Context, id, name, kind string, w io.Write
 	return io.Copy(w, resp.Body)
 }
 
-// Upload lädt die Dateien als multipart (Feld "file", mehrfach) hoch. Der Rumpf wird gestreamt.
+// Upload uploads the files as multipart (field "file", repeated). The body is streamed.
 func (c *Client) Upload(ctx context.Context, id string, paths []string) (out []Artifact, err error) {
 	for _, p := range paths {
 		if _, err := os.Stat(p); err != nil {
@@ -287,12 +287,12 @@ func (c *Client) Upload(ctx context.Context, id string, paths []string) (out []A
 	}
 	defer resp.Body.Close()
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return nil, fmt.Errorf("Antwort auf den Upload nicht lesbar: %w", err)
+		return nil, fmt.Errorf("response to the upload not readable: %w", err)
 	}
 	return out, nil
 }
 
-// Approvals: state "" liefert alle, sonst z. B. "pending".
+// Approvals: state "" returns all, otherwise e.g. "pending".
 func (c *Client) Approvals(ctx context.Context, state string) (out []Approval, err error) {
 	p := "/api/approvals"
 	if state != "" {
@@ -305,8 +305,8 @@ func (c *Client) Decide(ctx context.Context, approvalID string, approve bool) (o
 	return out, c.Do(ctx, "POST", "/api/approvals/"+esc(approvalID), map[string]bool{"approve": approve}, &out)
 }
 
-// Events öffnet den SSE-Strom eines Chats. Kehrt zurück, sobald der Server die Kopfzeilen
-// geschickt hat – ab dann ist das Abonnement aktiv.
+// Events opens the SSE stream of a chat. Returns as soon as the server has sent the headers –
+// from then on the subscription is active.
 func (c *Client) Events(ctx context.Context, id string) (io.ReadCloser, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", c.BaseURL+"/api/chats/"+esc(id)+"/events", nil)
 	if err != nil {
@@ -321,7 +321,7 @@ func (c *Client) Events(ctx context.Context, id string) (io.ReadCloser, error) {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		return nil, fmt.Errorf("Orchestrator unter %s nicht erreichbar: %w", c.BaseURL, err)
+		return nil, fmt.Errorf("orchestrator at %s not reachable: %w", c.BaseURL, err)
 	}
 	if resp.StatusCode != http.StatusOK {
 		defer resp.Body.Close()

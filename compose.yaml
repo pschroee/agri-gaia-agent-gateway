@@ -1,6 +1,6 @@
-# PoC Stufe 1: Orchestrator, Postgres, RustFS und die Paket-Zwischenspeicher. Die Sandboxen startet der
-# Orchestrator selbst über die Docker-API; sie gehören nicht zu diesem Projekt.
-# Starten über ./dev.sh start (baut vorher das Abbild agw-basis).
+# PoC stage 1: orchestrator, Postgres, RustFS and the package caches. The sandboxes are started by the
+# orchestrator itself through the Docker API; they do not belong to this project.
+# Start with ./dev.sh start (builds the agw-basis image first).
 name: agwpoc
 
 services:
@@ -9,7 +9,7 @@ services:
     environment:
       POSTGRES_USER: agwpoc
       POSTGRES_DB: agwpoc
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD in .env setzen}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
     volumes:
       - pg:/var/lib/postgresql/data
     networks: [intern]
@@ -29,8 +29,8 @@ services:
       RUSTFS_ADDRESS: 0.0.0.0:9000
       RUSTFS_CONSOLE_ADDRESS: 0.0.0.0:9001
       RUSTFS_CONSOLE_ENABLE: "true"
-      RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:?RUSTFS_ACCESS_KEY in .env setzen}
-      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:?RUSTFS_SECRET_KEY in .env setzen}
+      RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:?set RUSTFS_ACCESS_KEY in .env}
+      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:?set RUSTFS_SECRET_KEY in .env}
       RUSTFS_OBS_LOGGER_LEVEL: warn
     security_opt: ["no-new-privileges:true"]
     volumes:
@@ -46,12 +46,12 @@ services:
       start_period: 5s
     restart: unless-stopped
 
-  # Paket-Zwischenspeicher für npm und pip. Sie hängen nur am Netz pkg (mit
-  # Internet, ohne Weg zu Postgres, RustFS oder dem Orchestrator). Eine Sandbox
-  # erreicht sie nur, solange ihr Chat Internet hat: Der Orchestrator hängt sie
-  # dann unter den Aliasen npm-cache und pip-cache an das Platz-Netz der Sandbox
-  # und beim Abschalten wieder ab (AGW_NPM_CACHE, AGW_PIP_CACHE; Container-Namen
-  # von Compose). Keine Ports am Host.
+  # Package caches for npm and pip. They are only attached to the network pkg (with
+  # internet, no route to Postgres, RustFS or the orchestrator). A sandbox
+  # reaches them only while its chat has internet: the orchestrator then attaches
+  # them under the aliases npm-cache and pip-cache to the sandbox's slot network
+  # and detaches them when internet is switched off (AGW_NPM_CACHE, AGW_PIP_CACHE;
+  # container names from Compose). No ports on the host.
   npm-cache:
     image: verdaccio/verdaccio:6.10.4@sha256:43c4067288b050422265407ea2fe747e511fcd0c407a85ec90ab9a326d9400cd
     volumes:
@@ -75,9 +75,9 @@ services:
     image: epicwink/proxpi:1.3.0@sha256:0748b92ddf75405d9d83fbd1705517f951e67e0540af86e0a9bf4de388ba86c0
     environment:
       PROXPI_CACHE_DIR: /var/cache/proxpi
-      PROXPI_CACHE_SIZE: "10000000000" # 10 GB, danach verdrängt proxpi selten genutzte Dateien
-      # Standard sind 0,9 s: Dauert der Abruf länger, leitet proxpi pip zu
-      # files.pythonhosted.org um, und die Datei käme am Zwischenspeicher vorbei.
+      PROXPI_CACHE_SIZE: "10000000000" # 10 GB, beyond that proxpi evicts rarely used files
+      # The default is 0.9 s: if the download takes longer, proxpi redirects pip to
+      # files.pythonhosted.org, and the file would bypass the cache.
       PROXPI_DOWNLOAD_TIMEOUT: "120"
       PROXPI_CONNECT_TIMEOUT: "10"
       PROXPI_READ_TIMEOUT: "60"
@@ -97,14 +97,14 @@ services:
       start_interval: 2s
     restart: unless-stopped
 
-  # Eigene Metasuchmaschine für web_search (pi-searxng-suite). Nur der Orchestrator erreicht sie
-  # (Netz search); pi fragt über den Web-Proxy des Orchestrators an, und das nur, wenn sein Chat
-  # Internet hat. SearXNG selbst braucht Internet für die Suchmaschinen. Kein Port am Host.
+  # Own metasearch engine for web_search (pi-searxng-suite). Only the orchestrator reaches it
+  # (network search); pi queries through the orchestrator's web proxy, and only when its chat
+  # has internet. SearXNG itself needs internet for the search engines. No port on the host.
   searxng:
     image: searxng/searxng:2026.9.30-a9d990033@sha256:a07a5cd2da2c63d66e559f9e4d3a3db106cfc6c32fb0ac70abe91cc28bcd7350
     user: "977:977"
     environment:
-      SEARXNG_SECRET: ${SEARXNG_SECRET:?SEARXNG_SECRET in .env setzen (./dev.sh legt ihn an)}
+      SEARXNG_SECRET: ${SEARXNG_SECRET:?set SEARXNG_SECRET in .env (./dev.sh creates it)}
       FORCE_OWNERSHIP: "false"
     volumes:
       - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
@@ -161,8 +161,8 @@ services:
     depends_on:
       postgres: { condition: service_healthy }
       rustfs: { condition: service_healthy }
-      # Nur gestartet, nicht gesund: Die Zwischenspeicher sind entbehrlich, ohne
-      # sie scheitern Installationen, der Rest läuft weiter.
+      # Only started, not healthy: the caches are dispensable; without them
+      # installations fail, everything else keeps running.
       npm-cache: { condition: service_started }
       pip-cache: { condition: service_started }
       searxng: { condition: service_started }
@@ -180,22 +180,22 @@ networks:
   intern:
     name: agwpoc_intern
     ipam: { config: [{ subnet: 10.231.18.0/24 }] }
-  # SearXNG und Orchestrator; SearXNG geht hierüber ins Internet. Keine Sandbox hängt daran.
+  # SearXNG and orchestrator; SearXNG reaches the internet through this. No sandbox is attached.
   search:
     name: agwpoc_search
     ipam: { config: [{ subnet: 10.231.22.0/24 }] }
-  # Ausgang der Paket-Zwischenspeicher ins Internet. Keine Sandbox hängt daran;
-  # ohne ICC erreichen sich auch die beiden Zwischenspeicher nicht.
+  # Egress of the package caches to the internet. No sandbox is attached;
+  # without ICC the two caches cannot reach each other either.
   pkg:
     name: agwpoc_pkg
     driver_opts: { com.docker.network.bridge.enable_icc: "false" }
     ipam: { config: [{ subnet: 10.231.21.0/24 }] }
-# Weitere Netze legt der Orchestrator selbst an:
-# - agwpoc_slot_<platz> (intern, /28 aus 10.231.128.0/17): je Platz ein eigenes
-#   Netz mit genau zwei Teilnehmern, Sandbox und Orchestrator (Alias
-#   "orchestrator", für den LLM-Proxy). Sandboxen erreichen sich nicht.
-# - agwpoc_egress (10.231.20.0/24, ohne ICC): Internet; eine Sandbox hängt nur
-#   daran, wenn der Chat Internet hat. Der Orchestrator hängt nicht daran.
-#   Ohne ICC erreicht eine Sandbox dort keine anderen Container; deshalb hängen
-#   die Paket-Zwischenspeicher nicht hier, sondern werden bei Internet an das
-#   Platz-Netz der Sandbox gehängt (siehe npm-cache).
+# The orchestrator creates further networks itself:
+# - agwpoc_slot_<slot> (internal, /28 from 10.231.128.0/17): one network per slot
+#   with exactly two members, sandbox and orchestrator (alias
+#   "orchestrator", for the LLM proxy). Sandboxes cannot reach each other.
+# - agwpoc_egress (10.231.20.0/24, without ICC): internet; a sandbox is attached
+#   only when the chat has internet. The orchestrator is not attached.
+#   Without ICC a sandbox there reaches no other containers; that is why the
+#   package caches are not attached here but are attached to the sandbox's
+#   slot network when internet is on (see npm-cache).

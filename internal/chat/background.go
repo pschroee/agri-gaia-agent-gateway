@@ -1,20 +1,20 @@
 package chat
 
-// Hintergrundaufgaben (bash mit run_in_background). Das Register des Platzes (internal/bgtask)
-// führt sie aus und meldet sich hier: Der Manager legt die Zeile an, verteilt Start, Fortschritt
-// und Ende als SSE-Ereignis „background“ und benachrichtigt den Agenten beim Ende wie Claude Code:
+// Background tasks (bash with run_in_background). The slot's register (internal/bgtask) runs them
+// and reports here: the manager creates the row, distributes start, progress and end as the SSE
+// event "background" and notifies the agent at the end, like Claude Code:
 //
-//   - Arbeitet pi gerade (oder ist ein Auftrag unterwegs), kommt die Meldung als Systemeintrag in
-//     die Warteschlange und geht mit dem Laufende an pi.
-//   - Ist pi untätig, startet der Manager damit einen neuen Durchgang (Weckruf). Jede Übergabe, die
-//     nur aus Meldungen besteht, zählt als Weckruf, auch die beim Laufende (deliverQueue): höchstens
-//     Options.BgWakesPerHour je Chat und Stunde und Options.AutoTurnsMax in Folge ohne Nutzer.
-//     Darüber bleibt die Meldung zurückgehalten in der Warteschlange (wie nach einem Abbruch), und
-//     die UI zeigt einen Hinweis (SSE auto_held, hold_reason am Chat).
-//   - Beendet der Agent eine Aufgabe selbst (bg_stop), gibt es keine Meldung.
+//   - If pi is working (or a message is on its way), the note goes into the queue as a system
+//     entry and reaches pi when the run ends.
+//   - If pi is idle, the manager starts a new turn with it (wake-up). Every delivery that consists
+//     only of notes counts as a wake-up, including the one at the end of a run (deliverQueue): at
+//     most Options.BgWakesPerHour per chat and hour and Options.AutoTurnsMax in a row without the
+//     user. Beyond that the note stays held in the queue (as after an abort), and the UI shows a
+//     notice (SSE auto_held, hold_reason on the chat).
+//   - If the agent ends a task itself (bg_stop), there is no note.
 //
-// Ruht der Chat oder wird er beendet, sterben die Aufgaben mit der Sandbox. Der Manager markiert
-// sie vorher (suspended, closed, lost) und sagt es dem Agenten beim nächsten Auftrag einmal.
+// When the chat idles or is closed, the tasks die with the sandbox. The manager marks them
+// beforehand (suspended, closed, lost) and tells the agent once with the next message.
 
 import (
 	"context"
@@ -28,39 +28,39 @@ import (
 	"agw/internal/store"
 )
 
-// Vorgaben für Options.BgWakesPerHour, Options.BgKeepAlive und Options.AutoTurnsMax.
+// Defaults for Options.BgWakesPerHour, Options.BgKeepAlive and Options.AutoTurnsMax.
 const (
 	DefaultBgWakesPerHour = 10
 	DefaultBgKeepAlive    = time.Hour
 	DefaultAutoTurnsMax   = 5
 )
 
-// BackgroundAgent: Ein Platz mit Hintergrundaufgaben (worker.Worker).
+// BackgroundAgent: a slot with background tasks (worker.Worker).
 type BackgroundAgent interface {
 	BackgroundList(chatID string) []store.BackgroundTask
 	StopBackground(ctx context.Context, chatID, id, by string) (store.BackgroundTask, error)
 }
 
-// BackgroundEvent ist das SSE-Ereignis „background“.
+// BackgroundEvent is the SSE event "background".
 type BackgroundEvent struct {
-	// Change: started, output (gedrosselt), ended (mit notified_at, sobald die Meldung erzeugt ist).
+	// Change: started, output (throttled), ended (with notified_at once the note has been created).
 	Change string               `json:"change"`
 	Task   store.BackgroundTask `json:"task"`
 }
 
-// ErrNotRunning: Die Hintergrundaufgabe läuft nicht (mehr).
-var ErrNotRunning = errors.New("Hintergrundaufgabe läuft nicht")
+// ErrNotRunning: the background task is not (or no longer) running.
+var ErrNotRunning = errors.New("background task is not running")
 
 func (m *Manager) publishBackground(chatID, change string, t store.BackgroundTask) {
 	m.publish(chatID, Event{Kind: "background", Data: BackgroundEvent{Change: change, Task: t}})
 }
 
-// BackgroundCreate legt eine Aufgabe an (bgtask.Notifier).
+// BackgroundCreate creates a task (bgtask.Notifier).
 func (m *Manager) BackgroundCreate(ctx context.Context, t store.BackgroundTask) (store.BackgroundTask, error) {
 	logPath := execproto.BgLogPath
 	if t.LogPath != "" {
-		// Umgewandelter Vordergrundbefehl (bgtask.Adopt): Seine ganze Ausgabe steht, wenn überhaupt,
-		// in der Datei des Vordergrundbefehls.
+		// Converted foreground command (bgtask.Adopt): its full output, if any, is in the foreground
+		// command's file.
 		fixed := t.LogPath
 		logPath = func(int) string { return fixed }
 	}
@@ -68,31 +68,31 @@ func (m *Manager) BackgroundCreate(ctx context.Context, t store.BackgroundTask) 
 	if err != nil {
 		return bt, err
 	}
-	slog.Info("Hintergrundaufgabe gestartet", "chat", bt.ChatID, "aufgabe", bt.ID, "sitzung", bt.Session)
+	slog.Info("background task started", "chat", bt.ChatID, "task", bt.ID, "session", bt.Session)
 	m.publishBackground(bt.ChatID, "started", bt)
 	m.publishChat(context.WithoutCancel(ctx), bt.ChatID)
 	return bt, nil
 }
 
-// BackgroundProgress verteilt neue Ausgabe (bgtask.Notifier, schon gedrosselt).
+// BackgroundProgress distributes new output (bgtask.Notifier, already throttled).
 func (m *Manager) BackgroundProgress(t store.BackgroundTask) {
 	m.publishBackground(t.ChatID, "output", t)
 }
 
-// BackgroundLookup liefert eine Aufgabe aus der Datenbank (bgtask.Notifier).
+// BackgroundLookup returns a task from the database (bgtask.Notifier).
 func (m *Manager) BackgroundLookup(ctx context.Context, chatID string, seq int) (store.BackgroundTask, error) {
 	return m.st.GetBackgroundTask(ctx, chatID, seq)
 }
 
-// BackgroundEnded trägt das Ende ein und benachrichtigt den Agenten (bgtask.Notifier).
+// BackgroundEnded records the end and notifies the agent (bgtask.Notifier).
 func (m *Manager) BackgroundEnded(t store.BackgroundTask, notify bool) {
 	ctx := context.Background()
 	updated, err := m.st.FinishBackgroundTask(ctx, t)
 	if err != nil {
-		slog.Error("Ende der Hintergrundaufgabe nicht gespeichert", "chat", t.ChatID, "aufgabe", t.ID, "fehler", err)
+		slog.Error("end of background task not stored", "chat", t.ChatID, "task", t.ID, "err", err)
 	}
 	if !updated {
-		// Schon beim Ruhen oder Beenden markiert: den gespeicherten Stand verteilen, keine Meldung.
+		// Already marked when idling or closing: distribute the stored state, no note.
 		if row, err := m.st.GetBackgroundTask(ctx, t.ChatID, t.Seq); err == nil {
 			m.publishBackground(t.ChatID, "ended", row)
 		}
@@ -102,25 +102,25 @@ func (m *Manager) BackgroundEnded(t store.BackgroundTask, notify bool) {
 	if t.ExitCode != nil {
 		exit = fmt.Sprint(*t.ExitCode)
 	}
-	slog.Info("Hintergrundaufgabe beendet", "chat", t.ChatID, "aufgabe", t.ID, "zustand", t.State, "exit", exit)
+	slog.Info("background task ended", "chat", t.ChatID, "task", t.ID, "state", t.State, "exit", exit)
 	var wake *live
 	if notify && !(t.State == store.BgStopped && t.StoppedBy == "agent") {
 		wake = m.notifyBackground(ctx, t)
 	}
-	// Erst nach der Meldung verteilen: Das Ereignis trägt dann notified_at (Review 3, H1 c).
+	// Distribute only after the note: the event then carries notified_at (Review 3, H1 c).
 	if row, err := m.st.GetBackgroundTask(ctx, t.ChatID, t.Seq); err == nil {
 		t.NotifiedAt, t.Woke, t.NoticePending = row.NotifiedAt, row.Woke, row.NoticePending
 	}
 	m.publishBackground(t.ChatID, "ended", t)
 	m.publishChat(ctx, t.ChatID)
 	if wake != nil {
-		slog.Info("Weckruf durch Hintergrundaufgabe", "chat", t.ChatID, "aufgabe", t.ID)
+		slog.Info("wake-up by background task", "chat", t.ChatID, "task", t.ID)
 		m.deliverQueue(t.ChatID, wake)
 	}
 }
 
-// notifyBackground reiht die Meldung als Systemeintrag ein. Ist pi untätig und die Warteschlange
-// nicht zurückgehalten, liefert es den Platz für einen Weckruf (deliverQueue prüft die Grenzen).
+// notifyBackground enqueues the note as a system entry. If pi is idle and the queue is not held, it
+// returns the slot for a wake-up (deliverQueue checks the limits).
 func (m *Manager) notifyBackground(ctx context.Context, t store.BackgroundTask) *live {
 	n := BackgroundNote(t)
 	unlock := m.queueLock(t.ChatID)
@@ -132,7 +132,7 @@ func (m *Manager) notifyBackground(ctx context.Context, t store.BackgroundTask) 
 	e, err := m.st.EnqueueSystem(ctx, t.ChatID, n.Type, n.Refs, n.Text())
 	if err != nil {
 		unlock()
-		slog.Error("Meldung der Hintergrundaufgabe nicht eingereiht", "chat", t.ChatID, "aufgabe", t.ID, "fehler", err)
+		slog.Error("background task note not enqueued", "chat", t.ChatID, "task", t.ID, "err", err)
 		return nil
 	}
 	_ = m.st.MarkBackgroundNotified(ctx, t.ChatID, t.Seq, false)
@@ -144,38 +144,39 @@ func (m *Manager) notifyBackground(ctx context.Context, t store.BackgroundTask) 
 	return l
 }
 
-// BackgroundNote ist die Meldung an den Agenten beim Ende einer Aufgabe. Die Kopfzeile bildet der
-// Orchestrator aus eigenen Angaben; Befehl, Fehlertext und Ausgabe stammen aus der Sandbox und
-// kommen in den Zaun (siehe origin.go).
+// BackgroundNote is the note to the agent at the end of a task. The orchestrator builds the summary
+// line from its own data; command, error text and output come from the sandbox and go into the
+// fence (see origin.go). The note texts are parsed by the web UI (web/src/lib/systemnote.ts) and
+// stay German until they are changed on both sides.
 func BackgroundNote(t store.BackgroundTask) systemNote {
 	var h strings.Builder
-	h.WriteString("Hintergrundaufgabe ")
+	h.WriteString("Background task ")
 	h.WriteString(t.ID)
 	if t.Session != "" && t.Session != "main" {
 		s := t.Session
 		if !safeSession.MatchString(s) {
 			s = "?"
 		}
-		h.WriteString(" (gestartet von Subagent " + s + ")")
+		h.WriteString(" (started by subagent " + s + ")")
 	}
 	h.WriteString(" " + endPhrase(t))
 	if t.EndedAt != nil && !t.StartedAt.IsZero() {
-		h.WriteString(", Laufzeit " + FormatRuntime(t.EndedAt.Sub(t.StartedAt)))
+		h.WriteString(", runtime " + FormatRuntime(t.EndedAt.Sub(t.StartedAt)))
 	}
 	var b strings.Builder
-	b.WriteString("Befehl: ")
+	b.WriteString("Command: ")
 	b.WriteString(clipRunes(oneLine(t.Command), 200))
 	if t.State == store.BgFailed && t.Error != "" {
-		b.WriteString("\nFehler: " + clipRunes(oneLine(t.Error), 200))
+		b.WriteString("\nError: " + clipRunes(oneLine(t.Error), 200))
 	}
 	lines := lastLines(t.Tail, 10, 1500)
 	if lines == "" {
-		b.WriteString("\nKeine Ausgabe.")
+		b.WriteString("\nNo output.")
 	} else {
-		fmt.Fprintf(&b, "\nLetzte Zeilen (von %d):\n%s", t.OutputLines, lines)
+		fmt.Fprintf(&b, "\nLast lines (of %d):\n%s", t.OutputLines, lines)
 	}
 	if t.LogPath != "" && t.OutputBytes > 0 {
-		b.WriteString("\nGanze Ausgabe: " + t.LogPath)
+		b.WriteString("\nFull output: " + t.LogPath)
 	}
 	return systemNote{Type: store.NoteBackground, Refs: []string{t.ID}, Summary: h.String(), Body: b.String()}
 }
@@ -184,24 +185,24 @@ func endPhrase(t store.BackgroundTask) string {
 	switch t.State {
 	case store.BgExited:
 		if t.ExitCode != nil {
-			return fmt.Sprintf("beendet: Exit %d", *t.ExitCode)
+			return fmt.Sprintf("finished: exit %d", *t.ExitCode)
 		}
-		return "beendet"
+		return "finished"
 	case store.BgTimeout:
-		return "nach der Zeitgrenze abgebrochen"
+		return "aborted at the time limit"
 	case store.BgStopped:
 		if t.StoppedBy == "user" {
-			return "vom Nutzer gestoppt"
+			return "stopped by the user"
 		}
-		return "gestoppt"
+		return "stopped"
 	case store.BgLost:
-		return "abgebrochen: Ausführungs-Sandbox nicht mehr erreichbar"
+		return "aborted: execution sandbox no longer reachable"
 	default:
-		return "fehlgeschlagen" // der Fehlertext steht im Zaun
+		return "failed" // the error text is in the fence
 	}
 }
 
-// FormatRuntime: m:ss, ab einer Stunde h:mm:ss.
+// FormatRuntime: m:ss, from one hour on h:mm:ss.
 func FormatRuntime(d time.Duration) string {
 	s := int(d.Round(time.Second) / time.Second)
 	if s < 0 {
@@ -222,7 +223,7 @@ func clipRunes(s string, n int) string {
 	return s
 }
 
-// lastLines: die letzten n Zeilen, höchstens max Bytes (am Anfang gekürzt).
+// lastLines: the last n lines, at most max bytes (cut at the start).
 func lastLines(s string, n, max int) string {
 	s = strings.TrimRight(s, "\n")
 	if s == "" {
@@ -239,22 +240,22 @@ func lastLines(s string, n, max int) string {
 	return out
 }
 
-// endBackground markiert die laufenden Aufgaben eines Chats, bevor seine Sandbox verschwindet.
+// endBackground marks a chat's running tasks before its sandbox goes away.
 func (m *Manager) endBackground(ctx context.Context, chatID, state, reason string, notice bool) {
 	ended, err := m.st.EndRunningBackground(context.WithoutCancel(ctx), chatID, state, reason, notice)
 	if err != nil {
-		slog.Warn("Hintergrundaufgaben nicht markiert", "chat", chatID, "fehler", err)
+		slog.Warn("background tasks not marked", "chat", chatID, "err", err)
 		return
 	}
 	for _, t := range ended {
 		m.publishBackground(chatID, "ended", t)
 	}
 	if len(ended) > 0 {
-		slog.Info("Hintergrundaufgaben mit der Sandbox beendet", "chat", chatID, "anzahl", len(ended), "zustand", state)
+		slog.Info("background tasks ended with the sandbox", "chat", chatID, "count", len(ended), "state", state)
 	}
 }
 
-// backgroundNotice: der einmalige Hinweis auf Aufgaben, die mit einer früheren Sandbox endeten.
+// backgroundNotice: the one-off notice about tasks that ended with an earlier sandbox.
 func (m *Manager) backgroundNotice(ctx context.Context, chatID string) (*systemNote, []int) {
 	notes, err := m.st.BackgroundNotices(ctx, chatID)
 	if err != nil || len(notes) == 0 {
@@ -268,12 +269,12 @@ func (m *Manager) backgroundNotice(ctx context.Context, chatID string) (*systemN
 		seqs = append(seqs, t.Seq)
 	}
 	return &systemNote{Type: store.NoteSandbox, Refs: ids,
-		Summary: "Mit der vorigen Sandbox (Chat ruhte oder Sandbox beendet) sind diese Hintergrundaufgaben beendet worden: " +
-			strings.Join(ids, ", ") + ". Bei Bedarf neu starten.",
+		Summary: "These background tasks ended with the previous sandbox (chat was idle or sandbox ended): " +
+			strings.Join(ids, ", ") + ". Restart them if needed.",
 		Body: strings.Join(items, "\n")}, seqs
 }
 
-// BackgroundTasks liefert alle Aufgaben des Chats; laufende mit dem aktuellen Stand des Platzes.
+// BackgroundTasks returns all tasks of the chat; running ones with the slot's current state.
 func (m *Manager) BackgroundTasks(ctx context.Context, chatID string) ([]store.BackgroundTask, error) {
 	if _, err := m.st.GetChat(ctx, chatID); err != nil {
 		return nil, err
@@ -305,15 +306,15 @@ func (m *Manager) BackgroundTasks(ctx context.Context, chatID string) ([]store.B
 	return list, nil
 }
 
-// ForegroundAgent steuert laufende Vordergrundbefehle (bash) eines Platzes.
+// ForegroundAgent controls a slot's running foreground commands (bash).
 type ForegroundAgent interface {
 	StopForeground(chatID, toolCallID string) error
 	BackgroundForeground(ctx context.Context, chatID, toolCallID string) (store.BackgroundTask, error)
 	ForegroundRunning(chatID string) []string
 }
 
-// ErrNoForeground: kein laufender Vordergrundbefehl mit dieser Kennung (schon beendet).
-var ErrNoForeground = errors.New("kein laufender Befehl mit dieser Kennung")
+// ErrNoForeground: no running foreground command with this ID (already ended).
+var ErrNoForeground = errors.New("no running command with this ID")
 
 func (m *Manager) foreground(chatID string) (ForegroundAgent, error) {
 	m.mu.Lock()
@@ -329,8 +330,8 @@ func (m *Manager) foreground(chatID string) (ForegroundAgent, error) {
 	return fa, nil
 }
 
-// StopTool stoppt einen laufenden bash-Befehl auf Wunsch des Nutzers; der Agent bekommt „Command
-// stopped by the user“ als Ergebnis und arbeitet weiter.
+// StopTool stops a running bash command at the user's request; the agent gets "Command stopped by
+// the user" as the result and carries on.
 func (m *Manager) StopTool(ctx context.Context, chatID, toolCallID string) error {
 	fa, err := m.foreground(chatID)
 	if err != nil {
@@ -340,12 +341,12 @@ func (m *Manager) StopTool(ctx context.Context, chatID, toolCallID string) error
 	if err := fa.StopForeground(chatID, toolCallID); err != nil {
 		return err
 	}
-	slog.Info("Befehl vom Nutzer gestoppt", "chat", chatID, "aufruf", toolCallID)
+	slog.Info("command stopped by the user", "chat", chatID, "call", toolCallID)
 	return nil
 }
 
-// BackgroundTool wandelt einen laufenden bash-Befehl in eine Hintergrundaufgabe um: Der Befehl
-// läuft weiter, der Agent erfährt die Kennung sofort und wird bei ihrem Ende benachrichtigt.
+// BackgroundTool converts a running bash command into a background task: the command keeps running,
+// the agent learns the ID right away and is notified when the task ends.
 func (m *Manager) BackgroundTool(ctx context.Context, chatID, toolCallID string) (store.BackgroundTask, error) {
 	fa, err := m.foreground(chatID)
 	if err != nil {
@@ -356,12 +357,12 @@ func (m *Manager) BackgroundTool(ctx context.Context, chatID, toolCallID string)
 	if err != nil {
 		return t, err
 	}
-	slog.Info("Befehl vom Nutzer in den Hintergrund verschoben", "chat", chatID, "aufruf", toolCallID, "aufgabe", t.ID)
+	slog.Info("command moved to the background by the user", "chat", chatID, "call", toolCallID, "task", t.ID)
 	return t, nil
 }
 
-// RunningTools nennt die laufenden bash-Befehle des Chats (toolCallIds), die sich stoppen oder
-// umwandeln lassen.
+// RunningTools lists the chat's running bash commands (toolCallIds) that can be stopped or
+// converted.
 func (m *Manager) RunningTools(chatID string) []string {
 	fa, err := m.foreground(chatID)
 	if err != nil {
@@ -370,11 +371,11 @@ func (m *Manager) RunningTools(chatID string) []string {
 	return fa.ForegroundRunning(chatID)
 }
 
-// StopBackground beendet eine laufende Aufgabe auf Wunsch des Nutzers; der Agent erfährt es.
+// StopBackground ends a running task at the user's request; the agent is told.
 func (m *Manager) StopBackground(ctx context.Context, chatID, id string) (store.BackgroundTask, error) {
 	seq := store.ParseBgID(id)
 	if seq == 0 {
-		return store.BackgroundTask{}, fmt.Errorf("%w: Kennung %q", ErrInvalid, id)
+		return store.BackgroundTask{}, fmt.Errorf("%w: ID %q", ErrInvalid, id)
 	}
 	row, err := m.st.GetBackgroundTask(ctx, chatID, seq)
 	if err != nil {
@@ -394,13 +395,13 @@ func (m *Manager) StopBackground(ctx context.Context, chatID, id string) (store.
 		return row, ErrNotRunning
 	}
 	m.userActive(chatID)
-	slog.Info("Hintergrundaufgabe vom Nutzer gestoppt", "chat", chatID, "aufgabe", id)
+	slog.Info("background task stopped by the user", "chat", chatID, "task", id)
 	return ba.StopBackground(ctx, chatID, id, "user")
 }
 
-// keepAliveForBackground: Soll der Leerlauf das Ruhen verschieben, weil Aufgaben laufen? Nur bis
-// Options.BgKeepAlive nach der letzten Aktion des Nutzers (Review 3, M1: Weckrufe verlängern den
-// Aufschub nicht); danach ruht der Chat, und die Aufgaben enden.
+// keepAliveForBackground: should the idle timer postpone idling because tasks are running? Only up
+// to Options.BgKeepAlive after the user's last action (Review 3, M1: wake-ups do not extend the
+// postponement); after that the chat idles and the tasks end.
 func (m *Manager) keepAliveForBackground(chatID string, l *live) (time.Duration, bool) {
 	c, err := m.st.GetChat(context.Background(), chatID)
 	if err != nil || c.BackgroundRunning == 0 {

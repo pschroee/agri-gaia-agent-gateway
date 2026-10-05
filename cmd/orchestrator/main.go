@@ -1,5 +1,5 @@
-// Orchestrator des PoC (Stufe 1): Warm-Pool mit pi-Sandboxen, Chats in
-// Postgres, Artefakte in RustFS, API und Web-UI, LLM-Proxy für die Sandboxen.
+// Orchestrator of the PoC (stage 1): warm pool with pi sandboxes, chats in
+// Postgres, artifacts in RustFS, API and web UI, LLM proxy for the sandboxes.
 package main
 
 import (
@@ -35,7 +35,7 @@ import (
 func main() {
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
 	if err := run(); err != nil {
-		slog.Error("Orchestrator beendet mit Fehler", "fehler", err)
+		slog.Error("orchestrator exited with an error", "error", err)
 		os.Exit(1)
 	}
 }
@@ -48,13 +48,13 @@ func run() error {
 	}
 	if env.DefaultModel != "" {
 		if _, _, ok := cat.Lookup(env.DefaultModel); !ok {
-			return errors.New("AGW_DEFAULT_MODEL nicht im Katalog: " + env.DefaultModel)
+			return errors.New("AGW_DEFAULT_MODEL not in the catalogue: " + env.DefaultModel)
 		}
 		cat.Default = env.DefaultModel
 	}
 	for _, p := range cat.Providers {
 		if p.APIKey() == "" {
-			slog.Warn("kein Schlüssel für Anbieter gesetzt", "anbieter", p.ID, "variable", p.APIKeyEnv)
+			slog.Warn("no key set for provider", "provider", p.ID, "variable", p.APIKeyEnv)
 		}
 	}
 	if err := env.CheckAuth(); err != nil {
@@ -65,11 +65,11 @@ func run() error {
 		if auth, err = oidc.New(oidc.Config{Issuer: env.OIDCIssuer, ClientID: env.OIDCClientID, ClientSecret: env.OIDCClientSecret, PublicURL: env.PublicURL}); err != nil {
 			return err
 		}
-		// Die UI wird unter der öffentlichen Adresse aufgerufen; ihr Host gilt damit als erlaubt.
+		// The UI is opened under the public address; its host is therefore allowed.
 		if h := env.PublicHost(); h != "" && !slices.Contains(env.AllowedHosts, h) {
 			env.AllowedHosts = append(env.AllowedHosts, h)
 		}
-		slog.Info("Anmeldung über die Plattform (OIDC)", "issuer", env.OIDCIssuer, "client", env.OIDCClientID, "redirect", env.PublicURL+oidc.CallbackPath, "basis", env.BasePath+"/", "einbettung", env.FrameAncestors)
+		slog.Info("login through the platform (OIDC)", "issuer", env.OIDCIssuer, "client", env.OIDCClientID, "redirect", env.PublicURL+oidc.CallbackPath, "base", env.BasePath+"/", "embedding", env.FrameAncestors)
 	}
 	blocked, err := api.ParseSubnets(env.BlockedSubnets)
 	if err != nil {
@@ -98,15 +98,15 @@ func run() error {
 	}
 	self := os.Getenv("AGW_SELF_CONTAINER")
 	if self == "" {
-		self, _ = os.Hostname() // im Container: die kurze Container-ID
+		self, _ = os.Hostname() // in a container: the short container ID
 	}
 	rt.SetSelf(self)
 	rt.SetPkgCaches(env.NpmCache, env.PipCache)
 	if n, err := rt.RemoveManaged(ctx); err == nil && n > 0 {
-		slog.Info("Sandboxen eines früheren Laufs entfernt", "anzahl", n)
+		slog.Info("removed sandboxes of an earlier run", "count", n)
 	}
 	if n := rt.RemoveSlotNetworks(ctx); n > 0 {
-		slog.Info("Platz-Netze eines früheren Laufs entfernt", "anzahl", n)
+		slog.Info("removed slot networks of an earlier run", "count", n)
 	}
 	fac, err := worker.NewFactory(rt, cat, env)
 	if err != nil {
@@ -117,11 +117,11 @@ func run() error {
 		Exchange: env.PlatformExchange, Audiences: env.PlatformAudiences}
 	konto := env.PlatformUser
 	if auth != nil {
-		// Jeder Chat handelt für seinen Besitzer: dessen Token aus der Sitzung ist das subject_token.
+		// Every chat acts for its owner: the owner's token from the session is the subject_token.
 		pcfg.Subject = ownerToken(st, auth)
-		pcfg.User, pcfg.Password, konto = "", "", "Besitzer des Chats"
+		pcfg.User, pcfg.Password, konto = "", "", "owner of the chat"
 		if env.PlatformAPIURL != "" && !env.PlatformExchange {
-			slog.Warn("Anmeldung über die Plattform ohne Token-Austausch: das Token des Nutzers geht unverändert an die API (AGW_PLATFORM_TOKEN_EXCHANGE=true empfohlen)")
+			slog.Warn("login through the platform without token exchange: the user's token goes to the API unchanged (AGW_PLATFORM_TOKEN_EXCHANGE=true recommended)")
 		}
 	}
 	plat, err := platform.New(pcfg)
@@ -129,9 +129,9 @@ func run() error {
 		return err
 	}
 	if plat == nil {
-		slog.Info("Plattform-Anbindung aus (AGW_PLATFORM_API_URL leer)")
+		slog.Info("platform binding off (AGW_PLATFORM_API_URL empty)")
 	} else {
-		slog.Info("Plattform-Anbindung an", "api", env.PlatformAPIURL, "konto", konto, "client", env.PlatformClientID, "token_austausch", plat.Exchanging())
+		slog.Info("platform binding on", "api", env.PlatformAPIURL, "account", konto, "client", env.PlatformClientID, "token_exchange", plat.Exchanging())
 	}
 	p := pool.New[chat.Agent](fac.Create, fac.Destroy, env.PoolSizes)
 	m := chat.NewManager(st, p, cat, blobs, artifacts.NewBroker(), chat.Options{
@@ -158,20 +158,20 @@ func run() error {
 		}
 	}
 	if webFS == nil {
-		slog.Warn("Web-UI nicht gebaut; nur die API ist erreichbar")
+		slog.Warn("web UI not built; only the API is reachable")
 	}
-	// Alle Anfragen hängen an baseCtx; beim Beenden werden damit auch offene
-	// SSE-Verbindungen geschlossen, die Shutdown sonst bis zur Frist aufhielten.
+	// All requests hang off baseCtx; on exit this also closes open SSE
+	// connections, which would otherwise hold up Shutdown until the deadline.
 	baseCtx, cancelBase := context.WithCancel(context.Background())
 	defer cancelBase()
 	apiSrv := &http.Server{Addr: env.HTTPAddr, Handler: (&api.Server{M: m, Pool: p, Cat: cat, Env: env, Web: webFS, Blocked: blocked, Token: env.APIToken, AllowedHosts: env.AllowedHosts,
 		OIDC: auth, FrameAncestors: env.FrameAncestors}).Handler(),
 		ReadHeaderTimeout: 10 * time.Second, MaxHeaderBytes: 64 << 10, BaseContext: func(net.Listener) context.Context { return baseCtx }}
 	proxy := llmproxy.New(cat)
-	proxy.SetRecorder(m) // Zuordnung je Platz, Abrechnung, harte Grenze gleichzeitiger Agenten
+	proxy.SetRecorder(m) // assignment per slot, billing, hard limit of concurrent agents
 	proxySrv := &http.Server{Addr: env.ProxyAddr, Handler: proxy,
 		ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 60 * time.Second, MaxHeaderBytes: 64 << 10}
-	// Web-Proxy für web_search und web_extract aus dem Container von pi (nur mit Internet).
+	// Web proxy for web_search and web_extract from pi's container (only with internet).
 	web := &webproxy.Proxy{Gate: m, Blocked: blocked}
 	if env.SearxURL != "" {
 		if u, err := url.Parse(env.SearxURL); err == nil && u.Host != "" {
@@ -184,17 +184,17 @@ func run() error {
 	go func() { errc <- apiSrv.ListenAndServe() }()
 	go func() { errc <- proxySrv.ListenAndServe() }()
 	go func() { errc <- webSrv.ListenAndServe() }()
-	slog.Info("Orchestrator läuft", "api", env.HTTPAddr, "proxy", env.ProxyAddr, "pool", env.PoolSizes, "modell", cat.Default, "abbild", env.Image)
+	slog.Info("orchestrator running", "api", env.HTTPAddr, "proxy", env.ProxyAddr, "pool", env.PoolSizes, "model", cat.Default, "image", env.Image)
 
 	select {
 	case <-ctx.Done():
-		slog.Info("Beende: sichere Sitzungen und baue Sandboxen ab")
+		slog.Info("shutting down: saving sessions and removing sandboxes")
 	case err := <-errc:
 		if !errors.Is(err, http.ErrServerClosed) {
-			slog.Error("Server-Fehler", "fehler", err)
+			slog.Error("server error", "error", err)
 		}
 	}
-	// Zuerst die Chats sichern (mit eigener Frist), dann die Server beenden
+	// First save the chats (with their own deadline), then stop the servers
 	// (Review M6).
 	mctx, mcancel := context.WithTimeout(context.Background(), 20*time.Second)
 	m.Shutdown(mctx)
@@ -210,8 +210,8 @@ func run() error {
 	return nil
 }
 
-// ownerToken liefert je Chat das Zugangstoken seines Besitzers aus dessen Sitzung am Orchestrator.
-// Ohne lebende Sitzung scheitert der Plattform-Aufruf mit oidc.ErrNoSession (Meldung an den Agenten).
+// ownerToken returns, per chat, the access token of its owner from the owner's session at the orchestrator.
+// Without a live session the platform call fails with oidc.ErrNoSession (message to the agent).
 func ownerToken(st *store.Store, auth *oidc.Service) func(ctx context.Context, chatID string) (string, error) {
 	return func(ctx context.Context, chatID string) (string, error) {
 		owner, err := st.ChatOwner(ctx, chatID)
@@ -219,13 +219,13 @@ func ownerToken(st *store.Store, auth *oidc.Service) func(ctx context.Context, c
 			return "", err
 		}
 		if owner == "" {
-			return "", errors.New("Chat ohne Besitzer (angelegt im token-Modus); für die Plattform einen neuen Chat anlegen")
+			return "", errors.New("chat without owner (created in token mode); create a new chat for the platform")
 		}
 		return auth.AccessToken(ctx, owner)
 	}
 }
 
-// newTitler: Chattitel vom Modell des Chats oder von AGW_TITLE_MODEL; "off" schaltet sie ab.
+// newTitler: chat titles from the chat's model or from AGW_TITLE_MODEL; "off" switches them off.
 func newTitler(cat *config.Catalog, model string) chat.Titler {
 	if model == "off" {
 		return nil

@@ -12,76 +12,76 @@ import (
 	"agw/internal/config"
 )
 
-// Call ist ein abgerechneter Modellaufruf. Er wird am Proxy erfasst und
-// ist damit unabhängig von dem, was pi oder die Sandbox melden: Hier tauchen
-// auch Subagenten, Kompaktierungen und direkte Aufrufe aus der Sandbox auf.
+// Call is a billed model call. It is recorded at the proxy and
+// thus independent of what pi or the sandbox report: subagents, compactions
+// and direct calls from the sandbox show up here too.
 type Call struct {
 	ChatID     string       `json:"chat_id"`
 	SlotID     string       `json:"slot_id"`
 	SourceIP   string       `json:"source_ip"`
-	Model      string       `json:"model"` // anbieter/modell
+	Model      string       `json:"model"` // provider/model
 	ResponseID string       `json:"response_id"`
 	Status     int          `json:"status"`
 	Usage      config.Usage `json:"usage"`
 	Cost       float64      `json:"cost"`
 	Peak       bool         `json:"peak"`
 	ToolCalls  []ToolCall   `json:"tool_calls"`
-	// FinishReason des Anbieters (stop, tool_calls, length, …; Anthropic stop_reason).
+	// FinishReason of the provider (stop, tool_calls, length, …; Anthropic stop_reason).
 	FinishReason string `json:"finish_reason"`
-	// Complete: Die Antwort kam vollständig an (SSE mit finish_reason bzw. message_stop, JSON
-	// lesbar). Werkzeugaufrufe aus einer abgebrochenen Antwort führt pi nicht aus (M1).
+	// Complete: the response arrived completely (SSE with finish_reason or message_stop, JSON
+	// readable). pi does not execute tool calls from an aborted response (M1).
 	Complete   bool          `json:"complete"`
 	StartedAt  time.Time     `json:"started_at"`
 	Duration   time.Duration `json:"-"`
 	DurationMs int64         `json:"duration_ms"`
 }
 
-// ToolCall ist ein vom Modell angeforderter Werkzeugaufruf. ID ist die
-// Kennung des Anbieters (tool_calls[].id); pi gibt sie als toolCallId an die
-// Werkzeuge weiter, und der Abgleich mit tool_executions läuft über sie (E9).
+// ToolCall is a tool call requested by the model. ID is the
+// provider's ID (tool_calls[].id); pi passes it on to the tools as toolCallId,
+// and the reconciliation with tool_executions runs on it (E9).
 type ToolCall struct {
 	ID        string `json:"id,omitempty"`
 	Name      string `json:"name"`
 	Arguments string `json:"arguments"`
 }
 
-// Attribution ordnet eine Quelladresse einem Chat zu.
+// Attribution maps a source address to a chat.
 type Attribution struct {
 	ChatID string
 	SlotID string
-	// MaxConcurrent: höchstens so viele Modellaufrufe dieses Chats zugleich
-	// (Hauptagent plus erlaubte Subagenten). Harte Grenze, weil sie am Proxy
-	// außerhalb der Sandbox gilt. 0: keine Grenze.
+	// MaxConcurrent: at most this many model calls of this chat at the same time
+	// (main agent plus allowed subagents). A hard limit, because it applies at the proxy
+	// outside the sandbox. 0: no limit.
 	MaxConcurrent int
 }
 
-// Recorder ordnet Aufrufe Chats zu und speichert sie.
+// Recorder attributes calls to chats and stores them.
 type Recorder interface {
-	// Attribute: leerer Chat heißt kein zugewiesener Platz, der Aufruf wird abgewiesen.
+	// Attribute: an empty chat means no assigned slot, the call is refused.
 	Attribute(remoteIP string) Attribution
 	Record(c Call)
-	// LimitHit meldet einen wegen der Grenze abgewiesenen Aufruf.
+	// LimitHit reports a call refused because of the limit.
 	LimitHit(chatID string, max int)
 }
 
-// meter liest die Antwort des Anbieters mit, während sie weitergereicht wird
-// (SSE oder JSON), und sammelt Antwort-ID, Tokens und Werkzeugaufrufe.
+// meter reads along the provider's response while it is passed on
+// (SSE or JSON), and collects response ID, tokens and tool calls.
 type meter struct {
 	api     string
 	mu      sync.Mutex
-	buf     bytes.Buffer // unvollständige SSE-Zeile bzw. JSON-Rumpf
+	buf     bytes.Buffer // incomplete SSE line or JSON body
 	sse     bool
 	decided bool
 	id      string
 	usage   *rawUsage
 	tools   map[int]*ToolCall
 	order   []int
-	byID    map[string]int // id des Aufrufs → Schlüssel in tools (Stücke ohne index, L9)
-	last    int            // zuletzt begonnener Aufruf
-	nextKey int            // Schlüssel für Aufrufe ohne index (negativ, damit sie keinen index treffen)
+	byID    map[string]int // id of the call → key in tools (chunks without index, L9)
+	last    int            // most recently started call
+	nextKey int            // key for calls without index (negative so they never hit an index)
 	finish  string
 	stopped bool // Anthropic message_stop
-	jsonOK  bool // ganze JSON-Antwort gelesen
+	jsonOK  bool // whole JSON response read
 }
 
 type rawUsage struct {
@@ -115,7 +115,7 @@ func (m *meter) Write(p []byte) (int, error) {
 		}
 	}
 	if m.buf.Len()+len(p) > maxMeterJSON && !m.sse {
-		return len(p), nil // übergroße JSON-Antwort: nicht auswerten
+		return len(p), nil // oversized JSON response: do not evaluate
 	}
 	m.buf.Write(p)
 	if m.sse {
@@ -123,7 +123,7 @@ func (m *meter) Write(p []byte) (int, error) {
 			line, err := m.buf.ReadBytes('\n')
 			if err != nil {
 				m.buf.Reset()
-				m.buf.Write(line) // Rest für den nächsten Schreibvorgang
+				m.buf.Write(line) // remainder for the next write
 				break
 			}
 			m.sseLine(bytes.TrimRight(line, "\r\n"))
@@ -144,7 +144,7 @@ func (m *meter) sseLine(line []byte) {
 	m.chunk(data)
 }
 
-// chunk wertet ein JSON-Stück aus (SSE-Ereignis oder ganze Antwort).
+// chunk evaluates a JSON chunk (SSE event or whole response).
 func (m *meter) chunk(data []byte) {
 	var c struct {
 		ID      string    `json:"id"`
@@ -226,9 +226,9 @@ func (m *meter) chunk(data []byte) {
 	}
 }
 
-// toolKey ordnet ein Stück einem Aufruf zu: nach index, wenn vorhanden; sonst nach id (ein
-// Stück mit bekannter id setzt diesen Aufruf fort, eine neue id beginnt einen); ohne beides
-// gehört es zum zuletzt begonnenen Aufruf. In einer ganzen Nachricht (JSON) zählt die Stelle.
+// toolKey maps a chunk to a call: by index if present; otherwise by id (a
+// chunk with a known id continues that call, a new id starts one); without either
+// it belongs to the most recently started call. In a whole message (JSON) the position counts.
 func (m *meter) toolKey(pos int, index *int, id string, whole bool) int {
 	if index != nil {
 		return *index
@@ -263,8 +263,8 @@ type msgPart struct {
 	} `json:"tool_calls"`
 }
 
-// mergeUsage übernimmt Werte ungleich null (Anthropic meldet Eingabe und
-// Ausgabe in verschiedenen Ereignissen).
+// mergeUsage takes over non-zero values (Anthropic reports input and
+// output in different events).
 func (m *meter) mergeUsage(u *rawUsage) {
 	if m.usage == nil {
 		m.usage = &rawUsage{}
@@ -285,7 +285,7 @@ func (m *meter) mergeUsage(u *rawUsage) {
 	}
 }
 
-// Result liefert das Gesammelte. Tokens wie bei pi: Eingabe ohne Cache-Treffer.
+// Result returns what was collected. Tokens as with pi: input without cache hits.
 func (m *meter) Result() Call {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -308,7 +308,7 @@ func (m *meter) Result() Call {
 	}
 	c.FinishReason = strings.ToValidUTF8(m.finish, "")
 	c.Complete = m.finish != "" || m.stopped || m.jsonOK
-	// Aufrufe mit index nach index, solche ohne in der Reihenfolge ihres Auftretens.
+	// Calls with index by index, those without in the order they appeared.
 	sort.SliceStable(m.order, func(i, j int) bool {
 		a, b := m.order[i], m.order[j]
 		if a >= 0 && b >= 0 {
@@ -325,7 +325,7 @@ func (m *meter) Result() Call {
 	return c
 }
 
-// meteredBody reicht die Antwort durch und meldet am Ende das Ergebnis.
+// meteredBody passes the response through and reports the result at the end.
 type meteredBody struct {
 	io.ReadCloser
 	m    *meter

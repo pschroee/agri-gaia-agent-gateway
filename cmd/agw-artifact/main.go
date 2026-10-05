@@ -1,7 +1,7 @@
-// agw-artifact ist das Hilfs-CLI in der Sandbox. Es spricht HTTP über den
-// Unix-Socket des Platzes mit dem Orchestrator. Welcher Chat gemeint ist,
-// entscheidet der Orchestrator allein daran, über welchen Socket die Anfrage
-// kommt; das CLI sendet dazu keine Angabe.
+// agw-artifact is the helper CLI in the sandbox. It speaks HTTP to the
+// orchestrator over the slot's Unix socket. Which chat is meant is decided
+// by the orchestrator solely from the socket the request arrives on; the CLI
+// sends no information about it.
 package main
 
 import (
@@ -25,7 +25,7 @@ import (
 
 const defaultSocket = "/run/agw/agw.sock"
 
-// Exit-Codes: 0 bestätigt/erfolgreich, 1 Fehler, 3 vom Nutzer abgelehnt.
+// Exit codes: 0 approved/successful, 1 error, 3 rejected by the user.
 const exitRejected = 3
 
 func main() {
@@ -40,20 +40,20 @@ func main() {
 		},
 	}}
 
-	// Als agw-platform aufgerufen (Symlink im Abbild): Agri-Gaia-Plattform.
+	// Called as agw-platform (symlink in the image): Agri-Gaia platform.
 	if filepath.Base(os.Args[0]) == "agw-platform" {
 		code, err := platformCmd(hc, os.Args[1:])
 		if err != nil {
-			fmt.Fprintln(os.Stderr, "Fehler:", err)
+			fmt.Fprintln(os.Stderr, "error:", err)
 			os.Exit(1)
 		}
 		os.Exit(code)
 	}
-	// Als agw-internet aufgerufen (Symlink im Abbild): Internetzugang erbitten.
+	// Called as agw-internet (symlink in the image): request internet access.
 	if filepath.Base(os.Args[0]) == "agw-internet" {
 		code, err := internet(hc, os.Args[1:])
 		if err != nil {
-			fmt.Fprintln(os.Stderr, "Fehler:", err)
+			fmt.Fprintln(os.Stderr, "error:", err)
 			os.Exit(1)
 		}
 		os.Exit(code)
@@ -82,22 +82,22 @@ func main() {
 		os.Exit(1)
 	}
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "Fehler:", err)
+		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
 	}
 	os.Exit(code)
 }
 
 func usage() {
-	fmt.Fprint(os.Stderr, `agw-artifact — Artefakte des aktuellen Chats beim Orchestrator ablegen
+	fmt.Fprint(os.Stderr, `agw-artifact — store artifacts of the current chat at the orchestrator
 
-  agw-artifact upload <datei> [--name <name>]   hochladen; wartet auf Bestätigung durch den Nutzer
-  agw-artifact list                             Artefakte dieses Chats auflisten
-  agw-artifact get <name> [-o <datei>]          Artefakt herunterladen (Eingaben des Nutzers: --kind input)
-  agw-internet "<Begründung>"                   Internetzugang erbitten; wartet auf den Nutzer
-  agw-platform <befehl> …                       Agri-Gaia-Plattform (agw-platform --help)
+  agw-artifact upload <file> [--name <name>]    upload; waits for confirmation by the user
+  agw-artifact list                             list the artifacts of this chat
+  agw-artifact get <name> [-o <file>]           download an artifact (user inputs: --kind input)
+  agw-internet "<reason>"                       request internet access; waits for the user
+  agw-platform <command> …                      Agri-Gaia platform (agw-platform --help)
 
-Exit-Code bei upload: 0 bestätigt, 3 abgelehnt, 1 Fehler.
+Exit code for upload: 0 approved, 3 rejected, 1 error.
 `)
 }
 
@@ -111,8 +111,8 @@ type uploadResult struct {
 
 func upload(hc *http.Client, args []string) (int, error) {
 	fs := flag.NewFlagSet("upload", flag.ContinueOnError)
-	name := fs.String("name", "", "Name des Artefakts (Standard: Dateiname)")
-	// Positionsargument darf vor den Flags stehen.
+	name := fs.String("name", "", "name of the artifact (default: file name)")
+	// The positional argument may come before the flags.
 	var file string
 	if len(args) > 0 && args[0] != "" && args[0][0] != '-' {
 		file, args = args[0], args[1:]
@@ -124,7 +124,7 @@ func upload(hc *http.Client, args []string) (int, error) {
 		file = fs.Arg(0)
 	}
 	if file == "" {
-		return 1, errors.New("keine Datei angegeben")
+		return 1, errors.New("no file given")
 	}
 	if *name == "" {
 		*name = filepath.Base(file)
@@ -149,7 +149,7 @@ func upload(hc *http.Client, args []string) (int, error) {
 	req.Header.Set("X-Agw-Sha256", sum)
 	req.Header.Set("X-Agw-Via", "cli")
 	setCaller(req)
-	fmt.Fprintf(os.Stderr, "Lade %s hoch (%d Bytes). Warte auf Bestätigung durch den Nutzer …\n", *name, size)
+	fmt.Fprintf(os.Stderr, "Uploading %s (%d bytes). Waiting for confirmation by the user …\n", *name, size)
 	start := time.Now()
 	resp, err := hc.Do(req)
 	if err != nil {
@@ -158,39 +158,39 @@ func upload(hc *http.Client, args []string) (int, error) {
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		return 1, fmt.Errorf("Orchestrator antwortet %d: %s", resp.StatusCode, body)
+		return 1, fmt.Errorf("orchestrator responds %d: %s", resp.StatusCode, body)
 	}
 	var r uploadResult
 	if err := json.Unmarshal(body, &r); err != nil {
-		return 1, fmt.Errorf("unlesbare Antwort: %s", body)
+		return 1, fmt.Errorf("unreadable response: %s", body)
 	}
 	wait := time.Since(start).Round(time.Second)
 	switch r.Status {
 	case "approved":
-		fmt.Printf("bestätigt: Artefakt %q gespeichert (%d Bytes, sha256 %s, Wartezeit %s)\n", r.Name, r.Size, r.SHA256, wait)
+		fmt.Printf("approved: artifact %q stored (%d bytes, sha256 %s, wait %s)\n", r.Name, r.Size, r.SHA256, wait)
 		return 0, nil
 	default:
 		msg := r.Message
 		if msg == "" {
-			msg = "vom Nutzer abgelehnt"
+			msg = "rejected by the user"
 		}
-		fmt.Printf("abgelehnt: Artefakt %q wurde nicht gespeichert (%s, Wartezeit %s)\n", r.Name, msg, wait)
+		fmt.Printf("rejected: artifact %q was not stored (%s, wait %s)\n", r.Name, msg, wait)
 		return exitRejected, nil
 	}
 }
 
-// internet bittet den Nutzer um Internetzugang und wartet auf die Entscheidung.
+// internet asks the user for internet access and waits for the decision.
 func internet(hc *http.Client, args []string) (int, error) {
 	reason := strings.TrimSpace(strings.Join(args, " "))
 	if reason == "" || reason == "-h" || reason == "--help" {
-		fmt.Fprint(os.Stderr, "agw-internet \"<Begründung>\" — bittet den Nutzer um Internetzugang und wartet auf die Entscheidung.\nExit-Code: 0 freigegeben, 3 abgelehnt, 1 Fehler.\n")
+		fmt.Fprint(os.Stderr, "agw-internet \"<reason>\" — asks the user for internet access and waits for the decision.\nExit code: 0 granted, 3 rejected, 1 error.\n")
 		if reason == "" {
 			return 1, nil
 		}
 		return 0, nil
 	}
 	body, _ := json.Marshal(map[string]string{"reason": reason})
-	fmt.Fprintln(os.Stderr, "Bitte um Internetzugang. Warte auf die Entscheidung des Nutzers …")
+	fmt.Fprintln(os.Stderr, "Requesting internet access. Waiting for the user's decision …")
 	req, _ := http.NewRequest(http.MethodPost, "http://agw/internet", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	setCaller(req)
@@ -201,17 +201,17 @@ func internet(hc *http.Client, args []string) (int, error) {
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		return 1, fmt.Errorf("Orchestrator antwortet %d: %s", resp.StatusCode, raw)
+		return 1, fmt.Errorf("orchestrator responds %d: %s", resp.StatusCode, raw)
 	}
 	var r uploadResult
 	if err := json.Unmarshal(raw, &r); err != nil {
-		return 1, fmt.Errorf("unlesbare Antwort: %s", raw)
+		return 1, fmt.Errorf("unreadable response: %s", raw)
 	}
 	if r.Status == "approved" {
-		fmt.Println("bestätigt:", r.Message)
+		fmt.Println("approved:", r.Message)
 		return 0, nil
 	}
-	fmt.Println("abgelehnt:", r.Message)
+	fmt.Println("rejected:", r.Message)
 	return exitRejected, nil
 }
 
@@ -225,7 +225,7 @@ func list(hc *http.Client) error {
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("Orchestrator antwortet %d: %s", resp.StatusCode, body)
+		return fmt.Errorf("orchestrator responds %d: %s", resp.StatusCode, body)
 	}
 	var items []struct {
 		Name      string    `json:"name"`
@@ -236,7 +236,7 @@ func list(hc *http.Client) error {
 		return err
 	}
 	if len(items) == 0 {
-		fmt.Println("(keine Artefakte in diesem Chat)")
+		fmt.Println("(no artifacts in this chat)")
 	}
 	for _, it := range items {
 		fmt.Printf("%-40s %10d  %s\n", it.Name, it.Size, it.CreatedAt.Format(time.RFC3339))
@@ -246,8 +246,8 @@ func list(hc *http.Client) error {
 
 func get(hc *http.Client, args []string) error {
 	fs := flag.NewFlagSet("get", flag.ContinueOnError)
-	out := fs.String("o", "", "Zieldatei (Standard: Name des Artefakts)")
-	kind := fs.String("kind", "output", "output (Ergebnis) oder input (Eingabe des Nutzers)")
+	out := fs.String("o", "", "target file (default: name of the artifact)")
+	kind := fs.String("kind", "output", "output (result) or input (input from the user)")
 	var name string
 	if len(args) > 0 && args[0] != "" && args[0][0] != '-' {
 		name, args = args[0], args[1:]
@@ -259,7 +259,7 @@ func get(hc *http.Client, args []string) error {
 		name = fs.Arg(0)
 	}
 	if name == "" {
-		return errors.New("kein Name angegeben")
+		return errors.New("no name given")
 	}
 	if *out == "" {
 		*out = filepath.Base(name)
@@ -273,7 +273,7 @@ func get(hc *http.Client, args []string) error {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("Orchestrator antwortet %d: %s", resp.StatusCode, body)
+		return fmt.Errorf("orchestrator responds %d: %s", resp.StatusCode, body)
 	}
 	f, err := os.Create(*out)
 	if err != nil {
@@ -284,13 +284,13 @@ func get(hc *http.Client, args []string) error {
 		err = cerr
 	}
 	if err == nil {
-		fmt.Printf("%s gespeichert (%d Bytes)\n", *out, n)
+		fmt.Printf("%s saved (%d bytes)\n", *out, n)
 	}
 	return err
 }
 
-// setCaller nennt dem Orchestrator Werkzeugaufruf und Sitzung, in denen dieser Befehl läuft (setzt der
-// Orchestrator in die Umgebung); nur für die Anzeige, wer gefragt hat.
+// setCaller tells the orchestrator the tool call and session in which this command runs (the
+// orchestrator puts them into the environment); only for showing who asked.
 func setCaller(req *http.Request) {
 	if id := os.Getenv("PI_AGW_TOOL_CALL_ID"); id != "" {
 		req.Header.Set("X-Agw-Tool-Call", id)

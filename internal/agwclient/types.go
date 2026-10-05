@@ -1,9 +1,9 @@
-// Package agwclient ist ein Client für die HTTP-API des Orchestrators (siehe poc/API.md).
+// Package agwclient is a client for the orchestrator's HTTP API (see poc/API.md).
 package agwclient
 
 import "encoding/json"
 
-// Pricing: US-Dollar je 1 Mio. Tokens.
+// Pricing: US dollars per 1M tokens.
 type Pricing struct {
 	Input      float64 `json:"input"`
 	Output     float64 `json:"output"`
@@ -12,17 +12,17 @@ type Pricing struct {
 	Currency   string  `json:"currency"`
 	Note       string  `json:"note,omitempty"`
 	Source     string  `json:"source,omitempty"`
-	Retrieved  string  `json:"retrieved,omitempty"` // Abrufdatum der Preise
+	Retrieved  string  `json:"retrieved,omitempty"` // date the prices were retrieved
 }
 
-// TariffWindow: Spitzenzeitfenster in UTC, z. B. days "mon-fri", from "01:00", to "09:00".
+// TariffWindow: peak time window in UTC, e.g. days "mon-fri", from "01:00", to "09:00".
 type TariffWindow struct {
 	Days string `json:"days"`
 	From string `json:"from"`
 	To   string `json:"to"`
 }
 
-// Tariff: Die Preise in Pricing sind der Spitzentarif; außerhalb der Fenster gilt OffpeakFactor.
+// Tariff: the prices in Pricing are the peak tariff; outside the windows OffpeakFactor applies.
 type Tariff struct {
 	PeakWindowsUTC []TariffWindow `json:"peak_windows_utc"`
 	OffpeakFactor  float64        `json:"offpeak_factor"`
@@ -100,8 +100,8 @@ type Tokens struct {
 	Total     int64 `json:"total"`
 }
 
-// ContextUsage: Kontextauslastung laut pi. Tokens und Percent sind nil direkt nach einer
-// Kompaktierung, bis die nächste Antwort echte Werte liefert. Percent liegt zwischen 0 und 100.
+// ContextUsage: context usage as reported by pi. Tokens and Percent are nil right after a
+// compaction until the next response delivers real values. Percent lies between 0 and 100.
 type ContextUsage struct {
 	Tokens           *int64   `json:"tokens"`
 	Window           int64    `json:"window"`
@@ -122,10 +122,10 @@ type Chat struct {
 	Internet         bool            `json:"internet"`
 	AutoCompact      bool            `json:"auto_compact"`
 	Compactions      int             `json:"compactions"`
-	MaxSubagents     int             `json:"max_subagents"` // höchstens so viele Subagenten
-	Subagents        int             `json:"subagents"`     // bisher gestartete Subagenten-Läufe
-	LLMCalls         int             `json:"llm_calls"`     // am LLM-Proxy erfasste Modellaufrufe
-	CostOther        float64         `json:"cost_other"`    // Kosten außerhalb der Antworten der Hauptsitzung
+	MaxSubagents     int             `json:"max_subagents"` // at most this many subagents
+	Subagents        int             `json:"subagents"`     // subagent runs started so far
+	LLMCalls         int             `json:"llm_calls"`     // model calls recorded at the LLM proxy
+	CostOther        float64         `json:"cost_other"`    // cost outside the main session's responses
 	Context          *ContextUsage   `json:"context,omitempty"`
 	Running          bool            `json:"running"`
 	SlotID           string          `json:"slot_id,omitempty"`
@@ -136,25 +136,25 @@ type Chat struct {
 	ArtifactCount    int             `json:"artifact_count"`
 	PendingApprovals int             `json:"pending_approvals"`
 	Workspace        *Workspace      `json:"workspace,omitempty"`
-	Resuming         bool            `json:"resuming"`              // wird gerade in einer frischen Sandbox fortgesetzt
-	Queued           int             `json:"queued"`                // eingereihte, noch nicht übergebene Nachrichten
-	QueueHeld        bool            `json:"queue_held"`            // Eingereihtes geht erst mit der nächsten Nachricht
+	Resuming         bool            `json:"resuming"`              // is being resumed in a fresh sandbox right now
+	Queued           int             `json:"queued"`                // queued messages not yet handed over
+	QueueHeld        bool            `json:"queue_held"`            // queued items go out only with the next message
 	HoldReason       string          `json:"hold_reason,omitempty"` // abort, wake_limit, auto_turns
 	RunningSince     string          `json:"running_since,omitempty"`
-	// BackgroundRunning: laufende Hintergrundaufgaben (bash mit run_in_background).
+	// BackgroundRunning: running background tasks (bash with run_in_background).
 	BackgroundRunning int `json:"background_running"`
 }
 
-// QueueEntry: eingereihte Nachricht (Warteschlange des Chats).
+// QueueEntry: queued message (the chat's queue).
 type QueueEntry struct {
 	ID          string   `json:"id"`
 	Text        string   `json:"text"`
 	Attachments []string `json:"attachments"`
 	CreatedAt   string   `json:"created_at"`
-	Kind        string   `json:"kind,omitempty"` // user oder system (Meldung des Orchestrators)
+	Kind        string   `json:"kind,omitempty"` // user or system (orchestrator note)
 }
 
-// BackgroundTask: Hintergrundaufgabe (bash mit run_in_background), siehe API.md.
+// BackgroundTask: background task (bash with run_in_background), see API.md.
 type BackgroundTask struct {
 	ID           string `json:"id"`
 	Session      string `json:"session"`
@@ -174,8 +174,8 @@ type BackgroundTask struct {
 	Woke         bool   `json:"woke,omitempty"`
 }
 
-// Workspace: letzte Sicherung von /workspace (übersteht das Ruhen). SavedAt leer:
-// noch nie gesichert; SkippedReason: die letzte Sicherung wurde ausgelassen.
+// Workspace: last backup of /workspace (survives idling). SavedAt empty:
+// never backed up; SkippedReason: the last backup was skipped.
 type Workspace struct {
 	Size          int64  `json:"size"`
 	ArchiveSize   int64  `json:"archive_size"`
@@ -185,8 +185,8 @@ type Workspace struct {
 	SkippedAt     string `json:"skipped_at,omitempty"`
 }
 
-// StoredMessage: Cost und Peak berechnet der Orchestrator nach Tarif (nur Antworten und
-// Kompaktierungen). Role "compaction" kennzeichnet eine Kompaktierung.
+// StoredMessage: Cost and Peak are computed by the orchestrator per tariff (only responses and
+// compactions). Role "compaction" marks a compaction.
 type StoredMessage struct {
 	Seq       int64           `json:"seq"`
 	Role      string          `json:"role"`
@@ -196,7 +196,7 @@ type StoredMessage struct {
 	CreatedAt string          `json:"created_at"`
 }
 
-// Command ist ein Slash-Befehl (Name ohne „/"). Source: builtin, extension, prompt oder skill.
+// Command is a slash command (name without "/"). Source: builtin, extension, prompt or skill.
 type Command struct {
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
@@ -204,7 +204,7 @@ type Command struct {
 	Args        string `json:"args,omitempty"`
 }
 
-// CommandResult ist die Antwort von POST /api/chats/{id}/commands.
+// CommandResult is the response of POST /api/chats/{id}/commands.
 type CommandResult struct {
 	OK      bool            `json:"ok"`
 	Resumed bool            `json:"resumed"`
@@ -224,9 +224,9 @@ type Artifact struct {
 	Via         string `json:"via"`
 }
 
-// Approval: Kind "artifact_upload" (Name, Size, SHA256 beschreiben die Datei) oder
-// "internet_access" (Name ist die Begründung des Agenten, Size 0) oder "platform_write" (Name ist
-// „METHODE pfad“ eines Aufrufs der Agri-Gaia-Plattform, Preview samt JSON-Körper).
+// Approval: Kind "artifact_upload" (Name, Size, SHA256 describe the file) or
+// "internet_access" (Name is the agent's justification, Size 0) or "platform_write" (Name is
+// "METHOD path" of a call to the Agri-Gaia platform, Preview including the JSON body).
 type Approval struct {
 	ID          string `json:"id"`
 	ChatID      string `json:"chat_id"`
@@ -253,7 +253,7 @@ type SocketCall struct {
 	CreatedAt string `json:"created_at"`
 }
 
-// ChatDetail ist die Antwort von GET /api/chats/{id}.
+// ChatDetail is the response of GET /api/chats/{id}.
 type ChatDetail struct {
 	Chat        Chat            `json:"chat"`
 	Messages    []StoredMessage `json:"messages"`
@@ -266,14 +266,14 @@ type ChatDetail struct {
 	Background      []BackgroundTask `json:"background"`
 }
 
-// LLMToolCall: vom Modell angeforderter Werkzeugaufruf, wie ihn der Proxy gesehen hat.
+// LLMToolCall: tool call requested by the model, as seen by the proxy.
 type LLMToolCall struct {
 	Name      string `json:"name"`
 	Arguments string `json:"arguments"`
 }
 
-// LLMCall ist ein am LLM-Proxy erfasster Modellaufruf (außerhalb der Sandbox gemessen).
-// Main: die Antwort gehört zur Hauptsitzung; sonst Subagent, Kompaktierung o. Ä.
+// LLMCall is a model call recorded at the LLM proxy (measured outside the sandbox).
+// Main: the response belongs to the main session; otherwise subagent, compaction or similar.
 type LLMCall struct {
 	ID         int64         `json:"id"`
 	SlotID     string        `json:"slot_id"`
@@ -293,7 +293,7 @@ type LLMCall struct {
 	Main       bool          `json:"main"`
 }
 
-// SubagentPayload: je nach Kind belegt (task/text: Text; tool_call: Name, Arguments;
+// SubagentPayload: filled depending on Kind (task/text: Text; tool_call: Name, Arguments;
 // tool_result: Name, Text, IsError).
 type SubagentPayload struct {
 	Text      string `json:"text,omitempty"`
@@ -302,9 +302,9 @@ type SubagentPayload struct {
 	IsError   bool   `json:"is_error,omitempty"`
 }
 
-// SubagentEntry ist ein Eintrag aus der Sitzungsdatei eines Subagenten. Quelle ist die Sandbox,
-// also nicht fälschungssicher; Confirmed heißt: die zugehörige Antwort ist am Proxy belegt.
-// Kind: task, tool_call, tool_result oder text.
+// SubagentEntry is an entry from a subagent's session file. The source is the sandbox,
+// so it is not tamper-proof; Confirmed means: the corresponding response is attested at the proxy.
+// Kind: task, tool_call, tool_result or text.
 type SubagentEntry struct {
 	ChatID     string          `json:"chat_id"`
 	RunID      string          `json:"run_id"`
@@ -320,25 +320,25 @@ type SubagentEntry struct {
 type SendResult struct {
 	OK      bool   `json:"ok"`
 	Resumed bool   `json:"resumed"`
-	Queued  bool   `json:"queued"`             // eingereiht, weil der Agent gerade arbeitet
-	QueueID string `json:"queue_id,omitempty"` // Kennung des Eintrags
+	Queued  bool   `json:"queued"`             // queued because the agent is working
+	QueueID string `json:"queue_id,omitempty"` // ID of the entry
 }
 
-// CreateChatRequest: leere Felder werden weggelassen, damit der Server seine Voreinstellung nimmt.
+// CreateChatRequest: empty fields are omitted so that the server uses its default.
 type CreateChatRequest struct {
 	Model    string `json:"model,omitempty"`
 	Variant  string `json:"variant,omitempty"`
 	Title    string `json:"title,omitempty"`
 	Message  string `json:"message,omitempty"`
 	Internet *bool  `json:"internet,omitempty"`
-	// MaxSubagents: nil = Voreinstellung des Servers; 0 ist ein gültiger Wert.
+	// MaxSubagents: nil = server default; 0 is a valid value.
 	MaxSubagents *int `json:"max_subagents,omitempty"`
-	// Delegation: übertragene Rechte als JSON (leer: ohne Delegation).
+	// Delegation: delegated rights as JSON (empty: no delegation).
 	Delegation json.RawMessage `json:"delegation,omitempty"`
 }
 
-// ToolExecution ist eine Operation, die der Orchestrator in der Ausführungs-Sandbox ausgeführt
-// hat (E9).
+// ToolExecution is an operation the orchestrator has executed in the execution sandbox
+// (E9).
 type ToolExecution struct {
 	ID            int64          `json:"id"`
 	Session       string         `json:"session"`
@@ -355,9 +355,9 @@ type ToolExecution struct {
 	DurationMs    int64          `json:"duration_ms"`
 }
 
-// ReconciledCall ist ein Werkzeugaufruf im Abgleich: angefordert (Proxy) und/oder ausgeführt
-// (Orchestrator). State: confirmed, unrequested, unexecuted, mismatch, internal, aborted (Antwort
-// des Modells abgebrochen), rejected (laut Sitzung von pi abgewiesen; Reason, nicht fälschungssicher).
+// ReconciledCall is a tool call in the reconciliation: requested (proxy) and/or executed
+// (orchestrator). State: confirmed, unrequested, unexecuted, mismatch, internal, aborted (model
+// response aborted), rejected (refused according to pi's session; Reason, not tamper-proof).
 type ReconciledCall struct {
 	ToolCallID   string   `json:"tool_call_id"`
 	State        string   `json:"state"`

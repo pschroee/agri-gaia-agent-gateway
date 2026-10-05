@@ -19,12 +19,12 @@ func TestReconcile(t *testing.T) {
 			{"id":"call_01_b","name":"read","arguments":"{}"},
 			{"id":"call_02_c","name":"todo","arguments":"{}"},
 			{"id":"call_03_d","name":"edit","arguments":"{}"}]`)},
-		{ID: 2, ResponseID: "r2", Complete: true, StartedAt: t0.Add(time.Second), ToolCalls: json.RawMessage(`[{"id":"call_10_e","name":"write","arguments":"{}"},{"name":"alt_ohne_id"}]`)},
+		{ID: 2, ResponseID: "r2", Complete: true, StartedAt: t0.Add(time.Second), ToolCalls: json.RawMessage(`[{"id":"call_10_e","name":"write","arguments":"{}"},{"name":"old_without_id"}]`)},
 		{ID: 3, Complete: true, StartedAt: t0.Add(2 * time.Second), ToolCalls: json.RawMessage(`[]`)},
-		// M1: abgebrochene Antwort (kein finish_reason) und von pi abgewiesene Aufrufe
+		// M1: broken-off response (no finish_reason) and calls refused by pi
 		{ID: 4, Complete: false, StartedAt: t0.Add(3 * time.Second), ToolCalls: json.RawMessage(`[{"id":"call_20_f","name":"bash","arguments":"{\"comm"}]`)},
 		{ID: 5, Complete: true, FinishReason: "tool_calls", StartedAt: t0.Add(4 * time.Second), ToolCalls: json.RawMessage(`[{"id":"call_30_g","name":"grep","arguments":"{}"},{"id":"call_31_h","name":"read","arguments":"{}"}]`)},
-		// L6: ein Aufruf mit Operationen unter zwei Werkzeugen, eines davon doppelt
+		// L6: one call with operations under two tools, one of them twice
 		{ID: 6, Complete: true, StartedAt: t0.Add(5 * time.Second), ToolCalls: json.RawMessage(`[{"id":"call_40_i","name":"read","arguments":"{}"}]`)},
 	}
 	execs := []store.ToolExecution{
@@ -38,23 +38,23 @@ func TestReconcile(t *testing.T) {
 		{ID: 17, ToolCallID: "call_40_i", Tool: "bash", Op: "bash", StartedAt: t0.Add(5200 * time.Millisecond)},
 		{ID: 18, ToolCallID: "call_40_i", Tool: "read", Op: "stat", StartedAt: t0.Add(5300 * time.Millisecond)},
 	}
-	rejected := map[string]string{"call_30_g": "Tool grep not found", "call_00_a": "egal, wurde ausgeführt"}
+	rejected := map[string]string{"call_30_g": "Tool grep not found", "call_00_a": "irrelevant, was executed"}
 	r := Reconcile(calls, execs, rejected)
 	want := map[string]string{"call_00_a": RecConfirmed, "call_01_b": RecUnexecuted, "call_02_c": RecInternal,
 		"call_03_d": RecConfirmed, "call_10_e": RecMismatch, "call_99_x": RecUnrequested,
 		"call_20_f": RecAborted, "call_30_g": RecRejected, "call_31_h": RecUnexecuted, "call_40_i": RecMismatch}
 	if len(r.Calls) != len(want) {
-		t.Fatalf("Aufrufe: %+v", r.Calls)
+		t.Fatalf("calls: %+v", r.Calls)
 	}
 	got := map[string]ReconciledCall{}
 	for _, c := range r.Calls {
 		got[c.ToolCallID] = c
 		if c.State != want[c.ToolCallID] {
-			t.Errorf("%s: %s, erwartet %s", c.ToolCallID, c.State, want[c.ToolCallID])
+			t.Errorf("%s: %s, want %s", c.ToolCallID, c.State, want[c.ToolCallID])
 		}
 	}
 	if r.Calls[0].ToolCallID != "call_99_x" {
-		t.Fatalf("Reihenfolge nach Zeit: %s zuerst", r.Calls[0].ToolCallID)
+		t.Fatalf("order by time: %s first", r.Calls[0].ToolCallID)
 	}
 	d := got["call_03_d"]
 	if len(d.Ops) != 3 || d.Ops[2] != "write" || d.DurationMs != 4 || len(d.ExecutionIDs) != 3 || !d.Main || d.ResponseID != "r1" {
@@ -64,28 +64,28 @@ func TestReconcile(t *testing.T) {
 		t.Fatalf("bash: %+v", a)
 	}
 	if e := got["call_10_e"]; e.Tool != "write" || e.ExecutedTool != "bash" || e.Session != "run-x" || e.Main {
-		t.Fatalf("abweichend: %+v", e)
+		t.Fatalf("mismatch: %+v", e)
 	}
 	if r.Summary[RecConfirmed] != 2 || r.Summary[RecUnexecuted] != 2 || r.Summary[RecUnrequested] != 1 || r.Summary[RecInternal] != 1 ||
 		r.Summary[RecMismatch] != 2 || r.Summary[RecAborted] != 1 || r.Summary[RecRejected] != 1 {
-		t.Fatalf("Zusammenfassung: %v", r.Summary)
+		t.Fatalf("summary: %v", r.Summary)
 	}
 	if g := got["call_30_g"]; g.Reason != "Tool grep not found" {
-		t.Fatalf("Hinweis aus der Sitzung: %+v", g)
+		t.Fatalf("hint from the session: %+v", g)
 	}
 	if got["call_00_a"].Reason != "" {
-		t.Fatal("Hinweis an einem ausgeführten Aufruf")
+		t.Fatal("hint on an executed call")
 	}
 	if i := got["call_40_i"]; i.ExecutedTool != "read,bash" {
-		t.Fatalf("doppelt angehängt: %q", i.ExecutedTool)
+		t.Fatalf("appended twice: %q", i.ExecutedTool)
 	}
 	if empty := Reconcile(nil, nil, nil); len(empty.Calls) != 0 || empty.Executions == nil || empty.Summary[RecConfirmed] != 0 {
-		t.Fatalf("leer: %+v", empty)
+		t.Fatalf("empty: %+v", empty)
 	}
 }
 
-// Über den Manager gegen Postgres: Proxy meldet die angeforderten IDs, der
-// Socket die Ausführungen; der Abgleich verbindet beide, SSE meldet jede Ausführung.
+// Through the manager against Postgres: the proxy reports the requested IDs, the
+// socket the executions; the reconciliation joins both, SSE reports every execution.
 func TestToolExecutionsReconciledInManager(t *testing.T) {
 	e := setup(t)
 	ctx := context.Background()
@@ -108,9 +108,9 @@ func TestToolExecutionsReconciledInManager(t *testing.T) {
 		t.Fatal(err)
 	}
 	if r.Summary[RecConfirmed] != 1 || r.Summary[RecUnexecuted] != 1 || r.Summary[RecUnrequested] != 1 || len(r.Executions) != 2 {
-		t.Fatalf("Abgleich: %+v", r.Summary)
+		t.Fatalf("reconciliation: %+v", r.Summary)
 	}
 	if _, err := e.m.ToolExecutions(ctx, "00000000-0000-0000-0000-000000000000"); err == nil {
-		t.Fatal("unbekannter Chat ohne Fehler")
+		t.Fatal("unknown chat without error")
 	}
 }

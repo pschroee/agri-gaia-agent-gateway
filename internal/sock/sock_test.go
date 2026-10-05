@@ -26,8 +26,8 @@ type fakeBackend struct {
 	uploads []string
 	decide  string // "approved" | "rejected"
 	files   map[string]string
-	calls2  []string // Kennungen der Werkzeugaufrufe beim Upload (store.ToolCallFrom)
-	sess    []string // Sitzungen bei Upload und Internet (store.SessionFrom)
+	calls2  []string // tool call IDs at upload (store.ToolCallFrom)
+	sess    []string // sessions at upload and internet (store.SessionFrom)
 }
 
 func (f *fakeBackend) ChatForSlot(string) string {
@@ -89,7 +89,7 @@ func start(t *testing.T, b Backend) *http.Client {
 	t.Cleanup(func() { srv.Close() })
 	st, err := os.Stat(filepath.Join(dir, SocketName))
 	if err != nil || st.Mode().Perm()&0o006 != 0o006 {
-		t.Fatalf("Socket nicht für andere Nutzer verbindbar: %v %v", st.Mode(), err)
+		t.Fatalf("socket not connectable for other users: %v %v", st.Mode(), err)
 	}
 	return &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 		return (&net.Dialer{}).DialContext(ctx, "unix", filepath.Join(dir, SocketName))
@@ -104,11 +104,11 @@ func TestUnassignedSlotRefuses(t *testing.T) {
 		t.Fatal(err)
 	}
 	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusConflict || !strings.Contains(string(body), "nicht zugewiesen") {
-		t.Fatalf("erwartet 409 nicht zugewiesen: %d %s", resp.StatusCode, body)
+	if resp.StatusCode != http.StatusConflict || !strings.Contains(string(body), "not assigned") {
+		t.Fatalf("expected 409 not assigned: %d %s", resp.StatusCode, body)
 	}
 	if len(b.calls) != 1 || !strings.HasPrefix(b.calls[0], "cli:upload:") {
-		t.Fatalf("Aufruf nicht protokolliert: %v", b.calls)
+		t.Fatalf("call not logged: %v", b.calls)
 	}
 }
 
@@ -124,7 +124,7 @@ func TestUploadApprovedViaCLI(t *testing.T) {
 	var r UploadResult
 	json.NewDecoder(resp.Body).Decode(&r)
 	if resp.StatusCode != 200 || r.Status != "approved" || r.Name != "x.txt" {
-		t.Fatalf("Antwort: %d %+v", resp.StatusCode, r)
+		t.Fatalf("response: %d %+v", resp.StatusCode, r)
 	}
 	if len(b.uploads) != 1 || b.uploads[0] != "chat-1|cli|x.txt|abc" {
 		t.Fatalf("Upload: %v", b.uploads)
@@ -139,30 +139,30 @@ func TestUploadTooLarge(t *testing.T) {
 		t.Fatal(err)
 	}
 	if resp.StatusCode != http.StatusRequestEntityTooLarge {
-		t.Fatalf("413 erwartet, bekam %d", resp.StatusCode)
+		t.Fatalf("expected 413, got %d", resp.StatusCode)
 	}
 	if len(b.uploads) != 0 {
-		t.Fatal("übergroße Datei weitergereicht")
+		t.Fatal("oversized file passed on")
 	}
 }
 
 func TestListAndGet(t *testing.T) {
-	b := &fakeBackend{chat: "chat-1", files: map[string]string{"input/daten.csv": "a,b\n"}}
+	b := &fakeBackend{chat: "chat-1", files: map[string]string{"input/data.csv": "a,b\n"}}
 	c := start(t, b)
 	resp, _ := c.Get("http://agw/artifacts")
 	var list []store.Artifact
 	json.NewDecoder(resp.Body).Decode(&list)
 	if len(list) != 1 || list[0].Name != "a.txt" {
-		t.Fatalf("Liste: %+v", list)
+		t.Fatalf("list: %+v", list)
 	}
-	resp, _ = c.Get("http://agw/artifacts/daten.csv?kind=input")
+	resp, _ = c.Get("http://agw/artifacts/data.csv?kind=input")
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != 200 || string(body) != "a,b\n" {
 		t.Fatalf("Download: %d %q", resp.StatusCode, body)
 	}
-	resp, _ = c.Get("http://agw/artifacts/fehlt.txt")
+	resp, _ = c.Get("http://agw/artifacts/missing.txt")
 	if resp.StatusCode != 404 {
-		t.Fatalf("404 erwartet: %d", resp.StatusCode)
+		t.Fatalf("expected 404: %d", resp.StatusCode)
 	}
 }
 
@@ -181,10 +181,10 @@ func mcpCall(t *testing.T, c *http.Client, method string, params any) map[string
 	raw, _ := io.ReadAll(resp.Body)
 	var msg map[string]any
 	if err := json.Unmarshal(raw, &msg); err != nil {
-		t.Fatalf("MCP-Antwort kein JSON (%d): %s", resp.StatusCode, raw)
+		t.Fatalf("MCP response not JSON (%d): %s", resp.StatusCode, raw)
 	}
 	if msg["error"] != nil {
-		t.Fatalf("MCP-Fehler: %v", msg["error"])
+		t.Fatalf("MCP error: %v", msg["error"])
 	}
 	return msg["result"].(map[string]any)
 }
@@ -199,7 +199,7 @@ func TestMCPToolsListWorksUnassigned(t *testing.T) {
 	}
 	for _, want := range []string{"ping", "list_artifacts", "upload_artifact", "request_internet"} {
 		if !names[want] {
-			t.Fatalf("Werkzeug %s fehlt: %v", want, names)
+			t.Fatalf("tool %s missing: %v", want, names)
 		}
 	}
 }
@@ -212,13 +212,13 @@ func TestMCPPingAndUpload(t *testing.T) {
 	if !strings.Contains(text, "chat-9") || !strings.Contains(text, "p-test") {
 		t.Fatalf("ping: %s", text)
 	}
-	res = mcpCall(t, c, "tools/call", map[string]any{"name": "upload_artifact", "arguments": map[string]any{"name": "n.txt", "content_base64": "aGFsbG8="}})
+	res = mcpCall(t, c, "tools/call", map[string]any{"name": "upload_artifact", "arguments": map[string]any{"name": "n.txt", "content_base64": "aGVsbG8="}})
 	text = res["content"].([]any)[0].(map[string]any)["text"].(string)
-	if !strings.Contains(text, "abgelehnt") {
-		t.Fatalf("Ablehnung nicht gemeldet: %s", text)
+	if !strings.Contains(text, "rejected") {
+		t.Fatalf("rejection not reported: %s", text)
 	}
-	if len(b.uploads) != 1 || b.uploads[0] != "chat-9|mcp|n.txt|hallo" {
-		t.Fatalf("Upload über MCP: %v", b.uploads)
+	if len(b.uploads) != 1 || b.uploads[0] != "chat-9|mcp|n.txt|hello" {
+		t.Fatalf("upload via MCP: %v", b.uploads)
 	}
 	found := false
 	for _, c := range b.calls {
@@ -227,7 +227,7 @@ func TestMCPPingAndUpload(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Fatalf("ping nicht protokolliert: %v", b.calls)
+		t.Fatalf("ping not logged: %v", b.calls)
 	}
 }
 
@@ -235,7 +235,7 @@ func TestMCPCallUnassigned(t *testing.T) {
 	c := start(t, &fakeBackend{})
 	res := mcpCall(t, c, "tools/call", map[string]any{"name": "list_artifacts", "arguments": map[string]any{}})
 	if res["isError"] != true {
-		t.Fatalf("isError erwartet: %v", res)
+		t.Fatalf("expected isError: %v", res)
 	}
 }
 
@@ -251,22 +251,22 @@ func TestInternetRequestViaCLIAndMCP(t *testing.T) {
 	if r.Status != "approved" {
 		t.Fatalf("CLI: %+v", r)
 	}
-	res := mcpCall(t, c, "tools/call", map[string]any{"name": "request_internet", "arguments": map[string]any{"reason": "Webseite"}})
-	if txt := res["content"].([]any)[0].(map[string]any)["text"].(string); !strings.HasPrefix(txt, "bestätigt") {
+	res := mcpCall(t, c, "tools/call", map[string]any{"name": "request_internet", "arguments": map[string]any{"reason": "website"}})
+	if txt := res["content"].([]any)[0].(map[string]any)["text"].(string); !strings.HasPrefix(txt, "approved") {
 		t.Fatalf("MCP: %s", txt)
 	}
-	if len(b.uploads) != 2 || b.uploads[0] != "internet|chat-5|cli|pip install" || b.uploads[1] != "internet|chat-5|mcp|Webseite" {
-		t.Fatalf("Anfragen: %v", b.uploads)
+	if len(b.uploads) != 2 || b.uploads[0] != "internet|chat-5|cli|pip install" || b.uploads[1] != "internet|chat-5|mcp|website" {
+		t.Fatalf("requests: %v", b.uploads)
 	}
-	// Unzugewiesen: abgewiesen, nicht weitergereicht.
+	// Unassigned: refused, not passed on.
 	b.chat = ""
 	resp, _ = c.Post("http://agw/internet", "application/json", strings.NewReader(`{"reason":"x"}`))
 	if resp.StatusCode != http.StatusConflict || len(b.uploads) != 2 {
-		t.Fatalf("unzugewiesen: %d %v", resp.StatusCode, b.uploads)
+		t.Fatalf("unassigned: %d %v", resp.StatusCode, b.uploads)
 	}
 }
 
-// M5: Der Agent kann seinen Weg nicht umdeklarieren.
+// M5: the agent cannot redeclare its channel.
 func TestViaFromEndpointNotHeader(t *testing.T) {
 	b := &fakeBackend{chat: "c", decide: "approved"}
 	c := start(t, b)
@@ -278,7 +278,7 @@ func TestViaFromEndpointNotHeader(t *testing.T) {
 	}
 	resp.Body.Close()
 	if len(b.uploads) != 1 || !strings.Contains(b.uploads[0], "|cli|") {
-		t.Fatalf("Weg: %v", b.uploads)
+		t.Fatalf("channel: %v", b.uploads)
 	}
 }
 
@@ -289,16 +289,16 @@ func TestInternetReasonTruncated(t *testing.T) {
 	resp, _ := c.Post("http://agw/internet", "application/json", strings.NewReader(`{"reason":"`+long+`"}`))
 	resp.Body.Close()
 	if len(b.uploads) != 1 || len([]rune(b.uploads[0])) > 600 {
-		t.Fatalf("Begründung nicht gekürzt: %d Zeichen", len([]rune(b.uploads[0])))
+		t.Fatalf("reason not truncated: %d characters", len([]rune(b.uploads[0])))
 	}
 }
 
-// Die Kennung des Werkzeugaufrufs kommt beim CLI-Upload aus dem Kopf X-Agw-Tool-Call; ungültige
-// Kennungen werden ignoriert.
+// The ID of the tool call comes from the header X-Agw-Tool-Call for a CLI upload; invalid
+// IDs are ignored.
 func TestUploadToolCallHeader(t *testing.T) {
 	b := &fakeBackend{chat: "chat-1", decide: "approved"}
 	c := start(t, b)
-	for _, id := range []string{"call_7", "mit leerzeichen"} {
+	for _, id := range []string{"call_7", "with spaces"} {
 		req, _ := http.NewRequest(http.MethodPost, "http://agw/artifacts?name=x.txt", strings.NewReader("abc"))
 		req.Header.Set("X-Agw-Tool-Call", id)
 		resp, err := c.Do(req)
@@ -308,12 +308,12 @@ func TestUploadToolCallHeader(t *testing.T) {
 		resp.Body.Close()
 	}
 	if len(b.calls2) != 2 || b.calls2[0] != "call_7" || b.calls2[1] != "" {
-		t.Fatalf("Kennungen: %q", b.calls2)
+		t.Fatalf("IDs: %q", b.calls2)
 	}
 }
 
-// Die Sitzung (Hauptagent oder Subagenten-Lauf) kommt bei Upload und Internet aus X-Agw-Session;
-// alles, was nicht wie „main“ oder eine Laufkennung aussieht, wird verworfen.
+// The session (main agent or subagent run) comes from X-Agw-Session for upload and internet;
+// anything that does not look like "main" or a run ID is discarded.
 func TestCallerSessionHeader(t *testing.T) {
 	b := &fakeBackend{chat: "chat-1", decide: "approved"}
 	c := start(t, b)
@@ -335,6 +335,6 @@ func TestCallerSessionHeader(t *testing.T) {
 	resp.Body.Close()
 	want := []string{"main", "0a1b2c3d-4e5f-6789-abcd-ef0123456789#2", "", "0a1b2c3d-4e5f-6789-abcd-ef0123456789"}
 	if strings.Join(b.sess, ",") != strings.Join(want, ",") {
-		t.Fatalf("Sitzungen: %q", b.sess)
+		t.Fatalf("sessions: %q", b.sess)
 	}
 }

@@ -19,16 +19,16 @@ import (
 	"agw/internal/execproto"
 )
 
-// serve ist der langlebige Überwacher in der Ausführungs-Sandbox. Der
-// Orchestrator startet ihn einmal je Platz per docker exec als root (ohne
-// Capabilities außer SETUID/SETGID) und schickt Anfragen über stdin. Jede
-// Anfrage führt ein eigener Kindprozess "agw-exec op" als Agent-Nutzer aus.
-// Der Agent kann den Überwacher deshalb weder beenden noch über /proc seine
-// Ausgabe beschreiben (anderer Nutzer); er erreicht höchstens den Kindprozess
-// seiner eigenen Operation.
+// serve is the long-lived supervisor in the execution sandbox. The
+// orchestrator starts it once per slot via docker exec as root (without
+// capabilities except SETUID/SETGID) and sends requests over stdin. Each
+// request is run by its own child process "agw-exec op" as the agent user.
+// The agent can therefore neither end the supervisor nor write to its output
+// via /proc (different user); at most it reaches the child process of its
+// own operation.
 type server struct {
-	self string // Pfad zu agw-exec
-	uid  int    // Agent-Nutzer; -1: nicht wechseln (Tests)
+	self string // path to agw-exec
+	uid  int    // agent user; -1: do not switch (tests)
 	gid  int
 	env  []string
 
@@ -40,9 +40,9 @@ type server struct {
 	wg      sync.WaitGroup
 
 	reapMu sync.Mutex
-	// cgroup: Verzeichnis mit pids.max und pids.current (Tests setzen es anders).
+	// cgroup: directory with pids.max and pids.current (tests set it differently).
 	cgroup string
-	// bgMax: höchstens so viele Hintergrundaufgaben (Operation bg) gleichzeitig.
+	// bgMax: at most this many concurrent background tasks (operation bg).
 	bgMax int
 }
 
@@ -69,7 +69,7 @@ func newServer(out io.Writer, self string, uid, gid int) *server {
 func (s *server) send(f execproto.Frame) {
 	b, err := json.Marshal(f)
 	if err != nil {
-		b, _ = json.Marshal(execproto.Frame{ID: f.ID, Done: true, Error: "Antwort nicht kodierbar"})
+		b, _ = json.Marshal(execproto.Frame{ID: f.ID, Done: true, Error: "response not encodable"})
 	}
 	s.outMu.Lock()
 	defer s.outMu.Unlock()
@@ -77,8 +77,8 @@ func (s *server) send(f execproto.Frame) {
 	_ = s.out.Flush()
 }
 
-// run liest Anfragen bis zum Ende von stdin. Danach werden alle laufenden
-// Operationen abgebrochen: Ohne Orchestrator soll nichts weiterlaufen.
+// run reads requests until the end of stdin. Afterwards all running
+// operations are aborted: without an orchestrator nothing should keep running.
 func (s *server) run(in io.Reader) {
 	sc := bufio.NewScanner(in)
 	sc.Buffer(make([]byte, 64<<10), execproto.MaxFrameBytes)
@@ -128,20 +128,20 @@ func (s *server) run(in io.Reader) {
 	s.wg.Wait()
 }
 
-// child ist eine laufende Operation. Weitere Eingaben (nur workflow) schreibt ein eigener
-// Schreiber, damit ein Kind, das nicht liest, den Überwacher nicht aufhält; läuft seine
-// Warteschlange voll, wird die Operation abgebrochen.
+// child is a running operation. Further input (workflow only) is written by its own
+// writer, so that a child that does not read cannot hold up the supervisor; if its
+// queue fills up, the operation is aborted.
 type child struct {
 	stdin io.WriteCloser
 	once  sync.Once
 	in    chan []byte
 	done  chan struct{}
-	bg    bool // Hintergrundaufgabe (zählt gegen bgMax)
-	pgid  int  // Prozessgruppe einer Hintergrundaufgabe (aus ihrem ersten Rahmen)
-	ended bool // abschließender Rahmen gesendet (zählt nicht mehr gegen bgMax)
+	bg    bool // background task (counts against bgMax)
+	pgid  int  // process group of a background task (from its first frame)
+	ended bool // final frame sent (no longer counts against bgMax)
 }
 
-// bgRunning zählt die laufenden Hintergrundaufgaben; s.mu ist gesperrt.
+// bgRunning counts the running background tasks; s.mu is locked.
 func (s *server) bgRunning() int {
 	n := 0
 	for _, c := range s.running {
@@ -189,33 +189,33 @@ func (c *child) input(line []byte) {
 	case c.in <- b:
 	case <-c.done:
 	default:
-		c.cancel() // Kind liest nicht: abbrechen statt unbegrenzt zu puffern
+		c.cancel() // child does not read: abort instead of buffering without limit
 	}
 }
 
 func (s *server) start(req execproto.Request) {
 	id := req.ID
-	// Die Ausgabedatei einer Hintergrundaufgabe legt der Überwacher an und übergibt sie offen: Der
-	// Agent kann im Verzeichnis nichts vorab anlegen und die Datei nicht verändern (Review 3, N1).
+	// The supervisor creates the output file of a background task and hands it over open: the
+	// agent cannot create anything in the directory beforehand or modify the file (Review 3, N1).
 	req.LogFD = false
 	var logFile *os.File
 	if req.Op == execproto.OpBg {
 		f, err := openBgLog(bgLogFile(req.Spill))
 		if err != nil {
-			fmt.Fprintln(os.Stderr, "agw-exec serve: Ausgabedatei der Hintergrundaufgabe:", err)
+			fmt.Fprintln(os.Stderr, "agw-exec serve: output file of the background task:", err)
 		} else {
 			logFile, req.LogFD = f, true
 		}
 	}
 	cmd, stdin, stdout, err := s.spawn(logFile)
 	if err != nil && errors.Is(err, syscall.EAGAIN) {
-		// Kein Prozess mehr frei (PidsLimit erschöpft, etwa durch eine Fork-Bombe): Notbremse,
-		// dann ein zweiter Versuch (N3).
+		// No process left (PidsLimit exhausted, e.g. by a fork bomb): emergency brake,
+		// then a second attempt (N3).
 		s.reap()
 		cmd, stdin, stdout, err = s.spawn(logFile)
 	}
 	if logFile != nil {
-		logFile.Close() // der Helfer hat seine Kopie
+		logFile.Close() // the helper has its own copy
 	}
 	if err != nil {
 		s.send(execproto.Frame{ID: id, Done: true, Error: "execution helper not started: " + err.Error(), Code: "EAGAIN"})
@@ -248,7 +248,7 @@ func (s *server) start(req execproto.Request) {
 			if c.bg && (f.Pgid > 0 || f.Done) {
 				s.mu.Lock()
 				if f.Done {
-					c.ended = true // vor dem Senden: Wer das Ende sieht, findet den Platz frei
+					c.ended = true // before sending: whoever sees the end finds the slot free
 				} else {
 					c.pgid = f.Pgid
 				}
@@ -267,9 +267,9 @@ func (s *server) start(req execproto.Request) {
 		delete(s.running, id)
 		s.mu.Unlock()
 		if !done && c.bg {
-			// Der Helfer einer Hintergrundaufgabe ist ohne Ergebnis geendet (etwa vom Agenten
-			// beendet): Ihre Prozessgruppe soll nicht unbeobachtet weiterlaufen. Der Überwacher
-			// darf das mit CAP_KILL auch für Prozesse des Agenten.
+			// The helper of a background task ended without a result (e.g. killed by the agent):
+			// its process group should not keep running unobserved. The supervisor may do
+			// this with CAP_KILL for the agent's processes too.
 			s.mu.Lock()
 			pg := c.pgid
 			s.mu.Unlock()
@@ -282,7 +282,7 @@ func (s *server) start(req execproto.Request) {
 			c.ended = true
 			s.mu.Unlock()
 			msg := "execution helper exited without result"
-			// Ohne freie Prozesse stirbt schon die Laufzeit des Helfers (Go braucht Threads).
+			// Without free processes the helper's runtime already dies (Go needs threads).
 			if s.pidsExhausted() {
 				s.reap()
 				msg += "; the process limit of the execution sandbox was exhausted, all processes of the agent were killed"
@@ -292,7 +292,7 @@ func (s *server) start(req execproto.Request) {
 	}()
 }
 
-// spawn startet einen Kindprozess „agw-exec op“ als Agent-Nutzer; extra wird dort Deskriptor 3.
+// spawn starts a child process "agw-exec op" as the agent user; extra becomes descriptor 3 there.
 func (s *server) spawn(extra *os.File) (*exec.Cmd, io.WriteCloser, io.ReadCloser, error) {
 	cmd := exec.Command(s.self, "op")
 	cmd.Env = s.env
@@ -320,7 +320,7 @@ func (s *server) spawn(extra *os.File) (*exec.Cmd, io.WriteCloser, io.ReadCloser
 	return cmd, stdin, stdout, nil
 }
 
-// pidsExhausted: Ist das PidsLimit der Sandbox (cgroup v2) fast erreicht?
+// pidsExhausted: is the sandbox's PidsLimit (cgroup v2) almost reached?
 func (s *server) pidsExhausted() bool {
 	read := func(name string) (int64, bool) {
 		b, err := os.ReadFile(filepath.Join(s.cgroup, name))
@@ -335,10 +335,10 @@ func (s *server) pidsExhausted() bool {
 	return ok1 && ok2 && cur >= max-4
 }
 
-// reap ist die Notbremse bei erschöpftem PidsLimit (Security-Review N3): Der Überwacher
-// (root mit CAP_KILL, ohne neue Prozesse zu brauchen) beendet alle Prozesse des Agenten
-// außer PID 1, auch solche, die ihrer Prozessgruppe entkommen sind. Laufende Operationen enden
-// dabei mit Fehler. Mehrere Runden, weil eine Schleife des Agenten bis zu ihrem Ende nachlegt.
+// reap is the emergency brake when the PidsLimit is exhausted (security review N3): the supervisor
+// (root with CAP_KILL, without needing new processes) kills all processes of the agent
+// except PID 1, including those that escaped their process group. Running operations end
+// with an error. Several rounds, because a loop of the agent keeps spawning until it ends.
 func (s *server) reap() {
 	if s.uid < 0 {
 		return
@@ -354,10 +354,10 @@ func (s *server) reap() {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	fmt.Fprintf(os.Stderr, "agw-exec serve: Prozesslimit erschöpft, %d Prozesse des Agenten beendet\n", total)
+	fmt.Fprintf(os.Stderr, "agw-exec serve: process limit exhausted, killed %d processes of the agent\n", total)
 }
 
-// killUID schickt SIGKILL an alle Prozesse mit realer uid (außer PID 1 und sich selbst).
+// killUID sends SIGKILL to all processes with the real uid (except PID 1 and itself).
 func killUID(uid int) int {
 	ents, _ := os.ReadDir("/proc")
 	self := os.Getpid()
@@ -386,8 +386,8 @@ func killUID(uid int) int {
 	return n
 }
 
-// opMain ist der Kindprozess: eine Anfrage aus der ersten Zeile von stdin;
-// das Ende von stdin bricht die Operation ab.
+// opMain is the child process: one request from the first line of stdin;
+// the end of stdin aborts the operation.
 func opMain() int {
 	if err := notDumpable(); err != nil {
 		return 2
@@ -403,8 +403,8 @@ func opMain() int {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	// Weitere Zeilen auf stdin sind Eingaben (nur workflow); das Ende von stdin bricht ab.
-	// Ein leerer Rahmen „input“ beendet die Eingaben, ohne abzubrechen.
+	// Further lines on stdin are input (workflow only); the end of stdin aborts.
+	// An empty "input" frame ends the input without aborting.
 	input := make(chan []byte, 64)
 	go func() {
 		closed := false
@@ -439,7 +439,7 @@ func opMain() int {
 		}
 	}()
 	if req.Op != execproto.OpBash && req.Op != execproto.OpWorkflow {
-		// Dateioperationen und Suchen haben eine feste Obergrenze.
+		// File operations and searches have a fixed upper limit.
 		go func() {
 			time.Sleep(10 * time.Minute)
 			cancel()
@@ -481,9 +481,9 @@ func readLine(r *bufio.Reader, max int) ([]byte, error) {
 	}
 }
 
-// ensureBgDir legt das Verzeichnis der Ausgabedateien als Überwacher an (als root: root-eigen,
-// 0755). Was dort schon liegt und nicht genau das ist (Verweis, Datei, Verzeichnis eines anderen
-// Nutzers, andere Rechte), räumt er beiseite.
+// ensureBgDir creates the directory of the output files as the supervisor (as root: owned by root,
+// 0755). Whatever is already there and is not exactly that (symlink, file, directory of another
+// user, other permissions), it moves aside.
 func ensureBgDir(dir string) error {
 	st, err := os.Lstat(dir)
 	if err == nil {
@@ -494,22 +494,22 @@ func ensureBgDir(dir string) error {
 			}
 			return nil
 		}
-		aside := fmt.Sprintf("%s.fremd-%d", dir, time.Now().UnixNano())
+		aside := fmt.Sprintf("%s.foreign-%d", dir, time.Now().UnixNano())
 		if err := os.Rename(dir, aside); err != nil {
-			return fmt.Errorf("fremdes %s nicht beiseitegeräumt: %w", dir, err)
+			return fmt.Errorf("could not move foreign %s aside: %w", dir, err)
 		}
-		fmt.Fprintf(os.Stderr, "agw-exec serve: vorgefundenes %s nach %s verschoben\n", dir, aside)
+		fmt.Fprintf(os.Stderr, "agw-exec serve: moved pre-existing %s to %s\n", dir, aside)
 	} else if !os.IsNotExist(err) {
 		return err
 	}
 	if err := os.Mkdir(dir, 0o755); err != nil {
 		return err
 	}
-	return os.Chmod(dir, 0o755) // unabhängig von der umask
+	return os.Chmod(dir, 0o755) // independent of the umask
 }
 
-// openBgLog legt die Ausgabedatei einer Hintergrundaufgabe an (Verzeichnis siehe ensureBgDir) und
-// öffnet sie zum Schreiben; eine FIFO oder ein Verweis an der Adresse wird ersetzt.
+// openBgLog creates the output file of a background task (directory see ensureBgDir) and
+// opens it for writing; a FIFO or a symlink at that path is replaced.
 func openBgLog(p string) (*os.File, error) {
 	if err := ensureBgDir(filepath.Dir(p)); err != nil {
 		return nil, err
@@ -518,7 +518,7 @@ func openBgLog(p string) (*os.File, error) {
 	if err == nil {
 		return f, nil
 	}
-	// FIFO (ENXIO), Verweis (ELOOP) oder anderes: entfernen und neu anlegen, ohne Vorhandenes zu nehmen.
+	// FIFO (ENXIO), symlink (ELOOP) or other: remove and create anew, without taking anything existing.
 	_ = os.Remove(p)
 	f, err = os.OpenFile(p, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0o644)
 	if err != nil {

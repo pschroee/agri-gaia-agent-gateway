@@ -1,14 +1,14 @@
 package chat
 
-// Subagenten: Abrechnung am Proxy, Sichtbarkeit aus den Sitzungsdateien der
-// Subagenten und die Grenze, wie viele ein Chat starten darf.
+// Subagents: billing at the proxy, visibility from the subagents' session
+// files and the limit on how many a chat may start.
 //
-// Zwei Ebenen der Grenze:
-//   - hart, außerhalb der Sandbox: der LLM-Proxy lässt je Chat höchstens
-//     1 + max_subagents Modellaufrufe gleichzeitig zu, und der Orchestrator
-//     bricht ab, sobald mehr Subagenten gestartet wurden als erlaubt;
-//   - kooperativ: pi-subagents bekommt dieselbe Grenze in seiner
-//     Konfiguration, damit der Agent sie kennt und sauber abgewiesen wird.
+// Two levels of the limit:
+//   - hard, outside the sandbox: the LLM proxy allows at most
+//     1 + max_subagents concurrent model calls per chat, and the orchestrator
+//     aborts as soon as more subagents have been started than allowed;
+//   - cooperative: pi-subagents gets the same limit in its configuration, so
+//     that the agent knows it and is refused cleanly.
 
 import (
 	"bytes"
@@ -26,9 +26,9 @@ import (
 	"agw/internal/store"
 )
 
-// --- Abrechnung am Proxy (llmproxy.Recorder) ---
+// --- Billing at the proxy (llmproxy.Recorder) ---
 
-// Attribute ordnet eine Quelladresse im Platz-Netz einem Chat zu.
+// Attribute assigns a source address in the slot network to a chat.
 func (m *Manager) Attribute(ip string) llmproxy.Attribution {
 	if ip == "" {
 		return llmproxy.Attribution{}
@@ -43,7 +43,7 @@ func (m *Manager) Attribute(ip string) llmproxy.Attribution {
 	return llmproxy.Attribution{}
 }
 
-// Record speichert einen am Proxy erfassten Modellaufruf.
+// Record stores a model call recorded at the proxy.
 func (m *Manager) Record(c llmproxy.Call) {
 	tc, _ := json.Marshal(c.ToolCalls)
 	if len(c.ToolCalls) == 0 {
@@ -57,14 +57,15 @@ func (m *Manager) Record(c llmproxy.Call) {
 		FinishReason: c.FinishReason, Complete: c.Complete,
 	})
 	if err != nil {
-		slog.Error("Modellaufruf nicht gespeichert", "chat", c.ChatID, "fehler", err)
+		slog.Error("model call not stored", "chat", c.ChatID, "err", err)
 		return
 	}
 	m.publish(c.ChatID, Event{Kind: "llm_call", Data: rec})
 	m.publishChat(ctx, c.ChatID)
 }
 
-// LimitHit: der Proxy hat einen Aufruf wegen der Grenze abgewiesen.
+// LimitHit: the proxy refused a call because of the limit. The detail and the error message are
+// matched by the CLI and the web UI and stay German until they are changed on all sides.
 func (m *Manager) LimitHit(chatID string, max int) {
 	m.mu.Lock()
 	l := m.live[chatID]
@@ -73,16 +74,16 @@ func (m *Manager) LimitHit(chatID string, max int) {
 	if l != nil {
 		slot = l.slot.ID
 	}
-	m.LogCall(slot, chatID, "proxy", "agent_limit", fmt.Sprintf("höchstens %d gleichzeitige Agenten", max), "abgewiesen")
-	m.publish(chatID, Event{Kind: "error", Data: map[string]string{"message": fmt.Sprintf("Modellaufruf abgewiesen: höchstens %d gleichzeitige Agenten (Hauptagent und %d Subagenten) erlaubt", max, max-1)}})
+	m.LogCall(slot, chatID, "proxy", "agent_limit", fmt.Sprintf("at most %d concurrent agents", max), "refused")
+	m.publish(chatID, Event{Kind: "error", Data: map[string]string{"message": fmt.Sprintf("model call refused: at most %d concurrent agents (main agent and %d subagents) allowed", max, max-1)}})
 }
 
-// --- Grenze je Chat ---
+// --- Limit per chat ---
 
-// SetMaxSubagents ändert die Grenze; bei aktivem Chat wirkt sie sofort.
+// SetMaxSubagents changes the limit; with an active chat it takes effect immediately.
 func (m *Manager) SetMaxSubagents(ctx context.Context, chatID string, n int) (ChatView, error) {
 	if n < 0 || n > m.opt.MaxSubagentsLimit {
-		return ChatView{}, fmt.Errorf("%w: max_subagents muss zwischen 0 und %d liegen", ErrInvalid, m.opt.MaxSubagentsLimit)
+		return ChatView{}, fmt.Errorf("%w: max_subagents must be between 0 and %d", ErrInvalid, m.opt.MaxSubagentsLimit)
 	}
 	unlock := m.lock(chatID)
 	defer unlock()
@@ -102,32 +103,32 @@ func (m *Manager) SetMaxSubagents(ctx context.Context, chatID string, n int) (Ch
 	if l != nil {
 		m.applySubagentConfig(l, n)
 	}
-	slog.Info("Grenze für Subagenten gesetzt", "chat", chatID, "max", n)
+	slog.Info("subagent limit set", "chat", chatID, "max", n)
 	m.publishChat(ctx, chatID)
 	return m.View(ctx, chatID)
 }
 
-// applySubagentConfig schreibt die Grenze in die Konfiguration von
-// pi-subagents (kooperative Ebene). Die Sandbox kann die Datei ändern; hart
-// ist die Grenze deshalb erst durch Proxy und Überwachung.
+// applySubagentConfig writes the limit into the configuration of
+// pi-subagents (cooperative level). The sandbox can change the file; the limit
+// is therefore only hard through the proxy and monitoring.
 func (m *Manager) applySubagentConfig(l *live, n int) {
 	cfg := map[string]any{"maxActiveAsyncRunsPerSession": max(n, 1), "globalConcurrencyLimit": max(n, 1)}
 	if n > 0 {
 		cfg["maxSubagentSpawnsPerSession"] = n
 	} else {
-		cfg["maxSubagentSpawnsPerSession"] = 1 // 0 hieße dort „unbegrenzt“; hart gilt 0 über Proxy und Überwachung
+		cfg["maxSubagentSpawnsPerSession"] = 1 // 0 would mean "unlimited" there; 0 is enforced hard via proxy and monitoring
 	}
 	b, _ := json.Marshal(cfg)
 	_, err := execPiT(l.slot.Worker, []string{"agw-exec", "put", "/agent/config/extensions/subagent/config.json"}, bytes.NewReader(b), callTimeout)
 	if err != nil {
-		slog.Warn("pi-subagents-Konfiguration nicht geschrieben", "fehler", err)
+		slog.Warn("pi-subagents configuration not written", "err", err)
 	}
 }
 
-// --- Sichtbarkeit: Sitzungsdateien der Subagenten ---
+// --- Visibility: the subagents' session files ---
 
-// runKey macht aus dem Pfad die Kennung des Laufs (bei parallelen Kindern
-// mit #n); dieselbe Kennung steht an den Werkzeugausführungen (E9).
+// runKey turns the path into the run's ID (with #n for parallel children);
+// the same ID is attached to the tool executions (E9).
 func runKey(path string) string {
 	if k := sock.SessionKey(path); k != "main" {
 		return k
@@ -142,12 +143,12 @@ var agentNameRe = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,64}$`)
 func clip(s string) string {
 	s = strings.ToValidUTF8(s, "")
 	if len(s) > maxEntryText {
-		return s[:maxEntryText] + " … [gekürzt]"
+		return s[:maxEntryText] + " … [truncated]"
 	}
 	return s
 }
 
-// parseChildSession wandelt neue Zeilen einer Subagenten-Sitzung in Einträge.
+// parseChildSession turns new lines of a subagent session into entries.
 func parseChildSession(chatID, run, agent, data string) []store.SubagentEntry {
 	var out []store.SubagentEntry
 	add := func(id, kind, resp string, payload any) {
@@ -177,8 +178,8 @@ func parseChildSession(chatID, run, agent, data string) []store.SubagentEntry {
 		if json.Unmarshal([]byte(line), &e) != nil || e.ID == "" {
 			continue
 		}
-		// pi-subagents benennt die Kind-Sitzung „<agent>: <Auftrag …>“; Rückfall, wenn keine
-		// Statusdatei den Agenten nennt (etwa bei Läufen im Vordergrund).
+		// pi-subagents names the child session "<agent>: <task …>"; fallback when no status file
+		// names the agent (e.g. for runs in the foreground).
 		if e.Type == "session_info" && agent == "" {
 			if a, _, ok := strings.Cut(e.Name, ":"); ok && agentNameRe.MatchString(a) {
 				agent = a
@@ -219,14 +220,14 @@ func parseChildSession(chatID, run, agent, data string) []store.SubagentEntry {
 	return out
 }
 
-// watchSubagents liest die Sitzungsdateien der Subagenten laufend nach,
-// solange der Chat aktiv ist, und setzt die Grenze durch.
+// watchSubagents keeps reading the subagents' session files while the chat
+// is active and enforces the limit.
 func (m *Manager) watchSubagents(chatID string, l *live) {
 	t := time.NewTicker(2 * time.Second)
 	defer t.Stop()
 	offsets := map[string]int64{}
 	runs := map[string]runInfo{}
-	agents := map[string]string{} // Agent je Lauf, einmal erkannt (session_info steht nur am Anfang der Datei)
+	agents := map[string]string{} // agent per run, once recognised (session_info is only at the start of the file)
 	for {
 		select {
 		case <-l.stop:
@@ -237,8 +238,8 @@ func (m *Manager) watchSubagents(chatID string, l *live) {
 	}
 }
 
-// runInfo: Name und Zustand eines Laufs, wie agw-exec poll-subagents sie aus den Statusdateien
-// von pi-subagents liest.
+// runInfo: name and state of a run, as agw-exec poll-subagents reads them from pi-subagents'
+// status files.
 type runInfo struct {
 	Agent     string `json:"agent"`
 	Label     string `json:"label"`
@@ -259,8 +260,8 @@ func msTime(ms int64) *time.Time {
 
 func (m *Manager) pollSubagents(chatID string, l *live, offsets map[string]int64, runs map[string]runInfo, agents map[string]string) {
 	in, _ := json.Marshal(map[string]any{"offsets": offsets})
-	// Die Sitzungsdateien liegen im Container von pi; der Agent erreicht sie
-	// seit E9 nicht mehr. Gelesen wird mit agw-exec (dort gibt es kein Python).
+	// The session files live in pi's container; since E9 the agent can no
+	// longer reach them. They are read with agw-exec (there is no Python there).
 	out, err := execPiT(l.slot.Worker, []string{"agw-exec", "poll-subagents"}, bytes.NewReader(in), 10*time.Second)
 	if err != nil || len(out) == 0 || len(out) > 4<<20 {
 		return
@@ -286,7 +287,7 @@ func (m *Manager) pollSubagents(chatID string, l *live, offsets map[string]int64
 		r, err := m.st.UpsertSubagentRun(ctx, store.SubagentRun{ChatID: chatID, RunID: key, Agent: short(ri.Agent), Label: short(ri.Label),
 			State: short(ri.State), PiRunID: short(ri.PiRun), ParentRunID: short(ri.Parent), StartedAt: msTime(ri.StartedAt), EndedAt: msTime(ri.EndedAt)})
 		if err != nil {
-			slog.Warn("Subagenten-Lauf nicht gespeichert", "chat", chatID, "fehler", err)
+			slog.Warn("subagent run not stored", "chat", chatID, "err", err)
 			continue
 		}
 		runs[key] = ri
@@ -314,7 +315,7 @@ func (m *Manager) pollSubagents(chatID string, l *live, offsets map[string]int64
 		}
 		added, err := m.st.AddSubagentEntries(ctx, parsed)
 		if err != nil {
-			slog.Warn("Subagenten-Einträge nicht gespeichert", "chat", chatID, "fehler", err)
+			slog.Warn("subagent entries not stored", "chat", chatID, "err", err)
 		}
 		fresh = append(fresh, added...)
 	}
@@ -331,9 +332,10 @@ func (m *Manager) pollSubagents(chatID string, l *live, offsets map[string]int64
 	m.publishChat(ctx, chatID)
 }
 
-// enforceSubagentLimit bricht ab, wenn mehr Subagenten gestartet wurden als
-// erlaubt: Hauptagent abbrechen (beendet Vordergrund-Kinder) und alle übrigen
-// node-Prozesse der Sandbox außer pi selbst (PID 1) beenden.
+// enforceSubagentLimit aborts when more subagents have been started than
+// allowed: abort the main agent (ends foreground children) and end all other
+// node processes of the sandbox except pi itself (PID 1). Detail, result and
+// error message are matched by the CLI and the web UI and stay German for now.
 func (m *Manager) enforceSubagentLimit(ctx context.Context, chatID string, l *live) {
 	n, err := m.st.SubagentRunCount(ctx, chatID)
 	if err != nil {
@@ -349,24 +351,24 @@ func (m *Manager) enforceSubagentLimit(ctx context.Context, chatID string, l *li
 	if n <= limit || already {
 		return
 	}
-	slog.Warn("Grenze für Subagenten überschritten, breche ab", "chat", chatID, "gestartet", n, "erlaubt", limit)
+	slog.Warn("subagent limit exceeded, aborting", "chat", chatID, "started", n, "allowed", limit)
 	_, _ = callT(l.slot.Worker, map[string]any{"type": "abort"}, 10*time.Second)
 	_, _ = execPiT(l.slot.Worker, []string{"agw-exec", "kill-node"}, nil, 10*time.Second)
-	m.LogCall(l.slot.ID, chatID, "orchestrator", "subagent_limit", fmt.Sprintf("%d gestartet, %d erlaubt", n, limit), "abgebrochen")
-	m.publish(chatID, Event{Kind: "error", Data: map[string]string{"message": fmt.Sprintf("Grenze überschritten: %d Subagenten gestartet, erlaubt sind %d. Der Durchgang wurde abgebrochen.", n, limit)}})
+	m.LogCall(l.slot.ID, chatID, "orchestrator", "subagent_limit", fmt.Sprintf("%d started, %d allowed", n, limit), "aborted")
+	m.publish(chatID, Event{Kind: "error", Data: map[string]string{"message": fmt.Sprintf("limit exceeded: %d subagents started, %d allowed. The turn was aborted.", n, limit)}})
 }
 
-// SubagentEntries für die Chat-Ansicht.
+// SubagentEntries for the chat view.
 func (m *Manager) SubagentEntries(ctx context.Context, chatID string) ([]store.SubagentEntry, error) {
 	return m.st.ListSubagentEntries(ctx, chatID)
 }
 
-// LLMCalls für die Chat-Ansicht.
+// LLMCalls for the chat view.
 func (m *Manager) LLMCalls(ctx context.Context, chatID string) ([]store.LLMCall, error) {
 	return m.st.ListLLMCalls(ctx, chatID)
 }
 
-// short kürzt Angaben aus der Sandbox für Speicher und Anzeige.
+// short shortens data from the sandbox for storage and display.
 func short(s string) string {
 	s = strings.ToValidUTF8(s, "")
 	if len(s) > 120 {
@@ -375,7 +377,7 @@ func short(s string) string {
 	return s
 }
 
-// SubagentRuns für die Chat-Ansicht.
+// SubagentRuns for the chat view.
 func (m *Manager) SubagentRuns(ctx context.Context, chatID string) ([]store.SubagentRun, error) {
 	return m.st.ListSubagentRuns(ctx, chatID)
 }

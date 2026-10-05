@@ -25,7 +25,7 @@ func setup(t *testing.T) (*httptest.Server, *[]*http.Request, *[]string) {
 		io.WriteString(w, "data: [DONE]\n\n")
 	}))
 	t.Cleanup(up.Close)
-	t.Setenv("TEST_KEY", "sk-echt")
+	t.Setenv("TEST_KEY", "sk-real")
 	cat := &config.Catalog{Default: "p/m1", Providers: []config.Provider{{ID: "p", Upstream: up.URL, API: "openai-completions", APIKeyEnv: "TEST_KEY", Models: []config.Model{{ID: "m1"}}}}}
 	px := httptest.NewServer(New(cat))
 	t.Cleanup(px.Close)
@@ -42,32 +42,32 @@ func TestForwardsWithRealKeyAndStreams(t *testing.T) {
 	}
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != 200 || !strings.Contains(string(body), "[DONE]") {
-		t.Fatalf("Antwort: %d %s", resp.StatusCode, body)
+		t.Fatalf("response: %d %s", resp.StatusCode, body)
 	}
 	if len(*reqs) != 1 {
-		t.Fatalf("Upstream-Aufrufe: %d", len(*reqs))
+		t.Fatalf("upstream calls: %d", len(*reqs))
 	}
 	r := (*reqs)[0]
-	if r.URL.Path != "/chat/completions" || r.Header.Get("Authorization") != "Bearer sk-echt" {
-		t.Fatalf("Upstream sah Pfad %q, Auth %q", r.URL.Path, r.Header.Get("Authorization"))
+	if r.URL.Path != "/chat/completions" || r.Header.Get("Authorization") != "Bearer sk-real" {
+		t.Fatalf("upstream saw path %q, auth %q", r.URL.Path, r.Header.Get("Authorization"))
 	}
 	if (*bodies)[0] != `{"model":"m1","stream":true}` {
-		t.Fatalf("Body verändert: %s", (*bodies)[0])
+		t.Fatalf("body changed: %s", (*bodies)[0])
 	}
 }
 
 func TestRejectsUnknownModelAndProvider(t *testing.T) {
 	px, reqs, _ := setup(t)
-	resp, _ := http.Post(px.URL+"/llm/p/chat/completions", "application/json", strings.NewReader(`{"model":"teuer"}`))
+	resp, _ := http.Post(px.URL+"/llm/p/chat/completions", "application/json", strings.NewReader(`{"model":"pricey"}`))
 	if resp.StatusCode != http.StatusForbidden {
-		t.Fatalf("unbekanntes Modell: %d", resp.StatusCode)
+		t.Fatalf("unknown model: %d", resp.StatusCode)
 	}
 	resp, _ = http.Post(px.URL+"/llm/x/chat/completions", "application/json", strings.NewReader(`{"model":"m1"}`))
 	if resp.StatusCode != http.StatusNotFound {
-		t.Fatalf("unbekannter Anbieter: %d", resp.StatusCode)
+		t.Fatalf("unknown provider: %d", resp.StatusCode)
 	}
 	if len(*reqs) != 0 {
-		t.Fatal("abgewiesene Anfrage erreichte den Upstream")
+		t.Fatal("refused request reached the upstream")
 	}
 }
 
@@ -79,17 +79,17 @@ func TestRejectsNonPost(t *testing.T) {
 	}
 }
 
-// K2: Go ordnet JSON-Schlüssel ohne Rücksicht auf Groß-/Kleinschreibung zu,
-// der Anbieter nicht. Doppelte model-Schlüssel dürfen die Liste nicht umgehen.
+// K2: Go matches JSON keys case-insensitively,
+// the provider does not. Duplicate model keys must not bypass the list.
 func TestRejectsAmbiguousModelKeys(t *testing.T) {
 	px, reqs, _ := setup(t)
 	for _, body := range []string{
-		`{"model":"teuer","Model":"m1"}`,
-		`{"Model":"m1","model":"teuer"}`,
+		`{"model":"pricey","Model":"m1"}`,
+		`{"Model":"m1","model":"pricey"}`,
 		`{"MODEL":"m1"}`,
-		`{"model":"m1","model":"teuer"}`,
+		`{"model":"m1","model":"pricey"}`,
 		`{"model":["m1"]}`,
-		`kein json`,
+		`not json`,
 	} {
 		resp, _ := http.Post(px.URL+"/llm/p/chat/completions", "application/json", strings.NewReader(body))
 		if resp.StatusCode != http.StatusForbidden && resp.StatusCode != http.StatusBadRequest {
@@ -97,11 +97,11 @@ func TestRejectsAmbiguousModelKeys(t *testing.T) {
 		}
 	}
 	if len(*reqs) != 0 {
-		t.Fatalf("mehrdeutige Anfrage erreichte den Upstream: %d", len(*reqs))
+		t.Fatalf("ambiguous request reached the upstream: %d", len(*reqs))
 	}
 }
 
-// K2: Nur die Pfade der jeweiligen API sind erlaubt.
+// K2: only the paths of the respective API are allowed.
 func TestRejectsForeignPaths(t *testing.T) {
 	px, reqs, _ := setup(t)
 	for _, p := range []string{"/llm/p/files", "/llm/p/v1/batches", "/llm/p/chat/completions/../../files", "/llm/p/"} {
@@ -111,7 +111,7 @@ func TestRejectsForeignPaths(t *testing.T) {
 		}
 	}
 	if len(*reqs) != 0 {
-		t.Fatal("fremder Pfad erreichte den Upstream")
+		t.Fatal("foreign path reached the upstream")
 	}
 }
 
@@ -120,6 +120,6 @@ func TestBodyTooLarge(t *testing.T) {
 	big := `{"model":"m1","x":"` + strings.Repeat("a", maxBody) + `"}`
 	resp, _ := http.Post(px.URL+"/llm/p/chat/completions", "application/json", strings.NewReader(big))
 	if resp.StatusCode != http.StatusRequestEntityTooLarge {
-		t.Fatalf("übergroß: %d", resp.StatusCode)
+		t.Fatalf("oversized: %d", resp.StatusCode)
 	}
 }

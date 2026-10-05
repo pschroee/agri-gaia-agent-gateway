@@ -14,7 +14,7 @@ func TestBackgroundTaskLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	logPath := func(n int) string { return "/tmp/agw-bg/bg-" + BgID(n)[3:] + ".log" }
-	// Nummern je Chat fortlaufend, auch bei gleichzeitigem Anlegen.
+	// Numbers per chat are consecutive, even when created concurrently.
 	var wg sync.WaitGroup
 	seqs := make(chan int, 4)
 	for i := 0; i < 4; i++ {
@@ -36,29 +36,29 @@ func TestBackgroundTaskLifecycle(t *testing.T) {
 		seen[n] = true
 	}
 	if len(seen) != 4 || !seen[1] || !seen[4] {
-		t.Fatalf("Nummern: %v", seen)
+		t.Fatalf("numbers: %v", seen)
 	}
 	got, err := s.GetBackgroundTask(ctx, c.ID, 2)
 	if err != nil || got.ID != "bg-2" || got.State != BgRunning || got.LogPath != "/tmp/agw-bg/bg-2.log" || got.Command != "sleep 1␀" || got.Session != "main" {
-		t.Fatalf("Aufgabe 2: %+v %v", got, err)
+		t.Fatalf("task 2: %+v %v", got, err)
 	}
 	if ch, _ := s.GetChat(ctx, c.ID); ch.BackgroundRunning != 4 {
-		t.Fatalf("laufend am Chat: %d", ch.BackgroundRunning)
+		t.Fatalf("running on the chat: %d", ch.BackgroundRunning)
 	}
-	// Ende eintragen: einmal wirksam, danach nur noch Ausgabe ergänzen.
+	// Record the end: effective once, afterwards only add output.
 	code := 0
-	fin := BackgroundTask{ChatID: c.ID, Seq: 1, State: BgExited, ExitCode: &code, OutputBytes: 9, OutputLines: 1, OutputExcerpt: "fertig-bg\n", OutputSHA256: "abc", Tail: "fertig-bg\n"}
+	fin := BackgroundTask{ChatID: c.ID, Seq: 1, State: BgExited, ExitCode: &code, OutputBytes: 9, OutputLines: 1, OutputExcerpt: "done-bg\n", OutputSHA256: "abc", Tail: "done-bg\n"}
 	if ok, err := s.FinishBackgroundTask(ctx, fin); !ok || err != nil {
-		t.Fatalf("Ende: %v %v", ok, err)
+		t.Fatalf("end: %v %v", ok, err)
 	}
 	fin.State = BgFailed
 	if ok, _ := s.FinishBackgroundTask(ctx, fin); ok {
-		t.Fatal("zweites Ende überschreibt den Zustand")
+		t.Fatal("second end overwrites the state")
 	}
-	if got, _ := s.GetBackgroundTask(ctx, c.ID, 1); got.State != BgExited || *got.ExitCode != 0 || got.Tail != "fertig-bg\n" || got.EndedAt == nil {
-		t.Fatalf("nach dem Ende: %+v", got)
+	if got, _ := s.GetBackgroundTask(ctx, c.ID, 1); got.State != BgExited || *got.ExitCode != 0 || got.Tail != "done-bg\n" || got.EndedAt == nil {
+		t.Fatalf("after the end: %+v", got)
 	}
-	// Meldung und Weckruf festhalten (gezählt werden Weckrufe in chat_turns, siehe turns_test.go).
+	// Record note and wake-up (wake-ups are counted in chat_turns, see turns_test.go).
 	if err := s.MarkBackgroundNotified(ctx, c.ID, 1, false); err != nil {
 		t.Fatal(err)
 	}
@@ -66,45 +66,45 @@ func TestBackgroundTaskLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got, _ := s.GetBackgroundTask(ctx, c.ID, 1); got.NotifiedAt == nil || !got.Woke {
-		t.Fatalf("gemeldet und geweckt: %+v", got)
+		t.Fatalf("notified and woken: %+v", got)
 	}
-	// Ruhen: die übrigen drei enden mit Hinweis; ein spätes Ende der Sandbox ändert nichts mehr,
-	// ergänzt aber die Ausgabe.
-	ended, err := s.EndRunningBackground(ctx, c.ID, BgSuspended, "beim Ruhen beendet", true)
+	// Idling: the remaining three end with a notice; a late end from the sandbox changes nothing anymore,
+	// but adds the output.
+	ended, err := s.EndRunningBackground(ctx, c.ID, BgSuspended, "ended while idling", true)
 	if err != nil || len(ended) != 3 {
-		t.Fatalf("Ruhen: %d %v", len(ended), err)
+		t.Fatalf("idling: %d %v", len(ended), err)
 	}
 	late := BackgroundTask{ChatID: c.ID, Seq: 2, State: BgLost, OutputBytes: 3, OutputSHA256: "def", Tail: "ab\n"}
 	if ok, _ := s.FinishBackgroundTask(ctx, late); ok {
-		t.Fatal("spätes Ende überschreibt suspended")
+		t.Fatal("late end overwrites suspended")
 	}
 	if got, _ := s.GetBackgroundTask(ctx, c.ID, 2); got.State != BgSuspended || got.OutputSHA256 != "def" || !got.NoticePending {
-		t.Fatalf("nach spätem Ende: %+v", got)
+		t.Fatalf("after late end: %+v", got)
 	}
 	notes, _ := s.BackgroundNotices(ctx, c.ID)
 	if len(notes) != 3 {
-		t.Fatalf("Hinweise: %d", len(notes))
+		t.Fatalf("notices: %d", len(notes))
 	}
 	if err := s.ClearBackgroundNotices(ctx, c.ID, []int{2, 3, 4}); err != nil {
 		t.Fatal(err)
 	}
 	if notes, _ := s.BackgroundNotices(ctx, c.ID); len(notes) != 0 {
-		t.Fatalf("Hinweise nach dem Löschen: %d", len(notes))
+		t.Fatalf("notices after clearing: %d", len(notes))
 	}
 	if ch, _ := s.GetChat(ctx, c.ID); ch.BackgroundRunning != 0 {
-		t.Fatalf("laufend nach dem Ruhen: %d", ch.BackgroundRunning)
+		t.Fatalf("running after idling: %d", ch.BackgroundRunning)
 	}
-	// Neustart des Orchestrators
+	// Restart of the orchestrator
 	bt, _ := s.CreateBackgroundTask(ctx, BackgroundTask{ChatID: c.ID, SlotID: "p-2", ToolCallID: "call_y", Command: "x"}, nil)
 	if bt.Seq != 5 {
-		t.Fatalf("nächste Nummer: %d", bt.Seq)
+		t.Fatalf("next number: %d", bt.Seq)
 	}
-	if n, err := s.EndAllRunningBackground(ctx, "Orchestrator neu gestartet"); err != nil || n != 1 {
-		t.Fatalf("Neustart: %d %v", n, err)
+	if n, err := s.EndAllRunningBackground(ctx, "orchestrator restarted"); err != nil || n != 1 {
+		t.Fatalf("restart: %d %v", n, err)
 	}
 	list, _ := s.ListBackgroundTasks(ctx, c.ID)
 	if len(list) != 5 || list[4].State != BgLost {
-		t.Fatalf("Liste: %+v", list)
+		t.Fatalf("list: %+v", list)
 	}
 	if ParseBgID("bg-12") != 12 || ParseBgID("bg-0") != 0 || ParseBgID("12") != 0 || ParseBgID("bg-1x") != 0 || ParseBgID("bg-01") != 0 {
 		t.Fatal("ParseBgID")
@@ -115,13 +115,13 @@ func TestQueueSystemEntry(t *testing.T) {
 	s := open(t)
 	ctx := context.Background()
 	c, _ := s.CreateChat(ctx, NewChat{Title: "q", Model: "m", Variant: "cli"})
-	e, err := s.EnqueueKind(ctx, c.ID, QueueSystem, "[Hintergrundaufgabe bg-1 beendet]", nil)
+	e, err := s.EnqueueKind(ctx, c.ID, QueueSystem, "[Background task bg-1 ended]", nil)
 	if err != nil || e.Kind != QueueSystem {
 		t.Fatalf("%+v %v", e, err)
 	}
-	u, _ := s.Enqueue(ctx, c.ID, "hallo", nil)
+	u, _ := s.Enqueue(ctx, c.ID, "hello", nil)
 	if u.Kind != QueueUser {
-		t.Fatalf("Art: %q", u.Kind)
+		t.Fatalf("kind: %q", u.Kind)
 	}
 	list, _ := s.ClaimQueue(ctx, c.ID)
 	if len(list) != 2 || list[0].Kind != QueueSystem || list[1].Kind != QueueUser {

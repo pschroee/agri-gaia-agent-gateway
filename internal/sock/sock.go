@@ -1,13 +1,13 @@
-// Package sock bedient den Unix-Socket eines Platzes (E3, E4). Welcher Chat
-// gemeint ist, ergibt sich allein aus dem Platz, an dessen Socket die Anfrage
-// eingeht; Angaben des Agenten spielen dafür keine Rolle.
+// Package sock serves the Unix socket of a slot (E3, E4). Which chat is
+// meant follows solely from the slot at whose socket the request arrives;
+// statements by the agent play no role in this.
 //
-//	POST /artifacts?name=N   Upload, wartet auf Bestätigung durch den Nutzer
-//	GET  /artifacts          Artefakte des Chats
-//	GET  /artifacts/{name}   Download (?kind=input|output)
-//	POST /internet           Internetzugang erbitten, wartet auf Bestätigung
-//	POST /platform/{tool}    Werkzeug der Plattform-Anbindung (agw-platform); schreibend mit Bestätigung
-//	POST /mcp                MCP (Streamable HTTP, zustandslos)
+//	POST /artifacts?name=N   upload, waits for confirmation by the user
+//	GET  /artifacts          artifacts of the chat
+//	GET  /artifacts/{name}   download (?kind=input|output)
+//	POST /internet           request internet access, waits for confirmation
+//	POST /platform/{tool}    tool of the platform binding (agw-platform); writing calls need confirmation
+//	POST /mcp                MCP (Streamable HTTP, stateless)
 package sock
 
 import (
@@ -56,29 +56,29 @@ type Backend interface {
 	LogCall(slotID, chatID, via, op, detail, result string)
 }
 
-// PlatformBackend führt Aufrufe der Agri-Gaia-Plattform aus (Manager): GET direkt,
-// alles andere erst nach Bestätigung durch den Nutzer. Setzt ein Backend es nicht
-// um, melden die Werkzeuge „nicht eingerichtet“.
+// PlatformBackend executes calls to the Agri-Gaia platform (manager): GET directly,
+// everything else only after confirmation by the user. If a backend does not
+// implement it, the tools report "not configured".
 type PlatformBackend interface {
 	PlatformCall(ctx context.Context, chatID, slotID, via string, req platform.Request) (platform.Result, error)
 }
 
-// PlatformPrechecker prüft einen Aufruf vorab gegen die Delegation (vor dem Lesen von Dateien).
+// PlatformPrechecker checks a call against the delegation up front (before reading files).
 type PlatformPrechecker interface {
 	PlatformPrecheck(ctx context.Context, chatID string, req platform.Request) (platform.Result, bool)
 }
 
 type handler struct {
-	apiVia  string // Weg, unter dem der REST-Endpunkt protokolliert: api (pi) oder cli (Shell)
+	apiVia  string // channel under which the REST endpoint logs: api (pi) or cli (shell)
 	slot    string
 	b       Backend
-	run     ToolRunner // liest Dateien für Plattform-Uploads aus der Ausführungs-Sandbox (nil: keine Uploads)
+	run     ToolRunner // reads files for platform uploads from the execution sandbox (nil: no uploads)
 	max     int64
 	mcp     http.Handler
-	uploads chan struct{} // höchstens zwei Uploads je Platz gleichzeitig (Review H2)
+	uploads chan struct{} // at most two concurrent uploads per slot (Review H2)
 }
 
-// maxReason begrenzt die Begründung einer Internet-Anfrage schon am Socket.
+// maxReason limits the reason of an internet request already at the socket.
 const maxReason = 500
 
 func truncReason(s string) string {
@@ -90,25 +90,25 @@ func truncReason(s string) string {
 
 func newHandler(slotID string, b Backend, maxBytes int64) *handler {
 	h := &handler{slot: slotID, b: b, max: maxBytes, uploads: make(chan struct{}, 2)}
-	// Base64 vergrößert um 4/3; die Grenze soll für MCP dieselbe Dateigröße
-	// zulassen wie für das CLI (Review M5).
+	// Base64 grows by 4/3; the limit should allow the same file size for MCP
+	// as for the CLI (Review M5).
 	h.mcp = mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return h.mcpServer() },
 		&mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true, MaxRequestBodyBytes: maxBytes*4/3 + 64<<10})
 	return h
 }
 
-// NewHandler bedient den Socket der Ausführungs-Sandbox (agw-artifact,
-// agw-internet, curl --unix-socket): Artefakte, Internet und MCP.
+// NewHandler serves the socket of the execution sandbox (agw-artifact,
+// agw-internet, curl --unix-socket): artifacts, internet and MCP.
 func NewHandler(slotID string, b Backend, maxBytes int64) http.Handler {
 	return NewHandlerRun(slotID, b, maxBytes, nil)
 }
 
-// NewHandlerRun ist NewHandler mit Zugriff auf die Ausführungs-Sandbox, aus der die
-// Plattform-Uploads (upload_dataset, upload_model) ihre Dateien lesen.
+// NewHandlerRun is NewHandler with access to the execution sandbox, from which the
+// platform uploads (upload_dataset, upload_model) read their files.
 func NewHandlerRun(slotID string, b Backend, maxBytes int64, run ToolRunner) http.Handler {
 	h := newHandler(slotID, b, maxBytes)
 	h.run = run
-	h.apiVia = "cli" // curl --unix-socket aus der Shell
+	h.apiVia = "cli" // curl --unix-socket from the shell
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /artifacts", h.upload)
 	mux.HandleFunc("GET /artifacts", h.list)
@@ -119,9 +119,9 @@ func NewHandlerRun(slotID string, b Backend, maxBytes int64, run ToolRunner) htt
 	return h.withPlatformAPI(mux)
 }
 
-// withPlatformAPI leitet /platform-api/… an platformAPI, bevor die ServeMux den Pfad bereinigt: Sie
-// beantwortet ., .. und // sonst mit einer Weiterleitung, und der Versuch fehlte im Protokoll
-// (Review 5, M4). So sieht Normalize den Pfad, wie der Agent ihn geschickt hat.
+// withPlatformAPI routes /platform-api/… to platformAPI before the ServeMux cleans the path: otherwise
+// it answers ., .. and // with a redirect, and the attempt was missing from the log
+// (Review 5, M4). This way Normalize sees the path as the agent sent it.
 func (h *handler) withPlatformAPI(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, PlatformAPIPrefix+"/") {
@@ -132,7 +132,7 @@ func (h *handler) withPlatformAPI(next http.Handler) http.Handler {
 	})
 }
 
-var errUnassigned = errors.New("Platz ist keinem Chat zugewiesen")
+var errUnassigned = errors.New("slot is not assigned to any chat")
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json")
@@ -143,13 +143,13 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 func (h *handler) chat(via, op, detail string) (string, error) {
 	c := h.b.ChatForSlot(h.slot)
 	if c == "" {
-		h.b.LogCall(h.slot, "", via, op, detail, "abgewiesen: nicht zugewiesen")
+		h.b.LogCall(h.slot, "", via, op, detail, "refused: not assigned")
 		return "", errUnassigned
 	}
 	return c, nil
 }
 
-// CallerLogger protokolliert mit Sitzung und Werkzeugaufruf aus dem Kontext (Manager).
+// CallerLogger logs with session and tool call from the context (manager).
 type CallerLogger interface {
 	LogCallBy(ctx context.Context, slotID, chatID, via, op, detail, result string)
 }
@@ -164,8 +164,8 @@ func (h *handler) logCall(ctx context.Context, chat, via, op, detail, result str
 
 var sessionHeaderRe = regexp.MustCompile(`^(main|[0-9a-fA-F-]{8,64}(#[0-9]{1,4})?)$`)
 
-// callerCtx übernimmt Werkzeugaufruf und Sitzung aus den Kopfzeilen von agw-artifact (die Werte setzt
-// der Orchestrator in die Umgebung jedes bash-Befehls; nur zur Anzeige, der Agent kann sie ändern).
+// callerCtx takes tool call and session from agw-artifact's headers (the orchestrator puts the values
+// into the environment of every bash command; for display only, the agent can change them).
 func callerCtx(r *http.Request) context.Context {
 	ctx := r.Context()
 	if id := r.Header.Get("X-Agw-Tool-Call"); validToolCallID(id) {
@@ -178,35 +178,35 @@ func callerCtx(r *http.Request) context.Context {
 }
 
 func (h *handler) upload(w http.ResponseWriter, r *http.Request) {
-	// Der Weg ergibt sich aus dem Endpunkt, nicht aus einer Angabe des Agenten
-	// (Review M5): /artifacts ist der CLI-Weg, MCP kommt über /mcp.
+	// The channel follows from the endpoint, not from a statement by the agent
+	// (Review M5): /artifacts is the CLI channel, MCP comes via /mcp.
 	via := "cli"
 	ctx := callerCtx(r)
 	name := artifacts.SanitizeName(r.URL.Query().Get("name"))
 	chat, err := h.chat(via, "upload", name)
 	if err != nil {
-		writeJSON(w, http.StatusConflict, map[string]string{"error": "nicht zugewiesen: " + err.Error()})
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "not assigned: " + err.Error()})
 		return
 	}
 	if name == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "ungültiger Name"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid name"})
 		return
 	}
 	if r.ContentLength > h.max {
-		h.logCall(ctx, chat, via, "upload", name, "abgewiesen: zu groß")
-		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": fmt.Sprintf("Datei größer als %d MB", h.max>>20)})
+		h.logCall(ctx, chat, via, "upload", name, "refused: too large")
+		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": fmt.Sprintf("file larger than %d MB", h.max>>20)})
 		return
 	}
-	// Der Inhalt wird vollständig gelesen, bevor gewartet wird: Die Grenze
-	// gilt auch ohne Content-Length, und die Prüfsumme steht fest.
+	// The content is read completely before waiting: the limit also
+	// applies without Content-Length, and the checksum is fixed.
 	data, err := io.ReadAll(io.LimitReader(r.Body, h.max+1))
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
 	if int64(len(data)) > h.max {
-		h.logCall(ctx, chat, via, "upload", name, "abgewiesen: zu groß")
-		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": fmt.Sprintf("Datei größer als %d MB", h.max>>20)})
+		h.logCall(ctx, chat, via, "upload", name, "refused: too large")
+		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": fmt.Sprintf("file larger than %d MB", h.max>>20)})
 		return
 	}
 	res, err := h.doUpload(ctx, chat, via, name, data, r.Header.Get("X-Agw-Sha256"))
@@ -221,22 +221,22 @@ func (h *handler) upload(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, res)
 }
 
-var errBusy = errors.New("schon zwei Uploads in Arbeit; bitte nacheinander hochladen")
+var errBusy = errors.New("two uploads already in progress; please upload one after another")
 
 func (h *handler) doUpload(ctx context.Context, chat, via, name string, data []byte, sha string) (UploadResult, error) {
 	select {
 	case h.uploads <- struct{}{}:
 		defer func() { <-h.uploads }()
 	default:
-		h.logCall(ctx, chat, via, "upload", name, "abgewiesen: zu viele gleichzeitig")
+		h.logCall(ctx, chat, via, "upload", name, "refused: too many at once")
 		return UploadResult{}, errBusy
 	}
 	res, err := h.b.Upload(ctx, chat, h.slot, via, name, int64(len(data)), sha, bytes.NewReader(data))
 	result := res.Status
 	if err != nil {
-		result = "Fehler: " + err.Error()
+		result = "error: " + err.Error()
 	}
-	h.logCall(ctx, chat, via, "upload", fmt.Sprintf("%s (%d Bytes)", name, len(data)), result)
+	h.logCall(ctx, chat, via, "upload", fmt.Sprintf("%s (%d bytes)", name, len(data)), result)
 	return res, err
 }
 
@@ -248,7 +248,7 @@ func (h *handler) internet(w http.ResponseWriter, r *http.Request) {
 	req.Reason = truncReason(req.Reason)
 	chat, err := h.chat("cli", "internet", req.Reason)
 	if err != nil {
-		writeJSON(w, http.StatusConflict, map[string]string{"error": "nicht zugewiesen"})
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "not assigned"})
 		return
 	}
 	res, err := h.doInternet(callerCtx(r), chat, "cli", req.Reason)
@@ -263,17 +263,17 @@ func (h *handler) doInternet(ctx context.Context, chat, via, reason string) (Upl
 	res, err := h.b.RequestInternet(ctx, chat, h.slot, via, reason)
 	result := res.Status
 	if err != nil {
-		result = "Fehler: " + err.Error()
+		result = "error: " + err.Error()
 	}
 	h.logCall(ctx, chat, via, "internet", reason, result)
 	return res, err
 }
 
-// readFiles liest die Dateien eines Uploads aus der Ausführungs-Sandbox, bevor der Nutzer gefragt
-// wird: Die Bestätigung nennt Größe und SHA-256 dessen, was tatsächlich hochgeladen wird.
+// readFiles reads the files of an upload from the execution sandbox before the user is asked:
+// the confirmation names size and SHA-256 of what is actually uploaded.
 func (h *handler) readFiles(ctx context.Context, req *platform.Request) error {
 	if h.run == nil {
-		return errors.New("Uploads an diesem Socket nicht möglich")
+		return errors.New("uploads not possible at this socket")
 	}
 	var total int64
 	req.Uploads = make([]platform.Upload, 0, len(req.Files))
@@ -288,17 +288,17 @@ func (h *handler) readFiles(ctx context.Context, req *platform.Request) error {
 		}
 		if fr.Error != "" {
 			if fr.Code == "EFBIG" {
-				return fmt.Errorf("%s: größer als %d MB", f.Path, h.max>>20)
+				return fmt.Errorf("%s: larger than %d MB", f.Path, h.max>>20)
 			}
 			return fmt.Errorf("%s: %s", f.Path, fr.Error)
 		}
 		var rr execproto.ReadResult
 		if err := json.Unmarshal(fr.Result, &rr); err != nil {
-			return fmt.Errorf("%s: unlesbare Antwort", f.Path)
+			return fmt.Errorf("%s: unreadable response", f.Path)
 		}
 		total += int64(len(rr.Data))
 		if total > platform.MaxUploadBytes {
-			return fmt.Errorf("Dateien zusammen größer als %d MB", platform.MaxUploadBytes>>20)
+			return fmt.Errorf("files together larger than %d MB", platform.MaxUploadBytes>>20)
 		}
 		sum := sha256.Sum256(rr.Data)
 		req.Uploads = append(req.Uploads, platform.Upload{Field: f.Field, Name: path.Base(f.Path), Data: rr.Data, SHA256: hex.EncodeToString(sum[:])})
@@ -306,23 +306,23 @@ func (h *handler) readFiles(ctx context.Context, req *platform.Request) error {
 	return nil
 }
 
-// maxPlatformArgs begrenzt die Argumente eines Plattform-Werkzeugs (train_config, body).
+// maxPlatformArgs limits the arguments of a platform tool (train_config, body).
 const maxPlatformArgs = 1 << 20
 
 func (h *handler) platform(w http.ResponseWriter, r *http.Request) {
 	tool, ok := platform.Lookup(r.PathValue("tool"))
 	if !ok {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "unbekanntes Plattform-Werkzeug " + r.PathValue("tool")})
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "unknown platform tool " + r.PathValue("tool")})
 		return
 	}
 	raw, err := io.ReadAll(io.LimitReader(r.Body, maxPlatformArgs+1))
 	if err != nil || len(raw) > maxPlatformArgs {
-		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "Argumente zu groß"})
+		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "arguments too large"})
 		return
 	}
 	chat, err := h.chat("cli", "platform", tool.Name)
 	if err != nil {
-		writeJSON(w, http.StatusConflict, map[string]string{"error": "nicht zugewiesen"})
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "not assigned"})
 		return
 	}
 	res, err := h.doPlatform(callerCtx(r), chat, "cli", tool, raw)
@@ -333,34 +333,34 @@ func (h *handler) platform(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, res)
 }
 
-// doPlatform baut den Aufruf aus der Werkzeugtabelle, lässt ihn vom Backend
-// ausführen (mit Bestätigung, wenn er schreibt) und protokolliert ihn.
+// doPlatform builds the call from the tool table, has the backend execute it
+// (with confirmation if it writes) and logs it.
 func (h *handler) doPlatform(ctx context.Context, chat, via string, tool platform.Tool, raw json.RawMessage) (platform.Result, error) {
 	req, err := tool.Build(raw)
 	if err != nil {
-		h.logCall(ctx, chat, via, "platform", tool.Name, "abgewiesen: "+err.Error())
+		h.logCall(ctx, chat, via, "platform", tool.Name, "refused: "+err.Error())
 		return platform.Result{Status: "error", Message: err.Error()}, nil
 	}
 	return h.runPlatform(ctx, chat, via, req)
 }
 
-// runPlatform führt einen gebauten Aufruf über das Backend aus (Delegation, Bestätigung, Token) und
-// protokolliert ihn; gemeinsam für Werkzeuge (MCP, agw-platform) und den REST-Endpunkt.
+// runPlatform executes a built call through the backend (delegation, confirmation, token) and
+// logs it; shared by the tools (MCP, agw-platform) and the REST endpoint.
 func (h *handler) runPlatform(ctx context.Context, chat, via string, req platform.Request) (platform.Result, error) {
 	pb, ok := h.b.(PlatformBackend)
 	if !ok {
-		h.logCall(ctx, chat, via, "platform", req.String(), "nicht eingerichtet")
+		h.logCall(ctx, chat, via, "platform", req.String(), "not configured")
 		return platform.Result{Status: "error", Message: platform.ErrNotConfigured.Error()}, nil
 	}
 	if len(req.Files) > 0 {
 		if pc, ok := h.b.(PlatformPrechecker); ok {
 			if res, allowed := pc.PlatformPrecheck(ctx, chat, req); !allowed {
-				h.logCall(ctx, chat, via, "platform", req.String(), "übergriff abgewiesen: "+res.Message)
+				h.logCall(ctx, chat, via, "platform", req.String(), "violation blocked: "+res.Message)
 				return res, nil
 			}
 		}
 		if err := h.readFiles(ctx, &req); err != nil {
-			h.logCall(ctx, chat, via, "platform", req.String(), "abgewiesen: "+err.Error())
+			h.logCall(ctx, chat, via, "platform", req.String(), "refused: "+err.Error())
 			return platform.Result{Status: "error", Message: err.Error()}, nil
 		}
 	}
@@ -371,12 +371,12 @@ func (h *handler) runPlatform(ctx context.Context, chat, via string, req platfor
 	}
 	switch {
 	case res.Status == "denied":
-		result = "übergriff abgewiesen: " + res.Message
+		result = "violation blocked: " + res.Message
 	case res.Violation != "":
-		result += " · übergriff, nur protokolliert: " + res.Violation
+		result += " · violation, logged only: " + res.Violation
 	}
 	if err != nil {
-		result = "Fehler: " + err.Error()
+		result = "error: " + err.Error()
 	}
 	h.logCall(ctx, chat, via, "platform", req.String(), result)
 	return res, err
@@ -385,7 +385,7 @@ func (h *handler) runPlatform(ctx context.Context, chat, via string, req platfor
 func (h *handler) list(w http.ResponseWriter, r *http.Request) {
 	chat, err := h.chat("cli", "list", "")
 	if err != nil {
-		writeJSON(w, http.StatusConflict, map[string]string{"error": "nicht zugewiesen"})
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "not assigned"})
 		return
 	}
 	items, err := h.b.ListArtifacts(r.Context(), chat)
@@ -393,7 +393,7 @@ func (h *handler) list(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	h.logCall(callerCtx(r), chat, "cli", "list", "", fmt.Sprintf("%d Einträge", len(items)))
+	h.logCall(callerCtx(r), chat, "cli", "list", "", fmt.Sprintf("%d entries", len(items)))
 	writeJSON(w, http.StatusOK, items)
 }
 
@@ -405,7 +405,7 @@ func (h *handler) get(w http.ResponseWriter, r *http.Request) {
 	}
 	chat, err := h.chat("cli", "get", name)
 	if err != nil {
-		writeJSON(w, http.StatusConflict, map[string]string{"error": "nicht zugewiesen"})
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "not assigned"})
 		return
 	}
 	rc, size, err := h.b.OpenArtifact(r.Context(), chat, kind, name)
@@ -414,7 +414,7 @@ func (h *handler) get(w http.ResponseWriter, r *http.Request) {
 		if errors.Is(err, store.ErrNotFound) {
 			code = http.StatusNotFound
 		}
-		h.logCall(callerCtx(r), chat, "cli", "get", kind+"/"+name, "nicht gefunden")
+		h.logCall(callerCtx(r), chat, "cli", "get", kind+"/"+name, "not found")
 		writeJSON(w, code, map[string]string{"error": err.Error()})
 		return
 	}
@@ -430,12 +430,12 @@ func (h *handler) get(w http.ResponseWriter, r *http.Request) {
 type pingIn struct{}
 type listIn struct{}
 type internetIn struct {
-	Reason string `json:"reason" jsonschema:"Begründung für den Nutzer: wofür wird Internet gebraucht?"`
+	Reason string `json:"reason" jsonschema:"Reason for the user: what is internet needed for?"`
 }
 
 type uploadIn struct {
-	Name          string `json:"name" jsonschema:"Name des Artefakts"`
-	ContentBase64 string `json:"content_base64" jsonschema:"Inhalt der Datei, base64-kodiert"`
+	Name          string `json:"name" jsonschema:"name of the artifact"`
+	ContentBase64 string `json:"content_base64" jsonschema:"content of the file, base64-encoded"`
 }
 
 func textResult(isErr bool, format string, args ...any) *mcp.CallToolResult {
@@ -444,89 +444,89 @@ func textResult(isErr bool, format string, args ...any) *mcp.CallToolResult {
 
 func (h *handler) mcpServer() *mcp.Server {
 	s := mcp.NewServer(&mcp.Implementation{Name: "agw-orchestrator", Version: "0.1.0"}, nil)
-	mcp.AddTool(s, &mcp.Tool{Name: "ping", Description: "Testwerkzeug ohne Nebenwirkung: meldet Zeit, Chat und Platz. Prüft den Weg vom Agenten über den Socket zum Orchestrator."},
+	mcp.AddTool(s, &mcp.Tool{Name: "ping", Description: "Test tool without side effects: reports time, chat and slot. Checks the path from the agent through the socket to the orchestrator."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, _ pingIn) (*mcp.CallToolResult, any, error) {
 			chat, err := h.chat("mcp", "ping", "")
 			if err != nil {
-				return textResult(true, "Fehler: %v", err), nil, nil
+				return textResult(true, "error: %v", err), nil, nil
 			}
 			h.b.LogCall(h.slot, chat, "mcp", "ping", "", "ok")
-			return textResult(false, "pong · Zeit %s · Chat %s · Platz %s", time.Now().Format(time.RFC3339), chat, h.slot), nil, nil
+			return textResult(false, "pong · time %s · chat %s · slot %s", time.Now().Format(time.RFC3339), chat, h.slot), nil, nil
 		})
-	mcp.AddTool(s, &mcp.Tool{Name: "list_artifacts", Description: "Listet die Artefakte dieses Chats (Eingaben des Nutzers und Ergebnisse)."},
+	mcp.AddTool(s, &mcp.Tool{Name: "list_artifacts", Description: "Lists the artifacts of this chat (inputs from the user and results)."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, _ listIn) (*mcp.CallToolResult, any, error) {
 			chat, err := h.chat("mcp", "list", "")
 			if err != nil {
-				return textResult(true, "Fehler: %v", err), nil, nil
+				return textResult(true, "error: %v", err), nil, nil
 			}
 			items, err := h.b.ListArtifacts(ctx, chat)
 			if err != nil {
-				return textResult(true, "Fehler: %v", err), nil, nil
+				return textResult(true, "error: %v", err), nil, nil
 			}
-			h.b.LogCall(h.slot, chat, "mcp", "list", "", fmt.Sprintf("%d Einträge", len(items)))
+			h.b.LogCall(h.slot, chat, "mcp", "list", "", fmt.Sprintf("%d entries", len(items)))
 			if len(items) == 0 {
-				return textResult(false, "(keine Artefakte in diesem Chat)"), nil, nil
+				return textResult(false, "(no artifacts in this chat)"), nil, nil
 			}
 			var buf bytes.Buffer
 			for _, a := range items {
-				fmt.Fprintf(&buf, "%s\t%s\t%d Bytes\n", a.Kind, a.Name, a.Size)
+				fmt.Fprintf(&buf, "%s\t%s\t%d bytes\n", a.Kind, a.Name, a.Size)
 			}
 			return textResult(false, "%s", buf.String()), nil, nil
 		})
-	mcp.AddTool(s, &mcp.Tool{Name: "upload_artifact", Description: "Legt eine Datei als Artefakt dieses Chats ab. Der Nutzer muss den Upload bestätigen; der Aufruf wartet auf die Entscheidung."},
+	mcp.AddTool(s, &mcp.Tool{Name: "upload_artifact", Description: "Stores a file as an artifact of this chat. The user has to approve the upload; the call waits for the decision."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in uploadIn) (*mcp.CallToolResult, any, error) {
 			name := artifacts.SanitizeName(in.Name)
 			chat, err := h.chat("mcp", "upload", name)
 			if err != nil {
-				return textResult(true, "Fehler: %v", err), nil, nil
+				return textResult(true, "error: %v", err), nil, nil
 			}
 			data, err := base64.StdEncoding.DecodeString(in.ContentBase64)
 			if err != nil || name == "" {
-				return textResult(true, "ungültiger Name oder Inhalt"), nil, nil
+				return textResult(true, "invalid name or content"), nil, nil
 			}
 			if int64(len(data)) > h.max {
-				h.b.LogCall(h.slot, chat, "mcp", "upload", name, "abgewiesen: zu groß")
-				return textResult(true, "Datei größer als %d MB", h.max>>20), nil, nil
+				h.b.LogCall(h.slot, chat, "mcp", "upload", name, "refused: too large")
+				return textResult(true, "file larger than %d MB", h.max>>20), nil, nil
 			}
 			res, err := h.doUpload(ctx, chat, "mcp", name, data, "")
 			if err != nil {
-				return textResult(true, "Fehler: %v", err), nil, nil
+				return textResult(true, "error: %v", err), nil, nil
 			}
 			if res.Status == "approved" {
-				return textResult(false, "bestätigt: Artefakt %q gespeichert (%d Bytes, sha256 %s)", res.Name, res.Size, res.SHA256), nil, nil
+				return textResult(false, "approved: artifact %q stored (%d bytes, sha256 %s)", res.Name, res.Size, res.SHA256), nil, nil
 			}
 			msg := res.Message
 			if msg == "" {
-				msg = "vom Nutzer abgelehnt"
+				msg = "rejected by the user"
 			}
-			return textResult(false, "abgelehnt: Artefakt %q wurde nicht gespeichert (%s)", res.Name, msg), nil, nil
+			return textResult(false, "rejected: artifact %q was not stored (%s)", res.Name, msg), nil, nil
 		})
-	mcp.AddTool(s, &mcp.Tool{Name: "request_internet", Description: "Bittet den Nutzer um Internetzugang für diese Sandbox (standardmäßig aus). Mit Begründung aufrufen; der Aufruf wartet auf die Entscheidung des Nutzers."},
+	mcp.AddTool(s, &mcp.Tool{Name: "request_internet", Description: "Asks the user for internet access for this sandbox (off by default). Call it with a reason; the call waits for the user's decision."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in internetIn) (*mcp.CallToolResult, any, error) {
 			in.Reason = truncReason(in.Reason)
 			chat, err := h.chat("mcp", "internet", in.Reason)
 			if err != nil {
-				return textResult(true, "Fehler: %v", err), nil, nil
+				return textResult(true, "error: %v", err), nil, nil
 			}
 			res, err := h.doInternet(ctx, chat, "mcp", in.Reason)
 			if err != nil {
-				return textResult(true, "Fehler: %v", err), nil, nil
+				return textResult(true, "error: %v", err), nil, nil
 			}
 			if res.Status == "approved" {
-				return textResult(false, "bestätigt: %s", res.Message), nil, nil
+				return textResult(false, "approved: %s", res.Message), nil, nil
 			}
-			return textResult(false, "abgelehnt: %s", res.Message), nil, nil
+			return textResult(false, "rejected: %s", res.Message), nil, nil
 		})
 	for _, t := range platform.Tools {
 		s.AddTool(&mcp.Tool{Name: t.MCPName(), Description: t.Desc, InputSchema: t.Schema()},
 			func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 				chat, err := h.chat("mcp", "platform", t.Name)
 				if err != nil {
-					return textResult(true, "Fehler: %v", err), nil
+					return textResult(true, "error: %v", err), nil
 				}
 				res, err := h.doPlatform(ctx, chat, "mcp", t, req.Params.Arguments)
 				if err != nil {
-					return textResult(true, "Fehler: %v", err), nil
+					return textResult(true, "error: %v", err), nil
 				}
 				return textResult(res.Status == "error" || res.Status == "denied", "%s", res.Text()), nil
 			})
@@ -534,15 +534,15 @@ func (h *handler) mcpServer() *mcp.Server {
 	return s
 }
 
-// Server ist ein HTTP-Server an einem Unix-Socket.
+// Server is an HTTP server on a Unix socket.
 type Server struct {
 	srv  *http.Server
 	path string
 }
 
-// Listen legt dir/agw.sock an. Der Socket ist für alle Nutzer verbindbar, weil
-// pi in der Sandbox als eigener Nutzer läuft; abgegrenzt wird über das
-// Verzeichnis, das nur diese eine Sandbox eingebunden hat.
+// Listen creates dir/agw.sock. The socket can be connected to by all users, because
+// pi runs as its own user in the sandbox; isolation comes from the directory,
+// which only this one sandbox has mounted.
 func Listen(dir string, h http.Handler) (*Server, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
@@ -573,15 +573,15 @@ func (s *Server) Close() error {
 	return nil
 }
 
-// --- REST-Endpunkt (Schritt 2: REST-Variante) ---
+// --- REST endpoint (step 2: REST variant) ---
 
-// PlatformAPIPrefix: Unter diesem Pfad bildet der Socket die REST-API der Plattform nach. Der Agent
-// ruft sie ohne Anmeldung auf; Prüfung, Bestätigung und Token übernimmt der Autorisierungsdienst.
+// PlatformAPIPrefix: under this path the socket mirrors the platform's REST API. The agent calls it
+// without logging in; the authorization service takes care of checks, confirmation and token.
 const PlatformAPIPrefix = "/platform-api"
 
-// platformAPI nimmt einen HTTP-Aufruf in der Form der Plattform-API entgegen, baut daraus einen
-// eigenen Aufruf (nichts wird roh durchgereicht, auch keine Kopfzeilen) und gibt Status, Location und
-// Körper zurück. Uploads (multipart) gehen nur über upload_dataset und upload_model.
+// platformAPI accepts an HTTP call in the form of the platform API, builds its own call from it
+// (nothing is passed through raw, not even headers) and returns status, Location and body.
+// Uploads (multipart) only go through upload_dataset and upload_model.
 func (h *handler) platformAPI(w http.ResponseWriter, r *http.Request) {
 	via := h.apiVia
 	if via == "" {
@@ -590,12 +590,12 @@ func (h *handler) platformAPI(w http.ResponseWriter, r *http.Request) {
 	fail := func(code int, msg string) {
 		writeJSON(w, code, map[string]string{"error": msg})
 	}
-	// Prozentkodierung lässt der Autorisierungsdienst nicht zu: Was er prüft, soll genau das sein,
-	// was die Plattform liest (keine zweite Dekodierung, keine Parserdifferenz).
-	// Einzige Ausnahme ist %20: Ohne sie wären Pfade mit Leerzeichen (/train/config/Torchvision/Mask
-	// R-CNN) in der REST-Variante unerreichbar, über MCP und CLI aber nicht (Review 5, M5).
+	// The authorization service does not allow percent-encoding: what it checks should be exactly
+	// what the platform reads (no second decoding, no parser differential).
+	// The only exception is %20: without it, paths with spaces (/train/config/Torchvision/Mask
+	// R-CNN) would be unreachable in the REST variant, but not via MCP and CLI (Review 5, M5).
 	if pathPart, _, _ := strings.Cut(r.RequestURI, "?"); r.URL.RawPath != "" || strings.Contains(strings.ReplaceAll(pathPart, "%20", ""), "%") {
-		fail(http.StatusBadRequest, "Prozentkodierung im Pfad ist nicht erlaubt")
+		fail(http.StatusBadRequest, "percent-encoding in the path is not allowed")
 		return
 	}
 	path := strings.TrimPrefix(r.URL.Path, PlatformAPIPrefix)
@@ -605,29 +605,29 @@ func (h *handler) platformAPI(w http.ResponseWriter, r *http.Request) {
 	q := map[string]string{}
 	for k, vs := range r.URL.Query() {
 		if len(vs) != 1 {
-			fail(http.StatusBadRequest, fmt.Sprintf("Abfrageparameter %q mehrfach: nicht unterstützt", k))
+			fail(http.StatusBadRequest, fmt.Sprintf("query parameter %q repeated: not supported", k))
 			return
 		}
 		q[k] = vs[0]
 	}
 	raw, err := io.ReadAll(io.LimitReader(r.Body, maxPlatformArgs+1))
 	if err != nil || len(raw) > maxPlatformArgs {
-		fail(http.StatusRequestEntityTooLarge, "Körper zu groß (höchstens 1 MiB)")
+		fail(http.StatusRequestEntityTooLarge, "body too large (at most 1 MiB)")
 		return
 	}
 	if ct := r.Header.Get("Content-Type"); len(bytes.TrimSpace(raw)) > 0 && ct != "" && !strings.HasPrefix(ct, "application/json") {
-		fail(http.StatusUnsupportedMediaType, "nur JSON-Körper; Dateien gehen über upload_dataset und upload_model")
+		fail(http.StatusUnsupportedMediaType, "JSON bodies only; files go through upload_dataset and upload_model")
 		return
 	}
 	chat, err := h.chat(via, "platform", r.Method+" "+path)
 	if err != nil {
-		fail(http.StatusConflict, "nicht zugewiesen")
+		fail(http.StatusConflict, "not assigned")
 		return
 	}
 	ctx := callerCtx(r)
 	var res platform.Result
 	if path == "/_agw/paths" {
-		// Verdichtetes Pfadverzeichnis wie das Werkzeug api_paths (die OpenAPI-Beschreibung ist ~100 KB).
+		// Condensed path directory like the tool api_paths (the OpenAPI description is ~100 KB).
 		tool, _ := platform.Lookup("api_paths")
 		args, _ := json.Marshal(map[string]string{"prefix": q["prefix"]})
 		res, err = h.doPlatform(ctx, chat, via, tool, args)
@@ -641,7 +641,7 @@ func (h *handler) platformAPI(w http.ResponseWriter, r *http.Request) {
 		}
 		norm, nerr := platform.Normalize(req)
 		if nerr != nil {
-			h.logCall(ctx, chat, via, "platform", r.Method+" "+path, "abgewiesen: "+nerr.Error())
+			h.logCall(ctx, chat, via, "platform", r.Method+" "+path, "refused: "+nerr.Error())
 			fail(http.StatusBadRequest, nerr.Error())
 			return
 		}
@@ -654,14 +654,14 @@ func (h *handler) platformAPI(w http.ResponseWriter, r *http.Request) {
 	switch res.Status {
 	case "denied":
 		w.Header().Set("X-Agw-Outcome", "denied")
-		fail(http.StatusForbidden, "verweigert vom Autorisierungsdienst: "+res.Message+" (Rechte: GET "+PlatformAPIPrefix+"/_agw/rights)")
+		fail(http.StatusForbidden, "denied by the authorization service: "+res.Message+" (rights: GET "+PlatformAPIPrefix+"/_agw/rights)")
 		return
 	case "rejected":
 		w.Header().Set("X-Agw-Outcome", "rejected")
-		fail(http.StatusForbidden, "vom Nutzer abgelehnt: "+res.Message)
+		fail(http.StatusForbidden, "rejected by the user: "+res.Message)
 		return
 	}
-	if res.HTTPStatus == 0 { // Prüfung der Argumente oder Plattform nicht erreichbar
+	if res.HTTPStatus == 0 { // argument check or platform unreachable
 		fail(http.StatusBadRequest, res.Message)
 		return
 	}

@@ -13,14 +13,14 @@ import (
 	"agw/internal/agwclient"
 )
 
-const detailWithSubagents = `{"chat":{"id":"c1","title":"neu","model":"deepseek/deepseek-flash","variant":"cli","state":"active","max_subagents":2,"subagents":1,"llm_calls":5,"cost":0.05,"cost_other":0.01,"tokens":{"input":1200,"output":300,"cache_read":0,"total":1500}},
+const detailWithSubagents = `{"chat":{"id":"c1","title":"new","model":"deepseek/deepseek-flash","variant":"cli","state":"active","max_subagents":2,"subagents":1,"llm_calls":5,"cost":0.05,"cost_other":0.01,"tokens":{"input":1200,"output":300,"cache_read":0,"total":1500}},
 "messages":[],"artifacts":[],"approvals":[],"socket_calls":[],
 "subagent_entries":[
-{"chat_id":"c1","run_id":"r1","entry_id":"e1","agent":"scout","kind":"task","payload":{"text":"Durchsuche das Repo nach allen Stellen, an denen Tokens geprüft werden, und berichte ausführlich darüber mit Dateinamen und Zeilen"},"confirmed":false,"created_at":"2026-09-29T10:00:00Z"},
+{"chat_id":"c1","run_id":"r1","entry_id":"e1","agent":"scout","kind":"task","payload":{"text":"Search the repo for all places where tokens are checked, and report on them in detail with file names and lines"},"confirmed":false,"created_at":"2026-09-29T10:00:00Z"},
 {"chat_id":"c1","run_id":"r1","entry_id":"e2:0","agent":"scout","kind":"tool_call","payload":{"name":"bash","arguments":"{\"command\":\"grep -rn token\"}"},"response_id":"x1","confirmed":true,"created_at":"2026-09-29T10:00:01Z"},
 {"chat_id":"c1","run_id":"r1","entry_id":"e3","agent":"scout","kind":"tool_result","payload":{"name":"bash","text":"a.go:1: token\nb.go:2: token","is_error":false},"confirmed":false,"created_at":"2026-09-29T10:00:02Z"},
 {"chat_id":"c1","run_id":"r1","entry_id":"e4:0","agent":"scout","kind":"tool_call","payload":{"name":"read","arguments":"{\"path\":\"c.go\"}"},"response_id":"x2","confirmed":false,"created_at":"2026-09-29T10:00:03Z"},
-{"chat_id":"c1","run_id":"r1","entry_id":"e5","agent":"scout","kind":"tool_result","payload":{"name":"read","text":"nicht gefunden","is_error":true},"confirmed":false,"created_at":"2026-09-29T10:00:04Z"}
+{"chat_id":"c1","run_id":"r1","entry_id":"e5","agent":"scout","kind":"tool_result","payload":{"name":"read","text":"not found","is_error":true},"confirmed":false,"created_at":"2026-09-29T10:00:04Z"}
 ]}`
 
 type subServer struct {
@@ -46,7 +46,7 @@ func newSubServer(t *testing.T) *subServer {
 		s.mu.Unlock()
 		if b["max"] > 8 {
 			w.WriteHeader(400)
-			io.WriteString(w, `{"error":"max_subagents muss zwischen 0 und 8 liegen"}`)
+			io.WriteString(w, `{"error":"max_subagents must be between 0 and 8"}`)
 			return
 		}
 		io.WriteString(w, `{"id":"c1","state":"active","max_subagents":`+strings.TrimSpace(jsonInt(b["max"]))+`,"subagents":1,"tokens":{"total":0}}`)
@@ -81,17 +81,17 @@ func TestChatSubagentsShow(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("code %d: %s", code, errw)
 	}
-	for _, want := range []string{"Grenze 2", "gestartet 1", "scout", "Auftrag: Durchsuche das Repo",
-		`▶ bash {"command":"grep -rn token"}`, "✓ a.go:1: token", "belegt", "nur Sandbox", `▶ read {"path":"c.go"}`, "✗ nicht gefunden"} {
+	for _, want := range []string{"limit 2", "started 1", "scout", "task: Search the repo",
+		`▶ bash {"command":"grep -rn token"}`, "✓ a.go:1: token", "confirmed", "sandbox only", `▶ read {"path":"c.go"}`, "✗ not found"} {
 		if !strings.Contains(out, want) {
-			t.Errorf("Ausgabe ohne %q:\n%s", want, out)
+			t.Errorf("output without %q:\n%s", want, out)
 		}
 	}
-	if strings.Contains(out, "berichte ausführlich darüber mit Dateinamen und Zeilen") {
-		t.Errorf("Auftrag nicht gekürzt:\n%s", out)
+	if strings.Contains(out, "report on them in detail with file names and lines") {
+		t.Errorf("task not truncated:\n%s", out)
 	}
 	if len(s.maxSet) != 0 {
-		t.Errorf("Anzeige darf nichts setzen: %v", s.maxSet)
+		t.Errorf("showing must not set anything: %v", s.maxSet)
 	}
 }
 
@@ -101,21 +101,21 @@ func TestChatSubagentsSet(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("code %d: %s", code, errw)
 	}
-	if !strings.Contains(out, "4") || !strings.Contains(out, "Subagenten") {
-		t.Errorf("Ausgabe = %q", out)
+	if !strings.Contains(out, "4") || !strings.Contains(out, "Subagent") {
+		t.Errorf("output = %q", out)
 	}
 	if len(s.maxSet) != 1 || s.maxSet[0] != 4 {
-		t.Errorf("gesetzt = %v", s.maxSet)
+		t.Errorf("set = %v", s.maxSet)
 	}
-	if code, _, _ := s.run("chat", "subagents", "c1", "viele"); code != 2 {
-		t.Errorf("keine Zahl: code %d", code)
+	if code, _, _ := s.run("chat", "subagents", "c1", "many"); code != 2 {
+		t.Errorf("not a number: code %d", code)
 	}
 	if code, _, _ := s.run("chat", "subagents", "c1", "-1"); code != 2 {
-		t.Errorf("negative Zahl: code %d", code)
+		t.Errorf("negative number: code %d", code)
 	}
 	code, _, errw = s.run("chat", "subagents", "c1", "9")
-	if code != 1 || !strings.Contains(errw, "zwischen 0 und 8") {
-		t.Errorf("Serverfehler: code %d, %q", code, errw)
+	if code != 1 || !strings.Contains(errw, "between 0 and 8") {
+		t.Errorf("server error: code %d, %q", code, errw)
 	}
 }
 
@@ -125,9 +125,9 @@ func TestChatCalls(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("code %d: %s", code, errw)
 	}
-	for _, want := range []string{"Zeit", "Haupt", "Sub", "1.000", "0,0040 USD", "Spitzentarif", "Nebentarif", "bash, read", "subagent", "429", "3 Modellaufrufe", "0,0050 USD", "davon Sub"} {
+	for _, want := range []string{"Time", "main", "sub", "1,000", "0.0040 USD", "peak tariff", "off-peak tariff", "bash, read", "subagent", "429", "3 model calls", "0.0050 USD", "of which sub"} {
 		if !strings.Contains(out, want) {
-			t.Errorf("Ausgabe ohne %q:\n%s", want, out)
+			t.Errorf("output without %q:\n%s", want, out)
 		}
 	}
 	code, out, _ = s.run("chat", "calls", "c1", "--json")
@@ -143,21 +143,21 @@ func TestChatShowSubagentHeader(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("code %d: %s", code, errw)
 	}
-	for _, want := range []string{"Subagenten 1/2", "Modellaufrufe 5", "Kosten 0,0500 USD", "0,0100 USD außerhalb der Hauptantworten"} {
+	for _, want := range []string{"subagents 1/2", "model calls 5", "cost 0.0500 USD", "0.0100 USD outside the main replies"} {
 		if !strings.Contains(out, want) {
-			t.Errorf("Ausgabe ohne %q:\n%s", want, out)
+			t.Errorf("output without %q:\n%s", want, out)
 		}
 	}
 }
 
 var subagentScript = []string{
 	`{"kind":"pi","data":{"type":"agent_start"}}`,
-	`{"kind":"subagent","data":{"chat_id":"c1","run_id":"r1","entry_id":"e1","agent":"scout","kind":"task","payload":{"text":"Suche Tokens"},"confirmed":false}}`,
+	`{"kind":"subagent","data":{"chat_id":"c1","run_id":"r1","entry_id":"e1","agent":"scout","kind":"task","payload":{"text":"Search tokens"},"confirmed":false}}`,
 	`{"kind":"subagent","data":{"chat_id":"c1","run_id":"r1","entry_id":"e2:0","agent":"scout","kind":"tool_call","payload":{"name":"bash","arguments":"{\"command\":\"ls\"}"},"response_id":"x1","confirmed":true}}`,
 	`{"kind":"subagent","data":{"chat_id":"c1","run_id":"r1","entry_id":"e3","agent":"scout","kind":"tool_result","payload":{"name":"bash","text":"a.txt\nb.txt","is_error":false},"confirmed":false}}`,
 	`{"kind":"llm_call","data":{"id":2,"slot_id":"p-1","model":"deepseek-flash","status":200,"input":500,"output":100,"cost":0.0012,"peak":false,"tool_calls":[{"name":"bash","arguments":"{}"}],"main":false}}`,
-	`{"kind":"socket_call","data":{"id":9,"chat_id":"c1","slot_id":"p-1","via":"cli","op":"extension_ui","detail":"confirm: Datei löschen?","result":"abgelehnt"}}`,
-	`{"kind":"socket_call","data":{"id":10,"chat_id":"c1","slot_id":"p-1","via":"cli","op":"agent_limit","detail":"höchstens 3 gleichzeitige Agenten","result":"abgewiesen"}}`,
+	`{"kind":"socket_call","data":{"id":9,"chat_id":"c1","slot_id":"p-1","via":"cli","op":"extension_ui","detail":"confirm: delete file?","result":"rejected"}}`,
+	`{"kind":"socket_call","data":{"id":10,"chat_id":"c1","slot_id":"p-1","via":"cli","op":"agent_limit","detail":"at most 3 concurrent agents","result":"refused"}}`,
 	`{"kind":"pi","data":{"type":"agent_settled"}}`,
 }
 
@@ -165,61 +165,61 @@ func TestRunSubagentStream(t *testing.T) {
 	f := newFakeServer(t)
 	f.script = subagentScript
 	f.detail = detailWithSubagents
-	code, _, errw := f.run("run", "--max-subagents", "1", "Aufgabe")
+	code, _, errw := f.run("run", "--max-subagents", "1", "task")
 	if code != 0 {
 		t.Fatalf("code %d: %s", code, errw)
 	}
 	f.mu.Lock()
 	if f.createReq["max_subagents"] != float64(1) {
-		t.Errorf("Anlegen = %v", f.createReq)
+		t.Errorf("create = %v", f.createReq)
 	}
 	f.mu.Unlock()
-	for _, want := range []string{"  ↳ scout: Auftrag: Suche Tokens", `  ↳ scout: ▶ bash {"command":"ls"}`, "  ↳ scout: ✓ a.txt", "Erweiterung", "Datei löschen?",
-		"Kosten 0,0500 USD", "0,0100 USD außerhalb der Hauptantworten"} {
+	for _, want := range []string{"  ↳ scout: task: Search tokens", `  ↳ scout: ▶ bash {"command":"ls"}`, "  ↳ scout: ✓ a.txt", "extension", "delete file?",
+		"cost 0.0500 USD", "0.0100 USD outside the main replies"} {
 		if !strings.Contains(errw, want) {
-			t.Errorf("stderr ohne %q:\n%s", want, errw)
+			t.Errorf("stderr without %q:\n%s", want, errw)
 		}
 	}
-	if strings.Contains(errw, "Modellaufruf Sub") || strings.Contains(errw, "gleichzeitige Agenten") {
-		t.Errorf("llm_call/agent_limit ohne --verbose angezeigt:\n%s", errw)
+	if strings.Contains(errw, "model call sub") || strings.Contains(errw, "concurrent agents") {
+		t.Errorf("llm_call/agent_limit shown without --verbose:\n%s", errw)
 	}
 
 	f = newFakeServer(t)
 	f.script = subagentScript
 	f.detail = detailWithSubagents
-	code, _, errw = f.run("run", "--verbose", "Aufgabe")
+	code, _, errw = f.run("run", "--verbose", "task")
 	if code != 0 {
 		t.Fatalf("code %d: %s", code, errw)
 	}
-	for _, want := range []string{"Modellaufruf Sub", "0,0012 USD", "Proxy hat einen Modellaufruf abgewiesen", "höchstens 3 gleichzeitige Agenten"} {
+	for _, want := range []string{"model call sub", "0.0012 USD", "proxy refused a model call", "at most 3 concurrent agents"} {
 		if !strings.Contains(errw, want) {
-			t.Errorf("--verbose: stderr ohne %q:\n%s", want, errw)
+			t.Errorf("--verbose: stderr without %q:\n%s", want, errw)
 		}
 	}
 	if _, ok := f.createReq["max_subagents"]; ok {
-		t.Errorf("ohne --max-subagents darf das Feld fehlen: %v", f.createReq)
+		t.Errorf("without --max-subagents the field may be absent: %v", f.createReq)
 	}
 }
 
 func TestChatNewMaxSubagents(t *testing.T) {
 	f := newFakeServer(t)
-	code, _, errw := f.run("chat", "new", "--max-subagents", "0", "Los")
+	code, _, errw := f.run("chat", "new", "--max-subagents", "0", "Go")
 	if code != 0 {
 		t.Fatal(errw)
 	}
 	if v, ok := f.createReq["max_subagents"]; !ok || v != float64(0) {
-		t.Errorf("Anlegen = %v", f.createReq)
+		t.Errorf("create = %v", f.createReq)
 	}
 	if code, _, _ := f.run("chat", "new", "--max-subagents", "-2"); code != 2 {
-		t.Errorf("negativ: code %d", code)
+		t.Errorf("negative: code %d", code)
 	}
 }
 
 func TestStreamSubagentLimitSocketCall(t *testing.T) {
 	s, _, errw, _ := newTestStreamer(approvalShow, "")
 	s.verbose = true
-	feed(t, s, true, agwEv("socket_call", `{"op":"subagent_limit","via":"cli","detail":"3 gestartet, 2 erlaubt","result":"abgebrochen"}`))
-	if !strings.Contains(errw.String(), "Grenze für Subagenten überschritten (3 gestartet, 2 erlaubt)") {
+	feed(t, s, true, agwEv("socket_call", `{"op":"subagent_limit","via":"cli","detail":"3 started, 2 allowed","result":"aborted"}`))
+	if !strings.Contains(errw.String(), "subagent limit exceeded (3 started, 2 allowed)") {
 		t.Errorf("stderr = %q", errw.String())
 	}
 }

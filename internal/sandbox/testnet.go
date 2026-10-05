@@ -10,13 +10,13 @@ import (
 	"github.com/moby/moby/client"
 )
 
-// Netze der Tests bekommen feste Adressen aus 10.231.64.0/18, nie Dockers Standardbereiche
-// 172.17–172.31. Grund (05.10.2026, zweimal): Ein liegengebliebenes Testnetz in 172.25.0.0/16
-// verdeckte in der Docker-VM die VPN-Adresse der Agri-Gaia-API (172.25.198.41); Namen lösten auf,
-// Verbindungen liefen ins Leere. Die Plätze selbst liegen in 10.231.128.0/17, die festen Netze des
-// Stacks in 10.231.18–22.0/24; der Bereich hier überschneidet sich mit keinem davon.
+// Test networks get fixed addresses from 10.231.64.0/18, never Docker's default ranges
+// 172.17–172.31. Reason (2026-10-05, twice): a leftover test network in 172.25.0.0/16
+// shadowed the VPN address of the Agri-Gaia API (172.25.198.41) inside the Docker VM; names resolved,
+// connections went nowhere. The slots themselves live in 10.231.128.0/17, the stack's fixed networks
+// in 10.231.18–22.0/24; the range here overlaps with none of them.
 
-// TestSubnet wählt zufällig ein /28 aus 10.231.64.0/18 (64 × 16 = 1024 Netze).
+// TestSubnet picks a random /28 from 10.231.64.0/18 (64 × 16 = 1024 networks).
 func TestSubnet() string {
 	b := make([]byte, 2)
 	_, _ = rand.Read(b)
@@ -24,8 +24,8 @@ func TestSubnet() string {
 	return fmt.Sprintf("10.231.%d.%d/28", 64+n/16, (n%16)*16)
 }
 
-// CreateTestNetwork legt ein Bridge-Netz für einen Test mit einem Subnetz aus TestSubnet an und
-// versucht bei einer Überschneidung ein anderes.
+// CreateTestNetwork creates a bridge network for a test with a subnet from TestSubnet and
+// tries another one on overlap.
 func CreateTestNetwork(ctx context.Context, cli *client.Client, name string, internal bool) error {
 	var err error
 	for i := 0; i < 20; i++ {

@@ -1,5 +1,5 @@
-// Package store hält Chats, Nachrichten, Sitzungen, Artefakte, Bestätigungen
-// und das Socket-Protokoll in Postgres.
+// Package store keeps chats, messages, sessions, artifacts, approvals
+// and the socket log in Postgres.
 package store
 
 import (
@@ -19,7 +19,7 @@ import (
 //go:embed schema.sql
 var schemaSQL string
 
-var ErrNotFound = errors.New("nicht gefunden")
+var ErrNotFound = errors.New("not found")
 
 const (
 	StateActive  = "active"
@@ -45,16 +45,16 @@ type Chat struct {
 	ID    string `json:"id"`
 	Title string `json:"title"`
 	Model string `json:"model"`
-	// ThinkingLevel: Denkstufe von pi (/effort); leer: pis Vorgabe, noch nicht gelesen.
+	// ThinkingLevel: pi's thinking level (/effort); empty: pi's default, not read yet.
 	ThinkingLevel    string          `json:"thinking_level,omitempty"`
 	Variant          string          `json:"variant"`
 	State            string          `json:"state"`
 	Internet         bool            `json:"internet"`
 	AutoCompact      bool            `json:"auto_compact"`
 	MaxSubagents     int             `json:"max_subagents"`
-	Subagents        int             `json:"subagents"`  // gestartete Subagenten (Läufe)
-	LLMCalls         int             `json:"llm_calls"`  // am Proxy erfasste Modellaufrufe
-	CostOther        float64         `json:"cost_other"` // davon außerhalb der Antworten der Hauptsitzung
+	Subagents        int             `json:"subagents"`  // started subagents (runs)
+	LLMCalls         int             `json:"llm_calls"`  // model calls captured at the proxy
+	CostOther        float64         `json:"cost_other"` // of which outside the main session's replies
 	Compactions      int             `json:"compactions"`
 	Context          json.RawMessage `json:"context,omitempty"`
 	CreatedAt        time.Time       `json:"created_at"`
@@ -63,56 +63,56 @@ type Chat struct {
 	Cost             float64         `json:"cost"`
 	ArtifactCount    int             `json:"artifact_count"`
 	PendingApprovals int             `json:"pending_approvals"`
-	// Queued: eingereihte, noch nicht übergebene Nachrichten (Warteschlange).
+	// Queued: enqueued messages not yet delivered (queue).
 	Queued int `json:"queued"`
-	// BackgroundRunning: laufende Hintergrundaufgaben (bash mit run_in_background).
+	// BackgroundRunning: running background tasks (bash with run_in_background).
 	BackgroundRunning int `json:"background_running"`
-	// Workspace: letzte Sicherung des Arbeitsbereichs (nil: noch keine und nichts ausgelassen).
+	// Workspace: last backup of the workspace (nil: none yet and nothing skipped).
 	Workspace *WorkspaceInfo `json:"workspace,omitempty"`
-	// Delegation: übertragene Rechte des Chats (nil: ohne Delegation, Verhalten wie vor Schritt 1).
+	// Delegation: delegated rights of the chat (nil: without delegation, behaviour as before step 1).
 	Delegation json.RawMessage `json:"delegation,omitempty"`
-	// Owner: sub des Nutzers, dem der Chat gehört (Anmeldung über die Plattform); leer im token-Modus.
+	// Owner: sub of the user who owns the chat (login through the platform); empty in token mode.
 	Owner string `json:"owner,omitempty"`
-	// Language: bevorzugte Sprache des Nutzers laut Browser (BCP 47); leer: unbekannt.
+	// Language: the user's preferred language according to the browser (BCP 47); empty: unknown.
 	Language string `json:"language,omitempty"`
 }
 
-// Herkunft des Titels: TitleDefault (Platzhalter „Neuer Chat …“, wird mit der ersten Frage ersetzt),
-// TitleAuto (aus der ersten Frage), TitleUser (vom Nutzer gesetzt, auch mit /rename).
+// Origin of the title: TitleDefault (placeholder title, replaced with the first question),
+// TitleAuto (from the first question), TitleUser (set by the user, also with /rename).
 const (
 	TitleDefault = "default"
 	TitleAuto    = "auto"
 	TitleUser    = "user"
-	TitleModel   = "model" // vom Modell formuliert (einmal, nach der ersten Frage)
+	TitleModel   = "model" // phrased by the model (once, after the first question)
 )
 
 type NewChat struct {
 	Title, Model, Variant string
-	TitleSource           string // leer: TitleUser
+	TitleSource           string // empty: TitleUser
 	Internet              bool
 	AutoCompact           bool
 	MaxSubagents          int
-	Delegation            json.RawMessage // nil: ohne Delegation
-	Owner                 string          // leer: ohne Besitzer (token-Modus)
-	Language              string          // leer: unbekannt; vom Aufrufer geprüft (ValidLanguage)
+	Delegation            json.RawMessage // nil: without delegation
+	Owner                 string          // empty: without owner (token mode)
+	Language              string          // empty: unknown; checked by the caller (ValidLanguage)
 }
 
 type Message struct {
 	Seq       int             `json:"seq"`
 	Role      string          `json:"role"`
 	Message   json.RawMessage `json:"message"`
-	Cost      *float64        `json:"cost,omitempty"` // USD nach Tarif, nur bei Antworten
-	Peak      *bool           `json:"peak,omitempty"` // Spitzentarif galt
+	Cost      *float64        `json:"cost,omitempty"` // USD by tariff, only for replies
+	Peak      *bool           `json:"peak,omitempty"` // peak tariff applied
 	CreatedAt time.Time       `json:"created_at"`
-	// Review 3 (H1): Durchgang und Auslöser (alle Nachrichten eines Durchgangs), Herkunft und Teile
-	// (nur die Nutzernachricht, also der Auftrag an pi). Leer bei Zeilen von vor dieser Änderung.
+	// Review 3 (H1): turn and trigger (all messages of a turn), origin and parts
+	// (only the user message, i.e. the request to pi). Empty for rows from before this change.
 	TurnID  *int64   `json:"turn_id,omitempty"`
 	Trigger string   `json:"trigger,omitempty"`
 	Origin  string   `json:"origin,omitempty"`
 	Sources []Source `json:"sources,omitempty"`
 }
 
-// Billing sind die vom Orchestrator berechneten Kosten einer Antwort.
+// Billing is the cost of a reply as computed by the orchestrator.
 type Billing struct {
 	Cost float64
 	Peak bool
@@ -128,33 +128,33 @@ type Artifact struct {
 	Via         string    `json:"via"`
 	ObjectKey   string    `json:"-"`
 	CreatedAt   time.Time `json:"created_at"`
-	// ToolCallID: Werkzeugaufruf, der das Artefakt hochgeladen hat (nur Ausgaben; leer bei älteren
-	// Artefakten). Dient allein der Anzeige an der richtigen Stelle im Verlauf; bei der CLI stammt die
-	// Kennung aus der Umgebung des Befehls, der Agent könnte sie also verändern.
+	// ToolCallID: tool call that uploaded the artifact (outputs only; empty for older
+	// artifacts). Serves solely to show it at the right place in the history; with the CLI the
+	// ID comes from the command's environment, so the agent could change it.
 	ToolCallID string `json:"tool_call_id,omitempty"`
 }
 
 type toolCallKey struct{}
 type sessionKey struct{}
 
-// WithSession hängt die Sitzung eines Aufrufs an den Kontext („main“ oder die Kennung eines
-// Subagenten-Laufs, wie in tool_executions.session); nur zur Anzeige, bei der CLI vom Agenten änderbar.
+// WithSession attaches the session of a call to the context ("main" or the ID of a
+// subagent run, as in tool_executions.session); for display only, changeable by the agent with the CLI.
 func WithSession(ctx context.Context, s string) context.Context {
 	return context.WithValue(ctx, sessionKey{}, s)
 }
 
-// SessionFrom liefert die Sitzung aus WithSession (sonst leer).
+// SessionFrom returns the session from WithSession (otherwise empty).
 func SessionFrom(ctx context.Context) string {
 	s, _ := ctx.Value(sessionKey{}).(string)
 	return s
 }
 
-// WithToolCall hängt die Kennung des Werkzeugaufrufs an den Kontext eines Uploads.
+// WithToolCall attaches the ID of the tool call to the context of an upload.
 func WithToolCall(ctx context.Context, id string) context.Context {
 	return context.WithValue(ctx, toolCallKey{}, id)
 }
 
-// ToolCallFrom liefert die Kennung aus WithToolCall (sonst leer).
+// ToolCallFrom returns the ID from WithToolCall (otherwise empty).
 func ToolCallFrom(ctx context.Context) string {
 	id, _ := ctx.Value(toolCallKey{}).(string)
 	return id
@@ -174,8 +174,8 @@ type Approval struct {
 	State       string     `json:"state"`
 	CreatedAt   time.Time  `json:"created_at"`
 	DecidedAt   *time.Time `json:"decided_at,omitempty"`
-	// Session und ToolCallID: wer gefragt hat (Hauptagent „main“ oder Subagenten-Lauf) und in welchem
-	// Werkzeugaufruf; leer bei älteren Einträgen.
+	// Session and ToolCallID: who asked (main agent "main" or subagent run) and in which
+	// tool call; empty for older entries.
 	Session    string `json:"session,omitempty"`
 	ToolCallID string `json:"tool_call_id,omitempty"`
 }
@@ -189,7 +189,7 @@ type SocketCall struct {
 	Detail    string    `json:"detail"`
 	Result    string    `json:"result"`
 	CreatedAt time.Time `json:"created_at"`
-	// Session: Hauptagent („main“) oder Subagenten-Lauf, der den Aufruf machte (leer: unbekannt).
+	// Session: main agent ("main") or subagent run that made the call (empty: unknown).
 	Session    string `json:"session,omitempty"`
 	ToolCallID string `json:"tool_call_id,omitempty"`
 }
@@ -203,8 +203,8 @@ func Open(ctx context.Context, url string) (*Store, error) { return OpenSchema(c
 
 var schemaName = regexp.MustCompile(`^[a-z_][a-z0-9_]*$`)
 
-// OpenSchema öffnet die Datenbank und legt das Schema an. Mit schema != ""
-// arbeitet der Store in einem eigenen Postgres-Schema (für Tests).
+// OpenSchema opens the database and creates the schema. With schema != ""
+// the store works in its own Postgres schema (for tests).
 func OpenSchema(ctx context.Context, url, schema string) (*Store, error) {
 	cfg, err := pgxpool.ParseConfig(url)
 	if err != nil {
@@ -212,7 +212,7 @@ func OpenSchema(ctx context.Context, url, schema string) (*Store, error) {
 	}
 	if schema != "" {
 		if !schemaName.MatchString(schema) {
-			return nil, fmt.Errorf("ungültiger Schemaname %q", schema)
+			return nil, fmt.Errorf("invalid schema name %q", schema)
 		}
 		cfg.ConnConfig.RuntimeParams["search_path"] = schema
 	}
@@ -241,7 +241,7 @@ func OpenSchema(ctx context.Context, url, schema string) (*Store, error) {
 	}
 	if _, err := p.Exec(ctx, schemaSQL); err != nil {
 		p.Close()
-		return nil, fmt.Errorf("Schema anlegen: %w", err)
+		return nil, fmt.Errorf("creating schema: %w", err)
 	}
 	return &Store{pool: p, schema: schema}, nil
 }
@@ -254,8 +254,8 @@ func (s *Store) DropSchema(ctx context.Context) {
 	}
 }
 
-// chatSelect berechnet Tokens und Kosten aus den gespeicherten
-// Assistenten-Nachrichten (usage je Antwort, wie pi sie liefert).
+// chatSelect computes tokens and cost from the stored
+// assistant messages (usage per reply, as pi delivers it).
 const chatSelect = `
 SELECT c.id::text, c.title, c.model, c.thinking_level, c.variant, c.state, c.internet, c.auto_compact, c.max_subagents,
   (SELECT count(*) FROM chat_messages k WHERE k.chat_id = c.id AND k.role = 'compaction'), c.context,
@@ -323,15 +323,15 @@ func (s *Store) CreateChat(ctx context.Context, n NewChat) (Chat, error) {
 	if src == "" {
 		src = TitleUser
 	}
-	var del any // NULL ohne Delegation
+	var del any // NULL without delegation
 	if len(n.Delegation) > 0 {
 		del = string(n.Delegation)
 	}
-	var owner any // NULL ohne Besitzer
+	var owner any // NULL without owner
 	if n.Owner != "" {
 		owner = n.Owner
 	}
-	var lang any // NULL ohne Angabe
+	var lang any // NULL if not given
 	if n.Language != "" {
 		lang = n.Language
 	}
@@ -350,7 +350,7 @@ func (s *Store) GetChat(ctx context.Context, id string) (Chat, error) {
 	return scanChat(s.pool.QueryRow(ctx, chatSelect+` WHERE c.id = $1`, id))
 }
 
-// ChatOwner liefert den Besitzer eines Chats (leer: ohne Besitzer); unbekannt: ErrNotFound.
+// ChatOwner returns the owner of a chat (empty: without owner); unknown: ErrNotFound.
 func (s *Store) ChatOwner(ctx context.Context, id string) (string, error) {
 	if !isUUID(id) {
 		return "", ErrNotFound
@@ -380,7 +380,7 @@ func (s *Store) ListChats(ctx context.Context) ([]Chat, error) {
 	return out, rows.Err()
 }
 
-// ChatsInState liefert Chats eines Zustands (für den Neustart des Orchestrators).
+// ChatsInState returns the chats in a state (for the orchestrator's restart).
 func (s *Store) ChatsInState(ctx context.Context, state string) ([]Chat, error) {
 	all, err := s.ListChats(ctx)
 	if err != nil {
@@ -418,8 +418,8 @@ func (s *Store) SetAutoCompact(ctx context.Context, id string, on bool) error {
 	return s.exec1(ctx, `UPDATE chats SET auto_compact=$2, updated_at=now() WHERE id=$1`, id, on)
 }
 
-// SetContext hält die zuletzt bekannte Kontextauslastung fest (ohne updated_at
-// zu ändern, damit die Chatliste nicht bei jeder Messung umsortiert).
+// SetContext records the last known context usage (without changing
+// updated_at, so that the chat list is not reordered on every measurement).
 func (s *Store) SetContext(ctx context.Context, id string, usage json.RawMessage) error {
 	return s.exec1(ctx, `UPDATE chats SET context=$2 WHERE id=$1`, id, []byte(usage))
 }
@@ -437,7 +437,7 @@ func (s *Store) Commands(ctx context.Context, id string) (json.RawMessage, error
 	return b, err
 }
 
-// ChatInternet liest nur den Internet-Schalter (Web-Proxy, web-gate.ts; ohne die Summen von GetChat).
+// ChatInternet reads only the internet switch (web proxy, web-gate.ts; without GetChat's totals).
 func (s *Store) ChatInternet(ctx context.Context, id string) (bool, error) {
 	if !isUUID(id) {
 		return false, ErrNotFound
@@ -458,19 +458,19 @@ func (s *Store) SetThinkingLevel(ctx context.Context, id, level string) error {
 	return s.exec1(ctx, `UPDATE chats SET thinking_level=$2 WHERE id=$1`, id, level)
 }
 
-// SetTitle setzt den Titel als vom Nutzer gewählt; die automatische Benennung greift danach nicht mehr.
+// SetTitle sets the title as chosen by the user; automatic naming no longer applies afterwards.
 func (s *Store) SetTitle(ctx context.Context, id, title string) error {
 	return s.exec1(ctx, `UPDATE chats SET title=$2, title_source='user', updated_at=now() WHERE id=$1`, id, title)
 }
 
-// ModelTitle ersetzt den Titel aus der ersten Frage durch den des Modells, aber nicht, wenn der
-// Nutzer inzwischen umbenannt hat; true, wenn er ersetzt wurde.
+// ModelTitle replaces the title from the first question with the model's, but not if the
+// user has renamed the chat in the meantime; true if it was replaced.
 func (s *Store) ModelTitle(ctx context.Context, id, title string) (bool, error) {
 	tag, err := s.pool.Exec(ctx, `UPDATE chats SET title=$2, title_source='model' WHERE id=$1 AND title_source='auto'`, id, title)
 	return tag.RowsAffected() > 0, err
 }
 
-// AuxCall ist ein Modellaufruf des Orchestrators selbst (aux_llm_calls).
+// AuxCall is a model call of the orchestrator itself (aux_llm_calls).
 type AuxCall struct {
 	ChatID, Purpose, Model, Error string
 	Status                        int
@@ -489,7 +489,7 @@ VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
 	return err
 }
 
-// WebRequest ist eine Anfrage über den Web-Proxy (web_requests).
+// WebRequest is a request through the web proxy (web_requests).
 type WebRequest struct {
 	ID         int64     `json:"id"`
 	ChatID     string    `json:"chat_id"`
@@ -516,12 +516,12 @@ VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id`,
 	return id, err
 }
 
-// FinishWebRequest ergänzt einen Tunnel beim Schließen.
+// FinishWebRequest completes a tunnel when it closes.
 func (s *Store) FinishWebRequest(ctx context.Context, id, up, down, durationMs int64, denied string) error {
 	return s.exec1(ctx, `UPDATE web_requests SET bytes_up=$2, bytes_down=$3, duration_ms=$4, denied=$5 WHERE id=$1`, id, up, down, durationMs, noNUL(denied))
 }
 
-// WebRequests liefert die Anfragen eines Chats über den Web-Proxy.
+// WebRequests returns a chat's requests through the web proxy.
 func (s *Store) WebRequests(ctx context.Context, chatID string) ([]WebRequest, error) {
 	rows, err := s.pool.Query(ctx, `
 SELECT id, chat_id::text, slot_id, source_ip, method, host, port, path, status, bytes_up, bytes_down, denied, started_at, duration_ms
@@ -541,7 +541,7 @@ FROM web_requests WHERE chat_id = $1 ORDER BY id`, chatID)
 	return out, rows.Err()
 }
 
-// AuxCalls liefert die Modellaufrufe des Orchestrators zu einem Chat.
+// AuxCalls returns the orchestrator's model calls for a chat.
 func (s *Store) AuxCalls(ctx context.Context, chatID string) ([]AuxCall, error) {
 	rows, err := s.pool.Query(ctx, `
 SELECT chat_id::text, purpose, model, error, status, input, output, cache_read, cost, peak, started_at, duration_ms
@@ -561,7 +561,7 @@ FROM aux_llm_calls WHERE chat_id = $1 ORDER BY id`, chatID)
 	return out, rows.Err()
 }
 
-// AutoTitle ersetzt den Platzhaltertitel, und nur ihn; true, wenn er ersetzt wurde.
+// AutoTitle replaces the placeholder title, and only that; true if it was replaced.
 func (s *Store) AutoTitle(ctx context.Context, id, title string) (bool, error) {
 	tag, err := s.pool.Exec(ctx, `UPDATE chats SET title=$2, title_source='auto' WHERE id=$1 AND title_source='default'`, id, title)
 	return tag.RowsAffected() > 0, err
@@ -575,7 +575,7 @@ func (s *Store) SaveSession(ctx context.Context, id string, data []byte) error {
 	return s.exec1(ctx, `UPDATE chats SET session=$2, session_sha=encode(sha256($2),'hex'), updated_at=now() WHERE id=$1`, id, data)
 }
 
-// LoadSession liefert nil, wenn noch keine Sitzung gesichert ist.
+// LoadSession returns nil if no session has been saved yet.
 func (s *Store) LoadSession(ctx context.Context, id string) ([]byte, error) {
 	var b []byte
 	err := s.pool.QueryRow(ctx, `SELECT session FROM chats WHERE id=$1`, id).Scan(&b)
@@ -589,12 +589,12 @@ func (s *Store) AppendMessage(ctx context.Context, chatID string, msg json.RawMe
 	return s.AppendBilledMessage(ctx, chatID, msg, nil)
 }
 
-// AppendBilledMessage speichert eine Nachricht samt berechneten Kosten.
+// AppendBilledMessage stores a message along with its computed cost.
 func (s *Store) AppendBilledMessage(ctx context.Context, chatID string, msg json.RawMessage, bill *Billing) (int, error) {
 	return s.AppendTurnMessage(ctx, chatID, msg, bill, nil)
 }
 
-// MessageMeta: Durchgang, Auslöser und (nur bei der Nutzernachricht) Herkunft und Teile.
+// MessageMeta: turn, trigger and (only for the user message) origin and parts.
 type MessageMeta struct {
 	TurnID  int64
 	Trigger string
@@ -602,7 +602,7 @@ type MessageMeta struct {
 	Sources []Source
 }
 
-// AppendTurnMessage speichert eine Nachricht samt Kosten und Angaben zum Durchgang (meta darf nil sein).
+// AppendTurnMessage stores a message along with cost and turn details (meta may be nil).
 func (s *Store) AppendTurnMessage(ctx context.Context, chatID string, msg json.RawMessage, bill *Billing, meta *MessageMeta) (int, error) {
 	var cost, peak any
 	if bill != nil {
@@ -742,8 +742,8 @@ func (s *Store) GetApproval(ctx context.Context, id string) (Approval, error) {
 	return scanApproval(s.pool.QueryRow(ctx, `SELECT `+approvalCols+` FROM approvals WHERE id=$1`, id))
 }
 
-// DecideApproval setzt den Zustand nur, solange er "pending" ist. ok meldet,
-// ob diese Entscheidung gegriffen hat; sonst kommt der bestehende Stand zurück.
+// DecideApproval sets the state only while it is "pending". ok reports
+// whether this decision took effect; otherwise the existing state is returned.
 func (s *Store) DecideApproval(ctx context.Context, id, state string) (Approval, bool, error) {
 	a, err := scanApproval(s.pool.QueryRow(ctx, `UPDATE approvals SET state=$2, decided_at=now() WHERE id=$1 AND state='pending' RETURNING `+approvalCols, id, state))
 	if err == nil {
@@ -774,8 +774,8 @@ func (s *Store) ListApprovals(ctx context.Context, state, chatID string) ([]Appr
 	return out, rows.Err()
 }
 
-// ExpirePendingApprovals setzt beim Start alle offenen Bestätigungen auf
-// "expired": Die wartenden Aufrufe existieren nach einem Neustart nicht mehr.
+// ExpirePendingApprovals sets all open approvals to "expired" at startup:
+// the waiting calls no longer exist after a restart.
 func (s *Store) ExpirePendingApprovals(ctx context.Context) (int64, error) {
 	tag, err := s.pool.Exec(ctx, `UPDATE approvals SET state='expired', decided_at=now() WHERE state='pending'`)
 	return tag.RowsAffected(), err
@@ -808,7 +808,7 @@ func (s *Store) ListSocketCalls(ctx context.Context, chatID string) ([]SocketCal
 	return out, rows.Err()
 }
 
-// Totals summiert Tokens und Kosten über alle Chats (je Chat wie in chatSelect).
+// Totals sums tokens and cost over all chats (per chat as in chatSelect).
 func (s *Store) Totals(ctx context.Context) (Tokens, float64, error) {
 	var t Tokens
 	var cost float64
@@ -838,7 +838,7 @@ LEFT JOIN LATERAL (
   FROM llm_calls x WHERE x.chat_id = c.id
 ) l ON true`
 
-// LLMCall ist ein am Proxy erfasster Modellaufruf.
+// LLMCall is a model call captured at the proxy.
 type LLMCall struct {
 	ID         int64           `json:"id"`
 	ChatID     string          `json:"chat_id,omitempty"`
@@ -856,8 +856,8 @@ type LLMCall struct {
 	ToolCalls  json.RawMessage `json:"tool_calls"`
 	StartedAt  time.Time       `json:"started_at"`
 	DurationMs int64           `json:"duration_ms"`
-	Main       bool            `json:"main"` // Antwort der Hauptsitzung (responseId in den Nachrichten)
-	// FinishReason und Complete: siehe llmproxy.Call (M1).
+	Main       bool            `json:"main"` // reply of the main session (responseId in the messages)
+	// FinishReason and Complete: see llmproxy.Call (M1).
 	FinishReason string `json:"finish_reason"`
 	Complete     bool   `json:"complete"`
 }
@@ -900,10 +900,10 @@ FROM llm_calls x WHERE x.chat_id = $1 ORDER BY x.id`, chatID)
 	return out, rows.Err()
 }
 
-// ToolRejections liefert je toolCallId die Fehlermeldung der Werkzeugergebnisse mit isError aus
-// der Hauptsitzung und den Sitzungen der Subagenten (M1). Quelle sind Sitzungsdateien von pi,
-// also nicht fälschungssicher: nur ein Hinweis, warum ein angeforderter Aufruf nie ausgeführt
-// wurde (etwa ungültige Argumente oder ein ausgeblendetes Werkzeug).
+// ToolRejections returns, per toolCallId, the error message of the tool results with isError from
+// the main session and the subagents' sessions (M1). The source is pi's session files,
+// hence not tamper-proof: only a hint why a requested call was never executed
+// (such as invalid arguments or a hidden tool).
 func (s *Store) ToolRejections(ctx context.Context, chatID string) (map[string]string, error) {
 	rows, err := s.pool.Query(ctx, `
 SELECT m.message->>'toolCallId', COALESCE((SELECT string_agg(p->>'text', ' ') FROM jsonb_array_elements(
@@ -932,7 +932,7 @@ WHERE e.chat_id = $1 AND e.kind = 'tool_result' AND e.payload->>'is_error' = 'tr
 	return out, rows.Err()
 }
 
-// SubagentEntry ist ein Eintrag aus der Sitzungsdatei eines Subagenten.
+// SubagentEntry is an entry from a subagent's session file.
 type SubagentEntry struct {
 	ChatID     string          `json:"chat_id"`
 	RunID      string          `json:"run_id"`
@@ -941,11 +941,11 @@ type SubagentEntry struct {
 	Kind       string          `json:"kind"`
 	Payload    json.RawMessage `json:"payload"`
 	ResponseID string          `json:"response_id,omitempty"`
-	Confirmed  bool            `json:"confirmed"` // Antwort am Proxy belegt
+	Confirmed  bool            `json:"confirmed"` // reply recorded at the proxy
 	CreatedAt  time.Time       `json:"created_at"`
 }
 
-// AddSubagentEntries speichert neue Einträge und liefert nur die neuen zurück.
+// AddSubagentEntries stores new entries and returns only the new ones.
 func (s *Store) AddSubagentEntries(ctx context.Context, es []SubagentEntry) ([]SubagentEntry, error) {
 	var out []SubagentEntry
 	for _, e := range es {
@@ -987,7 +987,7 @@ FROM subagent_entries e WHERE e.chat_id = $1 ORDER BY e.created_at, e.run_id`, c
 	return out, rows.Err()
 }
 
-// SubagentRun: Name und Zustand eines Laufs (Kennung wie subagent_entries.run_id).
+// SubagentRun: name and state of a run (ID as in subagent_entries.run_id).
 type SubagentRun struct {
 	ChatID      string     `json:"chat_id"`
 	RunID       string     `json:"run_id"`
@@ -1001,7 +1001,7 @@ type SubagentRun struct {
 	UpdatedAt   time.Time  `json:"updated_at"`
 }
 
-// UpsertSubagentRun speichert Name und Zustand eines Laufs; leere Felder überschreiben nichts.
+// UpsertSubagentRun stores name and state of a run; empty fields overwrite nothing.
 func (s *Store) UpsertSubagentRun(ctx context.Context, r SubagentRun) (SubagentRun, error) {
 	err := s.pool.QueryRow(ctx, `
 INSERT INTO subagent_runs (chat_id, run_id, agent, label, state, pi_run_id, parent_run_id, started_at, ended_at)
@@ -1049,7 +1049,7 @@ func (s *Store) SetMaxSubagents(ctx context.Context, id string, n int) error {
 	return s.exec1(ctx, `UPDATE chats SET max_subagents=$2, updated_at=now() WHERE id=$1`, id, n)
 }
 
-// ChatImage ist ein Anzeige-Bild einer Antwort (kein Artefakt), in S3 gesichert.
+// ChatImage is a display image of a reply (not an artifact), saved in S3.
 type ChatImage struct {
 	ChatID      string    `json:"chat_id"`
 	Msg         string    `json:"msg"`
@@ -1061,7 +1061,7 @@ type ChatImage struct {
 	CreatedAt   time.Time `json:"created_at"`
 }
 
-// PutChatImage legt den Eintrag an; ein vorhandener bleibt (die erste Sicherung gilt).
+// PutChatImage creates the entry; an existing one stays (the first save applies).
 func (s *Store) PutChatImage(ctx context.Context, im ChatImage) error {
 	_, err := s.pool.Exec(ctx, `
 INSERT INTO chat_images (chat_id, msg, path, object_key, content_type, size, sha256)
@@ -1083,12 +1083,12 @@ WHERE chat_id=$1 AND msg=$2 AND path=$3`, chatID, msg, path).Scan(&im.ObjectKey,
 	return im, err
 }
 
-// WorkspaceInfo beschreibt die letzte Sicherung des Arbeitsbereichs eines Chats
-// (API-Feld workspace). SavedAt nil: noch nie gesichert. Skipped*: die letzte
-// Sicherung wurde ausgelassen (etwa über der Größengrenze); die vorherige gilt weiter.
+// WorkspaceInfo describes the last backup of a chat's workspace
+// (API field workspace). SavedAt nil: never backed up. Skipped*: the last
+// backup was skipped (e.g. above the size limit); the previous one remains valid.
 type WorkspaceInfo struct {
-	Size          int64      `json:"size"`         // Summe der Dateigrößen
-	ArchiveSize   int64      `json:"archive_size"` // Größe des tar.gz
+	Size          int64      `json:"size"`         // sum of the file sizes
+	ArchiveSize   int64      `json:"archive_size"` // size of the tar.gz
 	Files         int        `json:"files"`
 	SHA256        string     `json:"sha256,omitempty"`
 	SavedAt       *time.Time `json:"saved_at,omitempty"`
@@ -1097,15 +1097,15 @@ type WorkspaceInfo struct {
 	SkippedAt     *time.Time `json:"skipped_at,omitempty"`
 }
 
-// Workspace ist der vollständige Eintrag (mit Ablageort und Fingerabdruck).
+// Workspace is the full entry (with storage location and fingerprint).
 type Workspace struct {
 	WorkspaceInfo
 	ChatID      string
-	ObjectKey   string // "" = noch nie gesichert
+	ObjectKey   string // "" = never backed up
 	Fingerprint string
 }
 
-// GetWorkspace liefert den Eintrag des Chats oder ErrNotFound.
+// GetWorkspace returns the chat's entry or ErrNotFound.
 func (s *Store) GetWorkspace(ctx context.Context, chatID string) (Workspace, error) {
 	w := Workspace{ChatID: chatID}
 	if !isUUID(chatID) {
@@ -1123,7 +1123,7 @@ FROM chat_workspaces WHERE chat_id=$1`, chatID).Scan(&key, &w.Size, &w.ArchiveSi
 	return w, err
 }
 
-// PutWorkspace hält eine erfolgreiche Sicherung fest und löscht einen Auslass-Vermerk.
+// PutWorkspace records a successful backup and clears a skip note.
 func (s *Store) PutWorkspace(ctx context.Context, w Workspace) error {
 	_, err := s.pool.Exec(ctx, `
 INSERT INTO chat_workspaces (chat_id, object_key, size, archive_size, files, sha256, fingerprint, saved_at)
@@ -1135,7 +1135,7 @@ ON CONFLICT (chat_id) DO UPDATE SET object_key=EXCLUDED.object_key, size=EXCLUDE
 	return err
 }
 
-// SkipWorkspace vermerkt eine ausgelassene Sicherung; eine vorhandene bleibt gültig.
+// SkipWorkspace notes a skipped backup; an existing one remains valid.
 func (s *Store) SkipWorkspace(ctx context.Context, chatID, reason string, size int64) error {
 	_, err := s.pool.Exec(ctx, `
 INSERT INTO chat_workspaces (chat_id, skipped_reason, skipped_size, skipped_at) VALUES ($1,$2,$3,now())
@@ -1144,7 +1144,7 @@ ON CONFLICT (chat_id) DO UPDATE SET skipped_reason=EXCLUDED.skipped_reason, skip
 	return err
 }
 
-// ClearWorkspaceSkip nimmt den Auslass-Vermerk zurück (Arbeitsbereich unverändert seit der Sicherung).
+// ClearWorkspaceSkip withdraws the skip note (workspace unchanged since the backup).
 func (s *Store) ClearWorkspaceSkip(ctx context.Context, chatID string) error {
 	_, err := s.pool.Exec(ctx, `UPDATE chat_workspaces SET skipped_reason=NULL, skipped_size=NULL, skipped_at=NULL WHERE chat_id=$1`, chatID)
 	return err
@@ -1154,14 +1154,14 @@ var uuidRe = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[
 
 func isUUID(s string) bool { return uuidRe.MatchString(s) }
 
-// ToolExecution ist eine Operation, die der Orchestrator für ein Werkzeug in
-// der Ausführungs-Sandbox ausgeführt hat (E9). Belegt, weil er sie selbst
-// ausgeführt und eingetragen hat.
+// ToolExecution is an operation the orchestrator executed for a tool in
+// the execution sandbox (E9). Proven, because it executed and recorded it
+// itself.
 type ToolExecution struct {
 	ID            int64           `json:"id"`
 	ChatID        string          `json:"chat_id"`
 	SlotID        string          `json:"slot_id"`
-	Session       string          `json:"session"` // "main" oder Kennung des Subagenten-Laufs
+	Session       string          `json:"session"` // "main" or ID of the subagent run
 	ToolCallID    string          `json:"tool_call_id"`
 	Tool          string          `json:"tool"`
 	Op            string          `json:"op"`
@@ -1175,12 +1175,12 @@ type ToolExecution struct {
 	DurationMs    int64           `json:"duration_ms"`
 }
 
-// AddToolExecution speichert eine Ausführung. Postgres nimmt kein NUL in text
-// und kein \u0000 in jsonb an (SQLSTATE 22021/22P05); beides kommt bei
-// Binärausgaben vor (printf '\0', read einer PNG-Datei) und wird deshalb durch
-// U+2400 (␀) ersetzt. Scheitert der Eintrag trotzdem, wird eine Ersatzzeile
-// ohne Auszug und Argumente geschrieben: Eine fehlende Zeile fiele im Abgleich
-// fälschlich als „nicht ausgeführt“ auf (Code-Review K1).
+// AddToolExecution stores an execution. Postgres accepts no NUL in text
+// and no \u0000 in jsonb (SQLSTATE 22021/22P05); both occur in
+// binary output (printf '\0', read of a PNG file) and are therefore replaced by
+// U+2400 (␀). If the insert still fails, a fallback row without excerpt and
+// arguments is written: a missing row would wrongly show up in the reconciliation
+// as "not executed" (code review K1).
 func (s *Store) AddToolExecution(ctx context.Context, e ToolExecution) (ToolExecution, error) {
 	if len(e.Args) == 0 {
 		e.Args = json.RawMessage("{}")
@@ -1197,10 +1197,10 @@ func (s *Store) AddToolExecution(ctx context.Context, e ToolExecution) (ToolExec
 	}
 	fb := e
 	fb.Args, fb.OutputExcerpt = json.RawMessage("{}"), ""
-	fb.Error = strings.TrimSpace(fb.Error + " [Eintrag nicht vollständig gespeichert: " + noNUL(err.Error()) + "]")
+	fb.Error = strings.TrimSpace(fb.Error + " [entry not stored completely: " + noNUL(err.Error()) + "]")
 	id, err2 := s.insertToolExecution(ctx, fb)
 	if err2 != nil {
-		return e, fmt.Errorf("%w (Ersatzzeile: %v)", err, err2)
+		return e, fmt.Errorf("%w (fallback row: %v)", err, err2)
 	}
 	fb.ID = id
 	return fb, nil
@@ -1219,13 +1219,13 @@ VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING id`,
 	return id, err
 }
 
-// noNUL macht einen Text speicherbar: NUL wird zu U+2400, ungültiges UTF-8 zu U+FFFD.
+// noNUL makes a text storable: NUL becomes U+2400, invalid UTF-8 becomes U+FFFD.
 func noNUL(s string) string {
 	return strings.ToValidUTF8(strings.ReplaceAll(s, "\x00", "␀"), "�")
 }
 
-// jsonNoNUL ersetzt NUL in allen Zeichenketten eines JSON-Werts. Ungültiges JSON bleibt
-// unverändert (der Eintrag scheitert dann und wird zur Ersatzzeile).
+// jsonNoNUL replaces NUL in all strings of a JSON value. Invalid JSON stays
+// unchanged (the insert then fails and becomes the fallback row).
 func jsonNoNUL(raw json.RawMessage) json.RawMessage {
 	if !strings.Contains(string(raw), `\u0000`) && !strings.ContainsRune(string(raw), 0) {
 		return raw
@@ -1281,28 +1281,28 @@ FROM tool_executions WHERE chat_id = $1 ORDER BY id`, chatID)
 	return out, rows.Err()
 }
 
-// AddDelegationObject hält fest, dass ein Objekt in der Delegation dieses Chats entstanden ist
-// (Herkunftsregel). Doppelte Einträge sind ohne Wirkung.
+// AddDelegationObject records that an object was created within this chat's delegation
+// (provenance rule). Duplicate entries have no effect.
 func (s *Store) AddDelegationObject(ctx context.Context, chatID, resource, id string) error {
 	_, err := s.pool.Exec(ctx, `INSERT INTO delegation_objects (chat_id, resource, object_id) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING`, chatID, resource, id)
 	return err
 }
 
-// IsDelegationObject sagt, ob ein Objekt in der Delegation dieses Chats entstanden ist.
+// IsDelegationObject tells whether an object was created within this chat's delegation.
 func (s *Store) IsDelegationObject(ctx context.Context, chatID, resource, id string) (bool, error) {
 	var ok bool
 	err := s.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM delegation_objects WHERE chat_id = $1 AND resource = $2 AND object_id = $3)`, chatID, resource, id).Scan(&ok)
 	return ok, err
 }
 
-// DelegationObject ist ein Eintrag im Herkunftsregister.
+// DelegationObject is an entry in the provenance register.
 type DelegationObject struct {
 	Resource  string    `json:"resource"`
 	ObjectID  string    `json:"object_id"`
 	CreatedAt time.Time `json:"created_at"`
 }
 
-// ListDelegationObjects liefert das Herkunftsregister eines Chats.
+// ListDelegationObjects returns a chat's provenance register.
 func (s *Store) ListDelegationObjects(ctx context.Context, chatID string) ([]DelegationObject, error) {
 	rows, err := s.pool.Query(ctx, `SELECT resource, object_id, created_at FROM delegation_objects WHERE chat_id = $1 ORDER BY created_at, resource, object_id`, chatID)
 	if err != nil {

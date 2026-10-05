@@ -2,10 +2,10 @@ package main
 
 import "syscall"
 
-// notDumpable setzt PR_SET_DUMPABLE auf 0: /proc/<pid>/fd gehört dann root, und ein anderer
-// Prozess desselben Nutzers (bash des Agenten) kann die Ausgabe dieser Operation nicht über
-// /proc/<pid>/fd/1 beschreiben (Code-Review L7, Security-Review N1). Ein execve (etwa bash)
-// setzt den Wert für das neue Programm wieder auf 1.
+// notDumpable sets PR_SET_DUMPABLE to 0: /proc/<pid>/fd then belongs to root, and another
+// process of the same user (the agent's bash) cannot write to this operation's output via
+// /proc/<pid>/fd/1 (code review L7, security review N1). An execve (e.g. bash)
+// resets the value to 1 for the new program.
 func notDumpable() error {
 	const prSetDumpable = 4
 	_, _, e := syscall.RawSyscall(syscall.SYS_PRCTL, prSetDumpable, 0, 0)

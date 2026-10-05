@@ -8,29 +8,29 @@ import (
 	"time"
 )
 
-// Schritte beim Fortsetzen eines ruhenden Chats (SSE-Ereignis „resume“). Es sind genau die
-// Schritte, die attach tatsächlich ausführt, in dieser Reihenfolge; die UI zeigt sie live.
+// Steps when resuming an idle chat (SSE event "resume"). They are exactly the steps that attach
+// actually performs, in this order; the UI shows them live.
 const (
-	PhaseAcquire   = "acquire"   // Platz aus dem Pool holen (wartet bis AcquireTimeout)
-	PhaseSession   = "session"   // Modell setzen, Sitzungsdatei einspielen, switch_session
-	PhaseSettings  = "settings"  // Internet und Auto-Kompaktierung setzen
-	PhaseWorkspace = "workspace" // Arbeitsbereich aus der Sicherung einspielen
-	PhaseInputs    = "inputs"    // Eingaben des Nutzers nach /workspace/inputs/ spiegeln
-	PhaseReady     = "ready"     // fertig, der Auftrag geht jetzt an pi
-	PhaseFailed    = "failed"    // abgebrochen, Grund in detail
+	PhaseAcquire   = "acquire"   // take a slot from the pool (waits up to AcquireTimeout)
+	PhaseSession   = "session"   // set the model, restore the session file, switch_session
+	PhaseSettings  = "settings"  // set internet and auto-compaction
+	PhaseWorkspace = "workspace" // restore the workspace from the backup
+	PhaseInputs    = "inputs"    // mirror the user's inputs to /workspace/inputs/
+	PhaseReady     = "ready"     // done, the message now goes to pi
+	PhaseFailed    = "failed"    // aborted, reason in detail
 )
 
-// ResumeStep ist ein Ereignis beim Fortsetzen. Je Schritt kommt zuerst status "running",
-// dann "done", "warning" (weiter trotz Problem) oder "error" (Fortsetzen gescheitert).
+// ResumeStep is an event while resuming. Per step, status "running" comes first, then "done",
+// "warning" (carrying on despite a problem) or "error" (resuming failed).
 type ResumeStep struct {
-	ID     string    `json:"id"`    // Kennung dieses Fortsetzens
-	Phase  string    `json:"phase"` // siehe Phase*
+	ID     string    `json:"id"`    // ID of this resume
+	Phase  string    `json:"phase"` // see Phase*
 	Status string    `json:"status"`
 	Detail string    `json:"detail,omitempty"`
-	Size   *int64    `json:"size,omitempty"`  // workspace: Summe der Dateigrößen; inputs: Summe; session: Bytes
-	Files  *int      `json:"files,omitempty"` // workspace, inputs: Zahl der Dateien
+	Size   *int64    `json:"size,omitempty"`  // workspace: sum of the file sizes; inputs: sum; session: bytes
+	Files  *int      `json:"files,omitempty"` // workspace, inputs: number of files
 	At     time.Time `json:"at"`
-	Ms     int64     `json:"ms,omitempty"` // Dauer des Schritts; bei ready und failed die Gesamtdauer
+	Ms     int64     `json:"ms,omitempty"` // duration of the step; for ready and failed the total duration
 }
 
 var resumeSeq struct {
@@ -38,8 +38,8 @@ var resumeSeq struct {
 	n int64
 }
 
-// resumeProgress meldet die Schritte eines Fortsetzens. Alle Methoden vertragen nil
-// (Anlegen eines neuen Chats meldet nichts).
+// resumeProgress reports the steps of a resume. All methods tolerate nil (creating a new chat
+// reports nothing).
 type resumeProgress struct {
 	m      *Manager
 	chatID string
@@ -64,7 +64,7 @@ func (p *resumeProgress) emit(s ResumeStep) {
 	p.m.publish(p.chatID, Event{Kind: "resume", Data: s})
 }
 
-// run beginnt einen Schritt.
+// run starts a step.
 func (p *resumeProgress) run(phase string) {
 	if p == nil {
 		return
@@ -73,7 +73,7 @@ func (p *resumeProgress) run(phase string) {
 	p.emit(ResumeStep{Phase: phase, Status: "running"})
 }
 
-// done schließt den laufenden Schritt ab; s ergänzt Detail, Größe und Dateizahl.
+// done completes the running step; s adds detail, size and file count.
 func (p *resumeProgress) done(s ResumeStep) {
 	if p == nil || p.phase == "" {
 		return
@@ -93,7 +93,7 @@ func (p *resumeProgress) ready() {
 	p.emit(ResumeStep{Phase: PhaseReady, Status: "done", Ms: time.Since(p.start).Milliseconds()})
 }
 
-// fail markiert den laufenden Schritt als gescheitert und meldet failed mit dem Grund.
+// fail marks the running step as failed and reports failed with the reason.
 func (p *resumeProgress) fail(err error) {
 	if p == nil {
 		return
@@ -103,12 +103,12 @@ func (p *resumeProgress) fail(err error) {
 		p.done(ResumeStep{Status: "error", Detail: reason})
 	}
 	p.emit(ResumeStep{Phase: PhaseFailed, Status: "error", Detail: reason, Ms: time.Since(p.start).Milliseconds()})
-	slog.Warn("Fortsetzen gescheitert", "chat", p.chatID, "fehler", err)
+	slog.Warn("resume failed", "chat", p.chatID, "err", err)
 }
 
 func resumeFailReason(err error) string {
 	if errors.Is(err, ErrNoSlot) {
-		return "Kein freier Platz im Pool"
+		return "No free slot in the pool" // matched by the CLI and web UI tests; stays German for now
 	}
 	return err.Error()
 }
@@ -118,7 +118,7 @@ func int64p(n int64) *int64 { return &n }
 
 func onOff(b bool) string {
 	if b {
-		return "an"
+		return "on"
 	}
-	return "aus"
+	return "off"
 }
