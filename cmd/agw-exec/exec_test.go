@@ -685,17 +685,47 @@ func TestServeBgLimitAndStop(t *testing.T) {
 	if syscall.Kill(-pgids[1], 0) == nil {
 		t.Fatal("process group alive after the abort")
 	}
+	// The abort of no. 1 must not touch the others: their process groups are alive and none of
+	// them has ended (an end frame would have been swallowed by collect above).
+	checkOthers := func(when string) {
+		t.Helper()
+		for id := uint64(2); id <= execproto.DefaultBgMax; id++ {
+			for _, f := range got[id] {
+				if f.Done {
+					t.Fatalf("%s: task %d ended: %+v", when, id, f)
+				}
+			}
+			if err := syscall.Kill(-pgids[id], 0); err != nil {
+				t.Fatalf("%s: process group %d of task %d gone: %v", when, pgids[id], id, err)
+			}
+		}
+	}
+	checkOthers("after the abort of task 1")
 	h.send(t, execproto.Request{ID: 60, Op: execproto.OpBg, Command: "echo again", Cwd: dir, Spill: execproto.BgLogPath(60)})
 	got = h.collect(t, 60)
 	if last := got[60][len(got[60])-1]; last.Exit == nil || *last.Exit != 0 {
 		t.Fatalf("after the abort: %+v", last)
 	}
-	time.Sleep(1600 * time.Millisecond)
+	checkOthers("after the next task")
+	// The others touch their marker after 1.5 s. Poll instead of sleeping a fixed time: under load
+	// the shells start late (a fixed 1.6 s failed once in a full run and about once in 20 alone).
+	waitStart := time.Now()
+	for id := uint64(2); id <= execproto.DefaultBgMax; id++ {
+		name := fmt.Sprintf("%s-%d", marker, id)
+		for {
+			if _, err := os.Stat(name); err == nil {
+				break
+			}
+			if time.Since(waitStart) > 15*time.Second {
+				alive := syscall.Kill(-pgids[id], 0) == nil
+				t.Fatalf("task %d did not keep running: no marker after %v (process group alive: %v)", id, time.Since(waitStart), alive)
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
+	// Task 1 started first; by now its marker would exist if its group had survived.
 	if _, err := os.Stat(marker + "-1"); err == nil {
 		t.Fatal("aborted task kept running")
-	}
-	if _, err := os.Stat(marker + "-2"); err != nil {
-		t.Fatal("other task did not keep running:", err)
 	}
 }
 
