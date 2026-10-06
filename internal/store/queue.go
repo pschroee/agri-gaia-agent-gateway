@@ -27,6 +27,25 @@ type QueueEntry struct {
 	// below it what comes from the sandbox (command, output); see chat.BackgroundNote.
 	Note string   `json:"note,omitempty"`
 	Refs []string `json:"refs,omitempty"`
+	// Context: page context of a message from the user (only user entries; nil: none). It goes to
+	// pi as a note of its own (NoteContext) before the text, never inside it.
+	Context *PageContext `json:"context,omitempty"`
+}
+
+// PageContext is the platform page the user was on when sending, and the object opened or
+// selected there (issue #13). The orchestrator checks it (chat.ParsePageContext) before it is
+// stored; it tells the agent what the user refers to and grants no rights.
+type PageContext struct {
+	Page   string         `json:"page"`             // page id from a fixed list (chat.contextPages)
+	Object *ContextObject `json:"object,omitempty"` // opened or selected object, if any
+}
+
+// ContextObject is an object of the platform: kind as the delegation names the resource
+// (dataset, model, edge_device), id the platform's identifier, name as shown on the page.
+type ContextObject struct {
+	Kind string `json:"kind"`
+	ID   string `json:"id"`
+	Name string `json:"name,omitempty"`
 }
 
 // Kinds of a queue entry.
@@ -37,21 +56,28 @@ const (
 
 // Kinds of an orchestrator note.
 const (
-	NoteBackground = "background" // end of a background task
-	NoteSandbox    = "sandbox"    // tasks were ended with the previous sandbox
-	NoteLanguage   = "language"   // the user's preferred language according to the browser (first request of the chat)
+	NoteBackground = "background"   // end of a background task
+	NoteSandbox    = "sandbox"      // tasks were ended with the previous sandbox
+	NoteLanguage   = "language"     // the user's preferred language according to the browser (first request of the chat)
+	NoteContext    = "page_context" // page of the platform UI the user sent the message from (issue #13)
 )
 
-const queueCols = `id::text, chat_id::text, text, attachments, created_at, kind, note, refs`
+const queueCols = `id::text, chat_id::text, text, attachments, created_at, kind, note, refs, context`
 
 func scanQueue(rows pgx.Rows) ([]QueueEntry, error) {
 	defer rows.Close()
 	out := []QueueEntry{}
 	for rows.Next() {
 		var e QueueEntry
-		var att, refs []byte
-		if err := rows.Scan(&e.ID, &e.ChatID, &e.Text, &att, &e.CreatedAt, &e.Kind, &e.Note, &refs); err != nil {
+		var att, refs, pc []byte
+		if err := rows.Scan(&e.ID, &e.ChatID, &e.Text, &att, &e.CreatedAt, &e.Kind, &e.Note, &refs, &pc); err != nil {
 			return nil, err
+		}
+		if len(pc) > 0 {
+			var c PageContext
+			if json.Unmarshal(pc, &c) == nil && c.Page != "" {
+				e.Context = &c
+			}
 		}
 		_ = json.Unmarshal(refs, &e.Refs)
 		if len(e.Refs) == 0 {
@@ -68,20 +94,26 @@ func scanQueue(rows pgx.Rows) ([]QueueEntry, error) {
 
 // Enqueue enqueues a message from the user.
 func (s *Store) Enqueue(ctx context.Context, chatID, text string, attachments []string) (QueueEntry, error) {
-	return s.EnqueueKind(ctx, chatID, QueueUser, text, attachments)
+	return s.EnqueueUser(ctx, chatID, text, attachments, nil)
+}
+
+// EnqueueUser enqueues a message from the user with its page context (nil: none; checked by the
+// caller).
+func (s *Store) EnqueueUser(ctx context.Context, chatID, text string, attachments []string, pc *PageContext) (QueueEntry, error) {
+	return s.enqueue(ctx, chatID, QueueUser, text, attachments, "", nil, pc)
 }
 
 // EnqueueKind enqueues an entry of the given kind (QueueUser, QueueSystem).
 func (s *Store) EnqueueKind(ctx context.Context, chatID, kind, text string, attachments []string) (QueueEntry, error) {
-	return s.enqueue(ctx, chatID, kind, text, attachments, "", nil)
+	return s.enqueue(ctx, chatID, kind, text, attachments, "", nil, nil)
 }
 
 // EnqueueSystem enqueues an orchestrator note (note: NoteBackground, NoteSandbox).
 func (s *Store) EnqueueSystem(ctx context.Context, chatID, note string, refs []string, text string) (QueueEntry, error) {
-	return s.enqueue(ctx, chatID, QueueSystem, text, nil, note, refs)
+	return s.enqueue(ctx, chatID, QueueSystem, text, nil, note, refs, nil)
 }
 
-func (s *Store) enqueue(ctx context.Context, chatID, kind, text string, attachments []string, note string, refs []string) (QueueEntry, error) {
+func (s *Store) enqueue(ctx context.Context, chatID, kind, text string, attachments []string, note string, refs []string, pc *PageContext) (QueueEntry, error) {
 	if attachments == nil {
 		attachments = []string{}
 	}
@@ -90,11 +122,17 @@ func (s *Store) enqueue(ctx context.Context, chatID, kind, text string, attachme
 	}
 	if kind != QueueSystem {
 		kind, note, refs = QueueUser, "", []string{}
+	} else {
+		pc = nil // only messages from the user carry a page context
 	}
 	att, _ := json.Marshal(attachments)
 	rj, _ := json.Marshal(refs)
-	rows, err := s.pool.Query(ctx, `INSERT INTO chat_queue (chat_id, text, attachments, kind, note, refs) VALUES ($1,$2,$3,$4,$5,$6) RETURNING `+queueCols,
-		chatID, text, att, kind, note, rj)
+	var pj []byte // NULL without context
+	if pc != nil {
+		pj, _ = json.Marshal(pc)
+	}
+	rows, err := s.pool.Query(ctx, `INSERT INTO chat_queue (chat_id, text, attachments, kind, note, refs, context) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING `+queueCols,
+		chatID, text, att, kind, note, rj, pj)
 	if err != nil {
 		return QueueEntry{}, err
 	}

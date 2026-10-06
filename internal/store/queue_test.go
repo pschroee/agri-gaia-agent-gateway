@@ -59,3 +59,32 @@ func TestQueueLifecycle(t *testing.T) {
 		t.Fatalf("Queued after withdrawing = %d", got.Queued)
 	}
 }
+
+// A user entry keeps its page context through the queue (list, delivery, reopening); system entries
+// never carry one.
+func TestQueuePageContext(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	c, _ := s.CreateChat(ctx, NewChat{Title: "q", Model: "m", Variant: "cli"})
+	pc := &PageContext{Page: "datasets", Object: &ContextObject{Kind: "dataset", ID: "42", Name: "bay-3"}}
+	a, err := s.EnqueueUser(ctx, c.ID, "one", nil, pc)
+	if err != nil || a.Context == nil || a.Context.Object.Name != "bay-3" {
+		t.Fatalf("enqueued: %+v %v", a, err)
+	}
+	b, _ := s.Enqueue(ctx, c.ID, "two", nil)
+	n, _ := s.EnqueueSystem(ctx, c.ID, NoteBackground, []string{"bg-1"}, "done")
+	if b.Context != nil || n.Context != nil {
+		t.Fatalf("context without one: %+v %+v", b, n)
+	}
+	claimed, _ := s.ClaimQueue(ctx, c.ID)
+	if len(claimed) != 3 || claimed[0].Context == nil || *claimed[0].Context.Object != *pc.Object || claimed[1].Context != nil {
+		t.Fatalf("claimed: %+v", claimed)
+	}
+	if err := s.UnclaimQueue(ctx, []string{a.ID}); err != nil {
+		t.Fatal(err)
+	}
+	list, _ := s.ListQueue(ctx, c.ID)
+	if len(list) != 1 || list[0].Context == nil || list[0].Context.Page != "datasets" {
+		t.Fatalf("reopened: %+v", list)
+	}
+}

@@ -18,6 +18,8 @@ package chat
 //     in chat_turns and on the stored user message; the UI splits it by those, not by what the
 //     text looks like. A part with audience "agent" (store.NoteAudience) is context for the model
 //     only; the UI does not show it.
+//   - A page context (pagecontext.go) is such a part, before the user text it belongs to; its source
+//     carries the structured context, so the UI shows "Refers to …" without the note's text.
 
 import (
 	"crypto/rand"
@@ -44,10 +46,14 @@ var newMarker = func() string {
 // systemNote is an orchestrator note: the orchestrator builds Summary itself (one line), Body comes
 // wholly or partly from the sandbox and goes into the fence.
 type systemNote struct {
-	Type    string // store.NoteBackground, store.NoteSandbox, store.NoteLanguage
+	Type    string // store.NoteBackground, store.NoteSandbox, store.NoteLanguage, store.NoteContext
 	Refs    []string
 	Summary string
 	Body    string
+	// FenceHint replaces fenceHint above the fence (for data that does not come from the sandbox).
+	FenceHint string
+	// Context: the page context of a NoteContext note (carried into the source).
+	Context *store.PageContext
 }
 
 // Text is the form in the queue: summary line, the data below it.
@@ -117,6 +123,12 @@ func composeMessage(entries []store.QueueEntry, notices ...*systemNote) composed
 		if t == "" && len(e.Attachments) == 0 {
 			continue
 		}
+		if e.Context != nil {
+			// the page context right before the text it belongs to, as a note of its own
+			n := contextNote(*e.Context)
+			parts = append(parts, part{note: &n, src: store.Source{Kind: store.QueueSystem, Type: n.Type, Refs: n.Refs, QueueID: e.ID, Audience: store.NoteAudience(n.Type), Context: n.Context}})
+			all.WriteString(n.Text())
+		}
 		parts = append(parts, part{src: store.Source{Kind: store.QueueUser, QueueID: e.ID}, text: t})
 		all.WriteString(t)
 	}
@@ -170,7 +182,11 @@ func wrapSystem(n systemNote, avoid string, used map[string]bool) (string, strin
 		marker = newMarker()
 	}
 	used[marker] = true
-	b.WriteString("\n" + fenceHint + "\n<<<" + marker + "\n")
+	hint := fenceHint
+	if n.FenceHint != "" {
+		hint = n.FenceHint
+	}
+	b.WriteString("\n" + hint + "\n<<<" + marker + "\n")
 	b.WriteString(n.Body)
 	b.WriteString("\n" + marker + ">>>")
 	return b.String(), marker

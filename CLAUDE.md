@@ -41,6 +41,15 @@ refer to this repository.
   characters fall back to the UI's start page. Rules and examples in `API.md`, *Return after login*; new cases go
   into `internal/oidc/return_test.go`.
 
+## Page context
+
+- The platform UI sends the current page and the open or selected object with a message (`context` of
+  `POST …/messages`, issue #13). `chat.ParsePageContext` checks it against fixed lists (pages, kinds, integer ids, one-line
+  names up to 200 characters, no unknown fields); it goes to pi as a `page_context` note with `audience: "agent"` before
+  the text it belongs to, the name in a fence, and is stored on queue entries (`chat_queue.context`) and in the source.
+  New pages or kinds go into `contextPages`/`contextKinds` in `internal/chat/pagecontext.go` with a test. **It never
+  grants rights**; the delegation stays authoritative (`TestPageContextGrantsNoAccess`). Rules in `API.md`, *Page context*.
+
 ## Subagent limit
 
 - At most `AGW_MAX_SUBAGENTS` (default 5) subagents run **at the same time** per chat; fixed for the service, no
