@@ -233,20 +233,41 @@ for line in sys.stdin:
 }
 
 # stage <name> <command…>: one test stage with its duration; output comes line by line (grep --line-buffered),
-# otherwise a long run would look like a hang until the end.
+# otherwise a long run would look like a hang until the end. The terminal only shows a filtered view; the
+# complete, unfiltered output of each stage goes to $STAGE_LOG under .dev/test-logs/<run>/ (ignored), so a
+# failure message is never lost. The stage functions write it with tee before their filter.
+TEST_LOG_DIR=""
+STAGE_LOG=/dev/null
+stage_no=0
 stage() {
   local name=$1; shift
   local t0=$SECONDS
+  stage_no=$((stage_no + 1))
+  if [[ -n "$TEST_LOG_DIR" ]]; then
+    STAGE_LOG="$TEST_LOG_DIR/$stage_no-$(printf '%s' "$name" | tr -cs 'A-Za-z0-9' '-' | sed 's/^-//; s/-$//' | cut -c1-40).log"
+    : >"$STAGE_LOG"
+  fi
   info "$name"
   "$@"
   local rc=$?
-  if [[ $rc -ne 0 ]]; then warn "$name failed ($((SECONDS - t0)) s)"; return $rc; fi
+  if [[ $rc -ne 0 ]]; then
+    warn "$name failed ($((SECONDS - t0)) s)"
+    [[ "$STAGE_LOG" != /dev/null ]] && warn "complete output of the stage: $STAGE_LOG"
+    return $rc
+  fi
   info "$name: ok ($((SECONDS - t0)) s)"
+}
+
+# new_test_logs: one directory per run under .dev/test-logs; only the last 10 runs are kept.
+new_test_logs() {
+  TEST_LOG_DIR="$PWD/.dev/test-logs/$(date +%Y%m%d-%H%M%S)"
+  mkdir -p "$TEST_LOG_DIR"
+  ls -1d "$PWD"/.dev/test-logs/*/ 2>/dev/null | sort -r | tail -n +11 | xargs -r rm -rf
 }
 
 go_unit() {
   AGW_TEST_DATABASE_URL="postgres://agwpoc:${POSTGRES_PASSWORD}@127.0.0.1:${AGW_PG_PORT:-18482}/agwpoc?sslmode=disable" \
-    go test -race -count=1 ./... 2>&1 | grep --line-buffered -vE '^(ok|\?) ' ; return "${PIPESTATUS[0]}"
+    go test -race -count=1 ./... 2>&1 | tee -a "$STAGE_LOG" | grep --line-buffered -vE '^(ok|\?) ' ; return "${PIPESTATUS[0]}"
 }
 
 go_docker() {
@@ -254,29 +275,30 @@ go_docker() {
   AGW_DOCKER_TESTS=1 \
   AGW_TEST_DATABASE_URL="postgres://agwpoc:${POSTGRES_PASSWORD}@127.0.0.1:${AGW_PG_PORT:-18482}/agwpoc?sslmode=disable" \
     sh -c 'go test -count=1 ./internal/sandbox/ && go test -count=1 -run TestWorkspaceRoundTripInSandbox ./internal/chat/' 2>&1 \
-    | grep --line-buffered -E '^(ok|FAIL|---|panic)|_test.go:'; return "${PIPESTATUS[0]}"
+    | tee -a "$STAGE_LOG" | grep --line-buffered -E '^(ok|FAIL|---|panic)|_test.go:'; return "${PIPESTATUS[0]}"
 }
 
 go_s3() {
   docker run --rm --network agwpoc_intern -v "$PWD":/src -v "$(go env GOMODCACHE)":/go/pkg/mod -w /src \
     -e AGW_TEST_S3_ENDPOINT=rustfs:9000 -e RUSTFS_ACCESS_KEY -e RUSTFS_SECRET_KEY \
-    golang:1.26-bookworm go test -count=1 -run S3 ./internal/artifacts/
+    golang:1.26-bookworm go test -count=1 -run S3 ./internal/artifacts/ 2>&1 | tee -a "$STAGE_LOG"
+  return "${PIPESTATUS[0]}"
 }
 
 go_slots() {
   # E9: a whole slot (pi without a shell, execution sandbox, exec-bridge.ts) with a scripted
   # model, plus the parity of the redirection with pi's built-in tools (test image
   # agw-parity). In a Go container because Unix sockets on the Mac only work inside the Docker VM.
-  docker build -q -f images/agw-basis/Dockerfile --target parity -t agwpoc/agw-parity:dev . >/dev/null || return 1
+  docker build -q -f images/agw-basis/Dockerfile --target parity -t agwpoc/agw-parity:dev . >>"$STAGE_LOG" 2> >(tee -a "$STAGE_LOG" >&2) || return 1
   docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v agwpoc_sockets:/run/agw \
     -v "$PWD":/src:ro -v agwpoc_gomod:/go/pkg/mod -v agwpoc_gocache:/root/.cache/go-build -w /src \
     -e AGW_E9_IN_DOCKER=1 -e GOFLAGS=-buildvcs=false -e AGW_IMAGE="$IMAGE" -e AGW_PI_IMAGE="$PI_IMAGE" \
-    golang:1.26-bookworm go test -count=1 -v -run 'TestSlotE9|TestSlotBackground|TestSlotForeground|TestSlotWebSearch|TestSlotSubagentTalk|TestSlotSubagentIntercom|TestBridgeParity' ./internal/worker/ \
-    | grep --line-buffered -E '^(=== RUN|--- |PASS|FAIL|ok|panic)|_test.go:'
+    golang:1.26-bookworm go test -count=1 -v -run 'TestSlotE9|TestSlotBackground|TestSlotForeground|TestSlotWebSearch|TestSlotSubagentTalk|TestSlotSubagentIntercom|TestBridgeParity' ./internal/worker/ 2> >(tee -a "$STAGE_LOG" >&2) \
+    | tee -a "$STAGE_LOG" | grep --line-buffered -E '^(=== RUN|--- |PASS|FAIL|ok|panic)|_test.go:'
   return "${PIPESTATUS[0]}"
 }
 
-web_unit() { (cd web && npm test -- --run 2>&1 | grep --line-buffered -E 'Test Files|Tests |FAIL|✗|×'; exit "${PIPESTATUS[0]}"); }
+web_unit() { (cd web && npm test -- --run 2>&1 | tee -a "$STAGE_LOG" | grep --line-buffered -E 'Test Files|Tests |FAIL|✗|×'; exit "${PIPESTATUS[0]}"); }
 
 cmd_test() {
   local full=false
@@ -288,6 +310,7 @@ cmd_test() {
     warn "hot reload is running: do not save any Go file during the Docker tests, otherwise the orchestrator rebuilds and disturbs the tests."
   fi
   net_hygiene
+  new_test_logs
   dc up -d --wait postgres rustfs >/dev/null
   ensure_dist
   stage "Go tests (unit, Postgres, -race; without Docker)" go_unit || exit 1
@@ -300,7 +323,7 @@ cmd_test() {
   else
     info "Docker, S3 and slot tests skipped; before pushing: ./dev.sh test --full"
   fi
-  info "all tests green ($((SECONDS - t0)) s)"
+  info "all tests green ($((SECONDS - t0)) s); complete output in $TEST_LOG_DIR"
 }
 
 cmd_e2e() {
