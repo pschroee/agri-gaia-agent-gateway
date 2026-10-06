@@ -377,6 +377,8 @@ export type Approval = {
   /** Who asked: "main" or a subagent run (empty on older entries). */
   session?: string
   tool_call_id?: string
+  /** Platform calls: round trip to the platform in ms, without the approval's wait (missing: not measured). */
+  duration_ms?: number
 }
 
 export type SocketCall = {

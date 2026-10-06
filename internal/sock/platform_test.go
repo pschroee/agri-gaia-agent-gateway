@@ -3,6 +3,7 @@ package sock
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"agw/internal/platform"
+	"agw/internal/store"
 )
 
 // platformBackend is fakeBackend with a platform: GET goes through, decide
@@ -299,5 +301,41 @@ func TestPlatformAPIPathVariants(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(b.reqs, ";"), "GET /train/config/Torchvision/Mask R-CNN") {
 		t.Fatalf("spaces not decoded: %v", b.reqs)
+	}
+}
+
+// timedBackend reports a duration for every call and logs through CallerLogger.
+type timedBackend struct {
+	platformBackend
+	logged []string
+}
+
+func (b *timedBackend) PlatformCall(ctx context.Context, chatID, slotID, via string, req platform.Request) (platform.Result, error) {
+	r, err := b.platformBackend.PlatformCall(ctx, chatID, slotID, via, req)
+	if r.Status == "ok" {
+		r.Duration = 7 * time.Millisecond
+	}
+	return r, err
+}
+
+func (b *timedBackend) LogCallBy(ctx context.Context, slotID, chatID, via, op, detail, result string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	d := "-"
+	if ms := store.DurationMsFrom(ctx); ms != nil {
+		d = fmt.Sprint(*ms)
+	}
+	b.logged = append(b.logged, op+"|"+result+"|"+d)
+}
+
+// The socket logs the duration the backend measured; calls that did not go out have none (issue #12).
+func TestPlatformDurationLogged(t *testing.T) {
+	b := &timedBackend{platformBackend: platformBackend{fakeBackend: fakeBackend{chat: "chat-d", decide: "rejected"}}}
+	c := start(t, b)
+	cliPlatform(t, c, "datasets", `{}`)
+	cliPlatform(t, c, "start-training", `{"train_container_id":3}`)
+	got := strings.Join(b.logged, ";")
+	if got != "platform|ok 200|7;platform|rejected|-" {
+		t.Fatalf("logged: %s", got)
 	}
 }

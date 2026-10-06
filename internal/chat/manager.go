@@ -1604,7 +1604,7 @@ func (m *Manager) LogCall(slotID, chatID, via, op, detail, result string) {
 // (sock.CallerLogger): this way the log shows whether the main agent or a subagent asked.
 func (m *Manager) LogCallBy(ctx context.Context, slotID, chatID, via, op, detail, result string) {
 	sc, err := m.st.AddSocketCall(context.WithoutCancel(ctx), store.SocketCall{ChatID: chatID, SlotID: slotID, Via: via, Op: op, Detail: detail, Result: result,
-		Session: store.SessionFrom(ctx), ToolCallID: store.ToolCallFrom(ctx)})
+		Session: store.SessionFrom(ctx), ToolCallID: store.ToolCallFrom(ctx), DurationMs: store.DurationMsFrom(ctx)})
 	if err != nil {
 		slog.Error("socket call not logged", "error", err)
 		return
@@ -1891,11 +1891,15 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 			}
 		}
 	}
+	// Duration of the round trip to the platform (token exchange included), without the approval's waiting time.
+	t0 := time.Now()
 	res, err := m.opt.Platform.Do(ctx, chatID, req)
+	took := time.Since(t0)
 	if err != nil {
-		return platform.Result{Status: "error", Message: err.Error(), Violation: violation}, nil
+		return platform.Result{Status: "error", Message: err.Error(), Violation: violation, Duration: took}, nil
 	}
 	res.Violation = violation
+	res.Duration = took
 	if del != nil {
 		if r, id, ok := delegation.Created(access, res); ok {
 			if err := m.st.AddDelegationObject(context.WithoutCancel(ctx), chatID, r, id); err != nil {
@@ -2184,6 +2188,11 @@ func (m *Manager) Approvals(ctx context.Context, state, chatID string) ([]store.
 }
 func (m *Manager) SocketCalls(ctx context.Context, chatID string) ([]store.SocketCall, error) {
 	return m.st.ListSocketCalls(ctx, chatID)
+}
+
+// Activity returns platform calls across chats (GET /api/activity); the caller sets the owner.
+func (m *Manager) Activity(ctx context.Context, f store.ActivityFilter) (store.ActivityPage, error) {
+	return m.st.ListActivity(ctx, f)
 }
 func (m *Manager) Session(ctx context.Context, chatID string) ([]byte, error) {
 	m.mu.Lock()

@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -203,6 +204,7 @@ func (s *Server) Handler() http.Handler {
 	chat("GET /api/chats/{id}/images", s.image)
 	chat("GET /api/chats/{id}/events", s.events)
 	mux.HandleFunc("GET /api/approvals", s.approvals)
+	mux.HandleFunc("GET /api/activity", s.activity)
 	mux.Handle("POST /api/approvals/{id}", s.ownApproval(s.decide))
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "unknown endpoint")
@@ -1028,6 +1030,64 @@ func (s *Server) approvals(w http.ResponseWriter, r *http.Request) {
 		a = own
 	}
 	writeJSON(w, 200, a)
+}
+
+// Limits of GET /api/activity: page size by default and at most.
+const (
+	activityDefaultLimit = 100
+	activityMaxLimit     = 500
+)
+
+// activity lists the platform calls of the user's chats across all chats, newest first, with a summary of
+// the period (API.md, Activity across chats). In oidc mode the store filters by the owner, so another user's
+// calls never leave the database; a foreign chat in ?chat= gives an empty page, like an unknown one.
+func (s *Server) activity(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	f := store.ActivityFilter{ChatID: q.Get("chat"), Outcome: q.Get("outcome"), Limit: activityDefaultLimit}
+	for name, dst := range map[string]*time.Time{"since": &f.Since, "until": &f.Until} {
+		if v := q.Get(name); v != "" {
+			t, err := time.Parse(time.RFC3339, v)
+			if err != nil {
+				writeErr(w, http.StatusBadRequest, name+": expected an RFC 3339 time such as 2026-10-06T00:00:00Z")
+				return
+			}
+			*dst = t
+		}
+	}
+	if f.Outcome != "" && !slices.Contains(store.Outcomes, f.Outcome) {
+		writeErr(w, http.StatusBadRequest, "outcome: one of "+strings.Join(store.Outcomes, ", "))
+		return
+	}
+	if v := q.Get("limit"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 {
+			writeErr(w, http.StatusBadRequest, "limit: a positive number")
+			return
+		}
+		f.Limit = min(n, activityMaxLimit)
+	}
+	if v := q.Get("before"); v != "" {
+		n, err := strconv.ParseInt(v, 10, 64)
+		if err != nil || n < 1 {
+			writeErr(w, http.StatusBadRequest, "before: a positive call id (next_before of the previous page)")
+			return
+		}
+		f.Before = n
+	}
+	if s.OIDC != nil {
+		u, ok := UserFrom(r.Context())
+		if !ok || u.Sub == "" {
+			writeErr(w, http.StatusUnauthorized, "not logged in")
+			return
+		}
+		f.Owner = &u.Sub
+	}
+	page, err := s.M.Activity(r.Context(), f)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, 200, page)
 }
 
 func (s *Server) decide(w http.ResponseWriter, r *http.Request) {

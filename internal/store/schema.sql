@@ -370,3 +370,10 @@ UPDATE chats SET variant = 'both' WHERE variant = 'beide';
 -- like new ones ("New chat 05.10. 14:03"); titles the user or the model chose stay untouched.
 UPDATE chats SET title = 'New chat ' || substr(title, 12)
   WHERE title ~ '^Neuer Chat [0-9]{2}\.[0-9]{2}\. [0-9]{2}:[0-9]{2}$';
+
+-- Duration of a platform call in milliseconds (issue #12): the round trip to the platform including the token
+-- exchange, without the wait for an approval. NULL: not measured (older rows, calls refused before they went out,
+-- other operations).
+ALTER TABLE socket_calls ADD COLUMN IF NOT EXISTS duration_ms double precision;
+-- Activity across all chats of a user (GET /api/activity) reads only platform calls, newest first.
+CREATE INDEX IF NOT EXISTS socket_calls_platform ON socket_calls (id) WHERE op = 'platform';

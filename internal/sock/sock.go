@@ -378,6 +378,9 @@ func (h *handler) runPlatform(ctx context.Context, chat, via string, req platfor
 	if err != nil {
 		result = "error: " + err.Error()
 	}
+	if res.Duration > 0 {
+		ctx = store.WithDuration(ctx, res.Duration)
+	}
 	h.logCall(ctx, chat, via, "platform", req.String(), result)
 	return res, err
 }

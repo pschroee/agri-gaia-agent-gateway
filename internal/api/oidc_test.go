@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -315,5 +316,70 @@ func TestSubagentLimitFixedInAPI(t *testing.T) {
 	var cfg map[string]any
 	if code != 200 || json.Unmarshal([]byte(body), &cfg) != nil || cfg["max_subagents"] != float64(5) || cfg["max_subagents_limit"] != float64(5) || cfg["max_subagents_default"] != float64(5) {
 		t.Fatalf("config: %d %s", code, body)
+	}
+}
+
+// Activity across chats (issue #12): each user sees only the platform calls of their own chats, also when
+// naming another user's chat; bad parameters give 400.
+func TestOIDCActivityOwnership(t *testing.T) {
+	m, p, cat, st := ownershipEnv(t)
+	srv, is := oidcServer(t, m, p, cat, nil)
+	a := loggedIn(t, srv, is, anna)
+	b := loggedIn(t, srv, is, bert)
+	ctx := context.Background()
+	mk := func(title, owner string) store.Chat {
+		c, err := st.CreateChat(ctx, store.NewChat{Title: title, Model: "p/m", Variant: "cli", Owner: owner})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = st.SetState(ctx, c.ID, store.StateDormant)
+		return c
+	}
+	chatA, chatB, chatT := mk("by Anna", anna.Sub), mk("by Bert", bert.Sub), mk("token mode", "")
+	ms := 15.0
+	for _, c := range []struct{ chat, detail string }{{chatA.ID, "GET /anna-1"}, {chatA.ID, "GET /anna-2"}, {chatB.ID, "GET /bert"}, {chatT.ID, "GET /token"}} {
+		if _, err := st.AddSocketCall(ctx, store.SocketCall{ChatID: c.chat, SlotID: "p", Via: "mcp", Op: "platform", Detail: c.detail, Result: "ok 200", DurationMs: &ms}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	get := func(br *oidctest.Browser, q string) (int, store.ActivityPage, string) {
+		code, body := call(t, br, "GET", srv.URL+"/api/activity"+q, "")
+		var pg store.ActivityPage
+		_ = json.Unmarshal([]byte(body), &pg)
+		return code, pg, body
+	}
+	code, pg, body := get(a, "")
+	if code != 200 || len(pg.Calls) != 2 || pg.Summary.Total != 2 || pg.Chats[chatA.ID].Title != "by Anna" || len(pg.Chats) != 1 ||
+		strings.Contains(body, "/bert") || strings.Contains(body, "/token") {
+		t.Fatalf("Anna: %d %s", code, body)
+	}
+	if pg.Calls[0].DurationMs == nil || *pg.Calls[0].DurationMs != 15 || pg.Calls[0].Outcome != "ok" {
+		t.Fatalf("Anna's call: %+v", pg.Calls[0])
+	}
+	code, pg, body = get(b, "")
+	if code != 200 || len(pg.Calls) != 1 || pg.Calls[0].Detail != "GET /bert" || strings.Contains(body, "anna") || strings.Contains(body, chatA.ID) {
+		t.Fatalf("Bert: %d %s", code, body)
+	}
+	for _, q := range []string{"?chat=" + chatA.ID, "?chat=" + chatT.ID} {
+		if code, pg, body = get(b, q); code != 200 || len(pg.Calls) != 0 || pg.Summary.Total != 0 || strings.Contains(body, "anna") {
+			t.Fatalf("Bert %s: %d %s", q, code, body)
+		}
+	}
+	if code, pg, _ = get(a, "?limit=1"); code != 200 || len(pg.Calls) != 1 || pg.NextBefore == 0 || pg.Summary.Total != 2 {
+		t.Fatalf("limit 1: %d %+v", code, pg)
+	}
+	if code, pg, _ = get(a, fmt.Sprintf("?limit=1&before=%d", pg.NextBefore)); code != 200 || len(pg.Calls) != 1 || pg.Calls[0].Detail != "GET /anna-1" || pg.NextBefore != 0 {
+		t.Fatalf("second page: %d %+v", code, pg)
+	}
+	if code, pg, _ = get(a, "?outcome=error&since=2026-01-01T00:00:00Z"); code != 200 || len(pg.Calls) != 0 || pg.Summary.Total != 2 {
+		t.Fatalf("outcome error: %d %+v", code, pg)
+	}
+	for _, q := range []string{"?since=yesterday", "?until=2026-13-01T00:00:00Z", "?outcome=fine", "?limit=0", "?limit=x", "?before=-1"} {
+		if code, _, body := get(a, q); code != 400 {
+			t.Errorf("%s: %d %s", q, code, body)
+		}
+	}
+	if code, _ := call(t, oidctest.NewBrowser(t), "GET", srv.URL+"/api/activity", ""); code != 401 {
+		t.Fatalf("without login: %d", code)
 	}
 }

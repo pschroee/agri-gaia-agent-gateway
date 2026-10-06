@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"agw/internal/platform"
 	"agw/internal/sock"
@@ -224,5 +225,71 @@ func TestPlatformExchangeLogged(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("exchange not logged: %+v", calls)
+	}
+}
+
+// The duration of a platform call is the round trip to the platform, not the wait for the approval
+// (issue #12); LogCallBy stores it with the call.
+func TestPlatformCallDuration(t *testing.T) {
+	e := setup(t)
+	withPlatform(t, e)
+	ctx := context.Background()
+	c, _ := e.m.Create(ctx, NewChat{})
+	slot := e.m.live[c.ID].slot.ID
+	r, err := e.m.PlatformCall(ctx, c.ID, slot, "mcp", platform.Request{Method: "GET", Path: "/datasets"})
+	if err != nil || r.Status != "ok" || r.Duration <= 0 {
+		t.Fatalf("read: %+v %v", r, err)
+	}
+	if b, _ := json.Marshal(r); strings.Contains(strings.ToLower(string(b)), "duration") {
+		t.Fatalf("the agent must not see the duration: %s", b)
+	}
+
+	events, cancel := e.m.Subscribe(c.ID)
+	defer cancel()
+	const wait = 300 * time.Millisecond
+	done := make(chan platform.Result, 1)
+	go func() {
+		r, _ := e.m.PlatformCall(ctx, c.ID, slot, "cli", platform.Request{Method: "POST", Path: "/train/config", Body: json.RawMessage(`{}`)})
+		done <- r
+	}()
+	ap := waitEvent(t, events, "approval", "").Data.(store.Approval)
+	time.Sleep(wait)
+	if _, err := e.m.Decide(ctx, ap.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	r = <-done
+	if r.Status != "ok" || r.Duration <= 0 || r.Duration >= wait {
+		t.Fatalf("write after approval: status %s, duration %v (approval waited %v)", r.Status, r.Duration, wait)
+	}
+	// Rejected calls never went out: no duration.
+	go func() {
+		r, _ := e.m.PlatformCall(ctx, c.ID, slot, "cli", platform.Request{Method: "POST", Path: "/train/config", Body: json.RawMessage(`{}`)})
+		done <- r
+	}()
+	ap = waitEvent(t, events, "approval", "").Data.(store.Approval)
+	for ap.State != store.ApprovalPending {
+		ap = waitEvent(t, events, "approval", "").Data.(store.Approval)
+	}
+	if _, err := e.m.Decide(ctx, ap.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	if r = <-done; r.Status != "rejected" || r.Duration != 0 {
+		t.Fatalf("rejected: %+v", r)
+	}
+
+	e.m.LogCallBy(store.WithDuration(ctx, 42*time.Millisecond), slot, c.ID, "mcp", "platform", "GET /datasets", "ok 200")
+	e.m.LogCallBy(ctx, slot, c.ID, "mcp", "platform", "POST /x", "rejected")
+	calls, _ := e.st.ListSocketCalls(ctx, c.ID)
+	var with, without *store.SocketCall
+	for i := range calls {
+		switch calls[i].Detail {
+		case "GET /datasets":
+			with = &calls[i]
+		case "POST /x":
+			without = &calls[i]
+		}
+	}
+	if with == nil || with.DurationMs == nil || *with.DurationMs != 42 || without == nil || without.DurationMs != nil {
+		t.Fatalf("logged durations: %+v %+v", with, without)
 	}
 }
