@@ -207,13 +207,20 @@ func TestSlotE9WithScriptedModel(t *testing.T) {
 		callLine("subagent", map[string]any{"agent": "scout", "async": true, "task": "AS1\nCALL bash {\"command\":\"echo async-1; sleep 3\"}"}),
 		callLine("subagent", map[string]any{"agent": "scout", "async": true, "task": "AS2\nCALL bash {\"command\":\"echo async-2; sleep 3\"}"}),
 	}, "\n")
+	t0 := time.Now()
 	if _, err := w.Call(ctx, map[string]any{"type": "prompt", "message": script}); err != nil {
-		t.Fatal(err)
+		t.Fatalf("prompt after %v: %v", time.Since(t0), err)
 	}
 	select {
 	case <-settled:
+		t.Logf("main run settled after %v", time.Since(t0))
 	case <-ctx.Done():
-		t.Fatal("run does not finish")
+		is := fake.Issued()
+		last := "none"
+		if len(is) > 0 {
+			last = is[len(is)-1].Tool + " " + tail(is[len(is)-1].Args, 200)
+		}
+		t.Fatalf("run does not finish within %v: %d requests, %d executions, last request: %s", time.Since(t0), len(is), len(b.executions()), last)
 	}
 	// The background subagent (scout) reports via its runner process.
 	byTool := func() map[string]fakellm.Issued {
@@ -260,19 +267,29 @@ func TestSlotE9WithScriptedModel(t *testing.T) {
 		}
 		return m
 	}
-	deadline := time.Now().Add(60 * time.Second)
-	for time.Now().Before(deadline) {
+	waitStart := time.Now()
+	deadline := waitStart.Add(60 * time.Second)
+	var missing []string
+	for {
 		m := byTool()
-		ready := true
+		missing = missing[:0]
 		for _, k := range []string{"bash-background", "k:async-1", "k:async-2"} {
-			if is, ok := m[k]; !ok || execFor(b.executions(), is.ID) == nil {
-				ready = false
+			if is, ok := m[k]; !ok {
+				missing = append(missing, k+" (not requested)")
+			} else if execFor(b.executions(), is.ID) == nil {
+				missing = append(missing, k+" (not executed)")
 			}
 		}
-		if ready {
+		if len(missing) == 0 || !time.Now().Before(deadline) {
 			break
 		}
 		time.Sleep(500 * time.Millisecond)
+	}
+	if len(missing) > 0 {
+		// Not fatal here: the checks below name what is wrong; this line says it was the wait.
+		t.Logf("background subagents incomplete after waiting %v: %v", time.Since(waitStart), missing)
+	} else {
+		t.Logf("background subagents done after waiting %v", time.Since(waitStart))
 	}
 	issued := byTool()
 	execs := b.executions()
