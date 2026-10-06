@@ -22,6 +22,7 @@ import (
 	"agw/internal/chat"
 	"agw/internal/config"
 	"agw/internal/oidc"
+	"agw/internal/platform"
 	"agw/internal/pool"
 	"agw/internal/store"
 	"agw/internal/worker"
@@ -48,6 +49,9 @@ type Server struct {
 	OIDC *oidc.Service
 	// FrameAncestors: origins allowed to embed the UI (empty: frame-ancestors 'none').
 	FrameAncestors []string
+
+	// Platform is the binding to the Agri-Gaia platform for GET /api/platform (nil: binding off).
+	Platform *platform.Client
 }
 
 type userKey struct{}
@@ -167,6 +171,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/variants", s.variants)
 	mux.HandleFunc("GET /api/config", s.config)
 	mux.HandleFunc("GET /api/pool", s.pool)
+	mux.HandleFunc("GET /api/platform", s.platformStatus)
 	mux.HandleFunc("GET /api/chats", s.listChats)
 	mux.HandleFunc("POST /api/chats", s.createChat)
 	chat("GET /api/chats/{id}", s.getChat)
@@ -377,6 +382,27 @@ func fail(w http.ResponseWriter, err error) {
 
 func (s *Server) models(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, s.Cat.Models())
+}
+
+// platformStatus reports the binding to the platform: setup, whether the API answers, and the last token
+// exchange among the user's own chats. Read-only; the probe goes out without a token.
+func (s *Server) platformStatus(w http.ResponseWriter, r *http.Request) {
+	if s.Platform == nil {
+		writeJSON(w, 200, map[string]any{"configured": false})
+		return
+	}
+	out := map[string]any{"configured": true}
+	in := s.Platform.Info()
+	out["api_url"], out["login"], out["client_id"], out["token_exchange"] = in.APIURL, in.Login, in.ClientID, in.TokenExchange
+	if in.Account != "" {
+		out["account"] = in.Account
+	}
+	out["probe"] = s.Platform.Probe(r.Context())
+	ctx := r.Context()
+	if last, ok := s.Platform.LastExchange(func(id string) bool { ok, err := s.owns(ctx, id); return err == nil && ok }); ok {
+		out["last_exchange"] = last
+	}
+	writeJSON(w, 200, out)
 }
 
 func (s *Server) variants(w http.ResponseWriter, r *http.Request) {

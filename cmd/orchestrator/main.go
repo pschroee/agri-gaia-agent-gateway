@@ -165,7 +165,7 @@ func run() error {
 	baseCtx, cancelBase := context.WithCancel(context.Background())
 	defer cancelBase()
 	apiSrv := &http.Server{Addr: env.HTTPAddr, Handler: (&api.Server{M: m, Pool: p, Cat: cat, Env: env, Web: webFS, Blocked: blocked, Token: env.APIToken, AllowedHosts: env.AllowedHosts,
-		OIDC: auth, FrameAncestors: env.FrameAncestors}).Handler(),
+		OIDC: auth, FrameAncestors: env.FrameAncestors, Platform: plat}).Handler(),
 		ReadHeaderTimeout: 10 * time.Second, MaxHeaderBytes: 64 << 10, BaseContext: func(net.Listener) context.Context { return baseCtx }}
 	proxy := llmproxy.New(cat)
 	proxy.SetRecorder(m) // assignment per slot, billing, hard limit of concurrent agents

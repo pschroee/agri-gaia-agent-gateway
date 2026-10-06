@@ -357,6 +357,11 @@ type Client struct {
 	expires time.Time
 	chats   map[string]chatToken
 	xmu     sync.Mutex // one exchange at a time, so that concurrent calls of a chat do not exchange twice
+
+	// exchanged: outcome of the last token exchange per chat (status view, in memory only).
+	exchanged map[string]ExchangeStatus
+	probeMu   sync.Mutex // one probe at a time
+	probe     Probe      // last probe of the API (cached for ProbeMaxAge)
 }
 
 type chatToken struct {
@@ -461,7 +466,7 @@ func New(cfg Config) (*Client, error) {
 	if cfg.MaxResult <= 0 {
 		cfg.MaxResult = DefaultMaxResult
 	}
-	return &Client{cfg: cfg, base: u, chats: map[string]chatToken{}}, nil
+	return &Client{cfg: cfg, base: u, chats: map[string]chatToken{}, exchanged: map[string]ExchangeStatus{}}, nil
 }
 
 // Do performs a call. The check (Normalize) runs here once more, so that no caller
@@ -683,6 +688,9 @@ func (c *Client) tokenFor(ctx context.Context, chatID string, force bool) (strin
 	}
 	user, err := c.userToken(ctx, chatID, force)
 	if err != nil {
+		if ctx.Err() == nil {
+			c.noteExchange(chatID, err) // no subject token, so no exchange either (e.g. the user's login expired)
+		}
 		return "", err
 	}
 	tok, err := c.exchange(ctx, user)
@@ -694,8 +702,10 @@ func (c *Client) tokenFor(ctx context.Context, chatID string, force bool) (strin
 		}
 	}
 	if err != nil {
+		c.noteExchange(chatID, err)
 		return "", fmt.Errorf("token exchange: %w", err)
 	}
+	c.noteExchange(chatID, nil)
 	cl, cerr := ParseClaims(tok.Access)
 	exp := time.Now().Add(time.Duration(tok.ExpiresIn) * time.Second)
 	if until := time.Now().Add(c.cfg.ChatTokenMaxAge); until.Before(exp) {
