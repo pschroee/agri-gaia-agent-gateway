@@ -56,6 +56,13 @@ refer to this repository.
   containers labelled `agwpoc.managed=true`.
 - Do not run `npx prettier --write` on `web/`: there is no Prettier config; the code is hand-formatted at
   120 columns without semicolons. Check with `tsc -b` and `npm run lint`.
+- **`./dev.sh test` from a second checkout (git worktree) is not isolated:** the compose project name is fixed
+  (`agwpoc`), so `dc up postgres rustfs` there targets the stack of the main checkout from another directory, and
+  without a `.env` it would create one with a new random Postgres password. In a worktree run the fast stage by
+  hand against the running Postgres instead: `AGW_TEST_DATABASE_URL` with the main checkout's `POSTGRES_PASSWORD`,
+  `go test -race -count=1 ./...` (each test uses its own schema, so parallel runs do not collide) and
+  `cd web && npm test -- --run`; build `web/dist` once first (`npm ci && npm run build` in `web/`). The full stage
+  (shared images `agwpoc/*:dev`, label cleanup) belongs to one checkout at a time.
 - Networks of the stack and of tests are fixed in `10.231.0.0/16`; create test networks only through
   `sandbox.CreateTestNetwork`.
 

@@ -323,3 +323,134 @@ func TestSystemNoteNotSteered(t *testing.T) {
 	close(hold)
 	waitSettled(t, e, c.ID)
 }
+
+// A message steered in while a tool runs is no longer in the open queue, but pi reads it only after
+// the tool. Until pi reports the user message, DeliveredQueue names it (issue #21: a UI reloaded in
+// that window shows it again); afterwards the list is empty.
+func TestDeliveredQueueWhileSteered(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	c, _ := e.m.Create(ctx, NewChat{Title: "s"})
+	a := e.agent(0)
+	hold := make(chan struct{})
+	a.mu.Lock()
+	a.hold, a.withTool = hold, true
+	a.mu.Unlock()
+	if _, err := e.m.Send(ctx, c.ID, "one"); err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, "tool running", func() bool {
+		e.m.mu.Lock()
+		defer e.m.mu.Unlock()
+		l := e.m.live[c.ID]
+		return l != nil && l.toolsRunning == 1
+	})
+	if d := e.m.DeliveredQueue(c.ID); len(d) != 0 {
+		t.Fatalf("delivered before anything was queued: %+v", d)
+	}
+	r, err := e.m.SendWithAttachments(ctx, c.ID, "two", nil)
+	if err != nil || !r.Queued {
+		t.Fatalf("second: %+v %v", r, err)
+	}
+	waitUntil(t, "steered in", func() bool { a.mu.Lock(); defer a.mu.Unlock(); return len(a.steered) == 1 })
+	if q, _ := e.m.Queue(ctx, c.ID); len(q) != 0 {
+		t.Fatalf("still open: %+v", q)
+	}
+	d := e.m.DeliveredQueue(c.ID)
+	if len(d) != 1 || len(d[0].IDs) != 1 || d[0].IDs[0] != r.QueueID || !d[0].Steered || d[0].Text != "two" ||
+		d[0].Origin != store.OriginUser || d[0].DeliveredAt.IsZero() {
+		t.Fatalf("delivered: %+v", d)
+	}
+	if len(d[0].Entries) != 1 || d[0].Entries[0].ID != r.QueueID || d[0].Entries[0].Text != "two" || d[0].Entries[0].Kind != store.QueueUser {
+		t.Fatalf("entries: %+v", d[0].Entries)
+	}
+	// The user message of the first run ("one") is not this delivery.
+	close(hold)
+	waitSettled(t, e, c.ID)
+	if d := e.m.DeliveredQueue(c.ID); len(d) != 0 {
+		t.Fatalf("still delivered after pi read it: %+v", d)
+	}
+}
+
+// After an abort pi does not read the steered message; it is open again and no longer delivered.
+func TestDeliveredQueueEmptyAfterAbort(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	c, _ := e.m.Create(ctx, NewChat{Title: "s"})
+	a := e.agent(0)
+	hold := make(chan struct{})
+	a.mu.Lock()
+	a.hold, a.withTool = hold, true
+	a.mu.Unlock()
+	if _, err := e.m.Send(ctx, c.ID, "one"); err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, "tool running", func() bool {
+		e.m.mu.Lock()
+		defer e.m.mu.Unlock()
+		l := e.m.live[c.ID]
+		return l != nil && l.toolsRunning == 1
+	})
+	if _, err := e.m.Send(ctx, c.ID, "two"); err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, "steered in", func() bool { a.mu.Lock(); defer a.mu.Unlock(); return len(a.steered) == 1 })
+	if d := e.m.DeliveredQueue(c.ID); len(d) != 1 {
+		t.Fatalf("delivered: %+v", d)
+	}
+	if _, err := e.m.Abort(ctx, c.ID); err != nil {
+		t.Fatal(err)
+	}
+	if d := e.m.DeliveredQueue(c.ID); len(d) != 0 {
+		t.Fatalf("delivered after abort: %+v", d)
+	}
+	close(hold)
+	waitSettled(t, e, c.ID)
+	waitUntil(t, "open again", func() bool { q, _ := e.m.Queue(ctx, c.ID); return len(q) == 1 && q[0].Text == "two" })
+	if d := e.m.DeliveredQueue(c.ID); len(d) != 0 {
+		t.Fatalf("delivered after the run: %+v", d)
+	}
+}
+
+// Held entries that go along with a new message to a dormant chat are delivered (SSE "delivered")
+// before the chat is resumed; DeliveredQueue already names them while it resumes.
+func TestDeliveredQueueWhileResuming(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	id, _, release := busyChat(t, e)
+	r, _ := e.m.Send(ctx, id, "two")
+	if !r.Queued {
+		t.Fatal("not enqueued")
+	}
+	if _, err := e.m.Abort(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+	release()
+	waitSettled(t, e, id)
+	time.Sleep(100 * time.Millisecond) // background work after agent_settled
+	if _, err := e.m.Suspend(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+	var seen []QueueDelivery
+	hook := func() { seen = e.m.DeliveredQueue(id) }
+	e.mu.Lock()
+	e.onSwitch = hook
+	for _, a := range e.agents { // the pool may already have created the next sandbox
+		a.mu.Lock()
+		a.onSwitch = hook
+		a.mu.Unlock()
+	}
+	e.mu.Unlock()
+	res, err := e.m.Send(ctx, id, "three")
+	if err != nil || res.Queued || !res.Resumed {
+		t.Fatalf("send: %+v %v", res, err)
+	}
+	if len(seen) != 1 || len(seen[0].IDs) != 1 || seen[0].IDs[0] != r.QueueID || seen[0].Steered ||
+		seen[0].Text != "two\n\nthree" || len(seen[0].Entries) != 1 || seen[0].Entries[0].Text != "two" {
+		t.Fatalf("while resuming: %+v", seen)
+	}
+	waitSettled(t, e, id)
+	if d := e.m.DeliveredQueue(id); len(d) != 0 {
+		t.Fatalf("after the run: %+v", d)
+	}
+}

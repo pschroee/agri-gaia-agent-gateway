@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -97,6 +98,46 @@ func (m *Manager) publishQueueEv(ctx context.Context, chatID string, ev QueueEve
 // Queue returns the open entries of the queue.
 func (m *Manager) Queue(ctx context.Context, chatID string) ([]store.QueueEntry, error) {
 	return m.st.ListQueue(ctx, chatID)
+}
+
+// QueueDelivery: queue entries handed to pi together as one message whose user message pi has not
+// reported (and the orchestrator not stored) yet, e.g. steered in while a tool runs. Same content as
+// the SSE event "queue" with change "delivered", so that a UI can rebuild its state after a reload.
+type QueueDelivery struct {
+	IDs         []string           `json:"ids"`
+	Entries     []store.QueueEntry `json:"entries"` // the entries as they were queued, in order
+	Text        string             `json:"text"`    // the message as it went to pi
+	Origin      string             `json:"origin,omitempty"`
+	Sources     []store.Source     `json:"sources,omitempty"`
+	DeliveredAt time.Time          `json:"delivered_at"`
+	Steered     bool               `json:"steered"` // steered into a running turn (read after the current step)
+}
+
+// DeliveredQueue returns the deliveries of queue entries that pi has not read yet, oldest first.
+// The state lives only in memory, next to pi's process: after a restart of the orchestrator pi is
+// gone too, and the list is empty.
+func (m *Manager) DeliveredQueue(chatID string) []QueueDelivery {
+	m.mu.Lock()
+	tms := slices.Clone(m.delivering[chatID])
+	if l := m.live[chatID]; l != nil {
+		for _, p := range l.pendingTurns {
+			if !slices.Contains(tms, p) {
+				tms = append(tms, p)
+			}
+		}
+	}
+	out := []QueueDelivery{}
+	for _, tm := range tms {
+		if len(tm.claimed) == 0 || tm.isConsumed() {
+			continue
+		}
+		// steered is written under m.mu (dispatch); the other fields do not change after deliver
+		out = append(out, QueueDelivery{IDs: tm.claimed, Entries: tm.entries, Text: tm.text, Origin: tm.origin,
+			Sources: tm.sources, DeliveredAt: tm.deliveredAt, Steered: tm.steered})
+	}
+	m.mu.Unlock()
+	slices.SortStableFunc(out, func(a, b QueueDelivery) int { return a.DeliveredAt.Compare(b.DeliveredAt) })
+	return out
 }
 
 // checkAttachments checks that every attachment is an input of this chat uploaded by the user
@@ -230,6 +271,10 @@ type turnMeta struct {
 	// entries delivered with it.
 	steered bool
 	claimed []string
+	// entries: the queue entries named in claimed, as they were queued; deliveredAt: claimed and
+	// published as "delivered" (DeliveredQueue).
+	entries     []store.QueueEntry
+	deliveredAt time.Time
 
 	mu       sync.Mutex
 	consumed bool // pi has reported the user message (the message has been accepted)
@@ -261,12 +306,17 @@ func (m *Manager) deliver(ctx context.Context, chatID string, entries []store.Qu
 	lang := m.firstTurnLanguage(ctx, chatID)
 	notice, noticed := m.backgroundNotice(ctx, chatID)
 	c := composeMessage(entries, lang, notice)
-	tm := &turnMeta{trigger: trigger, origin: c.Origin, sources: c.Sources, text: c.Text, claimed: claimed}
+	tm := &turnMeta{trigger: trigger, origin: c.Origin, sources: c.Sources, text: c.Text, claimed: claimed,
+		entries: claimedEntries(entries, claimed), deliveredAt: time.Now()}
 	var err error
 	if tm.id, err = m.st.CreateTurn(ctx, chatID, trigger, c.Origin, c.Sources, claimed); err != nil {
 		slog.Warn("turn not created", "chat", chatID, "err", err)
 	}
 	if len(claimed) > 0 {
+		// Visible in DeliveredQueue until dispatch has added it to pendingTurns (or failed).
+		m.mu.Lock()
+		m.delivering[chatID] = append(m.delivering[chatID], tm)
+		m.mu.Unlock()
 		m.publishQueueEv(ctx, chatID, QueueEvent{Change: "delivered", IDs: claimed, Text: c.Text, Origin: c.Origin, Sources: c.Sources})
 	}
 	res, err := m.dispatch(ctx, chatID, tm, gen)
@@ -284,6 +334,11 @@ func (m *Manager) deliver(ctx context.Context, chatID string, entries []store.Qu
 	}
 	m.mu.Lock()
 	delete(m.sending, chatID)
+	if d := slices.DeleteFunc(m.delivering[chatID], func(p *turnMeta) bool { return p == tm }); len(d) > 0 {
+		m.delivering[chatID] = d
+	} else {
+		delete(m.delivering, chatID)
+	}
 	m.mu.Unlock()
 	if errors.Is(err, errAbortedBeforePrompt) {
 		return m.holdAfterAbort(ctx, chatID, entries, claimed, res)
@@ -341,6 +396,17 @@ func (m *Manager) markWoke(ctx context.Context, chatID string, sources []store.S
 			}
 		}
 	}
+}
+
+// claimedEntries returns the entries whose ID is in claimed, in order.
+func claimedEntries(es []store.QueueEntry, claimed []string) []store.QueueEntry {
+	out := []store.QueueEntry{}
+	for _, e := range es {
+		if e.ID != "" && slices.Contains(claimed, e.ID) {
+			out = append(out, e)
+		}
+	}
+	return out
 }
 
 func ids(es []store.QueueEntry) []string {

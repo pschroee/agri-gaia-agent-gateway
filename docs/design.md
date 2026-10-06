@@ -659,7 +659,9 @@ be enqueued and removable again (as in Claude Code).
   inserted (**after `abort`, pi continues with what is queued**), and reopens the entries
   (`restored`, held back after an abort). If pi has nothing queued any more but has started a new
   run, the prompt came too late for the old run and stays as it is. Removal is possible
-  as long as an entry has not been handed over (afterwards 409). After an abort the orchestrator holds back the
+  as long as an entry has not been handed over (afterwards 409). Handed over but not yet read by pi,
+  entries are listed in `queue_delivered` of `GET /api/chats/{id}` (from the requests in memory whose user
+  message pi has not reported), so that the UIs show them again after a page reload (issue #21). After an abort the orchestrator holds back the
   queue (`queue_held`, `hold_reason: "abort"`): it goes along with the next message or
   via "Send now". An abort while a prompt is still in flight (for example during
   resuming) also holds back that prompt. If pi does not answer `prompt` within the deadline but has accepted the prompt,

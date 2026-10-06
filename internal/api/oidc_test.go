@@ -273,6 +273,9 @@ func TestOIDCChatOwnership(t *testing.T) {
 	}
 	if code, body := call(t, a, "GET", srv.URL+"/api/chats/"+chatA.ID, ""); code != 200 || !strings.Contains(body, `"owner":"sub-anna"`) {
 		t.Fatalf("Anna on her own chat: %d %s", code, body)
+	} else if !strings.Contains(body, `"queue_delivered":[]`) {
+		// deliveries pi has not read yet (issue #21); an empty list, never null
+		t.Fatalf("queue_delivered missing: %s", body)
 	}
 	if code, body := call(t, a, "POST", srv.URL+"/api/approvals/"+apA.ID, `{"approve":false}`); code != 200 {
 		t.Fatalf("Anna decides: %d %s", code, body)
