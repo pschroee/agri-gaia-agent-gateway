@@ -23,6 +23,7 @@ import { limitErrorKind, mergeSubagentEntries } from "@/lib/subagents"
 import {
   addPending,
   applyCompactionError,
+  applyDeliveredQueue,
   applyPiEvent,
   applyQueueDelivered,
   applyResumeStep,
@@ -91,7 +92,8 @@ export function useChatStream(chatId: string) {
       setState((s) => ({
         ...s,
         chat: d.chat,
-        transcript: hydrate(s.transcript, d.messages ?? []),
+        // deliveries pi has not read yet stay visible after a reload, as before it
+        transcript: applyDeliveredQueue(hydrate(s.transcript, d.messages ?? []), d.queue_delivered),
         artifacts: d.artifacts ?? [],
         approvals: d.approvals ?? [],
         socketCalls: d.socket_calls ?? [],
