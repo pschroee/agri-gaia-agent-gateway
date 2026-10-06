@@ -33,6 +33,14 @@ refer to this repository.
   `secrets/agent-gateway.env`. Before every commit: `git diff --cached | grep -c 'sk-'` must print 0. No host
   names of private instances and no test credentials in code, docs or tests.
 
+## Login
+
+- The `return` target of `/oidc/login` must be an absolute path on the same host (`internal/oidc`, `safeReturn`):
+  the UI under the base and, under a path prefix, any page of the platform frontend on that host (`/ai-agent`).
+  Schemes, hosts, `//`, backslashes, dot segments and percent-encoded slashes, backslashes, dots or control
+  characters fall back to the UI's start page. Rules and examples in `API.md`, *Return after login*; new cases go
+  into `internal/oidc/return_test.go`.
+
 ## Testing
 
 - `./dev.sh test` (about 25 s) before every commit, `./dev.sh test --full` (5–6 min) before every push.

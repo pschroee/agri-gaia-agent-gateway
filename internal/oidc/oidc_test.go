@@ -248,15 +248,29 @@ func TestReturnPathUnderPrefix(t *testing.T) {
 	for ret, want := range map[string]string{
 		"/agent/":                     "UI /",
 		"/agent/?embed=1":             "UI /?embed=1",
-		"/":                           "UI /", // platform start page: not our path
-		"/agentx/":                    "UI /",
+		"/agent/#/chats/x":            "UI /",
+		"/":                           "Platform /", // pages of the platform on the same host (frontend)
+		"/ai-agent":                   "Platform /ai-agent",
+		"/ai-agent?tab=status#top":    "Platform /ai-agent?tab=status",
+		"/datasets/12":                "Platform /datasets/12",
+		"/agentx/":                    "Platform /agentx/",
 		"/agent/../evil":              "UI /",
 		"/agent/%2e%2e/evil":          "UI /",
 		"/agent/oidc/login":           "UI /",
+		"/agent/oidc":                 "UI /",
+		"/x/../agent/oidc/login":      "UI /",
 		"//evil.example/agent/":       "UI /",
+		"//evil.com":                  "UI /",
 		"https://evil.example/":       "UI /",
 		"https://evil.example/agent/": "UI /",
+		"https://evil.com":            "UI /",
+		"/\\evil.com":                 "UI /",
 		"/agent/\\evil":               "UI /",
+		"%2F%2Fevil.com":              "UI /",
+		"/%2F%2Fevil.com":             "UI /",
+		"/%5Cevil.com":                "UI /",
+		"javascript:alert(1)":         "UI /",
+		"ai-agent":                    "UI /",
 	} {
 		b := oidctest.NewBrowser(t)
 		code, body := get(t, b, srv.URL+"/agent/oidc/login?return="+url.QueryEscape(ret))

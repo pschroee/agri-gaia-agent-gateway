@@ -1053,7 +1053,9 @@ login, and the token exchange per chat uses the token **of this user** instead o
   `AGW_PUBLIC_URL` (`config.BasePath`, `Env.BasePath`) and inserts it everywhere it gives the browser an
   address: redirects after login and from `/login`, `login` in the 401 response, the link on the
   "Not logged in" page, the cookie path (`/agent/` or `/agent/oidc/` respectively, so that the platform on the same host
-  does not see them). `return` must lie under `/agent/` after resolving `..`. The UI builds all addresses
+  does not see them). `return` must be an absolute path on the same host without dot segments or encoded tricks;
+  besides `/agent/…` it may name a page of the platform frontend (`/ai-agent`), since 2026-10-06 (API.md, *Return
+  after login*). The UI builds all addresses
   relatively (Vite `base: "./"`, `api/…` instead of `/api/…`); thanks to hash routing the document path is always the
   entry point. The address without a trailing slash (`/agent`) needs a redirect to `/agent/` at the proxy
   (`redirectregex`), because relative addresses would otherwise resolve against `/`. For embedding,
