@@ -167,9 +167,15 @@ func (m *Manager) Send(ctx context.Context, chatID, text string) (SendResult, er
 	return m.SendWithAttachments(ctx, chatID, text, nil)
 }
 
-// SendWithAttachments sends a message with attachments or enqueues it. An idle chat is resumed on
-// the way; held entries of the queue go along.
+// SendWithAttachments sends a message with attachments or enqueues it (see SendMessage).
 func (m *Manager) SendWithAttachments(ctx context.Context, chatID, text string, names []string) (SendResult, error) {
+	return m.SendMessage(ctx, chatID, text, names, nil)
+}
+
+// SendMessage sends a message with attachments and page context (nil: none; checked with
+// ParsePageContext) or enqueues it, the context with it. An idle chat is resumed on the way; held
+// entries of the queue go along. The context goes to pi as a note before the text (pagecontext.go).
+func (m *Manager) SendMessage(ctx context.Context, chatID, text string, names []string, pc *store.PageContext) (SendResult, error) {
 	text = strings.TrimSpace(text)
 	if text == "" && len(names) == 0 {
 		return SendResult{}, errors.New("empty message")
@@ -178,7 +184,7 @@ func (m *Manager) SendWithAttachments(ctx context.Context, chatID, text string, 
 	if err != nil {
 		return SendResult{}, err
 	}
-	r, err := m.send(ctx, chatID, &store.QueueEntry{Text: text, Attachments: clean})
+	r, err := m.send(ctx, chatID, &store.QueueEntry{Kind: store.QueueUser, Text: text, Attachments: clean, Context: pc})
 	if err == nil {
 		m.autoTitle(context.WithoutCancel(ctx), chatID, text)
 	}
@@ -222,7 +228,7 @@ func (m *Manager) send(ctx context.Context, chatID string, msg *store.QueueEntry
 			unlock()
 			return SendResult{}, ErrRunning
 		}
-		e, err := m.st.Enqueue(ctx, chatID, msg.Text, msg.Attachments)
+		e, err := m.st.EnqueueUser(ctx, chatID, msg.Text, msg.Attachments, msg.Context)
 		unlock()
 		if err != nil {
 			return SendResult{}, err
@@ -373,7 +379,13 @@ func (m *Manager) holdAfterAbort(ctx context.Context, chatID string, entries []s
 		if e.ID != "" && isClaimed[e.ID] {
 			continue
 		}
-		q, err := m.st.EnqueueKind(ctx, chatID, e.Kind, e.Text, e.Attachments)
+		var q store.QueueEntry
+		var err error
+		if e.Kind == store.QueueSystem {
+			q, err = m.st.EnqueueKind(ctx, chatID, e.Kind, e.Text, e.Attachments)
+		} else {
+			q, err = m.st.EnqueueUser(ctx, chatID, e.Text, e.Attachments, e.Context) // keeps its page context
+		}
 		if err != nil {
 			return res, err
 		}

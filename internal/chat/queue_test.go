@@ -25,7 +25,7 @@ func TestComposeMessage(t *testing.T) {
 	}
 	for _, c := range cases {
 		if got := composeMessage(c.in, nil); got.Text != c.want || got.Origin != store.OriginUser {
-			t.Errorf("composeMessage(%+v) = %q, want %q", c.in, got, c.want)
+			t.Errorf("composeMessage(%+v) = %q, want %q", c.in, got.Text, c.want)
 		}
 	}
 }

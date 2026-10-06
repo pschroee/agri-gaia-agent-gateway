@@ -377,3 +377,8 @@ UPDATE chats SET title = 'New chat ' || substr(title, 12)
 ALTER TABLE socket_calls ADD COLUMN IF NOT EXISTS duration_ms double precision;
 -- Activity across all chats of a user (GET /api/activity) reads only platform calls, newest first.
 CREATE INDEX IF NOT EXISTS socket_calls_platform ON socket_calls (id) WHERE op = 'platform';
+
+-- Page context of a queued message from the user (issue #13): the platform page and the object the user had open
+-- when sending ({page, object?: {kind, id, name?}}, checked by chat.ParsePageContext); NULL: none. Goes to the agent
+-- as an orchestrator note for the model only, never as user text, and grants no rights.
+ALTER TABLE chat_queue ADD COLUMN IF NOT EXISTS context jsonb;

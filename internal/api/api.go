@@ -582,8 +582,9 @@ func (s *Server) getChat(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) send(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Text        string   `json:"text"`
-		Attachments []string `json:"attachments"`
+		Text        string          `json:"text"`
+		Attachments []string        `json:"attachments"`
+		Context     json.RawMessage `json:"context"` // page context (issue #13), checked by chat.ParsePageContext
 	}
 	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
 		writeErr(w, 400, "invalid JSON")
@@ -593,7 +594,12 @@ func (s *Server) send(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "at most 20 attachments per message")
 		return
 	}
-	res, err := s.M.SendWithAttachments(r.Context(), r.PathValue("id"), req.Text, req.Attachments)
+	pc, err := chat.ParsePageContext(req.Context)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	res, err := s.M.SendMessage(r.Context(), r.PathValue("id"), req.Text, req.Attachments, pc)
 	if err != nil {
 		sendFail(w, err)
 		return

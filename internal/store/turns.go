@@ -30,7 +30,7 @@ const (
 // Source is a part of a request, in order.
 type Source struct {
 	Kind    string   `json:"kind"`               // QueueUser or QueueSystem
-	Type    string   `json:"type,omitempty"`     // for system: NoteBackground, NoteSandbox, NoteLanguage
+	Type    string   `json:"type,omitempty"`     // for system: NoteBackground, NoteSandbox, NoteLanguage, NoteContext
 	Refs    []string `json:"refs,omitempty"`     // for system: affected tasks
 	QueueID string   `json:"queue_id,omitempty"` // queue entry, if enqueued
 	// Marker: marker of the fence around the data from the sandbox (only system, if there is data).
@@ -38,6 +38,9 @@ type Source struct {
 	// Audience: AudienceAgent for a note that is context for the model only (UIs do not show it);
 	// empty: shown to the user. Derived from Type (NoteAudience), also for rows stored without it.
 	Audience string `json:"audience,omitempty"`
+	// Context: for a NoteContext part the page context it stands for (structured, so that UIs show
+	// "Refers to …" without reading the note's text); QueueID is then the user entry it belongs to.
+	Context *PageContext `json:"context,omitempty"`
 }
 
 // AudienceAgent marks a note meant only for the model's context, not for the user (e.g. the
@@ -48,7 +51,7 @@ const AudienceAgent = "agent"
 // for notes the user should see (end of a background task, tasks ended with the sandbox, messages
 // from extensions in pi).
 func NoteAudience(noteType string) string {
-	if noteType == NoteLanguage {
+	if noteType == NoteLanguage || noteType == NoteContext {
 		return AudienceAgent
 	}
 	return ""

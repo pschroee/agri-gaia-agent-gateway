@@ -12,7 +12,7 @@ import (
 )
 
 func TestNoteAudience(t *testing.T) {
-	for typ, want := range map[string]string{NoteLanguage: AudienceAgent, NoteBackground: "", NoteSandbox: "", "pi": "", "": ""} {
+	for typ, want := range map[string]string{NoteLanguage: AudienceAgent, NoteContext: AudienceAgent, NoteBackground: "", NoteSandbox: "", "pi": "", "": ""} {
 		if got := NoteAudience(typ); got != want {
 			t.Errorf("NoteAudience(%q) = %q, want %q", typ, got, want)
 		}
