@@ -9,8 +9,12 @@
 #   ./dev.sh stop     stop everything and remove sandboxes (data is kept)
 #   ./dev.sh status   show services, sandboxes and pool
 #   ./dev.sh logs     follow the orchestrator log
-#   ./dev.sh test     fast tests (Go with Postgres, without Docker; web), about 30 s
-#   ./dev.sh test --full   additionally Docker integration, S3 and slot tests, about 5 min (before pushing)
+#   ./dev.sh test     fast tests (Go with Postgres, without Docker, with Go's test cache, without -race; web);
+#                     the everyday and pre-push check
+#   ./dev.sh test --full   the same stages without the test cache (-count=1) and with -race, about 30 s; on request
+#   ./dev.sh test --docker additionally Docker integration, S3 and slot tests (off by default since
+#                     issue #27: they start real containers and load the machine, about 7 min);
+#                     --dry-run with any of these only lists the stages it would run
 #   ./dev.sh e2e      end-to-end tests with a real model (costs a few cents); starts the
 #                     orchestrator with a low compaction threshold for it and normally again afterwards
 #   ./dev.sh cli ...  CLI agw against the running orchestrator (e.g. ./dev.sh cli pool)
@@ -265,9 +269,13 @@ new_test_logs() {
   ls -1d "$PWD"/.dev/test-logs/*/ 2>/dev/null | sort -r | tail -n +11 | xargs -r rm -rf
 }
 
+# GO_UNIT_FLAGS: empty for ./dev.sh test (Go's test cache, no -race), "-race -count=1" for --full.
+GO_UNIT_FLAGS=""
 go_unit() {
+  # The cache key includes the env vars a test reads (AGW_TEST_DATABASE_URL) and embedded files (schema.sql), but
+  # not the state of Postgres itself; the tests create their own schema, so that state should not matter.
   AGW_TEST_DATABASE_URL="postgres://agwpoc:${POSTGRES_PASSWORD}@127.0.0.1:${AGW_PG_PORT:-18482}/agwpoc?sslmode=disable" \
-    go test -race -count=1 ./... 2>&1 | tee -a "$STAGE_LOG" | grep --line-buffered -vE '^(ok|\?) ' ; return "${PIPESTATUS[0]}"
+    go test $GO_UNIT_FLAGS ./... 2>&1 | tee -a "$STAGE_LOG" | grep --line-buffered -vE '^(ok|\?) ' ; return "${PIPESTATUS[0]}"
 }
 
 go_docker() {
@@ -301,29 +309,55 @@ go_slots() {
 web_unit() { (cd web && npm test -- --run 2>&1 | tee -a "$STAGE_LOG" | grep --line-buffered -E 'Test Files|Tests |FAIL|✗|×'; exit "${PIPESTATUS[0]}"); }
 
 cmd_test() {
-  local full=false
-  [[ "${1:-}" == "--full" ]] && full=true
+  # Default: Go with the test cache and without -race, plus web. --full: the same stages without the cache and
+  # with -race. --docker: additionally Docker integration, S3 and slot tests, which are off by default (issue #27,
+  # decision of the author: they start real containers and load the machine). --dry-run: only list the stages.
+  local full=false docker=false dry=false arg
+  for arg in "$@"; do
+    case "$arg" in
+      --full) full=true ;;
+      --docker) docker=true ;;
+      --dry-run) dry=true ;;
+      *) warn "unknown option for test: $arg (known: --full, --docker, --dry-run)"; exit 2 ;;
+    esac
+  done
+  local go_name="Go tests (unit, Postgres, cached, without -race; without Docker)"
+  if $full; then GO_UNIT_FLAGS="-race -count=1"; go_name="Go tests (unit, Postgres, -race, uncached; without Docker)"; fi
+  local run=("$go_name" "web tests") skipped=()
+  if $docker; then
+    run+=("Docker integration (sandbox, workspace)" "S3 integration (in the Docker network)"
+      "slot tests with a scripted model (E9, background, subagents, parity)")
+  else
+    skipped+=("Docker integration" "S3 integration" "slot tests")
+  fi
+  if $dry; then
+    info "stages that would run:"; printf '   %s\n' "${run[@]}"
+    [[ ${#skipped[@]} -gt 0 ]] && { info "skipped:"; printf '   %s\n' "${skipped[@]}"; }
+    return 0
+  fi
   ensure_env
   set -a; . ./.env; set +a
   local t0=$SECONDS
-  if $full && [[ "$(mode)" == hot ]]; then
+  if $docker && [[ "$(mode)" == hot ]]; then
     warn "hot reload is running: do not save any Go file during the Docker tests, otherwise the orchestrator rebuilds and disturbs the tests."
   fi
   net_hygiene
   new_test_logs
   dc up -d --wait postgres rustfs >/dev/null
   ensure_dist
-  stage "Go tests (unit, Postgres, -race; without Docker)" go_unit || exit 1
+  stage "$go_name" go_unit || exit 1
   if [[ -f web/package.json ]]; then stage "web tests" web_unit || exit 1; fi
-  if $full; then
+  if $docker; then
     build_sandbox_image
     stage "Docker integration (sandbox, workspace)" go_docker || exit 1
     stage "S3 integration (in the Docker network)" go_s3 || exit 1
     stage "slot tests with a scripted model (E9, background, subagents, parity)" go_slots || exit 1
-  else
-    info "Docker, S3 and slot tests skipped; before pushing: ./dev.sh test --full"
   fi
   info "all tests green ($((SECONDS - t0)) s); complete output in $TEST_LOG_DIR"
+  if [[ ${#skipped[@]} -gt 0 ]]; then
+    local list; list=$(printf '%s, ' "${skipped[@]}"); list=${list%, }
+    info "skipped: $list (off by default, issue #27); run them with ./dev.sh test --docker"
+  fi
 }
 
 cmd_e2e() {
@@ -375,7 +409,7 @@ case "${1:-}" in
   stop) cmd_stop ;;
   status) cmd_status ;;
   logs) cmd_logs ;;
-  test) shift; cmd_test "${1:-}" ;;
+  test) shift; cmd_test "$@" ;;
   e2e) shift; cmd_e2e "$@" ;;
   cli) shift; cmd_cli "$@" ;;
   reset|clean) shift; cmd_reset "${1:-}" ;;

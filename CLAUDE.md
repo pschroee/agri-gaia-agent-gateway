@@ -69,7 +69,22 @@ refer to this repository.
 
 ## Testing
 
-- `./dev.sh test` (about 25 s) before every commit, `./dev.sh test --full` (5–6 min) before every push.
+- `./dev.sh test` is the everyday check, before every commit and before every push: Go with Postgres (with Go's
+  test cache, without `-race`) and web tests.
+- `./dev.sh test --full`: the same stages without the cache (`-count=1`) and with `-race`, about 30 s. Not part of
+  the workflow for now (decision of the author, 06.10.2026); run it only on request, e.g. after concurrency changes,
+  or when in doubt about the cache.
+- **Go's test cache** keys on the package files (embedded ones such as `internal/store/schema.sql` included) and on
+  env vars a test reads via `os.Getenv` (`AGW_TEST_DATABASE_URL` and the like), but not on the contents or state of
+  Postgres outside the repo. A cached `ok` therefore does not prove the tests still pass against the running
+  database; if in doubt, use `--full`.
+- **Docker integration, S3 and slot tests are off by default** (issue #27, decision of the author, 06.10.2026):
+  they build and start real containers, loaded the machine and took most of the former 450 s (Docker integration
+  124 s, S3 42 s, slot tests 203 s). The tests stay in the repo; `./dev.sh test --docker` runs them in addition
+  (about 7 min). Use it only when a change touches what they cover: `internal/sandbox`, the workspace round trip,
+  `internal/artifacts` (S3), `internal/worker` and the slot images (`images/`, `exec-bridge.ts`, pi settings), or
+  when asked. `./dev.sh test --docker --dry-run` (also with no flag or `--full`) only lists the stages, without
+  starting anything. Every run ends with a line naming the skipped stages.
 - **Test logs:** the terminal of `./dev.sh test` shows a filtered view; the complete output of every stage is in
   `.dev/test-logs/<run>/<n>-<stage>.log` (ignored, last 10 runs kept), and a failing stage prints its log path.
   Read the failure message there instead of re-running with `tail` (issue #26: a slot test failed once and its
@@ -79,7 +94,7 @@ refer to this repository.
   (`TestServeBgLimitAndStop`, issue #26); the abort was not at fault, the other process groups stay alive. A
   fixed sleep is only acceptable before a negative check ("did not happen"), where it can at worst pass falsely,
   not flake.
-- Do not save Go files while `./dev.sh test --full` or `./dev.sh e2e` runs: each orchestrator restart removes all
+- Do not save Go files while `./dev.sh test --docker` or `./dev.sh e2e` runs: each orchestrator restart removes all
   containers labelled `agwpoc.managed=true`.
 - Do not run `npx prettier --write` on `web/`: there is no Prettier config; the code is hand-formatted at
   120 columns without semicolons. Check with `tsc -b` and `npm run lint`.

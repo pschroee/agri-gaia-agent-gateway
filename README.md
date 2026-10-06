@@ -47,8 +47,9 @@ Requires Docker and Go; `.env` from `.env.example` (never committed).
 ```bash
 ./dev.sh init            # build images, create .env values
 ./dev.sh start           # stack with hot reload, prints the login link
-./dev.sh test            # fast tests (Go with Postgres, Vitest), about 25 s
-./dev.sh test --full     # adds Docker integration and slot tests, 5–6 min, before pushing
+./dev.sh test            # everyday and pre-push check: Go with Postgres (cached, no -race), Vitest
+./dev.sh test --full     # the same without the cache and with -race, on request
+./dev.sh test --docker   # adds Docker integration, S3 and slot tests (off by default), about 7 min
 ./dev.sh e2e             # end-to-end tests with the real model
 ./dev.sh stop
 ```
