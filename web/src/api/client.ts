@@ -119,7 +119,6 @@ export const api = {
   abort: (id: string) => post<Chat>(`api/chats/${enc(id)}/abort`),
   suspend: (id: string) => post<Chat>(`api/chats/${enc(id)}/suspend`),
   setInternet: (id: string, enabled: boolean) => post<Chat>(`api/chats/${enc(id)}/internet`, { enabled }),
-  setMaxSubagents: (id: string, max: number) => post<Chat>(`api/chats/${enc(id)}/subagents`, { max }),
   llmCalls: (id: string) => request<LLMCall[]>(`api/chats/${enc(id)}/llm_calls`),
   toolExecutions: (id: string) => request<ToolExecutionsResponse>(`api/chats/${enc(id)}/tool_executions`),
   background: (id: string) => request<BackgroundTask[]>(`api/chats/${enc(id)}/background`),

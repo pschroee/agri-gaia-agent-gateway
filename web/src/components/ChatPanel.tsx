@@ -35,7 +35,6 @@ import { ContextIndicator } from "@/components/ContextMeter"
 import { SlashCommandPopover } from "@/components/SlashCommandPopover"
 import { ContextTooLargeDialog, ModelEffortPicker } from "@/components/ModelSwitch"
 import { ChatStateBadge, RunningIndicator, VariantBadge } from "@/components/badges"
-import { NumberStepper } from "@/components/NumberStepper"
 import { Transcript, type TranscriptSubagents } from "@/components/Transcript"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
@@ -66,7 +65,7 @@ import { expectQueued, holdReasonText, queuePreview, queueRows, type QueueRow } 
 import { runningCount } from "@/lib/background"
 import { countViolations } from "@/lib/delegationTemplates"
 import { chatRunSince } from "@/lib/runtime"
-import { assignRuns, groupRuns, limitNotices, subagentLimitLabel } from "@/lib/subagents"
+import { assignRuns, groupRuns, limitNotices, subagentsRunningLabel, subagentsRunningTitle } from "@/lib/subagents"
 import { todoTimeline } from "@/lib/tasks"
 import { cn } from "@/lib/utils"
 
@@ -207,7 +206,6 @@ export function ChatPanel({ chatId, runId, config, modelName, onChanged, onRunSi
         <ChatHeader
           chat={chat}
           modelName={modelName}
-          config={config}
           answersCost={answersCost}
           connected={s.connected}
           runSince={runSince}
@@ -436,7 +434,6 @@ function DelegationStrip({ chat, violations, onOpen }: { chat: Chat; violations:
 function ChatHeader({
   chat,
   modelName,
-  config,
   answersCost,
   connected,
   runSince,
@@ -449,7 +446,6 @@ function ChatHeader({
   embed?: boolean
   chat: Chat
   modelName: (id: string) => string
-  config?: Config
   answersCost: number
   connected: boolean
   /** Start of the running turn (ms) for the run time next to "Running". */
@@ -551,12 +547,7 @@ function ChatHeader({
           <span className="text-foreground">{formatTokens(chat.tokens?.total)}</span> tokens
         </span>
         <CostInfo chat={chat} answersCost={answersCost} />
-        <SubagentLimit
-          chat={chat}
-          limit={config?.max_subagents_limit}
-          busy={busy === "Subagent limit"}
-          onChange={(max) => void run("Subagent limit", () => api.setMaxSubagents(chat.id, max))}
-        />
+        <SubagentsRunning chat={chat} />
         <span
           className={cn("inline-flex items-center gap-1.5 sm:ml-auto", chat.internet && "text-sky-700")}
           title={
@@ -618,58 +609,12 @@ function CostInfo({ chat, answersCost }: { chat: Chat; answersCost: number }) {
   )
 }
 
-/** "Subagents x / y" with a stepper to change the limit; locked for an ended chat. */
-function SubagentLimit({
-  chat,
-  limit,
-  busy,
-  onChange,
-}: {
-  chat: Chat
-  limit?: number
-  busy: boolean
-  onChange: (max: number) => void
-}) {
-  const max = chat.max_subagents ?? 0
-  const used = chat.subagents ?? 0
-  const over = used > max
+/** Subagents running now against the fixed limit; display only (issue #24: no setting per chat). */
+function SubagentsRunning({ chat }: { chat: Chat }) {
   return (
-    <Popover>
-      <PopoverTrigger asChild>
-        <button
-          type="button"
-          className={cn(
-            "inline-flex items-center gap-1 rounded underline decoration-dotted underline-offset-2 hover:text-foreground",
-            over && "font-medium text-red-700",
-          )}
-          aria-label={`${subagentLimitLabel(chat)}, change limit`}
-        >
-          <BotIcon className="size-3.5" /> {subagentLimitLabel(chat)}
-        </button>
-      </PopoverTrigger>
-      <PopoverContent align="start" collisionPadding={12} className="w-72 max-w-[calc(100vw-1.5rem)] text-xs">
-        <div className="text-sm font-semibold">Subagent limit</div>
-        <p className="mt-1 text-muted-foreground">
-          {used} started so far, {max} allowed. Enforced strictly at the proxy (at most {max + 1} concurrent model
-          calls) and by aborting as soon as more subagents start.
-        </p>
-        <div className="mt-2 flex items-center justify-between gap-2">
-          <Label htmlFor={`maxsub-${chat.id}`} className="text-xs">
-            Max. subagents
-          </Label>
-          <NumberStepper
-            id={`maxsub-${chat.id}`}
-            value={max}
-            min={0}
-            max={Math.max(limit ?? max, max)}
-            disabled={busy}
-            onChange={onChange}
-            aria-label="Max. subagents"
-          />
-        </div>
-        {limit !== undefined && <p className="mt-2 text-muted-foreground">At most {limit}. Takes effect immediately.</p>}
-      </PopoverContent>
-    </Popover>
+    <span className="inline-flex items-center gap-1 tabular-nums" title={subagentsRunningTitle(chat)}>
+      <BotIcon className="size-3.5" aria-hidden /> {subagentsRunningLabel(chat)}
+    </span>
   )
 }
 

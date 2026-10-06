@@ -236,8 +236,17 @@ export function limitNotices(calls: SocketCall[]): LimitNotice[] {
   return out
 }
 
-export function subagentLimitLabel(chat: Pick<Chat, "subagents" | "max_subagents">): string {
-  return `Subagents ${chat.subagents ?? 0} / ${chat.max_subagents ?? "–"}`
+/** Subagents running now against the fixed limit of the service (at most this many at the same time). */
+export function subagentsRunningLabel(chat: Pick<Chat, "subagents_running" | "max_subagents">): string {
+  return `Subagents ${chat.subagents_running ?? 0} / ${chat.max_subagents ?? "–"} running`
+}
+
+/** Tooltip of the label: the limit is fixed for the service and counts subagents at the same time. */
+export function subagentsRunningTitle(chat: Pick<Chat, "subagents" | "max_subagents">): string {
+  const max = chat.max_subagents
+  return max === undefined
+    ? `${chat.subagents ?? 0} subagents started so far`
+    : `At most ${max} subagents run at the same time (fixed for the service). ${chat.subagents ?? 0} started so far.`
 }
 
 /** ID of the base run; parallel children carry "#n". */
