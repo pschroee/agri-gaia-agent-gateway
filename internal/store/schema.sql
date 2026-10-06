@@ -365,3 +365,8 @@ ALTER TABLE chats ADD COLUMN IF NOT EXISTS language text;
 
 -- The variant id "beide" was renamed to "both" (2026-10-05); chats created before keep resuming.
 UPDATE chats SET variant = 'both' WHERE variant = 'beide';
+
+-- Placeholder titles from before the translation (2026-10-05, "Neuer Chat 05.10. 14:03") are shown in English
+-- like new ones ("New chat 05.10. 14:03"); titles the user or the model chose stay untouched.
+UPDATE chats SET title = 'New chat ' || substr(title, 12)
+  WHERE title ~ '^Neuer Chat [0-9]{2}\.[0-9]{2}\. [0-9]{2}:[0-9]{2}$';
