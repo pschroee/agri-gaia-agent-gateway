@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"regexp"
 	"strings"
 	"time"
@@ -154,6 +155,23 @@ func WithToolCall(ctx context.Context, id string) context.Context {
 	return context.WithValue(ctx, toolCallKey{}, id)
 }
 
+type durationKey struct{}
+
+// WithDuration attaches the measured duration of a platform call to the context of its log entry.
+func WithDuration(ctx context.Context, d time.Duration) context.Context {
+	return context.WithValue(ctx, durationKey{}, d)
+}
+
+// DurationMsFrom returns the duration from WithDuration in milliseconds (nil: none attached).
+func DurationMsFrom(ctx context.Context) *float64 {
+	d, ok := ctx.Value(durationKey{}).(time.Duration)
+	if !ok || d < 0 {
+		return nil
+	}
+	ms := math.Round(float64(d)/float64(time.Millisecond)*10) / 10
+	return &ms
+}
+
 // ToolCallFrom returns the ID from WithToolCall (otherwise empty).
 func ToolCallFrom(ctx context.Context) string {
 	id, _ := ctx.Value(toolCallKey{}).(string)
@@ -178,6 +196,8 @@ type Approval struct {
 	// tool call; empty for older entries.
 	Session    string `json:"session,omitempty"`
 	ToolCallID string `json:"tool_call_id,omitempty"`
+	// DurationMs: round trip of a platform call in milliseconds (nil: not measured).
+	DurationMs *float64 `json:"duration_ms,omitempty"`
 }
 
 type SocketCall struct {
@@ -192,6 +212,8 @@ type SocketCall struct {
 	// Session: main agent ("main") or subagent run that made the call (empty: unknown).
 	Session    string `json:"session,omitempty"`
 	ToolCallID string `json:"tool_call_id,omitempty"`
+	// DurationMs: round trip of a platform call in milliseconds (nil: not measured).
+	DurationMs *float64 `json:"duration_ms,omitempty"`
 }
 
 type Store struct {
@@ -787,13 +809,13 @@ func (s *Store) AddSocketCall(ctx context.Context, c SocketCall) (SocketCall, er
 	if c.ChatID != "" {
 		chat = c.ChatID
 	}
-	err := s.pool.QueryRow(ctx, `INSERT INTO socket_calls (chat_id, slot_id, via, op, detail, result, session, tool_call_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id, created_at`,
-		chat, c.SlotID, c.Via, c.Op, c.Detail, c.Result, c.Session, c.ToolCallID).Scan(&c.ID, &c.CreatedAt)
+	err := s.pool.QueryRow(ctx, `INSERT INTO socket_calls (chat_id, slot_id, via, op, detail, result, session, tool_call_id, duration_ms) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id, created_at`,
+		chat, c.SlotID, c.Via, c.Op, c.Detail, c.Result, c.Session, c.ToolCallID, c.DurationMs).Scan(&c.ID, &c.CreatedAt)
 	return c, err
 }
 
 func (s *Store) ListSocketCalls(ctx context.Context, chatID string) ([]SocketCall, error) {
-	rows, err := s.pool.Query(ctx, `SELECT id, COALESCE(chat_id::text,''), slot_id, via, op, detail, result, created_at, session, tool_call_id FROM socket_calls WHERE chat_id=$1 ORDER BY id`, chatID)
+	rows, err := s.pool.Query(ctx, `SELECT id, COALESCE(chat_id::text,''), slot_id, via, op, detail, result, created_at, session, tool_call_id, duration_ms FROM socket_calls WHERE chat_id=$1 ORDER BY id`, chatID)
 	if err != nil {
 		return nil, err
 	}
@@ -801,7 +823,7 @@ func (s *Store) ListSocketCalls(ctx context.Context, chatID string) ([]SocketCal
 	out := []SocketCall{}
 	for rows.Next() {
 		var c SocketCall
-		if err := rows.Scan(&c.ID, &c.ChatID, &c.SlotID, &c.Via, &c.Op, &c.Detail, &c.Result, &c.CreatedAt, &c.Session, &c.ToolCallID); err != nil {
+		if err := rows.Scan(&c.ID, &c.ChatID, &c.SlotID, &c.Via, &c.Op, &c.Detail, &c.Result, &c.CreatedAt, &c.Session, &c.ToolCallID, &c.DurationMs); err != nil {
 			return nil, err
 		}
 		out = append(out, c)

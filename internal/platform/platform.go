@@ -203,6 +203,9 @@ type Result struct {
 	// Violation: a violation that was only logged and let through (delegation without enforce);
 	// the agent does not see it.
 	Violation string `json:"-"`
+	// Duration: round trip to the platform (token exchange included, approval wait excluded); zero if the call
+	// did not go out. Logged with the call, not shown to the agent.
+	Duration time.Duration `json:"-"`
 }
 
 // RightsPath is the path under which the orchestrator itself answers the chat's delegated

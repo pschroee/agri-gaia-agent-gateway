@@ -291,7 +291,14 @@ type Approval = {
   created_at: string; decided_at?: string;
   preview?: string;       // first 4 KiB, text only
 };
-type SocketCall = { id: number; chat_id?: string; slot_id: string; via: "cli" | "mcp"; op: string; detail: string; result: string; created_at: string };
+type SocketCall = { id: number; chat_id?: string; slot_id: string; via: "cli" | "mcp"; op: string; detail: string; result: string; created_at: string; session?: string; tool_call_id?: string;
+  duration_ms?: number /* platform calls: round trip to the platform in ms (token exchange included, approval wait excluded); missing: not measured */ };
+// GET /api/activity (see "Activity across chats").
+type ActivityCall = SocketCall & { outcome: "ok" | "error" | "blocked" | "logged" | "rejected" | "refused";
+  approval?: { id: string; state: Approval["state"]; created_at: string; decided_at?: string } };
+type ActivityPage = { calls: ActivityCall[]; chats: Record<string, { id: string; title: string; model: string; variant: string; delegation?: unknown }>;
+  next_before?: number; summary: { total: number; outcomes: Record<ActivityCall["outcome"], number>; chats: number; runs: number;
+  duration: { count: number; avg_ms?: number; p95_ms?: number; max_ms?: number } } };
 ```
 
 ## Endpoints
@@ -333,8 +340,37 @@ type SocketCall = { id: number; chat_id?: string; slot_id: string; via: "cli" | 
 | `GET /api/chats/{id}/images?path=<path>&msg=<id>` | image | display image of a response (see below); 400 for an invalid path or ID, 404 if not available |
 | `POST /api/chats/{id}/files` (multipart, field `file`, may repeat) | `Artifact[]` (201) | user uploads files for the agent; for an active chat mirrored to `/workspace/inputs/` immediately, for a dormant one on resume. Limit `AGW_ARTIFACT_MAX_MB` per file |
 | `GET /api/approvals?state=pending` | `Approval[]` | open approvals of all chats |
+| `GET /api/activity?since=&until=&outcome=&chat=&limit=&before=` | `ActivityPage` | platform calls of the user's chats across all chats, newest first, with a summary of the period; see *Activity across chats* |
 | `POST /api/approvals/{id}` `{approve: boolean}` | `Approval` | approve or reject |
 | `GET /api/chats/{id}/events` | SSE | live events of the chat |
+
+## Activity across chats
+
+`GET /api/activity` lists the platform calls (`socket_calls` with `op: "platform"`) of all chats of the logged-in
+user, newest first. In oidc mode the database query filters by the chat's owner, so another user's calls never leave
+the store; `chat=` with another user's (or an unknown) chat gives an empty page, not 404. In token mode all chats
+count. The per-chat log in `GET /api/chats/{id}` (`socket_calls`) and the SSE event `socket_call` stay unchanged.
+
+| Parameter | Meaning |
+|---|---|
+| `since`, `until` | period as RFC 3339 times (`2026-10-06T00:00:00+02:00`); `since` inclusive, `until` exclusive; 400 otherwise |
+| `outcome` | `ok`, `error`, `blocked` (violation blocked by the delegation), `logged` (violation let through and logged), `rejected` (by the user or no decision in time), `refused` (by the gateway before it went out); filters `calls` only, not `summary` |
+| `chat` | one chat of the user |
+| `limit` | page size, default 100, at most 500 (larger values are capped), 400 below 1 |
+| `before` | cursor: `next_before` of the previous page; only calls with a smaller id |
+
+`outcome` per call is derived from `result` in the database, in this order: `violation blocked…` → blocked,
+`…violation, logged only…` → logged, `rejected…` → rejected, `refused…` or `not configured…` → refused, `ok…` → ok,
+everything else → error. `approval` is the `platform_write` approval of the same chat, tool call and call text
+(`name` = `detail`) created before the call; calls without `tool_call_id` carry none. `chats` holds title, model,
+variant and delegation of the chats on the page. `summary` covers the whole period and chat filter (not `outcome`,
+`before` or `limit`): number of calls in total and per outcome, chats with platform calls, `runs` (requests to the
+agent, `chat_turns`, in the same chats and period) and the measured durations (`count`, average, 95th percentile,
+maximum in ms, rounded to 0.1 ms).
+
+`duration_ms` is measured around the request to the platform (`Platform.Do`, including the token exchange), after
+any approval, and stored with the log entry (column `socket_calls.duration_ms`). Calls that did not go out (blocked,
+rejected, refused, `/_agw/rights`) and entries from before 2026-10-06 have none.
 
 ## SSE `GET /api/chats/{id}/events`
 

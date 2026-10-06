@@ -49,6 +49,15 @@ refer to this repository.
   `internal/chat/subagents.go`), not runs started in total; do not reintroduce `maxSubagentSpawnsPerSession` in the
   pi-subagents config, it caps runs in total. Rules in `API.md`, *Limit for subagents*.
 
+## Activity across chats
+
+- `GET /api/activity` (issue #12) reads platform calls of the user's chats in one query (`internal/store/activity.go`):
+  the owner filter is part of the SQL (`chats.owner`), never applied afterwards in Go, so a page size and the
+  summary stay right. The outcome classification (`outcomeSQL`) mirrors the result texts written in
+  `sock.runPlatform`; a new result text there needs a case there and in `TestListActivity`. `duration_ms` is the
+  round trip of `Platform.Do` handed from `platform.Result.Duration` to the log entry through the context
+  (`store.WithDuration`); it never reaches the agent (`json:"-"`). Rules in `API.md`, *Activity across chats*.
+
 ## Testing
 
 - `./dev.sh test` (about 25 s) before every commit, `./dev.sh test --full` (5–6 min) before every push.
