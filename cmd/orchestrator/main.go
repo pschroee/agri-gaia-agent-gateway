@@ -137,8 +137,8 @@ func run() error {
 	m := chat.NewManager(st, p, cat, blobs, artifacts.NewBroker(), chat.Options{
 		IdleTimeout: env.IdleTimeout, ApprovalTimeout: env.ApprovalTimeout,
 		ArtifactMaxBytes: env.ArtifactMaxBytes, InternetDefault: env.InternetDefault, ImageMaxBytes: env.ImageMaxBytes,
-		WorkspaceMaxBytes:   env.WorkspaceMaxBytes,
-		MaxSubagentsDefault: env.MaxSubagentsDefault, MaxSubagentsLimit: env.MaxSubagentsLimit,
+		WorkspaceMaxBytes:  env.WorkspaceMaxBytes,
+		MaxSubagents:       env.MaxSubagents,
 		AutoCompactDefault: env.AutoCompactDefault, CompactReserveTokens: env.CompactReserveTokens, CompactKeepRecent: env.CompactKeepRecent,
 		BgWakesPerHour: env.BgWakesPerHour, BgKeepAlive: env.BgKeepAlive, AutoTurnsMax: env.AutoTurnsMax,
 		Titler: newTitler(cat, env.TitleModel), Platform: plat,

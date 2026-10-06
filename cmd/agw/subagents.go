@@ -10,27 +10,11 @@ import (
 
 func (a *app) cmdChatSubagents(args []string) error {
 	fs := a.flags("chat subagents")
-	usage := "agw chat subagents <id> [N] [--json]"
-	pos, err := a.parse(fs, args, 1, 2, usage)
+	pos, err := a.parse(fs, args, 1, 1, "agw chat subagents <id> [--json]")
 	if err != nil {
 		return err
 	}
 	id := pos[0]
-	if len(pos) == 2 {
-		n, err := parseCount(pos[1])
-		if err != nil {
-			return usagef("%v – usage: %s", err, usage)
-		}
-		c, err := a.c.SetMaxSubagents(a.ctx, id, n)
-		if err != nil {
-			return err
-		}
-		if a.json {
-			return a.printJSON(c)
-		}
-		fmt.Fprintf(a.stdout, "Subagent limit in chat %s: %d (started so far %d; takes effect immediately).\n", c.ID, c.MaxSubagents, c.Subagents)
-		return nil
-	}
 	det, err := a.c.Chat(a.ctx, id)
 	if err != nil {
 		return err
@@ -40,10 +24,10 @@ func (a *app) cmdChatSubagents(args []string) error {
 		entries = []agwclient.SubagentEntry{}
 	}
 	if a.json {
-		return a.printJSON(map[string]any{"max_subagents": det.Chat.MaxSubagents, "subagents": det.Chat.Subagents, "entries": entries})
+		return a.printJSON(map[string]any{"max_subagents": det.Chat.MaxSubagents, "subagents": det.Chat.Subagents, "subagents_running": det.Chat.SubagentsRunning, "entries": entries})
 	}
 	w := a.stdout
-	fmt.Fprintf(w, "Subagents: limit %d, started %d\n", det.Chat.MaxSubagents, det.Chat.Subagents)
+	fmt.Fprintf(w, "Subagents: %d started, %d running, at most %d at the same time\n", det.Chat.Subagents, det.Chat.SubagentsRunning, det.Chat.MaxSubagents)
 	if len(entries) == 0 {
 		fmt.Fprintln(w, "No subagent runs yet.")
 		return nil

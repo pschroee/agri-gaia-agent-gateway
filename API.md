@@ -102,8 +102,9 @@ type Chat = {
   internet: boolean;      // sandbox has internet access (switch per chat, takes effect immediately; off by default, the agent can ask for it via approval)
   auto_compact: boolean;  // automatic compaction (switch per chat)
   compactions: number;    // number of compactions so far
-  max_subagents: number;  // at most this many subagents (hard: proxy and monitoring, see below)
+  max_subagents: number;  // at most this many subagents at the same time; fixed for the service, the same in every chat (see below)
   subagents: number;      // subagents (runs) started so far
+  subagents_running: number; // subagents running right now according to the monitoring (0 while dormant)
   llm_calls: number;      // model calls recorded at the LLM proxy
   cost_other: number;     // share of the cost outside the main session's responses (subagents, compaction, direct calls)
   context?: ContextUsage; // last known context usage (also for a dormant chat)
@@ -291,11 +292,11 @@ type SocketCall = { id: number; chat_id?: string; slot_id: string; via: "cli" | 
 |---|---|---|
 | `GET /api/models` | `Model[]` | selectable models |
 | `GET /api/variants` | `Variant[]` | binding variants |
-| `GET /api/config` | `{internet_default: boolean, approval_timeout_s: number, artifact_max_mb: number, idle_timeout_s: number, auto_compact_default: boolean, compact_reserve_tokens: number, compact_keep_recent_tokens: number, max_subagents_default: number, max_subagents_limit: number, workspace_max_mb: number /* 0 = workspace is not backed up */, bg_wakes_per_hour: number /* 0 = never wake */, bg_keepalive_s: number, auto_turns_max: number /* consecutive turns without the user, 0 = none */, executed_tools: string[] /* tools whose execution is proven at the socket, sorted */}` | defaults for the UI |
+| `GET /api/config` | `{internet_default: boolean, approval_timeout_s: number, artifact_max_mb: number, idle_timeout_s: number, auto_compact_default: boolean, compact_reserve_tokens: number, compact_keep_recent_tokens: number, max_subagents: number /* at the same time per chat, fixed */, max_subagents_default: number /* deprecated, = max_subagents */, max_subagents_limit: number /* deprecated, = max_subagents */, workspace_max_mb: number /* 0 = workspace is not backed up */, bg_wakes_per_hour: number /* 0 = never wake */, bg_keepalive_s: number, auto_turns_max: number /* consecutive turns without the user, 0 = none */, executed_tools: string[] /* tools whose execution is proven at the socket, sorted */}` | defaults for the UI |
 | `GET /api/pool` | `Pool` | pool status (the UI polls every second) |
 | `GET /api/platform` | `{configured: boolean, api_url?, login?: "user" \| "account", account?: string /* login account only */, client_id?, token_exchange?: boolean, probe?: {reachable, http_status?, latency_ms, error?, checked_at}, last_exchange?: {chat_id, at, ok, error?}}` | binding to the platform, read-only. `probe`: unauthenticated `GET` on the API base, any HTTP answer counts as reachable, cached 10 s. `last_exchange`: newest token exchange among the user's own chats, also a failed one (e.g. the user's login expired); in memory only, empty after a restart until the next platform call. `{configured: false}` without `AGW_PLATFORM_API_URL` |
 | `GET /api/chats` | `Chat[]` | newest first |
-| `POST /api/chats` `{model?, variant?, title?, message?, internet?, auto_compact?, max_subagents?, delegation?, language?}` | `Chat` (201) | takes a slot from the pool; with `message` it is sent immediately. `language`: preferred language according to the browser (BCP 47, only letters, digits, hyphen, at most 35 characters, otherwise 400), see *User language*. 503 if no slot is free |
+| `POST /api/chats` `{model?, variant?, title?, message?, internet?, auto_compact?, delegation?, language?}` | `Chat` (201) | takes a slot from the pool; `max_subagents` in the body is ignored (the limit is fixed, see *Limit for subagents*); with `message` it is sent immediately. `language`: preferred language according to the browser (BCP 47, only letters, digits, hyphen, at most 35 characters, otherwise 400), see *User language*. 503 if no slot is free |
 | `GET /api/chats/{id}` | `{chat, messages: StoredMessage[], artifacts: Artifact[], approvals: Approval[], socket_calls: SocketCall[], subagent_entries: SubagentEntry[], queue: QueueEntry[], background: BackgroundTask[]}` | complete chat |
 | `GET /api/chats/{id}/background` | `BackgroundTask[]` | background tasks of the chat by `seq`; running ones with the current state of the slot |
 | `GET /api/chats/{id}/web_requests` | `WebRequest[]` | requests of `web_search`/`web_extract` through the web proxy, including refused ones (`denied`); for HTTPS only target and bytes |
@@ -305,7 +306,7 @@ type SocketCall = { id: number; chat_id?: string; slot_id: string; via: "cli" | 
 | `POST /api/chats/{id}/background/{bg}/stop` | `BackgroundTask` | end a running background task (`stopped_by: "user"`, the agent is notified); 409 if it is not running, 404 unknown, 400 invalid ID |
 | `GET /api/chats/{id}/llm_calls` | `LLMCall[]` | all model calls of the chat according to the proxy |
 | `GET /api/chats/{id}/tool_executions` | `{calls: ReconciledCall[], summary: Record<ReconciledCall["state"], number>, executions: ToolExecution[], executed_tools: string[]}` | tool executions of the orchestrator and reconciliation with the calls requested at the proxy (E9), sorted by time |
-| `POST /api/chats/{id}/subagents` `{max}` | `Chat` | limit for subagents (0 … `max_subagents_limit`); takes effect immediately |
+| `POST /api/chats/{id}/subagents` | 410 | removed: the subagent limit is fixed for the service (see *Limit for subagents*); the answer says so |
 | `POST /api/chats/{id}/messages` `{text, attachments?: string[]}` | `SendResult` | sends; a dormant chat is resumed in a fresh sandbox (response after resuming, steps beforehand via SSE `resume`). If pi is working, the chat is being resumed or another instruction is in flight, the message is queued (`queued: true`, see *Queue*). Held entries go along |
 | `GET /api/chats/{id}/queue` | `QueueEntry[]` | open entries of the queue |
 | `DELETE /api/chats/{id}/queue/{queue_id}` | `{ok: true}` | remove an entry as long as it has not been delivered; afterwards 409, unknown 404 |
@@ -465,14 +466,23 @@ with it the note, stays in the context; it is not repeated.
 
 ## Limit for subagents
 
-`max_subagents` per chat (default `max_subagents_default`, at most `max_subagents_limit`) is enforced on two
-levels, both outside the sandbox, plus a third, cooperative one:
+At most `max_subagents` subagents run **at the same time** in a chat; how many a chat starts in total is not limited.
+The value is fixed for the service (`AGW_MAX_SUBAGENTS`, default 5) and the same in every chat: there is no setting
+per chat. `POST /api/chats` ignores a `max_subagents` in the body, `POST /api/chats/{id}/subagents` answers 410, and
+chats that stored another value before (the column `chats.max_subagents` stays, but is no longer read) run and show
+the service's value. The limit is enforced on two levels, both outside the sandbox, plus a third, cooperative one:
 
-1. **LLM proxy (hard):** at most `1 + max_subagents` concurrent model calls of the chat; further ones get
-   HTTP 429 and appear as `socket_call` with `op: "agent_limit"`.
-2. **Monitoring (hard):** as soon as more subagent runs have been started than allowed, the orchestrator aborts the
-   turn and ends all node processes of the sandbox except pi (`op: "subagent_limit"`).
-3. **pi-subagents (cooperative):** the same limit in its configuration, so the agent knows it.
+1. **LLM proxy (hard):** at most `1 + max_subagents` concurrent model calls of the chat (main agent plus five
+   subagents by default); further ones get HTTP 429 and appear as `socket_call` with `op: "agent_limit"`.
+2. **Monitoring (hard):** as soon as more subagents run at the same time than allowed, the orchestrator aborts the
+   turn and ends all node processes of the sandbox except pi (`op: "subagent_limit"`, detail
+   `"6 running at the same time, 5 allowed"`). A run counts as running if pi-subagents' status file says
+   `running`, `starting` or `active` (queued and paused runs wait and do not count), or, without a status file
+   (foreground run), if it showed activity during the current turn and has not ended with a text answer. A run with
+   no sign of life for three minutes no longer counts. Runs ended by the intervention never count again, so the next
+   subagents start from zero. `subagents_running` in `Chat` is this count.
+3. **pi-subagents (cooperative):** `globalConcurrencyLimit` and `maxActiveAsyncRunsPerSession` are set to the same
+   limit, without a cap on runs in total; surplus runs wait in pi-subagents' queue.
 
 ## Attachments to messages
 

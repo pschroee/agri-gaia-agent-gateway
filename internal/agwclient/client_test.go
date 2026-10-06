@@ -211,17 +211,12 @@ func TestDecodeModelAndMessageExtras(t *testing.T) {
 }
 
 func TestSubagentsAndLLMCalls(t *testing.T) {
-	var gotMax map[string]any
 	var gotCreate map[string]any
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/chats", func(w http.ResponseWriter, r *http.Request) {
 		json.NewDecoder(r.Body).Decode(&gotCreate)
 		w.WriteHeader(http.StatusCreated)
-		io.WriteString(w, `{"id":"c1","max_subagents":0,"tokens":{"total":0}}`)
-	})
-	mux.HandleFunc("POST /api/chats/{id}/subagents", func(w http.ResponseWriter, r *http.Request) {
-		json.NewDecoder(r.Body).Decode(&gotMax)
-		io.WriteString(w, `{"id":"c1","max_subagents":3,"subagents":1,"llm_calls":4,"cost_other":0.001,"tokens":{"total":0}}`)
+		io.WriteString(w, `{"id":"c1","max_subagents":5,"tokens":{"total":0}}`)
 	})
 	mux.HandleFunc("GET /api/chats/{id}/llm_calls", func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, `[{"id":7,"slot_id":"p-1","source_ip":"10.0.0.2","model":"deepseek-flash","response_id":"r1","status":200,"input":100,"output":20,"cache_read":5,"cache_write":0,"cost":0.0003,"peak":true,"tool_calls":[{"name":"bash","arguments":"{}"}],"started_at":"2026-09-29T10:00:00Z","duration_ms":1200,"main":false}]`)
@@ -230,34 +225,19 @@ func TestSubagentsAndLLMCalls(t *testing.T) {
 		io.WriteString(w, `{"chat":{"id":"c1","tokens":{"total":0}},"messages":[],"artifacts":[],"approvals":[],"socket_calls":[],"subagent_entries":[{"chat_id":"c1","run_id":"r","entry_id":"e1","agent":"scout","kind":"tool_call","payload":{"name":"bash","arguments":"{\"command\":\"ls\"}"},"response_id":"x","confirmed":true,"created_at":"2026-09-29T10:00:00Z"}]}`)
 	})
 	mux.HandleFunc("GET /api/config", func(w http.ResponseWriter, r *http.Request) {
-		io.WriteString(w, `{"max_subagents_default":2,"max_subagents_limit":8}`)
+		io.WriteString(w, `{"max_subagents":5,"max_subagents_default":5,"max_subagents_limit":5}`)
 	})
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 	c := New(srv.URL)
 	ctx := context.Background()
 
-	zero := 0
-	if _, err := c.CreateChat(ctx, CreateChatRequest{MaxSubagents: &zero}); err != nil {
-		t.Fatal(err)
-	}
-	if v, ok := gotCreate["max_subagents"]; !ok || v != float64(0) {
-		t.Errorf("max_subagents 0 must be sent: %v", gotCreate)
-	}
-	gotCreate = nil
+	// The limit is fixed for the service: the client never sends one.
 	if _, err := c.CreateChat(ctx, CreateChatRequest{}); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := gotCreate["max_subagents"]; ok {
-		t.Errorf("without a value max_subagents may be absent: %v", gotCreate)
-	}
-
-	ch, err := c.SetMaxSubagents(ctx, "c1", 3)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if gotMax["max"] != float64(3) || ch.MaxSubagents != 3 || ch.Subagents != 1 || ch.LLMCalls != 4 || ch.CostOther != 0.001 {
-		t.Errorf("SetMaxSubagents: body=%v chat=%+v", gotMax, ch)
+		t.Errorf("max_subagents must not be sent: %v", gotCreate)
 	}
 
 	calls, err := c.LLMCalls(ctx, "c1")
@@ -280,7 +260,7 @@ func TestSubagentsAndLLMCalls(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.MaxSubagentsDefault != 2 || cfg.MaxSubagentsLimit != 8 {
+	if cfg.MaxSubagents != 5 {
 		t.Errorf("Config = %+v", cfg)
 	}
 }

@@ -286,19 +286,22 @@ the same for all chats.
   main agent with the runs as a tree joined by dashed lines, combined into an expandable group card
   from four runs per level onwards (`web/src/lib/subagent-overview.ts`).
 - **Billed:** via the proxy (see above).
-- **Limit `max_subagents` per chat** (default 5, at most 20, adjustable in UI and CLI, takes effect
-  immediately; `AGW_MAX_SUBAGENTS_DEFAULT`, `AGW_MAX_SUBAGENTS_LIMIT`). pi-subagents runs at most four
-  subagents at the same time; together with the main agent that makes five pi processes of about 75 to
+- **Limit `max_subagents`: at most 5 subagents at the same time per chat**, fixed for the service
+  (`AGW_MAX_SUBAGENTS`), no setting per chat (issue #24, 2026-10-06; until then a per-chat value, default 5,
+  at most 20, that counted runs started in total). How many a chat starts one after another is not limited.
+  pi-subagents runs at most five subagents at the same time (`globalConcurrencyLimit`); together with the
+  main agent that makes six pi processes of about 75 to
   170 MiB each, which is why the pi container has 2 GiB of memory (`AGW_SANDBOX_MEMORY_MB`; the
   execution sandbox `AGW_EXEC_MEMORY_MB`, likewise 2 GiB):
   1. *hard at the proxy:* at most `1 + max_subagents` concurrent model calls of the chat, otherwise 429
      (`socket_calls.op = agent_limit`). Before E9 this also applied to calls bypassing pi, such as a second
      `pi` or `curl` started by the agent itself; since E9 only pi reaches the proxy.
-  2. *hard through monitoring:* as soon as more runs have been started than allowed, the orchestrator aborts
-     the turn and terminates all node processes in the pi container except pi itself
+  2. *hard through monitoring:* as soon as more runs run at the same time than allowed (status `running`,
+     `starting`, `active`, or a foreground run active in the current turn; three minutes without a sign of
+     life end the count), the orchestrator aborts the turn and terminates all node processes in the pi container except pi itself
      (`agw-exec kill-node`, `op = subagent_limit`).
   3. *cooperative:* the same limit in the configuration of `pi-subagents`
-     (`maxSubagentSpawnsPerSession` and others), plus `PI_SUBAGENT_MAX_DEPTH=1` (no nested
+     (`globalConcurrencyLimit`, `maxActiveAsyncRunsPerSession`; no cap in total), plus `PI_SUBAGENT_MAX_DEPTH=1` (no nested
      subagents). Before E9 the agent could change this layer in the sandbox; since then the
      configuration lies in the pi container, out of its reach. It still serves mainly
      to give understandable feedback.

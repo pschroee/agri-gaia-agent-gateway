@@ -412,7 +412,7 @@ func setup(t *testing.T) *env {
 	t.Cleanup(func() { cancel(); p.Shutdown(context.Background()) })
 	cat, _ := config.ParseCatalog([]byte(`{"default":"deepseek/deepseek-flash","providers":[{"id":"deepseek","models":[{"id":"deepseek-flash"},{"id":"klein","context_window":8000}]}]}`))
 	e.p, e.cat = p, cat
-	e.opt = Options{ApprovalTimeout: 2 * time.Second, ArtifactMaxBytes: 1 << 20, AcquireTimeout: 3 * time.Second, AutoCompactDefault: true, CompactReserveTokens: 16384, CompactKeepRecent: 20000, MaxSubagentsDefault: 2, MaxSubagentsLimit: 5}
+	e.opt = Options{ApprovalTimeout: 2 * time.Second, ArtifactMaxBytes: 1 << 20, AcquireTimeout: 3 * time.Second, AutoCompactDefault: true, CompactReserveTokens: 16384, CompactKeepRecent: 20000, MaxSubagents: config.DefaultMaxSubagents}
 	e.m = NewManager(st, p, cat, e.blobs, artifacts.NewBroker(), e.opt)
 	return e
 }
@@ -966,11 +966,10 @@ func TestSetInternetDuringResume(t *testing.T) {
 func TestAttributeAndRecord(t *testing.T) {
 	e := setup(t)
 	ctx := context.Background()
-	three := 3
-	c, _ := e.m.Create(ctx, NewChat{MaxSubagents: &three})
+	c, _ := e.m.Create(ctx, NewChat{})
 	a := e.agent(0)
 	att := e.m.Attribute(a.IP())
-	if att.ChatID != c.ID || att.MaxConcurrent != 4 {
+	if att.ChatID != c.ID || att.MaxConcurrent != 6 {
 		t.Fatalf("attribution: %+v", att)
 	}
 	if got := e.m.Attribute("10.9.9.9"); got.ChatID != "" {
@@ -992,98 +991,199 @@ func TestAttributeAndRecord(t *testing.T) {
 	}
 }
 
-func TestMaxSubagentsBoundsAndConfig(t *testing.T) {
+// The limit is fixed for the service (issue #24): a value in the request has no effect, and a chat
+// that stored another value before runs with the service's limit after resuming.
+func TestSubagentLimitFixedForService(t *testing.T) {
 	e := setup(t)
 	ctx := context.Background()
-	c, _ := e.m.Create(ctx, NewChat{})
-	if v, _ := e.m.View(ctx, c.ID); v.MaxSubagents != 2 {
-		t.Fatalf("default: %d", v.MaxSubagents)
-	}
-	if _, err := e.m.SetMaxSubagents(ctx, c.ID, 6); !errors.Is(err, ErrInvalid) {
-		t.Fatalf("above the upper bound: %v", err)
-	}
-	if _, err := e.m.SetMaxSubagents(ctx, c.ID, 1); err != nil {
+	one := 1
+	c, err := e.m.Create(ctx, NewChat{MaxSubagents: &one})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if att := e.m.Attribute(e.agent(0).IP()); att.MaxConcurrent != 2 {
-		t.Fatalf("limit does not take effect at the proxy immediately: %+v", att)
+	if c.MaxSubagents != 5 {
+		t.Fatalf("value from the request applied: %d", c.MaxSubagents)
+	}
+	if att := e.m.Attribute(e.agent(0).IP()); att.MaxConcurrent != 6 {
+		t.Fatalf("proxy limit: %+v", att)
 	}
 	a := e.agent(0)
 	a.mu.Lock()
-	defer a.mu.Unlock()
-	if !strings.Contains(strings.Join(a.execs, "\n"), "extensions/subagent/config.json") {
-		t.Fatalf("pi-subagents configuration not written: %v", a.execs)
+	cfg := string(a.files["/agent/config/extensions/subagent/config.json"])
+	a.mu.Unlock()
+	if !strings.Contains(cfg, `"globalConcurrencyLimit":5`) || !strings.Contains(cfg, `"maxActiveAsyncRunsPerSession":5`) || strings.Contains(cfg, "maxSubagentSpawnsPerSession") {
+		t.Fatalf("pi-subagents configuration (at the same time, no cap in total): %s", cfg)
+	}
+	if _, err := e.m.Suspend(ctx, c.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	// A chat from before issue #24 with its own value: view and resumed sandbox use the service's.
+	old, err := e.st.CreateChat(ctx, store.NewChat{Title: "old", Model: "deepseek/deepseek-flash", Variant: "cli", MaxSubagents: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = e.st.SetState(ctx, old.ID, store.StateDormant)
+	if v, _ := e.m.View(ctx, old.ID); v.MaxSubagents != 5 {
+		t.Fatalf("old chat shows its stored value: %d", v.MaxSubagents)
+	}
+	if _, err := e.m.Send(ctx, old.ID, "hello"); err != nil {
+		t.Fatal(err)
+	}
+	waitSettled(t, e, old.ID)
+	e.m.mu.Lock()
+	l := e.m.live[old.ID]
+	e.m.mu.Unlock()
+	if l == nil || l.maxSub != 5 {
+		t.Fatalf("old chat not running with the service's limit: %+v", l)
+	}
+	if att := e.m.Attribute(l.ip); att.MaxConcurrent != 6 {
+		t.Fatalf("proxy limit of the old chat: %+v", att)
+	}
+	if list, _ := e.m.List(ctx); len(list) == 0 || list[0].MaxSubagents != 5 || list[len(list)-1].MaxSubagents != 5 {
+		t.Fatalf("list: %+v", list)
 	}
 }
 
-func pollJSON(runs ...string) string {
+// subRun: one subagent run as the poll sees it; state "" means no status file (foreground run).
+type subRun struct {
+	id, state string
+	done      bool // the session ends with a text answer
+}
+
+func runID(i int) string { return fmt.Sprintf("%08d-0000-4000-8000-000000000000", i) }
+
+func pollRuns(runs ...subRun) string {
 	type file struct {
 		Path   string `json:"path"`
 		Offset int64  `json:"offset"`
 		Data   string `json:"data"`
 	}
-	var fs []file
+	fs := []file{}
 	agents := map[string]string{}
-	for i, r := range runs {
-		d := `{"type":"message","id":"u` + r + `","message":{"role":"user","content":[{"type":"text","text":"Task ` + r + `"}]}}` + "\n" +
-			`{"type":"message","id":"m` + r + `","message":{"role":"assistant","responseId":"resp-` + r + `","content":[{"type":"toolCall","name":"bash","arguments":{"command":"ls"}}]}}` + "\n"
-		fs = append(fs, file{Path: "/agent/sessions/s/" + r + "/run-0/session.jsonl", Offset: int64(len(d) + i), Data: d})
-		agents[r] = "scout"
+	status := map[string]any{}
+	for _, r := range runs {
+		d := `{"type":"message","id":"u` + r.id + `","message":{"role":"user","content":[{"type":"text","text":"Task ` + r.id + `"}]}}` + "\n" +
+			`{"type":"message","id":"m` + r.id + `","message":{"role":"assistant","responseId":"resp-` + r.id + `","content":[{"type":"toolCall","name":"bash","arguments":{"command":"ls"}}]}}` + "\n"
+		if r.done {
+			d += `{"type":"message","id":"t` + r.id + `","message":{"role":"assistant","responseId":"resp2-` + r.id + `","content":[{"type":"text","text":"done"}]}}` + "\n"
+		}
+		fs = append(fs, file{Path: "/agent/sessions/s/" + r.id + "/run-0/session.jsonl", Offset: int64(len(d)), Data: d})
+		agents[r.id] = "scout"
+		if r.state != "" {
+			status[r.id] = map[string]any{"agent": "scout", "label": "search", "state": r.state}
+		}
 	}
-	b, _ := json.Marshal(map[string]any{"files": fs, "agents": agents,
-		"runs": map[string]any{runs[0]: map[string]any{"agent": "scout", "label": "search", "state": "running"}}})
+	b, _ := json.Marshal(map[string]any{"files": fs, "agents": agents, "runs": status})
 	return string(b)
 }
 
-func TestSubagentEntriesAndHardLimit(t *testing.T) {
+// poll runs one round of the monitoring with the given runs and returns whether it aborted.
+func (e *env) poll(t *testing.T, chatID string, runs ...subRun) bool {
+	t.Helper()
+	a := e.agent(0)
+	a.mu.Lock()
+	a.pollOut = pollRuns(runs...)
+	before := len(a.execs)
+	a.mu.Unlock()
+	e.m.mu.Lock()
+	l := e.m.live[chatID]
+	e.m.mu.Unlock()
+	e.m.pollSubagents(chatID, l, map[string]int64{}, map[string]runInfo{}, map[string]string{})
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return strings.Contains(strings.Join(a.execs[before:], "\n"), "pi: agw-exec kill-node")
+}
+
+func limitCalls(t *testing.T, e *env, chatID string) []string {
+	t.Helper()
+	calls, err := e.st.ListSocketCalls(context.Background(), chatID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []string
+	for _, c := range calls {
+		if c.Op == "subagent_limit" {
+			out = append(out, c.Detail)
+		}
+	}
+	return out
+}
+
+// Five subagents at the same time are allowed, the sixth running one aborts the turn; the runs ended
+// that way never count again.
+func TestSubagentLimitCountsConcurrentRuns(t *testing.T) {
 	e := setup(t)
 	ctx := context.Background()
-	one := 1
-	c, _ := e.m.Create(ctx, NewChat{MaxSubagents: &one})
-	a := e.agent(0)
-	e.m.mu.Lock()
-	l := e.m.live[c.ID]
-	e.m.mu.Unlock()
+	c, _ := e.m.Create(ctx, NewChat{})
 	events, cancel := e.m.Subscribe(c.ID)
 	defer cancel()
 
-	run1 := "11111111-1111-1111-1111-111111111111"
-	run2 := "22222222-2222-2222-2222-222222222222"
-	a.mu.Lock()
-	a.pollOut = pollJSON(run1)
-	a.mu.Unlock()
-	offsets := map[string]int64{}
-	e.m.pollSubagents(c.ID, l, offsets, map[string]runInfo{}, map[string]string{})
-	if r := waitEvent(t, events, "subagent_run", "").Data.(store.SubagentRun); r.RunID != run1 || r.Label != "search" || r.State != "running" {
+	var runs []subRun
+	for i := 1; i <= 5; i++ {
+		runs = append(runs, subRun{id: runID(i), state: "running"})
+	}
+	if e.poll(t, c.ID, runs...) {
+		t.Fatal("aborted with five subagents at the same time")
+	}
+	if r := waitEvent(t, events, "subagent_run", "").Data.(store.SubagentRun); r.Label != "search" || r.State != "running" {
 		t.Fatalf("run: %+v", r)
 	}
-	ev := waitEvent(t, events, "subagent", "")
-	if se := ev.Data.(store.SubagentEntry); se.RunID != run1 || se.Agent != "scout" {
+	if se := waitEvent(t, events, "subagent", "").Data.(store.SubagentEntry); se.Agent != "scout" {
 		t.Fatalf("entry: %+v", se)
 	}
+	if v, _ := e.m.View(ctx, c.ID); v.SubagentsRunning != 5 || v.Subagents != 5 || v.MaxSubagents != 5 {
+		t.Fatalf("view with five running: running %d, started %d, max %d", v.SubagentsRunning, v.Subagents, v.MaxSubagents)
+	}
+	// Queued runs wait for capacity in pi-subagents and do not count.
+	if e.poll(t, c.ID, append(runs, subRun{id: runID(6), state: "queued"})...) {
+		t.Fatal("aborted because of a queued run")
+	}
+	runs = append(runs, subRun{id: runID(6), state: "running"})
+	if !e.poll(t, c.ID, runs...) {
+		t.Fatal("no abort with six subagents at the same time")
+	}
+	waitEvent(t, events, "error", "")
+	a := e.agent(0)
 	a.mu.Lock()
 	aborted := strings.Contains(fmt.Sprint(a.cmds), "abort")
 	a.mu.Unlock()
-	if aborted {
-		t.Fatal("aborted within the limit")
+	if !aborted {
+		t.Fatal("main agent not aborted")
 	}
-	// Second run exceeds the limit of 1: abort and kill the processes.
-	a.mu.Lock()
-	a.pollOut = pollJSON(run1, run2)
-	a.mu.Unlock()
-	e.m.pollSubagents(c.ID, l, map[string]int64{}, map[string]runInfo{}, map[string]string{})
-	waitEvent(t, events, "error", "")
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if !strings.Contains(fmt.Sprint(a.cmds), "abort") {
-		t.Fatal("no abort when the limit was exceeded")
+	if got := limitCalls(t, e, c.ID); len(got) != 1 || got[0] != "6 running at the same time, 5 allowed" {
+		t.Fatalf("socket calls: %q", got)
 	}
-	if !strings.Contains(strings.Join(a.execs, "\n"), "pi: agw-exec kill-node") {
-		t.Fatal("subagent processes not killed")
+	// The killed runs still say "running" in their stale status files: no second intervention, and
+	// a new run starts from zero.
+	if e.poll(t, c.ID, append(runs, subRun{id: runID(7), state: "running"})...) {
+		t.Fatal("killed runs counted again")
 	}
-	v, _ := e.m.View(ctx, c.ID)
-	if v.Subagents != 2 {
-		t.Fatalf("counted runs: %d", v.Subagents)
+	if v, _ := e.m.View(ctx, c.ID); v.SubagentsRunning != 1 || v.Subagents != 7 {
+		t.Fatalf("after the intervention: running %d, started %d", v.SubagentsRunning, v.Subagents)
+	}
+}
+
+// The limit counts subagents at the same time, not in total: eight runs one after another are fine.
+func TestSubagentLimitIgnoresFinishedRuns(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	c, _ := e.m.Create(ctx, NewChat{})
+	var runs []subRun
+	for i := 1; i <= 8; i++ {
+		for j := range runs {
+			runs[j].state = "complete"
+		}
+		runs = append(runs, subRun{id: runID(i), state: "running"})
+		if e.poll(t, c.ID, runs...) {
+			t.Fatalf("aborted at run %d although only one runs at a time", i)
+		}
+	}
+	if got := limitCalls(t, e, c.ID); len(got) != 0 {
+		t.Fatalf("socket calls: %q", got)
+	}
+	if v, _ := e.m.View(ctx, c.ID); v.SubagentsRunning != 1 || v.Subagents != 8 {
+		t.Fatalf("view: running %d, started %d", v.SubagentsRunning, v.Subagents)
 	}
 }
 

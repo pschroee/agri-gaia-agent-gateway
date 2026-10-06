@@ -43,12 +43,11 @@ func (a *app) cmdChatList(args []string) error {
 	return tw.Flush()
 }
 
-func (a *app) chatFlags(fs *flag.FlagSet, req *agwclient.CreateChatRequest, inet *triBool, maxSub *optInt) {
+func (a *app) chatFlags(fs *flag.FlagSet, req *agwclient.CreateChatRequest, inet *triBool) {
 	fs.StringVar(&req.Model, "model", "", "model (ID from agw models)")
 	fs.StringVar(&req.Variant, "variant", "", "binding: cli, mcp, api or both")
 	fs.StringVar(&req.Title, "title", "", "title of the chat")
 	fs.Var(inet, "internet", "internet access of the sandbox (true|false)")
-	fs.Var(maxSub, "max-subagents", "at most this many subagents (default: server default)")
 	fs.Func("delegation", "delegated rights as a JSON file (see docs/plan-delegation-rest-platform.md); - reads from stdin", func(p string) error {
 		var b []byte
 		var err error
@@ -72,15 +71,13 @@ func (a *app) cmdChatNew(args []string) error {
 	fs := a.flags("chat new")
 	var req agwclient.CreateChatRequest
 	var inet triBool
-	var maxSub optInt
-	a.chatFlags(fs, &req, &inet, &maxSub)
-	pos, err := a.parse(fs, args, 0, -1, "agw chat new [--model M] [--variant cli|mcp|api|both] [--title T] [--internet=true|false] [--max-subagents N] [--delegation file.json] [message]")
+	a.chatFlags(fs, &req, &inet)
+	pos, err := a.parse(fs, args, 0, -1, "agw chat new [--model M] [--variant cli|mcp|api|both] [--title T] [--internet=true|false] [--delegation file.json] [message]")
 	if err != nil {
 		return err
 	}
 	req.Message = strings.Join(pos, " ")
 	req.Internet = inet.ptr()
-	req.MaxSubagents = maxSub.ptr()
 	chat, err := a.c.CreateChat(a.ctx, req)
 	if err != nil {
 		return err
@@ -115,7 +112,7 @@ func (a *app) cmdChatShow(args []string) error {
 		fmt.Fprintf(w, " · slot %s", c.SlotID)
 	}
 	fmt.Fprintf(w, "\ntokens %s · %s\n", fmtTokens(c.Tokens), fmtChatCost(c))
-	fmt.Fprintf(w, "subagents %d/%d · model calls %d\n", c.Subagents, c.MaxSubagents, c.LLMCalls)
+	fmt.Fprintf(w, "subagents %d started, %d running (at most %d at the same time) · model calls %d\n", c.Subagents, c.SubagentsRunning, c.MaxSubagents, c.LLMCalls)
 	fmt.Fprintln(w, fmtContext(c))
 	fmt.Fprintln(w, fmtWorkspace(c.Workspace))
 	if c.Queued > 0 {
@@ -383,7 +380,7 @@ func (a *app) actToEnd(id string, s *streamer, checkRunning bool, act func(conte
 		c := det.Chat
 		line := fmt.Sprintf("chat %s · tokens %s · %s", c.ID, fmtTokens(c.Tokens), fmtChatCost(c))
 		if c.Subagents > 0 {
-			line += fmt.Sprintf(" · subagents %d/%d", c.Subagents, c.MaxSubagents)
+			line += fmt.Sprintf(" · subagents %d running/%d", c.SubagentsRunning, c.MaxSubagents)
 		}
 		fmt.Fprintf(a.stderr, "%s\n", a.dim(line))
 		fmt.Fprintf(a.stderr, "%s\n", a.dim(fmtContext(c)))
@@ -805,10 +802,9 @@ func (a *app) cmdRun(args []string) error {
 	fs := a.flags("run")
 	var req agwclient.CreateChatRequest
 	var inet triBool
-	var maxSub optInt
-	a.chatFlags(fs, &req, &inet, &maxSub)
+	a.chatFlags(fs, &req, &inet)
 	o := approvalFlags(fs)
-	pos, err := a.parse(fs, args, 1, -1, "agw run [--model M] [--variant cli|mcp|api|both] [--internet=true|false] [--max-subagents N] [--delegation file.json] [--auto-approve|--auto-reject] [--thinking] [--verbose] \"<task>\"")
+	pos, err := a.parse(fs, args, 1, -1, "agw run [--model M] [--variant cli|mcp|api|both] [--internet=true|false] [--delegation file.json] [--auto-approve|--auto-reject] [--thinking] [--verbose] \"<task>\"")
 	if err != nil {
 		return err
 	}
@@ -823,13 +819,12 @@ func (a *app) cmdRun(args []string) error {
 		req.Title = truncate(strings.Join(strings.Fields(task), " "), 60)
 	}
 	req.Internet = inet.ptr()
-	req.MaxSubagents = maxSub.ptr()
 	// Create without a message: subscribe first, then send – otherwise the first events would be lost.
 	chat, err := a.c.CreateChat(a.ctx, req)
 	if err != nil {
 		return err
 	}
-	fmt.Fprintln(a.stderr, a.dim(fmt.Sprintf("chat %s · model %s · variant %s · internet %s · subagents at most %d", chat.ID, chat.Model, chat.Variant, onOff(chat.Internet), chat.MaxSubagents)))
+	fmt.Fprintln(a.stderr, a.dim(fmt.Sprintf("chat %s · model %s · variant %s · internet %s · subagents at most %d at the same time", chat.ID, chat.Model, chat.Variant, onOff(chat.Internet), chat.MaxSubagents)))
 	s, err := a.newStreamer(chat.ID, o)
 	if err != nil {
 		return err

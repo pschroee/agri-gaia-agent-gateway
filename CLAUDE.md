@@ -41,6 +41,14 @@ refer to this repository.
   characters fall back to the UI's start page. Rules and examples in `API.md`, *Return after login*; new cases go
   into `internal/oidc/return_test.go`.
 
+## Subagent limit
+
+- At most `AGW_MAX_SUBAGENTS` (default 5) subagents run **at the same time** per chat; fixed for the service, no
+  setting per chat (issue #24). The stored `chats.max_subagents` of older chats is ignored, `POST /api/chats/{id}/subagents`
+  answers 410. The monitoring counts running runs in memory per sandbox (`runningSubagents` in
+  `internal/chat/subagents.go`), not runs started in total; do not reintroduce `maxSubagentSpawnsPerSession` in the
+  pi-subagents config, it caps runs in total. Rules in `API.md`, *Limit for subagents*.
+
 ## Testing
 
 - `./dev.sh test` (about 25 s) before every commit, `./dev.sh test --full` (5–6 min) before every push.

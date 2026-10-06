@@ -61,7 +61,7 @@ func TestE9BashRunsOutsidePi(t *testing.T) {
 // tool requested at the proxy was executed, every execution was requested.
 func TestE9ToolCallsReconciled(t *testing.T) {
 	requireE2E(t)
-	id := newChatWith(t, map[string]any{"variant": "cli", "internet": false, "max_subagents": 2})
+	id := newChatWith(t, map[string]any{"variant": "cli", "internet": false})
 	s := subscribe(t, id)
 	ask(t, s, id, "Do this without asking back: 1. Run 'uname -m' with bash. 2. Read the file /etc/os-release with read. "+
 		"3. Use the subagent tool with the agent scout in the foreground (async: false), which runs 'python3 --version' with bash. "+
@@ -166,7 +166,7 @@ func TestE9AbortStopsCommand(t *testing.T) {
 // execution sandbox; the three runs start in pi, their bash calls are confirmed.
 func TestE9WorkflowParallelSubagents(t *testing.T) {
 	requireE2E(t)
-	id := newChatWith(t, map[string]any{"variant": "cli", "internet": false, "max_subagents": 4})
+	id := newChatWith(t, map[string]any{"variant": "cli", "internet": false})
 	s := subscribe(t, id)
 	script := "const r = await runs.all([\n" +
 		"  { key: 'l1', agent: 'worker', task: \"Run exactly 'echo run-1; sleep 3' with bash and reply only with the output.\" },\n" +

@@ -7,13 +7,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync"
 	"testing"
 
 	"agw/internal/agwclient"
 )
 
-const detailWithSubagents = `{"chat":{"id":"c1","title":"new","model":"deepseek/deepseek-flash","variant":"cli","state":"active","max_subagents":2,"subagents":1,"llm_calls":5,"cost":0.05,"cost_other":0.01,"tokens":{"input":1200,"output":300,"cache_read":0,"total":1500}},
+const detailWithSubagents = `{"chat":{"id":"c1","title":"new","model":"deepseek/deepseek-flash","variant":"cli","state":"active","max_subagents":5,"subagents":1,"subagents_running":1,"llm_calls":5,"cost":0.05,"cost_other":0.01,"tokens":{"input":1200,"output":300,"cache_read":0,"total":1500}},
 "messages":[],"artifacts":[],"approvals":[],"socket_calls":[],
 "subagent_entries":[
 {"chat_id":"c1","run_id":"r1","entry_id":"e1","agent":"scout","kind":"task","payload":{"text":"Search the repo for all places where tokens are checked, and report on them in detail with file names and lines"},"confirmed":false,"created_at":"2026-09-29T10:00:00Z"},
@@ -24,9 +23,7 @@ const detailWithSubagents = `{"chat":{"id":"c1","title":"new","model":"deepseek/
 ]}`
 
 type subServer struct {
-	srv    *httptest.Server
-	mu     sync.Mutex
-	maxSet []int
+	srv *httptest.Server
 }
 
 func newSubServer(t *testing.T) *subServer {
@@ -38,19 +35,6 @@ func newSubServer(t *testing.T) *subServer {
 	mux.HandleFunc("GET /api/models", func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, `[{"id":"deepseek/deepseek-flash","provider":"deepseek","model":"deepseek-flash","name":"DeepSeek Flash","default":true,"tariff":{"peak_windows_utc":[{"days":"mon-fri","from":"01:00","to":"09:00"}],"offpeak_factor":0.5}}]`)
 	})
-	mux.HandleFunc("POST /api/chats/{id}/subagents", func(w http.ResponseWriter, r *http.Request) {
-		var b map[string]int
-		json.NewDecoder(r.Body).Decode(&b)
-		s.mu.Lock()
-		s.maxSet = append(s.maxSet, b["max"])
-		s.mu.Unlock()
-		if b["max"] > 8 {
-			w.WriteHeader(400)
-			io.WriteString(w, `{"error":"max_subagents must be between 0 and 8"}`)
-			return
-		}
-		io.WriteString(w, `{"id":"c1","state":"active","max_subagents":`+strings.TrimSpace(jsonInt(b["max"]))+`,"subagents":1,"tokens":{"total":0}}`)
-	})
 	mux.HandleFunc("GET /api/chats/{id}/llm_calls", func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, `[
 {"id":1,"slot_id":"p-1","source_ip":"10.0.0.2","model":"deepseek-flash","response_id":"m1","status":200,"input":1000,"output":200,"cache_read":50,"cache_write":0,"cost":0.004,"peak":true,"tool_calls":[{"name":"subagent","arguments":"{}"}],"started_at":"2026-09-29T10:00:00Z","duration_ms":1500,"main":true},
@@ -61,8 +45,6 @@ func newSubServer(t *testing.T) *subServer {
 	t.Cleanup(s.srv.Close)
 	return s
 }
-
-func jsonInt(n int) string { b, _ := json.Marshal(n); return string(b) }
 
 func (s *subServer) run(args ...string) (int, string, string) {
 	var out, errw strings.Builder
@@ -81,7 +63,7 @@ func TestChatSubagentsShow(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("code %d: %s", code, errw)
 	}
-	for _, want := range []string{"limit 2", "started 1", "scout", "task: Search the repo",
+	for _, want := range []string{"1 started", "1 running", "at most 5 at the same time", "scout", "task: Search the repo",
 		`▶ bash {"command":"grep -rn token"}`, "✓ a.go:1: token", "confirmed", "sandbox only", `▶ read {"path":"c.go"}`, "✗ not found"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output without %q:\n%s", want, out)
@@ -90,32 +72,13 @@ func TestChatSubagentsShow(t *testing.T) {
 	if strings.Contains(out, "report on them in detail with file names and lines") {
 		t.Errorf("task not truncated:\n%s", out)
 	}
-	if len(s.maxSet) != 0 {
-		t.Errorf("showing must not set anything: %v", s.maxSet)
-	}
 }
 
-func TestChatSubagentsSet(t *testing.T) {
+// The limit is fixed for the service (issue #24): the CLI no longer sets one per chat.
+func TestChatSubagentsCannotSetLimit(t *testing.T) {
 	s := newSubServer(t)
-	code, out, errw := s.run("chat", "subagents", "c1", "4")
-	if code != 0 {
-		t.Fatalf("code %d: %s", code, errw)
-	}
-	if !strings.Contains(out, "4") || !strings.Contains(out, "Subagent") {
-		t.Errorf("output = %q", out)
-	}
-	if len(s.maxSet) != 1 || s.maxSet[0] != 4 {
-		t.Errorf("set = %v", s.maxSet)
-	}
-	if code, _, _ := s.run("chat", "subagents", "c1", "many"); code != 2 {
-		t.Errorf("not a number: code %d", code)
-	}
-	if code, _, _ := s.run("chat", "subagents", "c1", "-1"); code != 2 {
-		t.Errorf("negative number: code %d", code)
-	}
-	code, _, errw = s.run("chat", "subagents", "c1", "9")
-	if code != 1 || !strings.Contains(errw, "between 0 and 8") {
-		t.Errorf("server error: code %d, %q", code, errw)
+	if code, _, errw := s.run("chat", "subagents", "c1", "4"); code != 2 || !strings.Contains(errw, "usage") {
+		t.Errorf("setting a limit: code %d, %q", code, errw)
 	}
 }
 
@@ -143,7 +106,7 @@ func TestChatShowSubagentHeader(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("code %d: %s", code, errw)
 	}
-	for _, want := range []string{"subagents 1/2", "model calls 5", "cost 0.0500 USD", "0.0100 USD outside the main replies"} {
+	for _, want := range []string{"subagents 1 started, 1 running (at most 5 at the same time)", "model calls 5", "cost 0.0500 USD", "0.0100 USD outside the main replies"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output without %q:\n%s", want, out)
 		}
@@ -165,15 +128,10 @@ func TestRunSubagentStream(t *testing.T) {
 	f := newFakeServer(t)
 	f.script = subagentScript
 	f.detail = detailWithSubagents
-	code, _, errw := f.run("run", "--max-subagents", "1", "task")
+	code, _, errw := f.run("run", "task")
 	if code != 0 {
 		t.Fatalf("code %d: %s", code, errw)
 	}
-	f.mu.Lock()
-	if f.createReq["max_subagents"] != float64(1) {
-		t.Errorf("create = %v", f.createReq)
-	}
-	f.mu.Unlock()
 	for _, want := range []string{"  ↳ scout: task: Search tokens", `  ↳ scout: ▶ bash {"command":"ls"}`, "  ↳ scout: ✓ a.txt", "extension", "delete file?",
 		"cost 0.0500 USD", "0.0100 USD outside the main replies"} {
 		if !strings.Contains(errw, want) {
@@ -197,29 +155,22 @@ func TestRunSubagentStream(t *testing.T) {
 		}
 	}
 	if _, ok := f.createReq["max_subagents"]; ok {
-		t.Errorf("without --max-subagents the field may be absent: %v", f.createReq)
+		t.Errorf("the CLI must not send a subagent limit: %v", f.createReq)
 	}
 }
 
-func TestChatNewMaxSubagents(t *testing.T) {
+func TestChatNewHasNoSubagentLimit(t *testing.T) {
 	f := newFakeServer(t)
-	code, _, errw := f.run("chat", "new", "--max-subagents", "0", "Go")
-	if code != 0 {
-		t.Fatal(errw)
-	}
-	if v, ok := f.createReq["max_subagents"]; !ok || v != float64(0) {
-		t.Errorf("create = %v", f.createReq)
-	}
-	if code, _, _ := f.run("chat", "new", "--max-subagents", "-2"); code != 2 {
-		t.Errorf("negative: code %d", code)
+	if code, _, _ := f.run("chat", "new", "--max-subagents", "0", "Go"); code != 2 {
+		t.Errorf("--max-subagents still accepted: code %d", code)
 	}
 }
 
 func TestStreamSubagentLimitSocketCall(t *testing.T) {
 	s, _, errw, _ := newTestStreamer(approvalShow, "")
 	s.verbose = true
-	feed(t, s, true, agwEv("socket_call", `{"op":"subagent_limit","via":"cli","detail":"3 started, 2 allowed","result":"aborted"}`))
-	if !strings.Contains(errw.String(), "subagent limit exceeded (3 started, 2 allowed)") {
+	feed(t, s, true, agwEv("socket_call", `{"op":"subagent_limit","via":"cli","detail":"6 running at the same time, 5 allowed","result":"aborted"}`))
+	if !strings.Contains(errw.String(), "subagent limit exceeded (6 running at the same time, 5 allowed)") {
 		t.Errorf("stderr = %q", errw.String())
 	}
 }

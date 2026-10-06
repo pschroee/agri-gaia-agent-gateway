@@ -277,15 +277,9 @@ func TestLLMCallsAreAuthoritative(t *testing.T) {
 	if len(added) != 0 {
 		t.Fatal("duplicate entries stored")
 	}
-	if n, _ := s.SubagentRunCount(ctx, c.ID); n != 1 {
-		t.Fatalf("runs: %d", n)
-	}
-	if err := s.SetMaxSubagents(ctx, c.ID, 0); err != nil {
-		t.Fatal(err)
-	}
 	got, _ = s.GetChat(ctx, c.ID)
-	if got.MaxSubagents != 0 || got.Subagents != 1 {
-		t.Fatalf("after limit: %+v", got)
+	if got.Subagents != 1 {
+		t.Fatalf("started runs: %+v", got)
 	}
 }
 
