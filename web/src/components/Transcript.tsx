@@ -21,7 +21,7 @@ import { formatTime, formatTokens, isUserAbort, formatUsage, formatUsd, hasThink
 import { formatElapsed, formatStepDuration, liveActivity, runStartOf } from "@/lib/runtime"
 import { type AssistantItem, awaitingAnswer, type CompactionItem, compactionNotice, type TranscriptState } from "@/lib/stream"
 import { type LimitNotice, placeAfter, type RunAssignment, type SubagentRun } from "@/lib/subagents"
-import { type MessagePart, splitMessage } from "@/lib/systemnote"
+import { type MessagePart, splitMessage, visibleParts } from "@/lib/systemnote"
 import { groupTodoBlocks, type TodoTimeline, todoTimeline } from "@/lib/tasks"
 import { cn } from "@/lib/utils"
 
@@ -475,9 +475,9 @@ function UserMessage({
   onOpenBackground?: (id?: string) => void
 }) {
   const { text: body, files } = splitAttachments(text)
-  const hasSystem = !!parts?.some((p) => p.kind !== "user")
-  // Without a system part, the text stays exactly as sent (including blank lines).
-  const segments: MessagePart[] = hasSystem ? parts! : body ? [{ kind: "user", text: body }] : []
+  // Without a system part, the text stays exactly as sent (including blank lines); notes for the agent alone
+  // (audience "agent", e.g. the preferred language) are left out.
+  const segments = visibleParts(parts, body)
   const lastUser = segments.reduce((acc, p, i) => (p.kind === "user" ? i : acc), -1)
   return (
     <div className="flex min-w-0 flex-col gap-1.5">

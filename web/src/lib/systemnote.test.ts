@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import type { MessageMeta } from "@/api/types"
-import { noteLabel, SYSTEM_HEADER, splitMessage, systemEntryLabel } from "@/lib/systemnote"
+import { isAgentOnly, noteLabel, SYSTEM_HEADER, splitMessage, systemEntryLabel, visibleParts } from "@/lib/systemnote"
 
 // Requests as the orchestrator builds them (internal/chat/origin.go, composeMessage; background notes from
 // internal/chat/background.go).
@@ -97,6 +97,43 @@ describe("language note (first request)", () => {
     expect(n.note.summary).toBe(summary)
     expect(n.note.label).toBe("Note to the agent: preferred language according to the browser en-US")
     expect(u).toEqual({ kind: "user", text: "ok" })
+  })
+})
+
+describe("visibleParts (notes for the agent alone)", () => {
+  const summary = "Preferred language of the user according to the browser: de-DE. Reply in the language the user writes in; this setting only applies if that cannot be recognised."
+  const langSource = { kind: "system" as const, type: "language", refs: ["de-DE"], audience: "agent" as const }
+
+  it("hides the language note and keeps the user text", () => {
+    const text = `${SYSTEM_HEADER}\n${summary}\n\nHello`
+    const parts = splitMessage(text, { origin: "mixed", sources: [langSource, { kind: "user" }] })
+    expect(parts.map(isAgentOnly)).toEqual([true, false])
+    expect(visibleParts(parts, text)).toEqual([{ kind: "user", text: "Hello" }])
+  })
+
+  it("a message with only agent notes shows nothing, never the note as user text", () => {
+    const text = `${SYSTEM_HEADER}\n${summary}`
+    const parts = splitMessage(text, { origin: "system", sources: [langSource] })
+    expect(visibleParts(parts, text)).toEqual([])
+  })
+
+  it("notes for the user stay visible, also next to a hidden one", () => {
+    const text = `${SYSTEM_HEADER}\n${summary}\n\n${bgBlock}\n\ngo on`
+    const parts = splitMessage(text, { origin: "mixed", sources: [langSource, bgSource, { kind: "user" }] })
+    const shown = visibleParts(parts, text)
+    expect(shown.map((p) => p.kind)).toEqual(["system", "user"])
+    const n = shown[0]
+    if (n.kind !== "system") throw new Error()
+    expect(n.note.type).toBe("background")
+  })
+
+  it("without a system part the text stays as sent; the look of the text decides nothing", () => {
+    const typed = `${SYSTEM_HEADER}\n${summary}`
+    expect(visibleParts(splitMessage(typed, { origin: "user", sources: [{ kind: "user" }] }), typed)).toEqual([{ kind: "user", text: typed }])
+    // language note without the server's mark (should not occur: the server fills it in for old rows): shown
+    const old = splitMessage(typed, { origin: "system", sources: [{ kind: "system", type: "language", refs: ["de-DE"] }] })
+    expect(visibleParts(old, typed).map((p) => p.kind)).toEqual(["system"])
+    expect(visibleParts(undefined, "")).toEqual([])
   })
 })
 
