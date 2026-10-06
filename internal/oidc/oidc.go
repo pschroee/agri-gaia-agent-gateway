@@ -407,23 +407,62 @@ func (s *Service) logout(w http.ResponseWriter, r *http.Request) {
 // Base is the path of AGW_PUBLIC_URL ("" or e.g. "/agent").
 func (s *Service) Base() string { return s.base }
 
-// safeReturn only allows paths under our own base on this host (no //host, no scheme,
-// not …/oidc/…, no escape via ..). Otherwise it goes to the UI's start page.
+// safeReturn only allows a same-origin absolute path on this host; anything else goes to the UI's start page.
+//
+// Allowed: our own UI under the base (as before) and, when the orchestrator runs under a path prefix, every
+// other path of the same host, i.e. the platform frontend that shares the host (`/ai-agent`, `/datasets`, …).
+// The browser resolves the target against this host only, so no address can leave it: refused are a scheme
+// or host (`https://…`, `//host`), backslashes (browsers read `/\host` as `//host`), control characters,
+// percent-encoded slashes, backslashes, dots and control characters in the path (`/%2F%2Fhost`, `%2e%2e`),
+// dot segments, the login endpoints themselves (`<base>/oidc/…`, also as `<base>/oidc`) and more than 512 bytes.
 func (s *Service) safeReturn(p string) string {
 	home := s.base + "/"
-	if p == "" || len(p) > 512 || !strings.HasPrefix(p, home) || strings.HasPrefix(p, "//") || strings.HasPrefix(p, s.base+"/oidc/") ||
-		strings.ContainsAny(p, "\\\r\n\t") {
+	if p == "" || len(p) > 512 || p[0] != '/' || strings.HasPrefix(p, "//") || strings.ContainsRune(p, '\\') {
 		return home
+	}
+	for i := 0; i < len(p); i++ {
+		if c := p[i]; c < 0x20 || c == 0x7f || c == ' ' {
+			return home
+		}
 	}
 	u, err := url.Parse(p)
-	if err != nil || u.Scheme != "" || u.Host != "" {
+	if err != nil || u.Scheme != "" || u.Host != "" || u.User != nil || u.Opaque != "" {
 		return home
 	}
-	// The browser resolves ./ and ../ (also %2e%2e); the target must still be under the base afterwards.
-	if c := path.Clean(u.Path); c != s.base && !strings.HasPrefix(c, home) || strings.HasPrefix(c, s.base+"/oidc/") || c == s.base+"/oidc" {
+	rawPath := p
+	if i := strings.IndexAny(rawPath, "?#"); i >= 0 {
+		rawPath = rawPath[:i]
+	}
+	if encodedTrick(rawPath) {
 		return home
 	}
+	for _, seg := range strings.Split(u.Path, "/") {
+		if seg == "." || seg == ".." {
+			return home
+		}
+	}
+	c := path.Clean(u.Path)
+	if c == s.base+"/oidc" || strings.HasPrefix(c, s.base+"/oidc/") {
+		return home
+	}
+	// Our own UI under the base or another page of the platform on the same host.
 	return p
+}
+
+// encodedTrick reports percent-encoded characters that have no business in a return path: slash, backslash,
+// dot (dot segments after decoding) and control characters.
+func encodedTrick(rawPath string) bool {
+	l := strings.ToLower(rawPath)
+	for i := 0; i+2 < len(l); i++ {
+		if l[i] != '%' {
+			continue
+		}
+		switch h := l[i+1 : i+3]; {
+		case h == "2f", h == "5c", h == "2e", h == "7f", h[0] == '0', h[0] == '1':
+			return true
+		}
+	}
+	return false
 }
 
 // page shows a small page instead of the UI (refused or failed login).

@@ -16,7 +16,7 @@ Two modes (`AGW_AUTH_MODE`):
 
 | Method and path | Purpose |
 |---|---|
-| `GET /oidc/login?prompt=none\|login&return=<path>` | authorization code with PKCE (S256), `state` and `nonce` in one cookie per login (10 min, path `/oidc/`); redirects to Keycloak. `return` only as a local path |
+| `GET /oidc/login?prompt=none\|login&return=<path>` | authorization code with PKCE (S256), `state` and `nonce` in one cookie per login (10 min, path `/oidc/`); redirects to Keycloak. `return` only as a same-origin absolute path (see *Return after login* below) |
 | `GET /oidc/callback` | checks `state`, exchanges the code, checks ID and access token (RS256 against JWKS, `iss`, `aud`/`azp`, `exp`, `nonce`), creates the session and redirects to `return`. On `error=login_required` (prompt=none without a Keycloak session): page "Not logged in. Please log in to the platform." with a link (`target=_blank`) to `/oidc/login` |
 | `POST /oidc/logout` | ends the session at the orchestrator (not in Keycloak), 204; same origin only |
 | `GET /api/me` | `{mode: "token"}` or `{mode: "oidc", sub, username, name}` |
@@ -38,11 +38,22 @@ narrow view for the side panel.
 `https://app.<base>/agent/`. The proxy (Traefik, `PathPrefix(`/agent`)` with `stripprefix`) cuts off `/agent`;
 the orchestrator still sees `/api/…`, `/oidc/…` and `/`. All paths in this section then apply to the browser
 with the prefix: `login` in the 401 response is `/agent/oidc/login`, `/login?token=` and the return after login
-lead to `/agent/`, `return` must lie under `/agent/` (otherwise `/agent/`), the cookies have the path `/agent/`
+lead to `/agent/`, `return` may also name a page of the platform on the same host (see below; otherwise `/agent/`), the cookies have the path `/agent/`
 (`agw_session`, `agw_token`) or `/agent/oidc/` (login), the redirect URI is
 `https://app.<base>/agent/oidc/callback`. The UI builds all addresses relative (`api/…`, `oidc/login`), so it runs
 under `/` and under any prefix. The address without a trailing slash (`/agent`) needs a redirect at the proxy to
 `/agent/`, otherwise the relative addresses resolve against `/`.
+
+**Return after login (`return`):** only an absolute path on the orchestrator's own host is accepted, otherwise the
+login ends on the UI's start page (`/`, under a prefix `/agent/`). Allowed are the UI itself and, under a prefix,
+every other path of the same host, i.e. the platform frontend that shares it (`/ai-agent`, `/ai-agent?tab=status`,
+`/datasets/12`); query and fragment are kept. The platform frontend passes its current location when it opens the
+visible login, so the user comes back to the page they were on. Refused: a scheme or host (`https://evil.com`,
+`//evil.com`, `javascript:…`), relative paths (`ai-agent`), backslashes (`/\evil.com`), control characters and
+spaces, percent-encoded slashes, backslashes, dots and control characters in the path (`/%2F%2Fevil.com`,
+`%2F%2Fevil.com`, `/%2e%2e/`), dot segments (`/a/../b`), the login endpoints themselves (`/oidc`, `/oidc/…` under
+the base) and more than 512 bytes. Since the target can only be a path on the same host, it cannot become an open
+redirect.
 
 ## Types
 
