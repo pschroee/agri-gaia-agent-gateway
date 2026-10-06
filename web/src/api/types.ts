@@ -162,6 +162,8 @@ export type MessageSource = {
   queue_id?: string
   /** Marker of the fence around the data from the sandbox */
   marker?: string
+  /** "agent": context for the model only (e.g. the preferred language); the UI does not show this part. Absent: shown. */
+  audience?: "agent"
 }
 /** Origin of a user message (stored or live via SSE "user_meta"). */
 export type MessageMeta = {

@@ -35,6 +35,33 @@ type Source struct {
 	QueueID string   `json:"queue_id,omitempty"` // queue entry, if enqueued
 	// Marker: marker of the fence around the data from the sandbox (only system, if there is data).
 	Marker string `json:"marker,omitempty"`
+	// Audience: AudienceAgent for a note that is context for the model only (UIs do not show it);
+	// empty: shown to the user. Derived from Type (NoteAudience), also for rows stored without it.
+	Audience string `json:"audience,omitempty"`
+}
+
+// AudienceAgent marks a note meant only for the model's context, not for the user (e.g. the
+// preferred language); UIs hide such parts of a message.
+const AudienceAgent = "agent"
+
+// NoteAudience returns the audience of a note type: AudienceAgent for pure context notes, empty
+// for notes the user should see (end of a background task, tasks ended with the sandbox, messages
+// from extensions in pi).
+func NoteAudience(noteType string) string {
+	if noteType == NoteLanguage {
+		return AudienceAgent
+	}
+	return ""
+}
+
+// withAudience fills in Audience for system parts (rows from before the field carry only Type).
+func withAudience(src []Source) []Source {
+	for i := range src {
+		if src[i].Kind == QueueSystem && src[i].Audience == "" {
+			src[i].Audience = NoteAudience(src[i].Type)
+		}
+	}
+	return src
 }
 
 // Turn is a turn.
@@ -102,6 +129,7 @@ func (s *Store) Turns(ctx context.Context, chatID string) ([]Turn, error) {
 			return nil, err
 		}
 		_ = json.Unmarshal(src, &t.Sources)
+		t.Sources = withAudience(t.Sources)
 		_ = json.Unmarshal(qs, &t.QueueIDs)
 		out = append(out, t)
 	}

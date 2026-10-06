@@ -145,6 +145,20 @@ export function splitMessage(text: string, meta: MessageMeta | undefined): Messa
   return parts.some((p) => p.kind === "system") ? parts : whole
 }
 
+/** A note the server marks as context for the model only (audience "agent", e.g. the preferred language). */
+export function isAgentOnly(p: MessagePart): boolean {
+  return p.kind === "system" && p.source.audience === "agent"
+}
+
+/**
+ * What the history shows of a user message: without a system part the text exactly as sent (body), otherwise
+ * the parts without those meant for the agent alone. Hidden parts are cut out, never shown as user text.
+ */
+export function visibleParts(parts: MessagePart[] | undefined, body: string): MessagePart[] {
+  if (!parts?.some((p) => p.kind !== "user")) return body ? [{ kind: "user", text: body }] : []
+  return parts.filter((p) => !isAgentOnly(p))
+}
+
 /** Short line for a system entry of the queue (the first line is the orchestrator's header line). */
 export function systemEntryLabel(e: Pick<QueueEntry, "kind" | "note" | "refs" | "text">): string | undefined {
   if (e.kind !== "system") return undefined
