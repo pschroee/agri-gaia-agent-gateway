@@ -16,7 +16,8 @@ package chat
 //   - User text sits outside every envelope, after the notes.
 //   - The message carries its origin (user, system, mixed) and its parts (Source, with the marker)
 //     in chat_turns and on the stored user message; the UI splits it by those, not by what the
-//     text looks like.
+//     text looks like. A part with audience "agent" (store.NoteAudience) is context for the model
+//     only; the UI does not show it.
 
 import (
 	"crypto/rand"
@@ -96,13 +97,13 @@ func composeMessage(entries []store.QueueEntry, notices ...*systemNote) composed
 			continue
 		}
 		n := *notice
-		parts = append(parts, part{note: &n, src: store.Source{Kind: store.QueueSystem, Type: n.Type, Refs: n.Refs}})
+		parts = append(parts, part{note: &n, src: store.Source{Kind: store.QueueSystem, Type: n.Type, Refs: n.Refs, Audience: store.NoteAudience(n.Type)}})
 		all.WriteString(n.Text())
 	}
 	for _, e := range entries {
 		if e.Kind == store.QueueSystem {
 			n := noteOf(e)
-			parts = append(parts, part{note: &n, src: store.Source{Kind: store.QueueSystem, Type: n.Type, Refs: n.Refs, QueueID: e.ID}})
+			parts = append(parts, part{note: &n, src: store.Source{Kind: store.QueueSystem, Type: n.Type, Refs: n.Refs, QueueID: e.ID, Audience: store.NoteAudience(n.Type)}})
 			all.WriteString(e.Text)
 			continue
 		}

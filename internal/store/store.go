@@ -654,6 +654,7 @@ FROM chat_messages WHERE chat_id=$1 ORDER BY seq`, chatID)
 		m.Message = raw
 		if len(src) > 0 {
 			_ = json.Unmarshal(src, &m.Sources)
+			m.Sources = withAudience(m.Sources)
 		}
 		out = append(out, m)
 	}

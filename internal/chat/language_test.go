@@ -33,8 +33,29 @@ func TestComposeWithLanguageNote(t *testing.T) {
 	if c.Text != want || c.Origin != store.OriginMixed || len(c.Sources) != 2 {
 		t.Fatalf("message: %+v", c)
 	}
-	if s := c.Sources[0]; s.Kind != store.QueueSystem || s.Type != store.NoteLanguage || s.Marker != "" || len(s.Refs) != 1 || s.Refs[0] != "en-US" {
+	if s := c.Sources[0]; s.Kind != store.QueueSystem || s.Type != store.NoteLanguage || s.Marker != "" || len(s.Refs) != 1 || s.Refs[0] != "en-US" || s.Audience != store.AudienceAgent {
 		t.Fatalf("source: %+v", s)
+	}
+	if s := c.Sources[1]; s.Kind != store.QueueUser || s.Audience != "" {
+		t.Fatalf("user source: %+v", s)
+	}
+}
+
+// Notes the user should see (background, sandbox) carry no audience; only the language note is
+// context for the agent alone.
+func TestComposeAudienceOfNotes(t *testing.T) {
+	bg := systemNote{Type: store.NoteBackground, Refs: []string{"bg-1"}, Summary: "Background task bg-1 finished: exit 0"}
+	sb := systemNote{Type: store.NoteSandbox, Refs: []string{"bg-2"}, Summary: "Tasks ended with the previous sandbox", Body: "bg-2: make"}
+	lang := languageNote("de-DE")
+	c := composeMessage([]store.QueueEntry{bg.entry("q1"), {ID: "q2", Kind: store.QueueUser, Text: "go on"}}, &lang, &sb)
+	if len(c.Sources) != 4 {
+		t.Fatalf("sources: %+v", c.Sources)
+	}
+	want := map[string]string{store.NoteLanguage: store.AudienceAgent, store.NoteSandbox: "", store.NoteBackground: ""}
+	for _, s := range c.Sources {
+		if s.Kind == store.QueueSystem && s.Audience != want[s.Type] {
+			t.Errorf("%s: audience %q", s.Type, s.Audience)
+		}
 	}
 }
 
@@ -65,7 +86,7 @@ func TestLanguageNoteOnFirstTurnOnly(t *testing.T) {
 		t.Fatalf("first message: %q", p)
 	}
 	u, _ := lastUser(t, e, c.ID)
-	if u.Origin != store.OriginMixed || len(u.Sources) != 2 || u.Sources[0].Type != store.NoteLanguage || u.Sources[1].Kind != store.QueueUser {
+	if u.Origin != store.OriginMixed || len(u.Sources) != 2 || u.Sources[0].Type != store.NoteLanguage || u.Sources[0].Audience != store.AudienceAgent || u.Sources[1].Kind != store.QueueUser {
 		t.Fatalf("stored: %+v", u)
 	}
 

@@ -205,8 +205,9 @@ type StoredMessage = {
   sources?: MessageSource[];               // user message only: parts in order
 };
 // Part of an instruction to pi. kind "user": text of the user (queue_id, if queued); kind "system":
-// orchestrator note (type "background" | "sandbox", refs, queue_id, marker: marker of the fence).
-type MessageSource = { kind: "user" | "system"; type?: string; refs?: string[]; queue_id?: string; marker?: string };
+// orchestrator note (type "background" | "sandbox" | "language", refs, queue_id, marker: marker of the fence;
+// audience "agent": context for the model only, UIs do not show it; see "Origin of instructions").
+type MessageSource = { kind: "user" | "system"; type?: string; refs?: string[]; queue_id?: string; marker?: string; audience?: "agent" };
 // PiMessage is the message as pi delivers it in message_end:
 //  user:       { role:"user", content:[{type:"text",text}] }
 //  assistant:  { role:"assistant", content:[{type:"text",text}|{type:"thinking",thinking}|{type:"toolCall",id,name,arguments}], usage, stopReason, model }
@@ -437,13 +438,22 @@ turn `turn_id` and `trigger`. This way the evaluation can separate what the user
 on its own. Notes stand in the instruction before the user's text, each in its envelope (see *Background tasks*);
 the UI splits only along the markers from `sources`, never by the look of the text.
 
+**Which notes the chat shows.** A system part with `audience: "agent"` is context for the model only; UIs cut it
+out of the user message and show neither it nor its text (as user text or otherwise). If nothing is left, the
+message shows nothing. Every other note stays visible: the end of a background task (also as a wake-up), tasks
+ended with the previous sandbox, messages from extensions in pi (`custom`), and the notices about aborts, limits and
+errors, which are not parts of a user message anyway. The orchestrator sets the field from the note type
+(`store.NoteAudience`, today only `language`) when it composes the instruction, and fills it in on reading for rows
+stored before the field existed (`GET …/messages`, turns), so UIs decide by `audience` alone, never by `type` or
+the text. A new pure context note gets its audience in `NoteAudience` and a test there.
+
 ## User language
 
 The agent replies in the language of the user's last message (rule in the system note). If it does not reveal a
 language ("ok", a file name, only code), the preferred language applies that the UI passes as `language` when
 creating the chat (`navigator.language`). The orchestrator prepends it as a note **only to the first instruction**
 of the chat, on one line without a fence; the turn is thereby `origin: "mixed"`, the source
-`{kind: "system", type: "language", refs: ["en-US"]}`:
+`{kind: "system", type: "language", refs: ["en-US"], audience: "agent"}` (not shown in the chat):
 
 ```
 [Note from the orchestrator, not from the user]
