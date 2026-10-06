@@ -69,8 +69,15 @@ refer to this repository.
 
 ## Testing
 
-- `./dev.sh test` (about 35 s: Go with Postgres and `-race`, web tests) before every commit and before every push.
-  `./dev.sh test --full` is currently the same run and stays as an alias so existing habits keep working.
+- `./dev.sh test` is the everyday check, before every commit and before every push: Go with Postgres (with Go's
+  test cache, without `-race`) and web tests.
+- `./dev.sh test --full`: the same stages without the cache (`-count=1`) and with `-race`, about 30 s. Not part of
+  the workflow for now (decision of the author, 06.10.2026); run it only on request, e.g. after concurrency changes,
+  or when in doubt about the cache.
+- **Go's test cache** keys on the package files (embedded ones such as `internal/store/schema.sql` included) and on
+  env vars a test reads via `os.Getenv` (`AGW_TEST_DATABASE_URL` and the like), but not on the contents or state of
+  Postgres outside the repo. A cached `ok` therefore does not prove the tests still pass against the running
+  database; if in doubt, use `--full`.
 - **Docker integration, S3 and slot tests are off by default** (issue #27, decision of the author, 06.10.2026):
   they build and start real containers, loaded the machine and took most of the former 450 s (Docker integration
   124 s, S3 42 s, slot tests 203 s). The tests stay in the repo; `./dev.sh test --docker` runs them in addition
