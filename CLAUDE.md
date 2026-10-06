@@ -70,6 +70,15 @@ refer to this repository.
 ## Testing
 
 - `./dev.sh test` (about 25 s) before every commit, `./dev.sh test --full` (5–6 min) before every push.
+- **Test logs:** the terminal of `./dev.sh test` shows a filtered view; the complete output of every stage is in
+  `.dev/test-logs/<run>/<n>-<stage>.log` (ignored, last 10 runs kept), and a failing stage prints its log path.
+  Read the failure message there instead of re-running with `tail` (issue #26: a slot test failed once and its
+  message was lost).
+- **No fixed sleep before asserting something asynchronous:** poll up to a generous deadline instead. A
+  `time.Sleep(1600ms)` before checking a marker written after `sleep 1.5` failed once in 20 plain runs
+  (`TestServeBgLimitAndStop`, issue #26); the abort was not at fault, the other process groups stay alive. A
+  fixed sleep is only acceptable before a negative check ("did not happen"), where it can at worst pass falsely,
+  not flake.
 - Do not save Go files while `./dev.sh test --full` or `./dev.sh e2e` runs: each orchestrator restart removes all
   containers labelled `agwpoc.managed=true`.
 - Do not run `npx prettier --write` on `web/`: there is no Prettier config; the code is hand-formatted at
