@@ -342,7 +342,7 @@ func TestAutoCompaction(t *testing.T) {
 // Subagents: tool calls visible, costs recorded at the proxy.
 func TestSubagentsVisibleAndBilled(t *testing.T) {
 	requireE2E(t)
-	id := newChatWith(t, map[string]any{"variant": "cli", "internet": false, "max_subagents": 2})
+	id := newChatWith(t, map[string]any{"variant": "cli", "internet": false})
 	s := subscribe(t, id)
 	ask(t, s, id, "Use the subagent tool with the agent scout in the foreground (async: false), which runs 'python3 --version' with bash. Then give only the version.", nil)
 	var f fullChat
@@ -390,31 +390,41 @@ func TestSubagentsVisibleAndBilled(t *testing.T) {
 	}
 }
 
-// Limit 0: a started subagent leads to an abort by the orchestrator.
+// Fixed limit of five subagents at the same time (issue #24): with six background runs either
+// pi-subagents queues the sixth (cooperative layer) or the orchestrator aborts (monitoring); never do
+// more than five run at the same time without an intervention.
 func TestSubagentLimitEnforced(t *testing.T) {
 	requireE2E(t)
-	id := newChatWith(t, map[string]any{"variant": "cli", "internet": false, "max_subagents": 0})
+	id := newChatWith(t, map[string]any{"variant": "cli", "internet": false})
 	s := subscribe(t, id)
-	ask(t, s, id, "Use the subagent tool with the agent scout in the background, which runs 'sleep 20; uname -m' with bash, and wait for the result with bg_wait.", nil)
-	deadline := time.Now().Add(30 * time.Second)
+	ask(t, s, id, "Without asking back: use the subagent tool six times in the background (async: true), each with the agent scout, "+
+		"which runs 'sleep 30; echo done' with bash. Start all six right away, then wait for the results with bg_wait.", nil)
+	deadline := time.Now().Add(90 * time.Second)
+	peak := 0
 	for time.Now().Before(deadline) {
 		f := getChat(t, id)
 		for _, c := range f.SocketCalls {
 			if c.Op == "subagent_limit" {
+				t.Logf("monitoring intervened (%s)", c.Result)
 				return
 			}
 		}
-		// pi-subagents can also refuse the start itself (cooperative layer): then there is no run.
-		if f.Chat.Subagents == 0 && !f.Chat.Running {
-			txt := lastAssistantText(t, id)
-			if txt != "" {
-				t.Logf("no subagent started (cooperative layer applied): %s", trunc(txt, 200))
-				return
-			}
+		if f.Chat.MaxSub != 5 {
+			t.Fatalf("limit %d, want the fixed 5", f.Chat.MaxSub)
+		}
+		peak = max(peak, f.Chat.SubRunning)
+		if peak > 5 {
+			t.Fatalf("%d subagents running at the same time without an intervention", peak)
+		}
+		if f.Chat.Subagents >= 6 && !f.Chat.Running {
+			break
 		}
 		time.Sleep(time.Second)
 	}
-	t.Fatal("limit 0 not enforced")
+	if peak == 0 {
+		t.Fatal("no subagent seen running")
+	}
+	t.Logf("at most %d subagents at the same time (cooperative layer queued the rest)", peak)
 }
 
 // Hard limit at the proxy, also for calls bypassing pi. Since E9 only pi's container reaches
@@ -422,13 +432,13 @@ func TestSubagentLimitEnforced(t *testing.T) {
 // directly with Node.
 func TestProxyConcurrencyLimitHard(t *testing.T) {
 	requireE2E(t)
-	id := newChatWith(t, map[string]any{"variant": "cli", "internet": false, "max_subagents": 0})
+	id := newChatWith(t, map[string]any{"variant": "cli", "internet": false})
 	c := piContainerOf(t, id)
 	script := `const body=JSON.stringify({model:"deepseek-flash",stream:true,messages:[{role:"user",content:"Count slowly from 1 to 40, each number on its own line."}]});
-Promise.all([1,2,3].map(()=>fetch("http://orchestrator:18481/llm/deepseek/chat/completions",{method:"POST",headers:{"content-type":"application/json"},body}).then(async r=>{console.log(r.status);await r.text()}).catch(e=>console.log("ERROR",e.message))))`
+Promise.all([1,2,3,4,5,6,7,8].map(()=>fetch("http://orchestrator:18481/llm/deepseek/chat/completions",{method:"POST",headers:{"content-type":"application/json"},body}).then(async r=>{console.log(r.status);await r.text()}).catch(e=>console.log("ERROR",e.message))))`
 	out, _ := dockerExec(t, c, "node", "-e", script)
 	if !strings.Contains(out, "429") {
-		t.Fatalf("no 429 with three concurrent calls and limit 1: %q", out)
+		t.Fatalf("no 429 with eight concurrent calls and limit 6 (main agent and five subagents): %q", out)
 	}
 	if !strings.Contains(out, "200") {
 		t.Fatalf("no call let through: %q", out)

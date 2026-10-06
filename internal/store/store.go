@@ -1040,16 +1040,6 @@ FROM subagent_runs WHERE chat_id=$1 ORDER BY started_at NULLS LAST, run_id`, cha
 	return out, rows.Err()
 }
 
-func (s *Store) SubagentRunCount(ctx context.Context, chatID string) (int, error) {
-	var n int
-	err := s.pool.QueryRow(ctx, `SELECT count(DISTINCT run_id) FROM subagent_entries WHERE chat_id=$1`, chatID).Scan(&n)
-	return n, err
-}
-
-func (s *Store) SetMaxSubagents(ctx context.Context, id string, n int) error {
-	return s.exec1(ctx, `UPDATE chats SET max_subagents=$2, updated_at=now() WHERE id=$1`, id, n)
-}
-
 // ChatImage is a display image of a reply (not an artifact), saved in S3.
 type ChatImage struct {
 	ChatID      string    `json:"chat_id"`

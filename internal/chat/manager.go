@@ -94,6 +94,8 @@ type ChatView struct {
 	ThinkingLevels []string `json:"thinking_levels,omitempty"`
 	// PendingModel: model to switch to after the running compaction.
 	PendingModel string `json:"pending_model,omitempty"`
+	// SubagentsRunning: subagents running right now according to the monitoring (0 while idle).
+	SubagentsRunning int `json:"subagents_running"`
 }
 
 type live struct {
@@ -104,9 +106,13 @@ type live struct {
 	stop    chan struct{}
 	stopped sync.Once
 
-	ip              string // address in the slot network
-	maxSub          int    // at most this many subagents
-	limitEnforcedAt int    // count at which we last intervened
+	ip     string // address in the slot network
+	maxSub int    // at most this many subagents at the same time (Options.MaxSubagents)
+	// subRuns: what the monitoring knows about the subagent runs of this sandbox (under pollMu);
+	// subRunning: how many of them run right now (under m.mu, for the view).
+	pollMu     sync.Mutex
+	subRuns    map[string]*subTrack
+	subRunning int
 
 	runningSince time.Time
 	toolsRunning int        // running tools (tool_execution_start to _end); moment for steering
@@ -182,8 +188,9 @@ type Options struct {
 	CompactReserveTokens int
 	CompactKeepRecent    int
 
-	MaxSubagentsDefault int
-	MaxSubagentsLimit   int
+	// MaxSubagents: at most this many subagents run at the same time per chat (AGW_MAX_SUBAGENTS).
+	// Fixed for the service: there is no setting per chat, and stored values of older chats are ignored.
+	MaxSubagents int
 
 	// ImageMaxBytes limits display images (default DefaultImageMaxBytes).
 	ImageMaxBytes int64
@@ -352,9 +359,12 @@ func (m *Manager) View(ctx context.Context, chatID string) (ChatView, error) {
 
 func (m *Manager) view(c store.Chat) ChatView {
 	v := ChatView{Chat: c}
+	// The limit is the service's, also for chats that stored another value before issue #24.
+	v.MaxSubagents = m.opt.MaxSubagents
 	m.mu.Lock()
 	l, ok := m.live[c.ID]
 	if ok {
+		v.SubagentsRunning = l.subRunning
 		v.Running = l.running
 		v.SlotID = l.slot.ID
 		if l.running && !l.runningSince.IsZero() {
@@ -407,13 +417,14 @@ func (m *Manager) slotOf(chatID string) string {
 // --- Creating, sending, resuming ---
 
 type NewChat struct {
-	Model        string `json:"model"`
-	Variant      string `json:"variant"`
-	Title        string `json:"title"`
-	Message      string `json:"message"`
-	Internet     *bool  `json:"internet"`
-	AutoCompact  *bool  `json:"auto_compact"`
-	MaxSubagents *int   `json:"max_subagents"`
+	Model       string `json:"model"`
+	Variant     string `json:"variant"`
+	Title       string `json:"title"`
+	Message     string `json:"message"`
+	Internet    *bool  `json:"internet"`
+	AutoCompact *bool  `json:"auto_compact"`
+	// MaxSubagents is accepted for older clients and ignored: the limit is Options.MaxSubagents.
+	MaxSubagents *int `json:"max_subagents"`
 	// Delegation: delegated rights (delegation.Delegation as JSON); without it the chat behaves
 	// as before step 1 (reading free, writing with approval).
 	Delegation json.RawMessage `json:"delegation,omitempty"`
@@ -451,13 +462,6 @@ func (m *Manager) Create(ctx context.Context, req NewChat) (ChatView, error) {
 	if req.AutoCompact != nil {
 		autoCompact = *req.AutoCompact
 	}
-	maxSub := m.opt.MaxSubagentsDefault
-	if req.MaxSubagents != nil {
-		maxSub = *req.MaxSubagents
-	}
-	if maxSub < 0 || maxSub > m.opt.MaxSubagentsLimit {
-		return ChatView{}, fmt.Errorf("%w: max_subagents must be between 0 and %d", ErrInvalid, m.opt.MaxSubagentsLimit)
-	}
 	lang, err := NormalizeLanguage(req.Language)
 	if err != nil {
 		return ChatView{}, err
@@ -470,7 +474,7 @@ func (m *Manager) Create(ctx context.Context, req NewChat) (ChatView, error) {
 		}
 		del, _ = json.Marshal(d) // the checked, normalized form is stored
 	}
-	c, err := m.st.CreateChat(ctx, store.NewChat{Title: title, TitleSource: titleSrc, Model: req.Model, Variant: req.Variant, Internet: internet, AutoCompact: autoCompact, MaxSubagents: maxSub, Delegation: del, Owner: req.Owner, Language: lang})
+	c, err := m.st.CreateChat(ctx, store.NewChat{Title: title, TitleSource: titleSrc, Model: req.Model, Variant: req.Variant, Internet: internet, AutoCompact: autoCompact, MaxSubagents: m.opt.MaxSubagents, Delegation: del, Owner: req.Owner, Language: lang})
 	if err != nil {
 		return ChatView{}, err
 	}
@@ -552,7 +556,7 @@ func (m *Manager) attach(ctx context.Context, c store.Chat, session []byte, p *r
 		return fail(fmt.Errorf("set auto-compaction: %w", err))
 	}
 	p.done(ResumeStep{Detail: "Internet " + onOff(c.Internet)})
-	l := &live{slot: slot, stop: make(chan struct{}), ip: a.IP(), maxSub: c.MaxSubagents}
+	l := &live{slot: slot, stop: make(chan struct{}), ip: a.IP(), maxSub: m.opt.MaxSubagents, subRuns: map[string]*subTrack{}}
 	m.userActive(c.ID) // creating and resuming come from the user
 	// Restore the workspace before the inputs and before the first request
 	// (the archive contains no inputs/, the two do not get in each other's way).
@@ -576,10 +580,7 @@ func (m *Manager) attach(ctx context.Context, c store.Chat, session []byte, p *r
 		p.done(ResumeStep{Size: int64p(size), Files: intp(n)})
 	}
 	l.runID, _ = m.st.StartRun(ctx, c.ID, slot.ID, a.ContainerID())
-	if n, err := m.st.SubagentRunCount(ctx, c.ID); err == nil {
-		l.limitEnforcedAt = n // earlier runs do not trigger a new intervention
-	}
-	m.applySubagentConfig(l, c.MaxSubagents)
+	m.applySubagentConfig(l, l.maxSub)
 	m.mu.Lock()
 	m.live[c.ID] = l
 	m.mu.Unlock()

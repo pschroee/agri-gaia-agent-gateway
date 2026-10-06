@@ -321,9 +321,10 @@ type Env struct {
 	DefaultModel         string
 	TitleModel           string // model for chat titles ("provider/model"; empty: the chat's, "off": none)
 	APIToken             string
-	MaxSubagentsDefault  int
-	MaxSubagentsLimit    int
-	AllowedHosts         []string
+	// MaxSubagents: at most this many subagents run at the same time per chat (AGW_MAX_SUBAGENTS,
+	// default 5); fixed for the service, not a setting per chat.
+	MaxSubagents int
+	AllowedHosts []string
 	// Background tasks: at most BgMax at a time per slot (AGW_BG_MAX), at most
 	// BgWakesPerHour wake-ups per chat and hour (AGW_BG_WAKES_PER_HOUR, 0 = never); running tasks
 	// keep the chat awake until BgKeepAlive after the last activity (AGW_BG_KEEPALIVE).
@@ -356,6 +357,10 @@ type Env struct {
 	// FrameAncestors: origins allowed to embed the UI (empty: frame-ancestors 'none').
 	FrameAncestors []string
 }
+
+// DefaultMaxSubagents: subagents that may run at the same time per chat unless AGW_MAX_SUBAGENTS says
+// otherwise (issue #24: fixed, no setting per chat).
+const DefaultMaxSubagents = 5
 
 // Login modes of the API (AGW_AUTH_MODE).
 const (
@@ -411,8 +416,7 @@ func FromEnv() Env {
 		DefaultModel:         str("AGW_DEFAULT_MODEL", ""),
 		TitleModel:           str("AGW_TITLE_MODEL", ""),
 		APIToken:             str("AGW_API_TOKEN", ""),
-		MaxSubagentsDefault:  num("AGW_MAX_SUBAGENTS_DEFAULT", 5),
-		MaxSubagentsLimit:    num("AGW_MAX_SUBAGENTS_LIMIT", 20),
+		MaxSubagents:         max(0, num("AGW_MAX_SUBAGENTS", DefaultMaxSubagents)),
 		AllowedHosts:         strings.Split(str("AGW_ALLOWED_HOSTS", "127.0.0.1:18480,localhost:18480"), ","),
 		BgMax:                max(1, num("AGW_BG_MAX", 5)),
 		BgWakesPerHour:       wakes(num("AGW_BG_WAKES_PER_HOUR", 10)),

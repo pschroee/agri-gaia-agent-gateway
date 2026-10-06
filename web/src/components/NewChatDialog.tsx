@@ -1,5 +1,5 @@
 import { useState } from "react"
-import { BotIcon, GlobeIcon, KeyRoundIcon, PlusIcon, ShrinkIcon } from "lucide-react"
+import { GlobeIcon, KeyRoundIcon, PlusIcon, ShrinkIcon } from "lucide-react"
 import { ApiError, api } from "@/api/client"
 import type { Chat, Model, Pricing, VariantId } from "@/api/types"
 import { Alert, AlertDescription } from "@/components/ui/alert"
@@ -38,8 +38,6 @@ export function NewChatDialog({ meta, onCreated, compact }: Props) {
   const [internet, setInternet] = useState(false)
   // undefined: server default (config.auto_compact_default)
   const [autoCompactChoice, setAutoCompact] = useState<boolean>()
-  // undefined: server default (config.max_subagents_default)
-  const [maxSubChoice, setMaxSub] = useState<number>()
   const [templateId, setTemplateId] = useState("none")
   const [hours, setHours] = useState(DEFAULT_DELEGATION_HOURS)
   const [busy, setBusy] = useState(false)
@@ -56,13 +54,10 @@ export function NewChatDialog({ meta, onCreated, compact }: Props) {
     setError(undefined)
     setInternet(meta.config?.internet_default ?? false)
     setAutoCompact(undefined)
-    setMaxSub(undefined)
     if (meta.models.length === 0) void reload()
   }
 
   const autoCompact = autoCompactChoice ?? meta.config?.auto_compact_default ?? true
-  const maxSubLimit = meta.config?.max_subagents_limit
-  const maxSub = maxSubChoice ?? meta.config?.max_subagents_default ?? 0
   const selected = meta.models.find((m) => m.id === model)
   const selectedVariant = meta.variants.find((v) => v.id === variant)
 
@@ -77,7 +72,6 @@ export function NewChatDialog({ meta, onCreated, compact }: Props) {
         message: message.trim() || undefined,
         internet,
         auto_compact: autoCompactChoice ?? meta.config?.auto_compact_default,
-        max_subagents: maxSubChoice ?? meta.config?.max_subagents_default,
         delegation: delegationFrom(template, hours),
         language: browserLanguage(),
       })
@@ -186,25 +180,6 @@ export function NewChatDialog({ meta, onCreated, compact }: Props) {
               </p>
             </div>
             <Switch id="new-autocompact" checked={autoCompact} onCheckedChange={setAutoCompact} />
-          </div>
-          <div className="flex items-start justify-between gap-3 rounded-md border px-3 py-2">
-            <div>
-              <Label htmlFor="new-maxsub" className="flex items-center gap-1.5">
-                <BotIcon className="size-3.5" /> Max. subagents
-              </Label>
-              <p className="text-xs text-muted-foreground">
-                Enforced strictly at the proxy and by aborting.
-                {maxSubLimit !== undefined && ` 0 to ${maxSubLimit}.`} Can be changed later in the chat.
-              </p>
-            </div>
-            <NumberStepper
-              id="new-maxsub"
-              value={maxSub}
-              min={0}
-              max={Math.max(maxSubLimit ?? maxSub, maxSub)}
-              onChange={setMaxSub}
-              aria-label="Max. subagents"
-            />
           </div>
           <div className="grid gap-1.5">
             <Label htmlFor="new-title">Title (optional)</Label>

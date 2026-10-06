@@ -12,7 +12,6 @@ import (
 	"os"
 	"os/signal"
 	"sort"
-	"strconv"
 	"strings"
 	"syscall"
 	"text/tabwriter"
@@ -31,7 +30,7 @@ Commands:
   config                        server defaults
   pool                          slots in the pool, target/free/assigned, totals
   chat list                     all chats, newest first
-  chat new [--model M] [--variant cli|mcp|both] [--title T] [--internet=true|false] [--max-subagents N] [message]
+  chat new [--model M] [--variant cli|mcp|both] [--title T] [--internet=true|false] [message]
   chat show <id> [--thinking]   header and history
   chat send <id> <text> [--wait] [--auto-approve|--auto-reject] [--thinking] [--verbose]
                                 if the agent is working, the message is queued
@@ -42,7 +41,7 @@ Commands:
   chat suspend|abort <id>
   chat internet <id> on|off
   chat autocompact <id> on|off  automatic compaction on/off
-  chat subagents <id> [N]       show subagent runs, set the limit with N
+  chat subagents <id>           show subagent runs
   chat calls <id>               model calls according to the LLM proxy, with costs
   chat execs <id> [--flagged]   tool executions of the orchestrator, reconciled with the proxy
   chat commands <id>            slash commands of the chat
@@ -55,7 +54,7 @@ Commands:
   approvals [--chat id] [--all] pending (or all) approvals
   approve <id> | reject <id>
   watch <chat-id> [--verbose]   follow events live (Ctrl+C ends)
-  run [--model M] [--variant V] [--internet=…] [--max-subagents N] [--auto-approve|--auto-reject] [--thinking] [--verbose] "<task>"
+  run [--model M] [--variant V] [--internet=…] [--auto-approve|--auto-reject] [--thinking] [--verbose] "<task>"
 
 --verbose additionally shows every model call (LLM proxy) with costs and the interventions of the subagent limit.
 
@@ -322,45 +321,6 @@ func (t *triBool) Set(s string) error {
 
 func (t *triBool) IsBoolFlag() bool { return true }
 
-// optInt is a non-negative number that knows whether it was set.
-type optInt struct {
-	set bool
-	val int
-}
-
-func (o *optInt) String() string {
-	if o == nil || !o.set {
-		return ""
-	}
-	return fmt.Sprint(o.val)
-}
-
-func (o *optInt) Set(s string) error {
-	n, err := parseCount(s)
-	if err != nil {
-		return err
-	}
-	o.val, o.set = n, true
-	return nil
-}
-
-func (o *optInt) ptr() *int {
-	if !o.set {
-		return nil
-	}
-	v := o.val
-	return &v
-}
-
-// parseCount reads an integer ≥ 0.
-func parseCount(s string) (int, error) {
-	n, err := strconv.Atoi(strings.TrimSpace(s))
-	if err != nil || n < 0 {
-		return 0, fmt.Errorf("expected an integer ≥ 0, not %q", s)
-	}
-	return n, nil
-}
-
 func (t *triBool) ptr() *bool {
 	if !t.set {
 		return nil
@@ -469,7 +429,7 @@ func (a *app) cmdConfig(args []string) error {
 	fmt.Fprintf(tw, "Auto-compaction for new chats\t%s\n", onOff(c.AutoCompactDefault))
 	fmt.Fprintf(tw, "Reserve until compaction\t%s tokens\n", fmtInt(c.CompactReserveTokens))
 	fmt.Fprintf(tw, "Kept when compacting\t%s tokens\n", fmtInt(c.CompactKeepRecentTokens))
-	fmt.Fprintf(tw, "Subagents for new chats\t%d (at most %d)\n", c.MaxSubagentsDefault, c.MaxSubagentsLimit)
+	fmt.Fprintf(tw, "Subagents per chat\tat most %d at the same time\n", c.MaxSubagents)
 	return tw.Flush()
 }
 

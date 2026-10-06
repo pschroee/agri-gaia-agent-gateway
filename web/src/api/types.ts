@@ -111,8 +111,10 @@ export type Chat = {
   thinking_levels?: string[]
   /** Model to switch to after the running compaction. */
   pending_model?: string
-  /** Maximum number of subagents (enforced at the proxy and by monitoring). */
+  /** At most this many subagents at the same time; fixed for the service, the same for every chat. */
   max_subagents?: number
+  /** Subagents running right now according to the monitoring (0 while the chat is idle). */
+  subagents_running?: number
   /** Delegated rights of the chat; missing: no delegation (reading free, writing with approval). */
   delegation?: Delegation
   /** sub of the owner (login through the platform); missing in token mode. */
@@ -489,7 +491,6 @@ export type CreateChatRequest = {
   message?: string
   internet?: boolean
   auto_compact?: boolean
-  max_subagents?: number
   /** Delegated rights (missing: no delegation). */
   delegation?: Delegation
   /** Preferred language according to the browser (BCP 47, navigator.language); the agent uses it only if the message reveals no language. */
@@ -507,8 +508,8 @@ export type Config = {
   auto_compact_default?: boolean
   compact_reserve_tokens?: number
   compact_keep_recent_tokens?: number
-  max_subagents_default?: number
-  max_subagents_limit?: number
+  /** Subagents at the same time per chat, fixed for the service. */
+  max_subagents?: number
   /** Tools whose execution is verified at the socket (E9) */
   executed_tools?: string[]
 }

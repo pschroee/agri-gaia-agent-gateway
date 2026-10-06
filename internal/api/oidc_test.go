@@ -190,7 +190,7 @@ func ownershipEnv(t *testing.T) (*chat.Manager, *pool.Pool[chat.Agent], *config.
 		return nil, errors.New("no slot in the test")
 	},
 		func(context.Context, chat.Agent) {}, map[string]int{"cli": 0})
-	m := chat.NewManager(st, p, cat, nil, artifacts.NewBroker(), chat.Options{AcquireTimeout: 100 * time.Millisecond, MaxSubagentsLimit: 5})
+	m := chat.NewManager(st, p, cat, nil, artifacts.NewBroker(), chat.Options{AcquireTimeout: 100 * time.Millisecond, MaxSubagents: 5})
 	return m, p, cat, st
 }
 
@@ -276,5 +276,41 @@ func TestOIDCChatOwnership(t *testing.T) {
 	}
 	if code, body := call(t, a, "POST", srv.URL+"/api/approvals/"+apA.ID, `{"approve":false}`); code != 200 {
 		t.Fatalf("Anna decides: %d %s", code, body)
+	}
+}
+
+// The subagent limit is fixed for the service (issue #24): chats show it whatever they stored, the
+// route that changed it per chat is gone, and the config reports it.
+func TestSubagentLimitFixedInAPI(t *testing.T) {
+	m, p, cat, st := ownershipEnv(t)
+	srv, is := oidcServer(t, m, p, cat, nil)
+	a := loggedIn(t, srv, is, anna)
+	ctx := context.Background()
+	old, err := st.CreateChat(ctx, store.NewChat{Title: "old", Model: "p/m", Variant: "cli", Owner: anna.Sub, MaxSubagents: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = st.SetState(ctx, old.ID, store.StateDormant)
+
+	code, body := call(t, a, "GET", srv.URL+"/api/chats/"+old.ID, "")
+	var det struct {
+		Chat struct {
+			MaxSubagents     int  `json:"max_subagents"`
+			SubagentsRunning *int `json:"subagents_running"`
+		} `json:"chat"`
+	}
+	if code != 200 || json.Unmarshal([]byte(body), &det) != nil || det.Chat.MaxSubagents != 5 || det.Chat.SubagentsRunning == nil {
+		t.Fatalf("chat: %d %s", code, body)
+	}
+	if code, body := call(t, a, "POST", srv.URL+"/api/chats/"+old.ID+"/subagents", `{"max":1}`); code != 410 || !strings.Contains(body, "fixed") {
+		t.Fatalf("setting the limit per chat: %d %s", code, body)
+	}
+	if got, _ := st.GetChat(ctx, old.ID); got.MaxSubagents != 2 {
+		t.Fatalf("stored value changed: %d", got.MaxSubagents)
+	}
+	code, body = call(t, a, "GET", srv.URL+"/api/config", "")
+	var cfg map[string]any
+	if code != 200 || json.Unmarshal([]byte(body), &cfg) != nil || cfg["max_subagents"] != float64(5) || cfg["max_subagents_limit"] != float64(5) || cfg["max_subagents_default"] != float64(5) {
+		t.Fatalf("config: %d %s", code, body)
 	}
 }

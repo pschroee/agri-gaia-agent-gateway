@@ -13,7 +13,8 @@ import {
   placeAfter,
   runLabel,
   shortRunId,
-  subagentLimitLabel,
+  subagentsRunningLabel,
+  subagentsRunningTitle,
   toolAgents,
 } from "./subagents"
 import type { TranscriptItem } from "./stream"
@@ -206,9 +207,15 @@ describe("limitNotices", () => {
   })
 })
 
-describe("subagentLimitLabel", () => {
-  it("shows started and allowed subagents", () => {
-    expect(subagentLimitLabel({ subagents: 1, max_subagents: 2 })).toBe("Subagents 1 / 2")
-    expect(subagentLimitLabel({})).toBe("Subagents 0 / –")
+describe("subagentsRunningLabel", () => {
+  it("shows running subagents against the fixed limit", () => {
+    expect(subagentsRunningLabel({ subagents_running: 2, max_subagents: 5 })).toBe("Subagents 2 / 5 running")
+    expect(subagentsRunningLabel({})).toBe("Subagents 0 / – running")
+  })
+  it("explains the limit in the tooltip", () => {
+    expect(subagentsRunningTitle({ subagents: 7, max_subagents: 5 })).toBe(
+      "At most 5 subagents run at the same time (fixed for the service). 7 started so far.",
+    )
+    expect(subagentsRunningTitle({ subagents: 1 })).toBe("1 subagents started so far")
   })
 })

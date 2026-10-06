@@ -189,7 +189,7 @@ func (s *Server) Handler() http.Handler {
 	chat("POST /api/chats/{id}/tools/{call}/background", s.backgroundTool)
 	chat("POST /api/chats/{id}/effort", s.setEffort)
 	chat("POST /api/chats/{id}/autocompact", s.autocompact)
-	chat("POST /api/chats/{id}/subagents", s.maxSubagents)
+	chat("POST /api/chats/{id}/subagents", s.subagentLimitGone)
 	chat("GET /api/chats/{id}/llm_calls", s.llmCalls)
 	chat("GET /api/chats/{id}/tool_executions", s.toolExecutions)
 	chat("GET /api/chats/{id}/background", s.background)
@@ -419,12 +419,15 @@ func (s *Server) config(w http.ResponseWriter, r *http.Request) {
 		"auto_compact_default":       o.AutoCompactDefault,
 		"compact_reserve_tokens":     o.CompactReserveTokens,
 		"compact_keep_recent_tokens": o.CompactKeepRecent,
-		"max_subagents_default":      o.MaxSubagentsDefault,
-		"max_subagents_limit":        o.MaxSubagentsLimit,
-		"workspace_max_mb":           workspaceMaxMB(o.WorkspaceMaxBytes),
-		"bg_wakes_per_hour":          o.BgWakesPerHour,
-		"bg_keepalive_s":             int(o.BgKeepAlive.Seconds()),
-		"auto_turns_max":             o.AutoTurnsMax,
+		// Subagents at the same time per chat, fixed for the service (issue #24). The two older keys
+		// carry the same value for clients that still read them.
+		"max_subagents":         o.MaxSubagents,
+		"max_subagents_default": o.MaxSubagents,
+		"max_subagents_limit":   o.MaxSubagents,
+		"workspace_max_mb":      workspaceMaxMB(o.WorkspaceMaxBytes),
+		"bg_wakes_per_hour":     o.BgWakesPerHour,
+		"bg_keepalive_s":        int(o.BgKeepAlive.Seconds()),
+		"auto_turns_max":        o.AutoTurnsMax,
 		// Tools whose execution is evidenced at the socket (E9, L6): the UI matches against them
 		// instead of keeping the list itself.
 		"executed_tools": chat.ExecutedToolNames(),
@@ -761,20 +764,10 @@ func (s *Server) autocompact(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, c)
 }
 
-func (s *Server) maxSubagents(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Max *int `json:"max"`
-	}
-	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<10)).Decode(&req); err != nil || req.Max == nil {
-		writeErr(w, 400, `expected {"max": <number>}`)
-		return
-	}
-	c, err := s.M.SetMaxSubagents(r.Context(), r.PathValue("id"), *req.Max)
-	if err != nil {
-		fail(w, err)
-		return
-	}
-	writeJSON(w, 200, c)
+// subagentLimitGone: the limit per chat was removed (issue #24); the route answers 410 so that older clients
+// get a clear message instead of a 404 that looks like an unknown chat.
+func (s *Server) subagentLimitGone(w http.ResponseWriter, r *http.Request) {
+	writeErr(w, http.StatusGone, fmt.Sprintf("the subagent limit is fixed for the service (%d at the same time) and cannot be changed per chat", s.M.Options().MaxSubagents))
 }
 
 func (s *Server) llmCalls(w http.ResponseWriter, r *http.Request) {

@@ -197,11 +197,6 @@ func (c *Client) SetAutoCompact(ctx context.Context, id string, enabled bool) (C
 	return c.chatAction(ctx, id, "autocompact", map[string]bool{"enabled": enabled})
 }
 
-// SetMaxSubagents sets the limit for subagents (0 … max_subagents_limit); takes effect immediately.
-func (c *Client) SetMaxSubagents(ctx context.Context, id string, max int) (Chat, error) {
-	return c.chatAction(ctx, id, "subagents", map[string]int{"max": max})
-}
-
 // LLMCalls returns all model calls of the chat recorded at the LLM proxy.
 func (c *Client) LLMCalls(ctx context.Context, id string) (out []LLMCall, err error) {
 	return out, c.Do(ctx, "GET", "/api/chats/"+esc(id)+"/llm_calls", nil, &out)

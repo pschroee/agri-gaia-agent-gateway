@@ -11,7 +11,7 @@ import { modelName, type useMeta } from "@/hooks/useMeta"
 import { useNow } from "@/hooks/useNow"
 import { usePolling } from "@/hooks/usePolling"
 import { formatActivity, formatDuration, formatTime, formatTokens, formatUsd } from "@/lib/format"
-import { cn } from "@/lib/utils"
+import { subagentsRunningTitle } from "@/lib/subagents"
 
 type Props = {
   meta: ReturnType<typeof useMeta>
@@ -209,7 +209,7 @@ function ActiveChats({ chats, modelName }: { chats: Chat[]; modelName: (id: stri
             <TableHead className="text-right">Tokens</TableHead>
             <TableHead className="text-right">Cost</TableHead>
             <TableHead>Context</TableHead>
-            <TableHead title="started / allowed subagents">Subagents</TableHead>
+            <TableHead title="running now / at most at the same time">Subagents</TableHead>
             <TableHead className="text-right">Model calls</TableHead>
             <TableHead>Pending</TableHead>
           </TableRow>
@@ -242,10 +242,8 @@ function ActiveChats({ chats, modelName }: { chats: Chat[]; modelName: (id: stri
                 {formatUsd(c.cost)}
               </TableCell>
               <TableCell>{c.context ? <ContextBadge context={c.context} /> : "–"}</TableCell>
-              <TableCell
-                className={cn("tabular-nums", (c.subagents ?? 0) > (c.max_subagents ?? Infinity) && "font-medium text-red-700")}
-              >
-                {c.max_subagents !== undefined ? `${c.subagents ?? 0}/${c.max_subagents}` : "–"}
+              <TableCell className="tabular-nums" title={subagentsRunningTitle(c)}>
+                {c.max_subagents !== undefined ? `${c.subagents_running ?? 0}/${c.max_subagents}` : "–"}
               </TableCell>
               <TableCell className="text-right tabular-nums">{c.llm_calls ?? "–"}</TableCell>
               <TableCell>{c.pending_approvals > 0 ? c.pending_approvals : "–"}</TableCell>

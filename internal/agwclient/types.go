@@ -56,8 +56,8 @@ type Config struct {
 	CompactReserveTokens    int64 `json:"compact_reserve_tokens"`
 	CompactKeepRecentTokens int64 `json:"compact_keep_recent_tokens"`
 
-	MaxSubagentsDefault int `json:"max_subagents_default"`
-	MaxSubagentsLimit   int `json:"max_subagents_limit"`
+	// MaxSubagents: subagents at the same time per chat, fixed for the service.
+	MaxSubagents int `json:"max_subagents"`
 }
 
 type Activity struct {
@@ -122,10 +122,11 @@ type Chat struct {
 	Internet         bool            `json:"internet"`
 	AutoCompact      bool            `json:"auto_compact"`
 	Compactions      int             `json:"compactions"`
-	MaxSubagents     int             `json:"max_subagents"` // at most this many subagents
-	Subagents        int             `json:"subagents"`     // subagent runs started so far
-	LLMCalls         int             `json:"llm_calls"`     // model calls recorded at the LLM proxy
-	CostOther        float64         `json:"cost_other"`    // cost outside the main session's responses
+	MaxSubagents     int             `json:"max_subagents"`     // at most this many subagents at the same time (fixed for the service)
+	Subagents        int             `json:"subagents"`         // subagent runs started so far
+	SubagentsRunning int             `json:"subagents_running"` // subagents running right now
+	LLMCalls         int             `json:"llm_calls"`         // model calls recorded at the LLM proxy
+	CostOther        float64         `json:"cost_other"`        // cost outside the main session's responses
 	Context          *ContextUsage   `json:"context,omitempty"`
 	Running          bool            `json:"running"`
 	SlotID           string          `json:"slot_id,omitempty"`
@@ -331,8 +332,6 @@ type CreateChatRequest struct {
 	Title    string `json:"title,omitempty"`
 	Message  string `json:"message,omitempty"`
 	Internet *bool  `json:"internet,omitempty"`
-	// MaxSubagents: nil = server default; 0 is a valid value.
-	MaxSubagents *int `json:"max_subagents,omitempty"`
 	// Delegation: delegated rights as JSON (empty: no delegation).
 	Delegation json.RawMessage `json:"delegation,omitempty"`
 }

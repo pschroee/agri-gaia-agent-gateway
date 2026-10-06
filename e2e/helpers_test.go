@@ -47,6 +47,7 @@ type chatView struct {
 	Cost        float64         `json:"cost"`
 	Context     json.RawMessage `json:"context"`
 	MaxSub      int             `json:"max_subagents"`
+	SubRunning  int             `json:"subagents_running"`
 	Subagents   int             `json:"subagents"`
 	LLMCalls    int             `json:"llm_calls"`
 	CostOther   float64         `json:"cost_other"`

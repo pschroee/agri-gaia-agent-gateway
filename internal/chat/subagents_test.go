@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 )
 
 const childSession = `{"type":"session","id":"s1"}
@@ -80,5 +81,34 @@ func TestRunKeyFromPath(t *testing.T) {
 		if got := runKey(in); got != want {
 			t.Errorf("runKey(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// Which runs count towards the limit of subagents at the same time.
+func TestRunningSubagents(t *testing.T) {
+	now := time.Date(2026, 10, 6, 12, 0, 0, 0, time.UTC)
+	turn := now.Add(-time.Minute)
+	runs := map[string]*subTrack{
+		"bg-running":  {State: "running", Last: now.Add(-10 * time.Second)},
+		"bg-Running":  {State: "Running", Last: now},
+		"bg-starting": {State: "starting", Last: now},
+		"bg-queued":   {State: "queued", Last: now},
+		"bg-paused":   {State: "paused", Last: now},
+		"bg-done":     {State: "complete", Last: now},
+		"bg-failed":   {State: "failed", Last: now},
+		"bg-stale":    {State: "running", Last: now.Add(-subagentQuiet - time.Second)},
+		"bg-killed":   {State: "running", Last: now, Killed: true},
+		"fg-working":  {LastKind: "tool_call", Last: now.Add(-5 * time.Second)},
+		"fg-answered": {LastKind: "text", Last: now},
+		"fg-old-turn": {LastKind: "tool_call", Last: turn.Add(-time.Second)},
+	}
+	got := strings.Join(runningSubagents(runs, now, turn), ",")
+	if want := "bg-Running,bg-running,bg-starting,fg-working"; got != want {
+		t.Fatalf("during a turn: %s, want %s", got, want)
+	}
+	// While the main agent is idle no foreground run can work; background runs go on.
+	got = strings.Join(runningSubagents(runs, now, time.Time{}), ",")
+	if want := "bg-Running,bg-running,bg-starting"; got != want {
+		t.Fatalf("idle: %s, want %s", got, want)
 	}
 }

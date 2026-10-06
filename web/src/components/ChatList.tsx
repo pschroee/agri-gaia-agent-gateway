@@ -3,7 +3,7 @@ import type { Chat } from "@/api/types"
 import { ChatStateBadge, RunningIndicator, VariantBadge } from "@/components/badges"
 import { ContextBadge } from "@/components/ContextMeter"
 import { chatHref } from "@/hooks/useHashRoute"
-import { subagentLimitLabel } from "@/lib/subagents"
+import { subagentsRunningLabel, subagentsRunningTitle } from "@/lib/subagents"
 import { cn } from "@/lib/utils"
 
 type Props = {
@@ -43,11 +43,8 @@ export function ChatList({ chats, selectedId, modelName, runSince }: Props) {
             <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
               <span className="min-w-0 truncate">{modelName(c.model)}</span>
               {c.max_subagents !== undefined && (
-                <span
-                  className={cn("ml-auto shrink-0 tabular-nums", (c.subagents ?? 0) > c.max_subagents && "text-red-700")}
-                  title="started / allowed subagents"
-                >
-                  {subagentLimitLabel(c)}
+                <span className="ml-auto shrink-0 tabular-nums" title={subagentsRunningTitle(c)}>
+                  {subagentsRunningLabel(c)}
                 </span>
               )}
             </div>
