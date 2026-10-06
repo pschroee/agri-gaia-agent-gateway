@@ -237,6 +237,9 @@ type Manager struct {
 	qMu map[string]*sync.Mutex
 	// sending: a request is on its way (resume or prompt); new messages are enqueued.
 	sending map[string]bool
+	// delivering: messages in deliver (claimed, "delivered" published, prompt not answered yet,
+	// e.g. while resuming); with pendingTurns the source of DeliveredQueue.
+	delivering map[string][]*turnMeta
 	// resuming: the chat is being resumed (for display).
 	resuming map[string]bool
 	// pendingModel: model switch waiting for the end of a compaction (SetModel with compactFirst).
@@ -275,7 +278,7 @@ func NewManager(st *store.Store, p *pool.Pool[Agent], cat *config.Catalog, blobs
 	return &Manager{st: st, pool: p, cat: cat, blobs: blobs, broker: broker, opt: opt,
 		live: map[string]*live{}, subs: map[string]map[chan Event]struct{}{}, chatMu: map[string]*sync.Mutex{},
 		imgMu: map[string]*sync.Mutex{}, wsMu: map[string]*sync.Mutex{}, qMu: map[string]*sync.Mutex{},
-		sending: map[string]bool{}, resuming: map[string]bool{}, pendingModel: map[string]string{}, levels: map[string][]string{}, userAt: map[string]time.Time{}, aborts: map[string]uint64{}}
+		sending: map[string]bool{}, delivering: map[string][]*turnMeta{}, resuming: map[string]bool{}, pendingModel: map[string]string{}, levels: map[string][]string{}, userAt: map[string]time.Time{}, aborts: map[string]uint64{}}
 }
 
 // userActive records an action of the user (postponement by background tasks, M1).

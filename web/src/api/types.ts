@@ -242,6 +242,21 @@ export type QueueEvent = {
   sources?: MessageSource[]
 }
 
+/**
+ * Queued entries handed to pi as one message whose user message pi has not reported yet (steered in while a
+ * tool runs, or on their way while the chat resumes); same content as SSE "queue" with change "delivered".
+ */
+export type QueueDelivery = {
+  ids: string[]
+  entries: QueueEntry[]
+  text: string
+  origin?: MessageOrigin
+  sources?: MessageSource[]
+  delivered_at: string
+  /** steered into the running turn: pi reads it after its current step */
+  steered: boolean
+}
+
 export type ResumePhase = "acquire" | "session" | "settings" | "workspace" | "inputs" | "ready" | "failed"
 
 /** SSE "resume": a step while resuming an idle chat. */
@@ -388,6 +403,8 @@ export type ChatDetail = {
   subagent_entries?: SubagentEntry[]
   subagent_runs?: SubagentRunMeta[]
   queue?: QueueEntry[]
+  /** handed to pi but not read yet (issue #21); empty on older gateways */
+  queue_delivered?: QueueDelivery[]
   background?: BackgroundTask[]
 }
 

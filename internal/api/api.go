@@ -575,7 +575,7 @@ func (s *Server) getChat(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	writeJSON(w, 200, map[string]any{"chat": c, "messages": msgs, "artifacts": arts, "approvals": aps, "socket_calls": calls, "subagent_entries": subs, "subagent_runs": subRuns, "queue": queue, "background": bg})
+	writeJSON(w, 200, map[string]any{"chat": c, "messages": msgs, "artifacts": arts, "approvals": aps, "socket_calls": calls, "subagent_entries": subs, "subagent_runs": subRuns, "queue": queue, "queue_delivered": s.M.DeliveredQueue(id), "background": bg})
 }
 
 func (s *Server) send(w http.ResponseWriter, r *http.Request) {

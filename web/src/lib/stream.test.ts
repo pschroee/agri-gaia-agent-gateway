@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest"
-import type { PiEvent, StoredMessage } from "@/api/types"
+import type { PiEvent, QueueDelivery, StoredMessage } from "@/api/types"
 import {
   addPending,
   applyCompactionError,
+  applyDeliveredQueue,
   applyPiEvent,
   applyQueueDelivered,
   applyUserMeta,
@@ -502,6 +503,37 @@ describe("origin of the user message", () => {
     const t = applyQueueDelivered(addPending(emptyTranscript(), "p", "continue"), "q-2", "Note\n\ncontinue", { origin: "mixed", sources: meta.sources })
     expect(t.pending).toHaveLength(1)
     expect(t.pending[0]).toMatchObject({ key: "p", origin: "mixed" })
+  })
+})
+
+describe("handed-over queue after a reload (queue_delivered)", () => {
+  const delivery: QueueDelivery = {
+    ids: ["q1"],
+    entries: [{ id: "q1", chat_id: "c", text: "and also this", attachments: [], created_at: "2026-10-06T10:00:00Z", kind: "user" }],
+    text: "and also this",
+    origin: "user",
+    sources: [{ kind: "user", queue_id: "q1" }],
+    delivered_at: "2026-10-06T10:00:01Z",
+    steered: true,
+  }
+  it("shows the delivery as a sent message, as the live event did before the reload", () => {
+    const h = hydrate(emptyTranscript(), [stored(1, { role: "user", content: "one" })])
+    const s = applyDeliveredQueue(h, [delivery])
+    expect(s.pending).toEqual([{ key: "queue-q1", text: "and also this", afterSeq: 1, origin: "user", sources: delivery.sources }])
+    // the live path and a second load do not show it twice
+    const live = applyQueueDelivered(h, "queue-q1", "and also this", delivery)
+    expect(applyDeliveredQueue(live, [delivery]).pending).toHaveLength(1)
+    expect(applyDeliveredQueue(s, [delivery]).pending).toHaveLength(1)
+  })
+  it("disappears once pi's user message is stored", () => {
+    const s = applyDeliveredQueue(hydrate(emptyTranscript(), [stored(1, { role: "user", content: "one" })]), [delivery])
+    const after = hydrate(s, [stored(1, { role: "user", content: "one" }), stored(2, { role: "user", content: "and also this" })])
+    expect(after.pending).toEqual([])
+  })
+  it("older gateways without the field change nothing", () => {
+    const h = hydrate(emptyTranscript(), [])
+    expect(applyDeliveredQueue(h, undefined)).toBe(h)
+    expect(applyDeliveredQueue(h, [])).toBe(h)
   })
 })
 

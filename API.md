@@ -136,6 +136,14 @@ type Chat = {
 // be removed like messages as long as they are open.
 type QueueEntry = { id: string; chat_id: string; text: string; attachments: string[]; created_at: string; kind: "user" | "system"; note?: string; refs?: string[] };
 
+// Queued entries handed to pi together as one message whose user message pi has not reported (and the
+// orchestrator not stored) yet: steered into a running turn (steered: true, pi reads it after its current
+// step) or on its way while the chat resumes. Same content as the SSE event "queue" with change "delivered"
+// (ids, text, origin, sources) plus the entries as they were queued, so that a UI shows the same after a
+// reload as before it. Only in memory, next to pi's process: empty after a restart of the orchestrator.
+type QueueDelivery = { ids: string[]; entries: QueueEntry[]; text: string; origin?: "user" | "system" | "mixed";
+  sources?: MessageSource[]; delivered_at: string; steered: boolean };
+
 // Background task (bash with run_in_background, see below).
 type BackgroundTask = {
   id: string;             // "bg-<seq>", consecutive per chat
@@ -297,7 +305,7 @@ type SocketCall = { id: number; chat_id?: string; slot_id: string; via: "cli" | 
 | `GET /api/platform` | `{configured: boolean, api_url?, login?: "user" \| "account", account?: string /* login account only */, client_id?, token_exchange?: boolean, probe?: {reachable, http_status?, latency_ms, error?, checked_at}, last_exchange?: {chat_id, at, ok, error?}}` | binding to the platform, read-only. `probe`: unauthenticated `GET` on the API base, any HTTP answer counts as reachable, cached 10 s. `last_exchange`: newest token exchange among the user's own chats, also a failed one (e.g. the user's login expired); in memory only, empty after a restart until the next platform call. `{configured: false}` without `AGW_PLATFORM_API_URL` |
 | `GET /api/chats` | `Chat[]` | newest first |
 | `POST /api/chats` `{model?, variant?, title?, message?, internet?, auto_compact?, delegation?, language?}` | `Chat` (201) | takes a slot from the pool; `max_subagents` in the body is ignored (the limit is fixed, see *Limit for subagents*); with `message` it is sent immediately. `language`: preferred language according to the browser (BCP 47, only letters, digits, hyphen, at most 35 characters, otherwise 400), see *User language*. 503 if no slot is free |
-| `GET /api/chats/{id}` | `{chat, messages: StoredMessage[], artifacts: Artifact[], approvals: Approval[], socket_calls: SocketCall[], subagent_entries: SubagentEntry[], queue: QueueEntry[], background: BackgroundTask[]}` | complete chat |
+| `GET /api/chats/{id}` | `{chat, messages: StoredMessage[], artifacts: Artifact[], approvals: Approval[], socket_calls: SocketCall[], subagent_entries: SubagentEntry[], queue: QueueEntry[], queue_delivered: QueueDelivery[], background: BackgroundTask[]}` | complete chat; `queue_delivered`: handed to pi but not read yet, oldest first (see *Queue*) |
 | `GET /api/chats/{id}/background` | `BackgroundTask[]` | background tasks of the chat by `seq`; running ones with the current state of the slot |
 | `GET /api/chats/{id}/web_requests` | `WebRequest[]` | requests of `web_search`/`web_extract` through the web proxy, including refused ones (`denied`); for HTTPS only target and bytes |
 | `GET /api/chats/{id}/tools/running` | `{tool_call_ids}` | running foreground commands (bash) that can be stopped or converted |
@@ -377,8 +385,20 @@ in flight (for example while resuming) takes effect: the instruction does not go
 
 After `POST …/abort` the orchestrator holds the queue (`queue_held`) instead of carrying on after the abort: it goes
 along with the next message (before its text) or via `POST …/queue/send`. The same applies to a dormant chat (for
-example after a restart). Ending discards it. Previously a message during a run went to pi via `steer`; there it
-could no longer be taken back.
+example after a restart). Ending discards it.
+
+**Steering.** While a tool runs, open entries with at least one message from the user go to pi right away
+(`prompt` with `streamingBehavior: "steer"`); pi inserts them after the running tools, before the next model
+call. The SSE event `queue` reports `delivered` at that moment, but pi reads the message only after its current
+step, and only then is the user message stored. Before an abort and at the end of the run the orchestrator takes
+back with `clear_queue` what pi has not inserted yet and reopens the entries (`restored`; held after an abort).
+
+**Delivered, not read yet.** Delivered entries are no longer in `queue` (`GET …/queue`, SSE `entries`) and cannot
+be removed (409). Until pi reports the matching user message, `GET /api/chats/{id}` lists them in
+`queue_delivered` (one `QueueDelivery` per delivery), so that a UI reloaded in that window shows them as before
+the reload. A delivery leaves the list when pi reports its user message (the stored message follows), when it is
+taken back (`restored`) or when the delivery fails. The state lives in the orchestrator's memory, next to pi: after
+a restart of the orchestrator the list is empty.
 
 ## Background tasks
 

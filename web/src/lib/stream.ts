@@ -1,6 +1,6 @@
 // Assembles a chat's history from the stored messages and pi's live events
 // (see "Assembling the stream" in poc/API.md). Pure functions, without React.
-import type { ContentBlock, MessageMeta, MessageOrigin, MessageSource, PiEvent, ResumePhase, ResumeStep, StoredMessage, TurnTrigger, Usage } from "@/api/types"
+import type { ContentBlock, MessageMeta, MessageOrigin, MessageSource, PiEvent, QueueDelivery, ResumePhase, ResumeStep, StoredMessage, TurnTrigger, Usage } from "@/api/types"
 import { splitAttachments } from "@/lib/attachments"
 import { messageImageKey } from "@/lib/images"
 
@@ -690,6 +690,20 @@ export function applyQueueDelivered(state: TranscriptState, key: string, text: s
     return { ...state, pending }
   }
   return { ...state, pending: [...state.pending, { key, text, afterSeq: lastSeq(state.items), ...origin }] }
+}
+
+/**
+ * After a (re)load: deliveries of queued messages that pi has not read yet (`queue_delivered` of
+ * GET /api/chats/{id}) appear as sent messages, like after the SSE event "delivered" before the reload.
+ * Deliveries already shown (same key as the live path) are skipped.
+ */
+export function applyDeliveredQueue(state: TranscriptState, deliveries: QueueDelivery[] | undefined | null): TranscriptState {
+  if (!Array.isArray(deliveries)) return state
+  return deliveries.reduce((s, d) => {
+    const key = `queue-${d.ids?.[0] ?? d.delivered_at}`
+    if (!d.text || s.pending.some((p) => p.key === key)) return s
+    return applyQueueDelivered(s, key, d.text, d)
+  }, state)
 }
 
 /** SSE "user_meta": origin of the user message pi reports next. */
