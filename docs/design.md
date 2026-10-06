@@ -30,8 +30,8 @@ cd poc
 ./dev.sh start --prod   # the same with the fixed orchestrator image, without hot reload
 ./dev.sh status    # services, sandboxes, pool
 ./dev.sh cli run "Write a Python script …"     # CLI agw, answer streamed
-./dev.sh test      # fast tests, about 25 s: Go (unit, Postgres, -race) and web (Vitest)
-./dev.sh test --full  # additionally Docker integration, S3 and slot tests, about 5 min (before pushing)
+./dev.sh test      # fast tests, about 35 s: Go (unit, Postgres, -race) and web (Vitest); --full is an alias
+./dev.sh test --docker  # additionally Docker integration, S3 and slot tests (off by default), about 7 min
 ./dev.sh e2e       # end to end with the real model (amounts in cents), incl. auto-compaction
 ./dev.sh stop      # stop, tear down sandboxes, data is kept
 ./dev.sh reset     # delete EVERYTHING (volumes with chats and artifacts, networks, images); asks first
@@ -1260,7 +1260,8 @@ background tasks with wake-up, `bg_stop` and stop by the user (`TestBackgroundTa
 about 10,000 tokens) and normally afterwards.
 
 `./dev.sh test` runs the fast stage (unit tests of all packages with `-race`, store and manager tests
-against Postgres, Vitest), `./dev.sh test --full` additionally everything below: integration against
+against Postgres, Vitest; `--full` is an alias), `./dev.sh test --docker` additionally everything below (off by
+default since issue #27 because it starts real containers): integration against
 Docker (real sandbox: `exec`, hardening, internet switch; E9: pi's container without shell,
 supervisor in the hardened execution sandbox including an attack on it, fork bomb, a whole slot with
 a scripted model in the Go container including workflows, parity of the bridge tools with pi in the
