@@ -3,16 +3,20 @@ package api
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"testing"
 
 	"agw/internal/chat"
 	"agw/internal/config"
 	"agw/internal/store"
+	"agw/internal/toolset"
+	"agw/internal/worker"
 )
 
 // Requests from the sandbox networks are refused, all others let through.
@@ -221,5 +225,42 @@ func TestSendRefusesInvalidPageContext(t *testing.T) {
 		if w.Code != 400 || !strings.Contains(w.Body.String(), "context") {
 			t.Errorf("%s: %d %s", ctx, w.Code, w.Body.String())
 		}
+	}
+}
+
+// Issue #29: the combination of bindings of new chats is reported in GET /api/config and marked in
+// GET /api/variants; a request for another one is a 400.
+func TestToolsetsReported(t *testing.T) {
+	ts, _ := toolset.Parse("api,cli")
+	s := &Server{M: chat.NewManager(nil, nil, nil, nil, nil, chat.Options{Toolsets: ts})}
+	w := httptest.NewRecorder()
+	s.config(w, httptest.NewRequest("GET", "/api/config", nil))
+	var cfg struct {
+		Toolsets worker.VariantInfo `json:"toolsets"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Toolsets.ID != "cli,api" || strings.Join(cfg.Toolsets.Bindings, ",") != "cli,api" ||
+		!slices.Contains(cfg.Toolsets.Tools, "bash") || !slices.Contains(cfg.Toolsets.Tools, "platform_http") || cfg.Toolsets.Label != "Command line + REST API" {
+		t.Fatalf("toolsets: %+v", cfg.Toolsets)
+	}
+	w = httptest.NewRecorder()
+	s.variants(w, httptest.NewRequest("GET", "/api/variants", nil))
+	var vs []worker.VariantInfo
+	if err := json.Unmarshal(w.Body.Bytes(), &vs); err != nil {
+		t.Fatal(err)
+	}
+	active := []string{}
+	for _, v := range vs {
+		if v.Active {
+			active = append(active, v.ID)
+		}
+	}
+	if len(vs) != 7 || strings.Join(active, ";") != "cli,api" {
+		t.Fatalf("variants: %d, active %v", len(vs), active)
+	}
+	if errCode(chat.ErrVariantFixed) != http.StatusBadRequest {
+		t.Fatal("ErrVariantFixed")
 	}
 }

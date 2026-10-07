@@ -135,12 +135,34 @@ func call(t *testing.T, method, path string, body any, out any) int {
 	return resp.StatusCode
 }
 
+// requireToolsets skips the test unless the gateway gives new chats the combination of variant.
+func requireToolsets(t *testing.T, variant string) {
+	t.Helper()
+	var cfg struct {
+		Toolsets struct {
+			ID string `json:"id"`
+		} `json:"toolsets"`
+	}
+	if call(t, "GET", "/api/config", nil, &cfg) != http.StatusOK {
+		t.Fatal("GET /api/config failed")
+	}
+	if cfg.Toolsets.ID != variant {
+		t.Skipf("needs AGW_TOOLSETS=%s, the gateway runs with %q", variant, cfg.Toolsets.ID)
+	}
+}
+
 func newChat(t *testing.T, variant string, internet bool) string {
 	return newChatWith(t, map[string]any{"variant": variant, "internet": internet})
 }
 
 func newChatWith(t *testing.T, req map[string]any) string {
 	t.Helper()
+	// Since issue #29 the gateway fixes the bindings (AGW_TOOLSETS); a test written for another
+	// combination is skipped, e.g. AGW_TOOLSETS=mcp ./dev.sh e2e -run MCP.
+	if v, ok := req["variant"].(string); ok && v != "" {
+		requireToolsets(t, v)
+		delete(req, "variant")
+	}
 	req["title"] = "E2E " + t.Name()
 	var c chatView
 	var code int

@@ -362,7 +362,7 @@ func errCode(err error) int {
 		return http.StatusConflict
 	case errors.Is(err, chat.ErrTooManyPending):
 		return http.StatusTooManyRequests
-	case errors.Is(err, chat.ErrUnknownModel), errors.Is(err, chat.ErrUnknownVariant), errors.Is(err, chat.ErrInvalid):
+	case errors.Is(err, chat.ErrUnknownModel), errors.Is(err, chat.ErrUnknownVariant), errors.Is(err, chat.ErrVariantFixed), errors.Is(err, chat.ErrInvalid):
 		return http.StatusBadRequest
 	}
 	return http.StatusInternalServerError
@@ -407,8 +407,16 @@ func (s *Server) platformStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, out)
 }
 
+// variants lists every combination of bindings; active marks the one new chats get (AGW_TOOLSETS).
+// The others remain for chats stored with them.
 func (s *Server) variants(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, 200, worker.Variants)
+	active := s.M.Options().Toolsets.Key()
+	out := make([]worker.VariantInfo, 0, len(worker.Variants))
+	for _, v := range worker.Variants {
+		v.Active = v.ID == active
+		out = append(out, v)
+	}
+	writeJSON(w, 200, out)
 }
 
 func (s *Server) config(w http.ResponseWriter, r *http.Request) {
@@ -433,6 +441,9 @@ func (s *Server) config(w http.ResponseWriter, r *http.Request) {
 		// Tools whose execution is evidenced at the socket (E9, L6): the UI matches against them
 		// instead of keeping the list itself.
 		"executed_tools": chat.ExecutedToolNames(),
+		// Bindings of every new chat (AGW_TOOLSETS, issue #29): key, bindings, label and the union
+		// of their tools. There is no choice per chat.
+		"toolsets": worker.Info(o.Toolsets),
 	})
 }
 
@@ -506,9 +517,10 @@ func (s *Server) pool(w http.ResponseWriter, r *http.Request) {
 	}
 	tok, cost, _ := s.M.Totals(r.Context())
 	writeJSON(w, 200, map[string]any{
-		"slots":   out,
-		"targets": s.Pool.Targets(),
-		"totals":  map[string]any{"cost": cost, "tokens": tok, "chats_active": active},
+		"slots":    out,
+		"targets":  s.Pool.Targets(),
+		"toolsets": s.M.Options().Toolsets.Key(), // key kept warm; other keys only on demand
+		"totals":   map[string]any{"cost": cost, "tokens": tok, "chats_active": active},
 	})
 }
 

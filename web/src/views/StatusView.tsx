@@ -1,6 +1,6 @@
 import { GlobeIcon } from "lucide-react"
 import { api } from "@/api/client"
-import type { Approval, Chat, Pool, VariantId } from "@/api/types"
+import type { Approval, Chat, Pool, Variant, VariantId } from "@/api/types"
 import { ApprovalCard } from "@/components/ApprovalCard"
 import { ContextBadge } from "@/components/ContextMeter"
 import { ChatStateBadge, RunningIndicator, SlotStateBadge, VariantBadge } from "@/components/badges"
@@ -12,6 +12,7 @@ import { useNow } from "@/hooks/useNow"
 import { usePolling } from "@/hooks/usePolling"
 import { formatActivity, formatDuration, formatTime, formatTokens, formatUsd } from "@/lib/format"
 import { subagentsRunningTitle } from "@/lib/subagents"
+import { activeToolsets } from "@/lib/toolsets"
 
 type Props = {
   meta: ReturnType<typeof useMeta>
@@ -31,6 +32,7 @@ export function StatusView({ meta, approvals, onApprovalsChanged }: Props) {
     <div className="min-h-0 flex-1 overflow-y-auto">
       <div className="mx-auto flex max-w-7xl flex-col gap-6 p-4">
         {pool.error && <p className="text-sm text-red-700">Pool unreachable: {pool.error}</p>}
+        <ToolsetsLine toolsets={activeToolsets(meta.config, meta.variants)} />
         {pool.data && <Kennzahlen pool={pool.data} />}
 
         <section>
@@ -158,6 +160,7 @@ function Kennzahlen({ pool }: { pool: Pool }) {
             <CardHeader>
               <CardTitle className="flex items-center gap-2 text-sm">
                 Variant <VariantBadge variant={v} />
+                {pool.toolsets === v && <span className="text-xs font-normal text-muted-foreground">new chats</span>}
               </CardTitle>
             </CardHeader>
             <CardContent className="grid grid-cols-4 gap-2 text-center">
@@ -182,6 +185,19 @@ function Kennzahlen({ pool }: { pool: Pool }) {
         </Card>
       )}
     </div>
+  )
+}
+
+/** The bindings every new chat gets (AGW_TOOLSETS); fixed for the gateway. */
+function ToolsetsLine({ toolsets }: { toolsets?: Variant }) {
+  if (!toolsets) return null
+  return (
+    <section className="text-sm" data-testid="toolsets">
+      <span className="font-semibold">Bindings of new chats:</span> <VariantBadge variant={toolsets.id} />{" "}
+      <span className="text-muted-foreground">
+        {toolsets.label} · set by AGW_TOOLSETS · tools: {toolsets.tools.join(", ")}
+      </span>
+    </section>
   )
 }
 

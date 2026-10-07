@@ -27,6 +27,7 @@ import (
 	"agw/internal/sandbox"
 	"agw/internal/store"
 	"agw/internal/titler"
+	"agw/internal/toolset"
 	"agw/internal/webproxy"
 	"agw/internal/worker"
 	"agw/web"
@@ -42,6 +43,16 @@ func main() {
 
 func run() error {
 	env := config.FromEnv()
+	// The bindings of every new chat (issue #29); a typo stops the start.
+	toolsets, err := env.Toolset()
+	if err != nil {
+		return err
+	}
+	for _, k := range config.LegacyPoolSizeVars {
+		if os.Getenv(k) != "" {
+			slog.Warn("variable ignored since AGW_TOOLSETS; use AGW_POOL_SIZE", "variable", k)
+		}
+	}
 	cat, err := config.LoadCatalog(env.CatalogPath)
 	if err != nil {
 		return err
@@ -133,7 +144,10 @@ func run() error {
 	} else {
 		slog.Info("platform binding on", "api", env.PlatformAPIURL, "account", konto, "client", env.PlatformClientID, "token_exchange", plat.Exchanging())
 	}
-	p := pool.New[chat.Agent](fac.Create, fac.Destroy, env.PoolSizes)
+	// Warm slots only for the configured combination; chats stored with another one (cli, mcp, api,
+	// both, …) get a slot on demand when they resume.
+	p := pool.New[chat.Agent](fac.Create, fac.Destroy, map[string]int{toolsets.Key(): env.PoolSize})
+	p.SetKnown(toolset.Valid)
 	m := chat.NewManager(st, p, cat, blobs, artifacts.NewBroker(), chat.Options{
 		IdleTimeout: env.IdleTimeout, ApprovalTimeout: env.ApprovalTimeout,
 		ArtifactMaxBytes: env.ArtifactMaxBytes, InternetDefault: env.InternetDefault, ImageMaxBytes: env.ImageMaxBytes,
@@ -141,7 +155,7 @@ func run() error {
 		MaxSubagents:       env.MaxSubagents,
 		AutoCompactDefault: env.AutoCompactDefault, CompactReserveTokens: env.CompactReserveTokens, CompactKeepRecent: env.CompactKeepRecent,
 		BgWakesPerHour: env.BgWakesPerHour, BgKeepAlive: env.BgKeepAlive, AutoTurnsMax: env.AutoTurnsMax,
-		Titler: newTitler(cat, env.TitleModel), Platform: plat,
+		Titler: newTitler(cat, env.TitleModel), Platform: plat, Toolsets: toolsets,
 	})
 	fac.Backend = m
 	plat.SetOnExchange(m.PlatformExchanged)
@@ -184,7 +198,7 @@ func run() error {
 	go func() { errc <- apiSrv.ListenAndServe() }()
 	go func() { errc <- proxySrv.ListenAndServe() }()
 	go func() { errc <- webSrv.ListenAndServe() }()
-	slog.Info("orchestrator running", "api", env.HTTPAddr, "proxy", env.ProxyAddr, "pool", env.PoolSizes, "model", cat.Default, "image", env.Image)
+	slog.Info("orchestrator running", "api", env.HTTPAddr, "proxy", env.ProxyAddr, "toolsets", toolsets.Key(), "pool", env.PoolSize, "model", cat.Default, "image", env.Image)
 
 	select {
 	case <-ctx.Done():

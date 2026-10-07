@@ -1,5 +1,6 @@
 // Package pool keeps pre-started sandboxes ready per binding variant
-// (warm pool, E7). Every slot is assigned exactly once and destroyed
+// (warm pool, E7). A variant is the canonical key of a combination of bindings (package toolset);
+// the targets name the keys kept warm, further keys accepted by SetKnown get a slot on demand. Every slot is assigned exactly once and destroyed
 // afterwards, never put back into the pool.
 package pool
 
@@ -106,6 +107,7 @@ type Pool[W any] struct {
 	create  CreateFunc[W]
 	destroy DestroyFunc[W]
 	targets map[string]int
+	known   func(variant string) bool // further variants started on demand (nil: none)
 
 	mu      sync.Mutex
 	slots   map[string]*Slot[W]
@@ -129,6 +131,15 @@ func New[W any](create CreateFunc[W], destroy DestroyFunc[W], targets map[string
 		wake: make(chan struct{}, 1), idleCh: make(chan struct{}),
 		retryDelay: 3 * time.Second,
 	}
+}
+
+// SetKnown accepts variants beyond the targets: they have no warm slots, AcquireWait starts one on
+// demand. Used for chats stored with another combination than the configured one, so that they
+// resume (issue #29). Call before Start.
+func (p *Pool[W]) SetKnown(known func(variant string) bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.known = known
 }
 
 func (p *Pool[W]) Targets() map[string]int {
@@ -238,7 +249,7 @@ func (p *Pool[W]) LastError(variant string) string {
 func (p *Pool[W]) Acquire(variant, chatID string) (*Slot[W], error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if _, ok := p.targets[variant]; !ok {
+	if _, ok := p.targets[variant]; !ok && (p.known == nil || !p.known(variant)) {
 		return nil, ErrUnknownVariant
 	}
 	var best *Slot[W]

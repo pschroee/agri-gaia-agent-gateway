@@ -39,6 +39,7 @@ import (
 	"agw/internal/sandbox"
 	"agw/internal/sock"
 	"agw/internal/store"
+	"agw/internal/toolset"
 )
 
 const (
@@ -69,7 +70,7 @@ const (
 // after switching it on).
 const noLazySubagent = "subagents_enable"
 
-// SystemNote is appended to pi's system prompt (variants with bash, default number of background
+// SystemNote is appended to pi's system prompt (combinations with bash, default number of background
 // tasks; a slot uses SystemNoteFor with the configured limit).
 var SystemNote = SystemNoteFor("cli", execproto.DefaultBgMax)
 
@@ -85,7 +86,7 @@ const mmdcNote = " If you need the diagram as a file as a fallback (for example 
 // is preserved.
 func SystemNoteFor(variant string, bgMax int) string {
 	bg, mmdc := "", ""
-	if variant == "cli" || variant == "both" { // only variants with bash
+	if ts, err := toolset.FromVariant(variant); err == nil && ts.Has(toolset.CLI) { // only with bash
 		bg, mmdc = fmt.Sprintf(bgNote, bgMax), mmdcNote
 	}
 	return strings.NewReplacer("{{bg}}", bg, "{{mmdc}}", mmdc).Replace(systemNote)
@@ -108,13 +109,77 @@ const systemNote = `You work in an isolated sandbox (Debian, Python 3, curl, jq,
 - Flows, architectures, states, sequences, schedules and data models you show as a code block with the language mermaid; the web UI renders it (skill mermaid).{{mmdc}} For data with axes and numbers you use matplotlib.
 {{bg}}- Language: reply in the language of the user's latest message, not in the language of this note or of the skills. If the user switches language, switch with them. Only when their message shows no language (e.g. "ok", a file name or only code) does the preferred language from an orchestrator note apply (starts with ` + chat.SystemHeader + `). Tool calls, commands, code and identifiers stay as they are.`
 
-// Variants describes the binding variants (scope of action per variant).
-var Variants = []VariantInfo{
-	{ID: "cli", Label: "Command line (bash + agw-artifact, subagents)", Tools: []string{"read", "bash", "edit", "write", "subagent", "todo", "bg_output", "bg_stop", "web_search", "web_extract", "intercom"}},
-	{ID: "mcp", Label: "MCP (MCP tools only, read/write/ls, no bash)", Tools: append([]string{"read", "write", "ls", "mcp_ping", "mcp_list_artifacts", "mcp_upload_artifact", "mcp_request_internet"}, append(platformMCPTools(), "todo", "web_search", "web_extract")...)},
-	{ID: "api", Label: "REST API (platform_http only, no bash, no file tools)", Tools: []string{"platform_http", "todo", "web_search", "web_extract"}},
-	{ID: "both", Label: "MCP and command line", Tools: append([]string{"read", "bash", "edit", "write", "subagent", "mcp_ping", "mcp_list_artifacts", "mcp_upload_artifact", "mcp_request_internet"}, append(platformMCPTools(), "todo", "bg_output", "bg_stop", "web_search", "web_extract", "intercom")...)},
+// bindingTools are the tools pi has per binding; a combination gets their union (issue #29).
+// With the command line, ls stays hidden in the main agent (BridgeHide), as in the former variant both.
+var bindingTools = map[toolset.Binding][]string{
+	toolset.CLI: {"read", "bash", "edit", "write", "subagent", "todo", "bg_output", "bg_stop", "web_search", "web_extract", "intercom"},
+	toolset.MCP: append([]string{"read", "write", "ls", "mcp_ping", "mcp_list_artifacts", "mcp_upload_artifact", "mcp_request_internet"}, append(platformMCPTools(), "todo", "web_search", "web_extract")...),
+	toolset.API: {"platform_http", "todo", "web_search", "web_extract"},
 }
+
+// bindingLabels name the bindings in the UI.
+var bindingLabels = map[toolset.Binding]string{
+	toolset.CLI: "Command line",
+	toolset.MCP: "MCP",
+	toolset.API: "REST API",
+}
+
+// singleLabels keep the more detailed labels of the single bindings.
+var singleLabels = map[string]string{
+	"cli": "Command line (bash + agw-artifact, subagents)",
+	"mcp": "MCP (MCP tools only, read/write/ls, no bash)",
+	"api": "REST API (platform_http only, no bash, no file tools)",
+}
+
+// Tools is the union of the tools of the bindings of a combination, each tool once, in the
+// canonical order of the bindings (cli, mcp, api).
+func Tools(ts toolset.Set) []string {
+	seen := map[string]bool{}
+	if ts.Has(toolset.CLI) {
+		seen["ls"] = true // hidden in the main agent while bash is there (BridgeHide)
+	}
+	var out []string
+	for _, b := range ts.Bindings() {
+		for _, t := range bindingTools[b] {
+			if !seen[t] {
+				seen[t] = true
+				out = append(out, t)
+			}
+		}
+	}
+	return out
+}
+
+// Label names a combination in the UI.
+func Label(ts toolset.Set) string {
+	if l, ok := singleLabels[ts.Key()]; ok {
+		return l
+	}
+	parts := make([]string, 0, 3)
+	for _, b := range ts.Bindings() {
+		parts = append(parts, bindingLabels[b])
+	}
+	return strings.Join(parts, " + ")
+}
+
+// Info describes a combination (GET /api/variants, GET /api/config).
+func Info(ts toolset.Set) VariantInfo {
+	bs := make([]string, 0, 3)
+	for _, b := range ts.Bindings() {
+		bs = append(bs, string(b))
+	}
+	return VariantInfo{ID: ts.Key(), Label: Label(ts), Bindings: bs, Tools: Tools(ts)}
+}
+
+// Variants describes every combination of bindings (scope of action per combination). Only the
+// one in AGW_TOOLSETS is given to new chats; the others remain for chats stored with them.
+var Variants = func() []VariantInfo {
+	var out []VariantInfo
+	for _, ts := range toolset.All() {
+		out = append(out, Info(ts))
+	}
+	return out
+}()
 
 // platformMCPTools are the tools of the platform binding as pi sees them via mcp.ts.
 func platformMCPTools() []string {
@@ -126,35 +191,43 @@ func platformMCPTools() []string {
 }
 
 type VariantInfo struct {
-	ID    string   `json:"id"`
-	Label string   `json:"label"`
-	Tools []string `json:"tools"`
+	ID       string   `json:"id"`
+	Label    string   `json:"label"`
+	Bindings []string `json:"bindings"`
+	Tools    []string `json:"tools"`
+	Active   bool     `json:"active,omitempty"` // the combination new chats get (AGW_TOOLSETS)
 }
 
-// PiArgs returns the pi arguments of a variant. The scope of action is
-// defined here: the MCP variant gets a strict tool list without bash and
-// without subagents, because a subagent would bring bash back. All variants
-// get the task list (todo).
+// PiArgs returns the pi arguments of a variant: a combination key, a key in another order or the
+// older id both. The scope of action is defined here. Without the command line the tool list is
+// strict (--tools) and there are no subagents, because a subagent would bring bash back. With the
+// command line pi keeps its default tools and adds those of the extensions (MCP, REST). All
+// combinations get the task list (todo).
 func PiArgs(variant, provider, model string) ([]string, error) {
 	return piArgs(variant, provider, model, SystemNoteFor(variant, execproto.DefaultBgMax))
 }
 
 func piArgs(variant, provider, model, note string) ([]string, error) {
+	ts, err := toolset.FromVariant(variant)
+	if err != nil {
+		return nil, err
+	}
 	args := []string{"--provider", provider, "--model", model, "--append-system-prompt", note, "-e", bridgeExt, "-e", todoExt, "-e", searxExt, "-e", webGateExt}
-	switch variant {
-	case "cli":
-		args = append(args, "-e", subagentsExt, "-e", intercomExt, "--exclude-tools", noLazySubagent, "--skill", artifactSkil, "--skill", internetSkil, "--skill", platformSkil, "--skill", typstSkill, "--skill", diagramSkill, "--skill", mermaidSkill)
-	case "mcp":
-		args = append(args, "-e", mcpExt, "--tools", "read,write,ls,mcp_ping,mcp_list_artifacts,mcp_upload_artifact,mcp_request_internet,"+strings.Join(platformMCPTools(), ",")+",todo,web_search,web_extract")
-	case "api":
-		// REST variant (step 2): no bash, no file tools, only the HTTP tool at the orchestrator's
-		// REST endpoint. The same web and task tools as MCP, so that the variants differ only in how
-		// the platform is bound.
-		args = append(args, "-e", apiExt, "--tools", "platform_http,todo,web_search,web_extract")
-	case "both":
-		args = append(args, "-e", subagentsExt, "-e", intercomExt, "--exclude-tools", noLazySubagent, "-e", mcpExt, "--skill", artifactSkil, "--skill", internetSkil, "--skill", platformSkil, "--skill", typstSkill, "--skill", diagramSkill, "--skill", mermaidSkill)
-	default:
-		return nil, fmt.Errorf("unknown variant %q", variant)
+	if ts.Has(toolset.CLI) {
+		args = append(args, "-e", subagentsExt, "-e", intercomExt, "--exclude-tools", noLazySubagent)
+	}
+	if ts.Has(toolset.MCP) {
+		args = append(args, "-e", mcpExt)
+	}
+	if ts.Has(toolset.API) {
+		// REST binding (step 2): the HTTP tool at the orchestrator's REST endpoint. The same web and
+		// task tools as MCP, so that the bindings differ only in how the platform is bound.
+		args = append(args, "-e", apiExt)
+	}
+	if ts.Has(toolset.CLI) {
+		args = append(args, "--skill", artifactSkil, "--skill", internetSkil, "--skill", platformSkil, "--skill", typstSkill, "--skill", diagramSkill, "--skill", mermaidSkill)
+	} else {
+		args = append(args, "--tools", strings.Join(Tools(ts), ","))
 	}
 	return args, nil
 }
@@ -444,10 +517,11 @@ func WebEnv(env config.Env) []string {
 }
 
 // BridgeHide names the tools that exec-bridge.ts hides again in the main
-// agent: in cli and both, grep, find and ls were not active before E9.
-// The MCP variant sets its tools with --tools.
+// agent: with the command line, grep, find and ls were not active before E9.
+// Without it --tools sets the tools; MCP needs ls, so nothing is hidden there.
 func BridgeHide(variant string) string {
-	if variant == "mcp" {
+	ts, err := toolset.FromVariant(variant)
+	if err == nil && ts.Has(toolset.MCP) && !ts.Has(toolset.CLI) {
 		return ""
 	}
 	return "grep,find,ls"

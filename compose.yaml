@@ -145,8 +145,8 @@ services:
       AGW_SEARXNG_URL: http://searxng:8080
       AGW_NPM_CACHE: agwpoc-npm-cache-1
       AGW_PIP_CACHE: agwpoc-pip-cache-1
-      AGW_POOL_SIZE_CLI: ${AGW_POOL_SIZE_CLI:-1}
-      AGW_POOL_SIZE_MCP: ${AGW_POOL_SIZE_MCP:-1}
+      AGW_TOOLSETS: ${AGW_TOOLSETS:-cli}
+      AGW_POOL_SIZE: ${AGW_POOL_SIZE:-2} # lower than the default 4 on a development machine
       AGW_COMPACT_RESERVE_TOKENS: ${AGW_COMPACT_RESERVE_TOKENS:-16384}
       AGW_COMPACT_KEEP_RECENT_TOKENS: ${AGW_COMPACT_KEEP_RECENT_TOKENS:-20000}
     volumes:

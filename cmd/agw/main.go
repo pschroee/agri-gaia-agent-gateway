@@ -26,11 +26,11 @@ Usage: agw [--url URL] [--json] <command> [arguments]
 
 Commands:
   models                        selectable models with prices
-  variants                      binding variants
+  variants                      combinations of bindings (the active one: AGW_TOOLSETS)
   config                        server defaults
   pool                          slots in the pool, target/free/assigned, totals
   chat list                     all chats, newest first
-  chat new [--model M] [--variant cli|mcp|both] [--title T] [--internet=true|false] [message]
+  chat new [--model M] [--variant V] [--title T] [--internet=true|false] [message]
   chat show <id> [--thinking]   header and history
   chat send <id> <text> [--wait] [--auto-approve|--auto-reject] [--thinking] [--verbose]
                                 if the agent is working, the message is queued
@@ -402,9 +402,13 @@ func (a *app) cmdVariants(args []string) error {
 		return a.printJSON(vs)
 	}
 	tw := a.table()
-	fmt.Fprintln(tw, "ID\tLabel\tTools")
+	fmt.Fprintln(tw, "ID\tNew chats\tLabel\tTools")
 	for _, v := range vs {
-		fmt.Fprintf(tw, "%s\t%s\t%s\n", v.ID, v.Label, strings.Join(v.Tools, ", "))
+		mark := ""
+		if v.Active {
+			mark = "yes"
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", v.ID, mark, v.Label, strings.Join(v.Tools, ", "))
 	}
 	return tw.Flush()
 }
@@ -430,6 +434,9 @@ func (a *app) cmdConfig(args []string) error {
 	fmt.Fprintf(tw, "Reserve until compaction\t%s tokens\n", fmtInt(c.CompactReserveTokens))
 	fmt.Fprintf(tw, "Kept when compacting\t%s tokens\n", fmtInt(c.CompactKeepRecentTokens))
 	fmt.Fprintf(tw, "Subagents per chat\tat most %d at the same time\n", c.MaxSubagents)
+	if c.Toolsets != nil {
+		fmt.Fprintf(tw, "Bindings of new chats\t%s (AGW_TOOLSETS)\n", c.Toolsets.ID)
+	}
 	return tw.Flush()
 }
 
