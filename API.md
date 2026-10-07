@@ -745,7 +745,9 @@ without approval, because that only removes a right (issue #34). Both exist in e
   and `web_extract` disappear from the next request on (`web-gate.ts`); the web proxy refuses at once.
 - **Guidance for the agent** (issue #44): the system note names only the switch tools of the chat's bindings and the
   flow request, `web_search`, `web_extract`, cite sources with URL, switch off; the skill `web-research` (`cli`,
-  `mcp`) has the details, and `ext/web-tools.ts` gives the two web tools fuller descriptions.
+  `mcp`) has the details, and `ext/web-tools.ts` gives the two web tools fuller descriptions. Sources are cited as
+  Markdown links with a meaningful title, never as bare URLs (issue #61: rule in the skill's description, its text,
+  `web-tools.ts`, and `linkRule` in the system note, which also covers platform links and files).
 - **Socket endpoints** (both sockets; the channel follows from the socket: `cli` at the sandbox's socket, `api` at
   pi's socket): `POST /internet {reason}` → `{status: "approved"|"rejected", name: "internet", message}`, and
   `POST /internet/off` (no body) → `{status: "off"|"already_off", name: "internet", message}`. A slot without a chat
