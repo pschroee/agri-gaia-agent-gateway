@@ -159,6 +159,20 @@ RUN case "${TARGETARCH:-$(dpkg --print-architecture)}" in \
  && install -m 0755 /tmp/fd-v${FD_VERSION}-${T}-unknown-linux-musl/fd /usr/local/bin/fd \
  && rm -rf /tmp/fd-* \
  && fd --version
+# markitdown converts documents to Markdown for the agent (skill documents): Word (docx), Excel
+# (xlsx, xls), PowerPoint (pptx), Outlook (msg), PDF as a fallback to pdftotext; HTML, CSV, EPUB,
+# JSON and XML need no extra. Pinned; internet is off in the sandbox, so it has to be in the image.
+# Its dependencies are pinned in markitdown/constraints.txt. The check converts a generated workbook.
+ARG MARKITDOWN_VERSION=0.1.8
+COPY images/agw-basis/markitdown/constraints.txt /tmp/markitdown-constraints.txt
+RUN pip3 install --no-cache-dir --break-system-packages -c /tmp/markitdown-constraints.txt \
+      "markitdown[docx,xlsx,xls,pptx,outlook,pdf]==${MARKITDOWN_VERSION}" \
+ && rm -f /tmp/markitdown-constraints.txt \
+ && cd /tmp \
+ && python3 -c "import openpyxl; wb = openpyxl.Workbook(); wb.active.append(['Pen', 'Pigs']); wb.active.append(['B3', 42]); wb.save('t.xlsx')" \
+ && markitdown t.xlsx | grep -q '| B3 | 42 |' \
+ && rm -f t.xlsx \
+ && markitdown --version
 # Dedicated unprivileged user; the home is in the tmpfs at runtime.
 RUN useradd --uid 10001 --create-home --shell /bin/bash agent \
  && mkdir -p /workspace /run/agw && chown agent:agent /workspace
@@ -175,7 +189,7 @@ COPY --from=pi /opt/agw/pihome/npm/node_modules/pi-subagents/node_modules/acorn 
 ENV NPM_CONFIG_PREFIX=/home/agent/.local NPM_CONFIG_UPDATE_NOTIFIER=false \
     PIP_BREAK_SYSTEM_PACKAGES=1 PIP_USER=1 \
     PATH=/home/agent/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-LABEL org.opencontainers.image.title="agw-basis"
+LABEL org.opencontainers.image.title="agw-basis" agwpoc.markitdown-version="${MARKITDOWN_VERSION}"
 USER agent
 WORKDIR /workspace
 # PID 1 does nothing and reaps orphaned processes; the orchestrator starts tools via
