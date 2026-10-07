@@ -741,6 +741,45 @@ func (m *Manager) ensureLive(ctx context.Context, chatID string) (*live, bool, e
 	return l, true, nil
 }
 
+// Resume resumes an idle chat in the background, without a message (issue #31: the UI wakes a chat as
+// soon as it is opened, so the user never sees it idle). It returns at once; SSE "resume" reports
+// the steps as for a resume through a message. Idempotent: an active chat, a chat already being
+// resumed or started, and a second call during a wake change nothing. A message sent meanwhile
+// waits in ensureLive for the wake and never takes a second slot. After a failed wake the chat stays
+// idle; calling Resume again (or sending) tries again. Not to be confused with the wake-ups of
+// background tasks (BgWakesPerHour), which start a turn of the agent.
+func (m *Manager) Resume(ctx context.Context, chatID string) (ChatView, error) {
+	c, err := m.st.GetChat(ctx, chatID)
+	if err != nil {
+		return ChatView{}, err
+	}
+	m.mu.Lock()
+	busy := m.live[chatID] != nil || m.resuming[chatID] || m.starting[chatID]
+	if !busy {
+		// set before the response, so the chat comes back as resuming and a second call is a no-op
+		m.resuming[chatID] = true
+	}
+	m.mu.Unlock()
+	if busy {
+		return m.view(c), nil
+	}
+	m.userActive(chatID)
+	go func() {
+		ctx := context.WithoutCancel(ctx)
+		_, _, err := m.ensureLive(ctx, chatID)
+		// ensureLive clears the flag itself when it resumed; when the chat was live meanwhile (a message
+		// resumed it first) or loading the chat failed, it is cleared here
+		m.mu.Lock()
+		delete(m.resuming, chatID)
+		m.mu.Unlock()
+		if err != nil {
+			slog.Info("resume on open failed", "chat", chatID, "error", err)
+		}
+		m.publishChat(ctx, chatID)
+	}()
+	return m.view(c), nil
+}
+
 // AttachmentsHeader introduces the block with which attachments are appended
 // to a message; the UI recognizes it and shows the attachments as chips.
 const AttachmentsHeader = "[Attachments in /workspace/inputs/]"

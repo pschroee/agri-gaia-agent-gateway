@@ -182,6 +182,7 @@ func (s *Server) Handler() http.Handler {
 	chat("DELETE /api/chats/{id}/queue/{qid}", s.unqueue)
 	chat("POST /api/chats/{id}/abort", s.action(s.M.Abort))
 	chat("POST /api/chats/{id}/suspend", s.action(s.M.Suspend))
+	chat("POST /api/chats/{id}/resume", s.action(s.M.Resume))
 	chat("POST /api/chats/{id}/internet", s.internet)
 	chat("POST /api/chats/{id}/model", s.setModel)
 	chat("GET /api/chats/{id}/tools/running", s.runningTools)

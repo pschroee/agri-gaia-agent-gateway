@@ -342,6 +342,7 @@ type ActivityPage = { calls: ActivityCall[]; chats: Record<string, { id: string;
 | `POST /api/chats/{id}/model` `{model, compact_first?}` | `Chat` | switch model (409 `ErrRunning` while pi is working). If the last measured context does not fit under the new model's context window minus reserve: **409 with `code: "context_too_large"`** and `details: {model, tokens, window, limit}`. With `compact_first: true` it compacts first and switches after the end (`pending_model` in the chat until then) |
 | `POST /api/chats/{id}/effort` `{level}` | `Chat` | pi's thinking level (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`); levels pi does not report for the model (`thinking_levels`) give 400. For a dormant chat on resume |
 | `POST /api/chats/{id}/suspend` | `Chat` | let it idle: save the session, tear down the sandbox (409 with an open approval) |
+| `POST /api/chats/{id}/resume` | `Chat` | resume an idle chat in the background, without a message (see *Resuming a chat when it is opened*); returns at once with `resuming: true`, steps via SSE `resume`. Idempotent: an active, running, starting or already resuming chat comes back unchanged |
 | `GET /api/chats/{id}/session` | JSONL | pi's session file |
 | `GET /api/chats/{id}/artifacts` | `Artifact[]` | inputs and outputs of the chat |
 | `GET /api/chats/{id}/artifacts/{name}?kind=input\|output` | file | download (default `output`) |
@@ -578,6 +579,23 @@ context.
 
 The pool replaces every taken slot at once: each start runs on its own, so taking several slots in a row starts their
 replacements in parallel instead of one batch after another.
+
+## Resuming a chat when it is opened
+
+`POST /api/chats/{id}/resume` (issue #31; the platform UI calls it when a chat is opened or selected, so the user
+never sees a chat idle):
+
+- **Idle chat:** the chat is marked `resuming` before the response, which comes back at once. The resume runs in the
+  background exactly like a resume through a message: SSE `resume` reports `acquire`, `session`, `settings`,
+  `workspace`, `inputs` and ends with `ready` or `failed` (`start` is not set). A resume takes longer than assigning a
+  warm slot to a new chat: the session, the workspace and the inputs are restored, and without a free slot it waits for
+  one (up to `AGW_ACQUIRE_TIMEOUT`).
+- **Harmless to repeat:** an active chat (also while the agent works), a new chat waiting for its first sandbox and a
+  chat already being resumed, by this endpoint or by a message, come back unchanged; nothing is started twice.
+- **A message sent meanwhile** waits for the resume and is then delivered (not queued); it never takes a second slot.
+- **After `failed`** the chat stays idle (`dormant`); calling the endpoint again, or the next message, tries again.
+- The idle timeout (`AGW_IDLE_TIMEOUT`) stays: an opened chat that is not used idles again afterwards, and the
+  endpoint does not extend background tasks. A chat of another user answers 404 in oidc mode, like every chat route.
 
 ## Bindings of new chats
 
