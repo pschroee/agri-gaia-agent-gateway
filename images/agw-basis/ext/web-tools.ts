@@ -41,7 +41,7 @@ export const EXTRACT_DESCRIPTION =
 export const EXTRACT_URL = "Full http(s) URL of the page or file, e.g. from a web_search result"
 
 export const CITE_GUIDELINE =
-	"Name the web sources you used in your answer with their URL; if sources disagree, say so and name both."
+	"Name the web sources you used in your answer with their URL, as Markdown links with a meaningful title ([Title](https://...)), never as bare URLs; if sources disagree, say so and name both."
 
 type Tool = Parameters<ExtensionAPI["registerTool"]>[0]
 

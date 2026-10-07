@@ -105,6 +105,13 @@ refer to this repository.
   `<b>` shows as text, `#quot;` shows literally as `&quot;`, and unquoted brackets (`A[Training (CPU)]`) are the
   usual parse error. Changes to skills or `images/agw-basis/mmdc/` need both slot images rebuilt (see *Warm pool*).
 
+## Links in the chat
+
+- Links are Markdown links with a meaningful title, never bare URLs (issue #61). The rule lives in the
+  **description** and text of the skill `web-research`, in the citing guideline of `ext/web-tools.ts` and in
+  `linkRule` of the system note (every binding; also platform links and files). Tests in
+  `internal/worker/links_test.go`. Skill changes need both slot images rebuilt (see *Warm pool*).
+
 ## Creating chats
 
 - `POST /api/chats` with `async: true` (issue #30) returns at once also when the pool is empty: the chat is marked
