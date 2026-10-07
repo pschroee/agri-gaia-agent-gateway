@@ -35,6 +35,7 @@ type fakeAgent struct {
 	internet bool
 	netCalls int // SetInternet calls
 	closed   bool
+	reason   string // teardown reason passed by the pool (issue #55)
 	events   chan rpc.Event
 	pollOut  string   // response to the subagents' read script
 	execs    []string // executed commands
@@ -425,10 +426,13 @@ func setup(t *testing.T) *env {
 		e.agents = append(e.agents, a)
 		return a, nil
 	}
-	destroy := func(_ context.Context, a Agent) {
+	destroy := func(ctx context.Context, a Agent) {
 		fa := a.(*fakeAgent)
 		fa.mu.Lock()
 		defer fa.mu.Unlock()
+		if fa.reason == "" {
+			fa.reason = pool.Reason(ctx)
+		}
 		if !fa.closed {
 			fa.closed = true
 			close(fa.events) // like a torn-down container: pi's stream ends
