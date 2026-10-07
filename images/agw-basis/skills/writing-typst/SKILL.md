@@ -330,4 +330,4 @@ Upstream docs (GitHub, for when local files are missing/outdated):
   The list is also in `/opt/typst/packages.txt`.
 - If an `#import "@preview/…"` fails, the package is not in the image: fall back to one of the
   packages above, do not try to download it.
-- Store the finished PDF as an artifact if needed (`agw-artifact upload file.pdf`).
+- Send the finished PDF to the user with `agw-artifact upload file.pdf` (no approval; skill `artifacts`).

@@ -76,7 +76,7 @@ func runOp(ctx context.Context, req execproto.Request, emit func(execproto.Frame
 	}
 	switch req.Op {
 	case execproto.OpRead:
-		data, size, err := readFile(req.Path, req.Max)
+		data, size, err := readFileIn(req.Root, req.Path, req.Max)
 		if err != nil {
 			emit(fail(err))
 			return
@@ -166,12 +166,30 @@ func openRegular(p string, flag int, perm os.FileMode) (*os.File, error) {
 	return f, nil
 }
 
+// readFileIn reads like readFile; with a root (files sent to the user, issue #62) the file must lie inside it, with no
+// symbolic link on the way or at the end (execproto.OpenInside).
+func readFileIn(root, p string, max int64) ([]byte, int64, error) {
+	if root == "" {
+		return readFile(p, max)
+	}
+	f, err := execproto.OpenInside(root, p)
+	if err != nil {
+		return nil, 0, &opError{"EACCES", err.Error()}
+	}
+	defer f.Close()
+	return readOpen(f, p, max)
+}
+
 func readFile(p string, max int64) ([]byte, int64, error) {
 	f, err := openRegular(p, os.O_RDONLY, 0)
 	if err != nil {
 		return nil, 0, err
 	}
 	defer f.Close()
+	return readOpen(f, p, max)
+}
+
+func readOpen(f *os.File, p string, max int64) ([]byte, int64, error) {
 	st, _ := f.Stat()
 	data, err := io.ReadAll(io.LimitReader(f, max+1))
 	if err != nil {

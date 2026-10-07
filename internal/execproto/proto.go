@@ -109,6 +109,9 @@ type Request struct {
 	// is already open (descriptor 3), created by the supervisor as root (Review 3, N1). Whatever the
 	// orchestrator sends here is overwritten by the supervisor.
 	LogFD bool `json:"logFd,omitempty"`
+	// Root (only read): the file must lie inside this directory, no symbolic link on the way or at the end, regular
+	// file only (OpenInside). Set by the orchestrator for files the agent sends to the user (issue #62).
+	Root string `json:"root,omitempty"`
 }
 
 // LinesArgs: lines Start (0-based) to Start+Count-1, at most a little more than MaxBytes.
@@ -287,6 +290,9 @@ func (r *Request) Validate() error {
 	default:
 		return errors.New("unknown operation " + r.Op)
 	}
+	if r.Root != "" && r.Op != OpRead {
+		return errors.New("root only for read")
+	}
 	switch r.Op {
 	case OpWrite:
 		if len(r.Data) > MaxFileBytes {
@@ -295,6 +301,16 @@ func (r *Request) Validate() error {
 	case OpRead:
 		if r.Max <= 0 || r.Max > MaxFileBytes {
 			r.Max = MaxFileBytes
+		}
+		if r.Root != "" {
+			c, err := CleanPath(r.Root)
+			if err != nil {
+				return errors.New("root: " + err.Error())
+			}
+			r.Root = c
+			if !Inside(r.Root, r.Path) {
+				return fmt.Errorf("only files inside %s can be sent, not %s: %w", r.Root, r.Path, ErrOutsideRoot)
+			}
 		}
 	case OpAccess:
 		if r.Mode != "r" && r.Mode != "rw" && r.Mode != "" {

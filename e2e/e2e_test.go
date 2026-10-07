@@ -177,27 +177,24 @@ func TestInternetRequestRejected(t *testing.T) {
 	}
 }
 
-func TestArtifactRejectThenApprove(t *testing.T) {
+// Issue #62: the agent sends a file without approval; it is stored at once and logged.
+func TestArtifactSentWithoutApproval(t *testing.T) {
 	requireE2E(t)
 	id := newChat(t, "cli", false)
 	s := subscribe(t, id)
-	ask(t, s, id, "Create a file hello.txt with the content 'Hello world' and upload it with agw-artifact as an artifact.", func(approval) bool { return false })
+	ask(t, s, id, "Create a file hello.txt with the content 'Hello world' and send it to me with agw-artifact upload.", func(approval) bool { return false })
 	f := getChat(t, id)
-	if len(f.Artifacts) != 0 {
-		t.Fatalf("artifact despite rejection: %+v", f.Artifacts)
-	}
-	ask(t, s, id, "Please upload hello.txt once more, this time I will approve.", func(approval) bool { return true })
-	f = getChat(t, id)
-	var states []string
-	for _, a := range f.Approvals {
-		states = append(states, a.State)
-	}
 	if len(f.Artifacts) != 1 || f.Artifacts[0].Name != "hello.txt" || f.Artifacts[0].Via != "cli" {
-		t.Fatalf("artifact: %+v (approvals %v)", f.Artifacts, states)
+		t.Fatalf("artifact: %+v", f.Artifacts)
 	}
-	if !strings.Contains(strings.Join(states, ","), "rejected") || !strings.Contains(strings.Join(states, ","), "approved") {
-		t.Fatalf("approvals: %v", states)
+	if len(f.Approvals) != 0 {
+		t.Fatalf("approvals: %+v", f.Approvals)
 	}
+	var ops []string
+	for _, c := range f.SocketCalls {
+		ops = append(ops, c.Via+":"+c.Op+":"+c.Result)
+	}
+	mustContain(t, strings.Join(ops, " "), "cli:upload:stored", "socket log")
 }
 
 func TestMCPVariant(t *testing.T) {
@@ -217,7 +214,7 @@ func TestMCPVariant(t *testing.T) {
 		ops = append(ops, c.Via+":"+c.Op+":"+c.Result)
 	}
 	mustContain(t, strings.Join(ops, " "), "mcp:ping:ok", "socket log")
-	mustContain(t, strings.Join(ops, " "), "mcp:upload:approved", "socket log")
+	mustContain(t, strings.Join(ops, " "), "mcp:upload:stored", "socket log")
 }
 
 func TestUserInputAndResume(t *testing.T) {

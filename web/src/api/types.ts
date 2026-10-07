@@ -375,7 +375,8 @@ export type Approval = {
   id: string
   chat_id: string
   /**
-   * artifact_upload: upload a file; internet_access: request for internet access, `name` is the reason;
+   * artifact_upload: upload a file (only in older chats: since issue #62 the agent sends files without approval);
+   * internet_access: request for internet access, `name` is the reason;
    * platform_write: writing call to the Agri-Gaia platform, `name` is "METHOD path", `preview` including the body.
    */
   kind: "artifact_upload" | "internet_access" | "platform_write"

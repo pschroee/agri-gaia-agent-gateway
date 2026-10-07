@@ -2,7 +2,7 @@
 // meant follows solely from the slot at whose socket the request arrives;
 // statements by the agent play no role in this.
 //
-//	POST /artifacts?name=N   upload, waits for confirmation by the user
+//	POST /artifacts?name=N   send a file to the user: stored as an artifact at once, no confirmation
 //	GET  /artifacts          artifacts of the chat
 //	GET  /artifacts/{name}   download (?kind=input|output)
 //	POST /internet           request internet access, waits for confirmation
@@ -40,12 +40,21 @@ import (
 
 const SocketName = "agw.sock"
 
+// Statuses of an upload (issue #62: no approval any more). UploadStored: stored and sent to the user;
+// UploadRejected: not stored (checksum mismatch). Requests for internet keep approved | rejected.
+const (
+	UploadStored   = "stored"
+	UploadRejected = "rejected"
+)
+
 type UploadResult struct {
-	Status  string `json:"status"` // approved | rejected
+	Status  string `json:"status"` // uploads: stored | rejected; internet: approved | rejected; off: off | already_off
 	Name    string `json:"name"`
 	Size    int64  `json:"size"`
 	SHA256  string `json:"sha256"`
 	Message string `json:"message,omitempty"`
+	// Text (uploads): the line the agent reads (UploadResultText), the same for agw-artifact and MCP.
+	Text string `json:"text,omitempty"`
 	// Log is the result text for the socket log when it says more than Status (internet requests:
 	// "already on", "expired"); never sent to the agent.
 	Log string `json:"-"`
@@ -235,6 +244,22 @@ func (h *handler) upload(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, res)
 }
 
+// UploadToolDescription is the description of the MCP tool upload_artifact (also mcp_upload_artifact in pi).
+const UploadToolDescription = "Sends a file to the user: it is stored as an artifact of this chat and appears in the chat at once as a file message, without approval. " +
+	"Use it for result files the user wants to keep or download, not for intermediate files. Only regular files inside /workspace, no symbolic links."
+
+// UploadResultText is what the agent reads after an upload (agw-artifact, MCP).
+func UploadResultText(r UploadResult) string {
+	if r.Status == UploadStored {
+		return fmt.Sprintf("sent: %q is in the chat for the user (%d bytes, sha256 %s)", r.Name, r.Size, r.SHA256)
+	}
+	msg := r.Message
+	if msg == "" {
+		msg = "not stored"
+	}
+	return fmt.Sprintf("not sent: %q was not stored (%s)", r.Name, msg)
+}
+
 var errBusy = errors.New("two uploads already in progress; please upload one after another")
 
 func (h *handler) doUpload(ctx context.Context, chat, via, name string, data []byte, sha string) (UploadResult, error) {
@@ -247,10 +272,18 @@ func (h *handler) doUpload(ctx context.Context, chat, via, name string, data []b
 	}
 	res, err := h.b.Upload(ctx, chat, h.slot, via, name, int64(len(data)), sha, bytes.NewReader(data))
 	result := res.Status
+	if res.Status == UploadRejected && res.Message != "" {
+		result += ": " + res.Message
+	}
 	if err != nil {
 		result = "error: " + err.Error()
 	}
-	h.logCall(ctx, chat, via, "upload", fmt.Sprintf("%s (%d bytes)", name, len(data)), result)
+	if err == nil {
+		res.Text = UploadResultText(res)
+	}
+	// name, size and SHA-256 of what was sent; the tool call comes from the context (Activity, evaluation)
+	sum := sha256.Sum256(data)
+	h.logCall(ctx, chat, via, "upload", fmt.Sprintf("%s (%d bytes, sha256 %s)", name, len(data), hex.EncodeToString(sum[:])), result)
 	return res, err
 }
 
@@ -532,7 +565,7 @@ func (h *handler) mcpServer() *mcp.Server {
 			}
 			return textResult(false, "%s", buf.String()), nil, nil
 		})
-	mcp.AddTool(s, &mcp.Tool{Name: "upload_artifact", Description: "Stores a file as an artifact of this chat. The user has to approve the upload; the call waits for the decision."},
+	mcp.AddTool(s, &mcp.Tool{Name: "upload_artifact", Description: UploadToolDescription},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in uploadIn) (*mcp.CallToolResult, any, error) {
 			name := artifacts.SanitizeName(in.Name)
 			chat, err := h.chat("mcp", "upload", name)
@@ -551,14 +584,7 @@ func (h *handler) mcpServer() *mcp.Server {
 			if err != nil {
 				return textResult(true, "error: %v", err), nil, nil
 			}
-			if res.Status == "approved" {
-				return textResult(false, "approved: artifact %q stored (%d bytes, sha256 %s)", res.Name, res.Size, res.SHA256), nil, nil
-			}
-			msg := res.Message
-			if msg == "" {
-				msg = "rejected by the user"
-			}
-			return textResult(false, "rejected: artifact %q was not stored (%s)", res.Name, msg), nil, nil
+			return textResult(res.Status != UploadStored, "%s", UploadResultText(res)), nil, nil
 		})
 	mcp.AddTool(s, &mcp.Tool{Name: "request_internet", Description: "Asks the user for internet access for this sandbox (off by default). Call it with a reason; the call waits for the user's decision."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in internetIn) (*mcp.CallToolResult, any, error) {

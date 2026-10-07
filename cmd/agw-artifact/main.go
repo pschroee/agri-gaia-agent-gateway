@@ -21,11 +21,13 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"agw/internal/execproto"
 )
 
 const defaultSocket = "/run/agw/agw.sock"
 
-// Exit codes: 0 approved/successful, 1 error, 3 rejected by the user.
+// Exit codes: 0 approved/successful, 1 error, 3 rejected by the user (internet, platform writes).
 const exitRejected = 3
 
 func main() {
@@ -91,46 +93,35 @@ func main() {
 func usage() {
 	fmt.Fprint(os.Stderr, `agw-artifact — store artifacts of the current chat at the orchestrator
 
-  agw-artifact upload <file> [--name <name>]    upload; waits for confirmation by the user
+  agw-artifact upload <file> [--name <name>]    send a file inside /workspace to the user (shown in the chat at once)
   agw-artifact list                             list the artifacts of this chat
   agw-artifact get <name> [-o <file>]           download an artifact (user inputs: --kind input)
   agw-internet "<reason>"                       request internet access; waits for the user
   agw-internet off                              switch internet access off again (no approval)
   agw-platform <command> …                      Agri-Gaia platform (agw-platform --help)
 
-Exit code for upload: 0 approved, 3 rejected, 1 error.
+Exit code for upload: 0 sent, 1 not sent (error).
 `)
 }
 
 type uploadResult struct {
-	Status  string `json:"status"` // approved | rejected
+	Status  string `json:"status"` // upload: stored | rejected; internet: approved | rejected
 	Name    string `json:"name"`
 	Size    int64  `json:"size"`
 	SHA256  string `json:"sha256"`
 	Message string `json:"message"`
+	Text    string `json:"text"` // upload: the line for the agent
 }
 
+// upload sends a file to the user (issue #62): it is stored as an artifact of the chat at once, without approval, and
+// appears in the chat as a file message of the agent. Only regular files inside /workspace, reached without symbolic
+// links (opened with O_NOFOLLOW|O_NONBLOCK like the other helpers); the orchestrator checks size and name again.
 func upload(hc *http.Client, args []string) (int, error) {
-	fs := flag.NewFlagSet("upload", flag.ContinueOnError)
-	name := fs.String("name", "", "name of the artifact (default: file name)")
-	// The positional argument may come before the flags.
-	var file string
-	if len(args) > 0 && args[0] != "" && args[0][0] != '-' {
-		file, args = args[0], args[1:]
-	}
-	if err := fs.Parse(args); err != nil {
+	file, name, err := parseUploadArgs(args)
+	if err != nil {
 		return 1, err
 	}
-	if file == "" && fs.NArg() > 0 {
-		file = fs.Arg(0)
-	}
-	if file == "" {
-		return 1, errors.New("no file given")
-	}
-	if *name == "" {
-		*name = filepath.Base(file)
-	}
-	f, err := os.Open(file)
+	f, err := execproto.OpenInside(workspace, file)
 	if err != nil {
 		return 1, err
 	}
@@ -145,13 +136,11 @@ func upload(hc *http.Client, args []string) (int, error) {
 	}
 	sum := hex.EncodeToString(h.Sum(nil))
 
-	req, _ := http.NewRequest(http.MethodPost, "http://agw/artifacts?name="+url.QueryEscape(*name), f)
+	req, _ := http.NewRequest(http.MethodPost, "http://agw/artifacts?name="+url.QueryEscape(name), f)
 	req.ContentLength = size
 	req.Header.Set("X-Agw-Sha256", sum)
 	req.Header.Set("X-Agw-Via", "cli")
 	setCaller(req)
-	fmt.Fprintf(os.Stderr, "Uploading %s (%d bytes). Waiting for confirmation by the user …\n", *name, size)
-	start := time.Now()
 	resp, err := hc.Do(req)
 	if err != nil {
 		return 1, err
@@ -165,20 +154,59 @@ func upload(hc *http.Client, args []string) (int, error) {
 	if err := json.Unmarshal(body, &r); err != nil {
 		return 1, fmt.Errorf("unreadable response: %s", body)
 	}
-	wait := time.Since(start).Round(time.Second)
-	switch r.Status {
-	case "approved":
-		fmt.Printf("approved: artifact %q stored (%d bytes, sha256 %s, wait %s)\n", r.Name, r.Size, r.SHA256, wait)
-		return 0, nil
-	default:
-		msg := r.Message
-		if msg == "" {
-			msg = "rejected by the user"
-		}
-		fmt.Printf("rejected: artifact %q was not stored (%s, wait %s)\n", r.Name, msg, wait)
-		return exitRejected, nil
-	}
+	return printUpload(os.Stdout, r), nil
 }
+
+// printUpload writes the result line and returns the exit code: 0 sent, 1 not sent.
+func printUpload(w io.Writer, r uploadResult) int {
+	text := r.Text
+	ok := r.Status == "stored"
+	if text == "" {
+		if ok {
+			text = fmt.Sprintf("sent: %q is in the chat for the user (%d bytes, sha256 %s)", r.Name, r.Size, r.SHA256)
+		} else {
+			msg := r.Message
+			if msg == "" {
+				msg = "not stored"
+			}
+			text = fmt.Sprintf("not sent: %q was not stored (%s)", r.Name, msg)
+		}
+	}
+	fmt.Fprintln(w, text)
+	if ok {
+		return 0
+	}
+	return 1
+}
+
+// parseUploadArgs: upload <file> [--name <name>]; the file may also come after the flags. The name defaults to the
+// file name.
+func parseUploadArgs(args []string) (file, name string, err error) {
+	fs := flag.NewFlagSet("upload", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	n := fs.String("name", "", "name of the artifact (default: file name)")
+	// The positional argument may come before the flags.
+	if len(args) > 0 && args[0] != "" && args[0][0] != '-' {
+		file, args = args[0], args[1:]
+	}
+	if err := fs.Parse(args); err != nil {
+		return "", "", err
+	}
+	if file == "" && fs.NArg() > 0 {
+		file = fs.Arg(0)
+	}
+	if file == "" {
+		return "", "", errors.New("no file given")
+	}
+	name = *n
+	if name == "" {
+		name = filepath.Base(file)
+	}
+	return file, name, nil
+}
+
+// workspace is the directory files are sent from; tests replace it (no environment variable, so the agent cannot).
+var workspace = execproto.Workspace
 
 const internetHelp = `agw-internet "<reason>"   asks the user for internet access and waits for the decision.
                           Exit code: 0 granted, 3 rejected, 1 error.
