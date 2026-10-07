@@ -288,6 +288,18 @@ type SubagentEntry = { chat_id: string; run_id: string; entry_id: string; agent:
   payload: { text?: string; name?: string; arguments?: string; is_error?: boolean; id?: string /* call */; tool_call_id?: string /* result */ };
   response_id?: string; confirmed: boolean; created_at: string };
 
+// Name and state of a subagent run according to pi-subagents' status files (sandbox, hence not tamper-proof).
+type SubagentRun = { chat_id: string; run_id: string; agent: string; label?: string /* name in the workflow */;
+  state?: string /* pi-subagents' state, e.g. running, complete, failed */; pi_run_id?: string; parent_run_id?: string;
+  started_at?: string; ended_at?: string; updated_at: string };
+
+// Short form of a run for lists of chats (GET /api/chats/{id}/subagent-runs, see "Subagent runs without opening a chat").
+type SubagentRunSummary = { run_id: string; agent: string; label?: string; state?: string /* missing: estimate from last_kind and last_at */;
+  task_head?: string /* first lines of the first task: at most 8 lines and 500 bytes */;
+  started_at?: string /* first activity */; ended_at?: string /* only from the status file */;
+  last_at?: string /* newest entry or end */; last_kind?: SubagentEntry["kind"] /* kind of the newest entry */;
+  entries: number };
+
 type Command = { name: string /* without "/" */; description?: string; source: "builtin" | "extension" | "prompt" | "skill"; args?: string /* hint about arguments */ };
 
 type Artifact = { chat_id: string; kind: "input" | "output"; name: string; size: number; sha256: string; content_type: string; created_at: string; via: "cli" | "mcp" | "ui"; tool_call_id?: string /* tool call that uploaded the result (display only) */ };
@@ -326,7 +338,7 @@ type ActivityPage = { calls: ActivityCall[]; chats: Record<string, { id: string;
 | `GET /api/platform` | `{configured: boolean, api_url?, login?: "user" \| "account", account?: string /* login account only */, client_id?, token_exchange?: boolean, probe?: {reachable, http_status?, latency_ms, error?, checked_at}, last_exchange?: {chat_id, at, ok, error?}}` | binding to the platform, read-only. `probe`: unauthenticated `GET` on the API base, any HTTP answer counts as reachable, cached 10 s. `last_exchange`: newest token exchange among the user's own chats, also a failed one (e.g. the user's login expired); in memory only, empty after a restart until the next platform call. `{configured: false}` without `AGW_PLATFORM_API_URL` |
 | `GET /api/chats` | `Chat[]` | newest first, by `updated_at`; a rename (`/rename`) does not change `updated_at`, so the chat keeps its place |
 | `POST /api/chats` `{model?, variant?, title?, message?, internet?, auto_compact?, delegation?, language?, async?}` | `Chat` (201) | takes a slot from the pool; the chat gets the bindings of `AGW_TOOLSETS` (see *Bindings of new chats*): `variant` may be left out, a `variant` naming another combination is refused with 400; `max_subagents` in the body is ignored (the limit is fixed, see *Limit for subagents*); with `message` it is sent immediately. `language`: preferred language according to the browser (BCP 47, only letters, digits, hyphen, at most 35 characters, otherwise 400), see *User language*. 503 if no slot is free. `async: true` (without `message`): returns at once also when no slot is free, see *Creating a chat without waiting* |
-| `GET /api/chats/{id}` | `{chat, messages: StoredMessage[], artifacts: Artifact[], approvals: Approval[], socket_calls: SocketCall[], subagent_entries: SubagentEntry[], queue: QueueEntry[], queue_delivered: QueueDelivery[], background: BackgroundTask[]}` | complete chat; `queue_delivered`: handed to pi but not read yet, oldest first (see *Queue*) |
+| `GET /api/chats/{id}` | `{chat, messages: StoredMessage[], artifacts: Artifact[], approvals: Approval[], socket_calls: SocketCall[], subagent_entries: SubagentEntry[], subagent_runs: SubagentRun[], queue: QueueEntry[], queue_delivered: QueueDelivery[], background: BackgroundTask[]}` | complete chat; `queue_delivered`: handed to pi but not read yet, oldest first (see *Queue*) |
 | `GET /api/chats/{id}/background` | `BackgroundTask[]` | background tasks of the chat by `seq`; running ones with the current state of the slot |
 | `GET /api/chats/{id}/web_requests` | `WebRequest[]` | requests of `web_search`/`web_extract` through the web proxy, including refused ones (`denied`); for HTTPS only target and bytes |
 | `GET /api/chats/{id}/tools/running` | `{tool_call_ids}` | running foreground commands (bash) that can be stopped or converted |
@@ -335,6 +347,7 @@ type ActivityPage = { calls: ActivityCall[]; chats: Record<string, { id: string;
 | `POST /api/chats/{id}/background/{bg}/stop` | `BackgroundTask` | end a running background task (`stopped_by: "user"`, the agent is notified); 409 if it is not running, 404 unknown, 400 invalid ID |
 | `GET /api/chats/{id}/llm_calls` | `LLMCall[]` | all model calls of the chat according to the proxy |
 | `GET /api/chats/{id}/tool_executions` | `{calls: ReconciledCall[], summary: Record<ReconciledCall["state"], number>, executions: ToolExecution[], executed_tools: string[]}` | tool executions of the orchestrator and reconciliation with the calls requested at the proxy (E9), sorted by time |
+| `GET /api/chats/{id}/subagent-runs` | `SubagentRunSummary[]` | short list of the chat's subagent runs in the order they started, from the database alone: does not wake the chat and takes no slot; 404 for foreign and unknown chats. See *Subagent runs without opening a chat* |
 | `POST /api/chats/{id}/subagents` | 410 | removed: the subagent limit is fixed for the service (see *Limit for subagents*); the answer says so |
 | `POST /api/chats/{id}/messages` `{text, attachments?: string[], context?: PageContext}` | `SendResult` | sends (`context`: see *Page context*; invalid: 400); a dormant chat is resumed in a fresh sandbox (response after resuming, steps beforehand via SSE `resume`). If pi is working, the chat is being resumed or another instruction is in flight, the message is queued (`queued: true`, see *Queue*). Held entries go along |
 | `GET /api/chats/{id}/queue` | `QueueEntry[]` | open entries of the queue |
@@ -655,6 +668,23 @@ never sees a chat idle):
 - **After `failed`** the chat stays idle (`dormant`); calling the endpoint again, or the next message, tries again.
 - The idle timeout (`AGW_IDLE_TIMEOUT`) stays: an opened chat that is not used idles again afterwards, and the
   endpoint does not extend background tasks. A chat of another user answers 404 in oidc mode, like every chat route.
+
+## Subagent runs without opening a chat
+
+The chat selector of the platform UI (panel and history on `/ai-agent`) lets the user expand the subagents of any
+chat, not only of the open one (issue #60). Opening a chat with `GET /api/chats/{id}` and `POST …/resume` would load
+all its entries and wake it; `GET /api/chats/{id}/subagent-runs` instead answers a short list from `subagent_runs`
+and `subagent_entries` and touches neither the chat's state nor the pool. Runs of older chats that only have entries
+appear as well; a status row without a start and without entries is left out.
+
+- The title is left to the client: `task_head` carries the first lines of the first task (at most 8 lines, 500
+  bytes), so the UI applies the same rule as for an open chat (workflow label unless it repeats the agent, otherwise
+  the first meaningful line of the task, which skips headings such as `## Task` and tags such as `[Context]`). A
+  single raw first line would give other titles than the open chat.
+- Without `state`, the client estimates the state as for an open chat from `last_kind` (`text`: done) and `last_at`.
+- The list is a separate route and not part of `GET /api/chats`: the list of chats is reloaded often and for every
+  chat, while only the few chats the user expands need their runs, and task texts of every run would make each
+  reload of the chat list larger for nothing.
 
 ## Bindings of new chats
 

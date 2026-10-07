@@ -192,6 +192,7 @@ func (s *Server) Handler() http.Handler {
 	chat("POST /api/chats/{id}/effort", s.setEffort)
 	chat("POST /api/chats/{id}/autocompact", s.autocompact)
 	chat("POST /api/chats/{id}/subagents", s.subagentLimitGone)
+	chat("GET /api/chats/{id}/subagent-runs", s.subagentRuns)
 	chat("GET /api/chats/{id}/llm_calls", s.llmCalls)
 	chat("GET /api/chats/{id}/tool_executions", s.toolExecutions)
 	chat("GET /api/chats/{id}/background", s.background)
@@ -592,6 +593,23 @@ func (s *Server) getChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]any{"chat": c, "messages": msgs, "artifacts": arts, "approvals": aps, "socket_calls": calls, "subagent_entries": subs, "subagent_runs": subRuns, "queue": queue, "queue_delivered": s.M.DeliveredQueue(id), "background": bg})
+}
+
+// subagentRuns answers the short list of a chat's subagent runs (issue #60) from the database alone: it does not
+// call View, Resume or anything else that could wake the chat or take a slot.
+func (s *Server) subagentRuns(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	// token mode has no owner check: an unknown chat is 404 here as on the other routes, not an empty list
+	if _, err := s.M.ChatOwner(r.Context(), id); err != nil {
+		fail(w, err)
+		return
+	}
+	runs, err := s.M.SubagentRunSummaries(r.Context(), id)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, 200, runs)
 }
 
 func (s *Server) send(w http.ResponseWriter, r *http.Request) {

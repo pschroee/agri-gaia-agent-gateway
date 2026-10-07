@@ -1064,6 +1064,78 @@ FROM subagent_runs WHERE chat_id=$1 ORDER BY started_at NULLS LAST, run_id`, cha
 	return out, rows.Err()
 }
 
+// SubagentRunSummary is one line of the short list of a chat's subagent runs (GET /api/chats/{id}/subagent-runs,
+// issue #60): enough for a title and a state dot without loading the chat's entries. Runs come from subagent_runs
+// and subagent_entries together, so runs of older chats without a status row appear as well.
+type SubagentRunSummary struct {
+	RunID string `json:"run_id"`
+	Agent string `json:"agent"`
+	Label string `json:"label,omitempty"`
+	State string `json:"state,omitempty"`
+	// TaskHead is the beginning of the run's first task (at most TaskHeadLines lines and TaskHeadBytes bytes), so the
+	// UI can build the title with the same rule as for an open chat, which skips headings and tags.
+	TaskHead  string     `json:"task_head,omitempty"`
+	StartedAt *time.Time `json:"started_at,omitempty"`
+	EndedAt   *time.Time `json:"ended_at,omitempty"`
+	// LastAt and LastKind describe the newest entry; the UI estimates the state from them when State is empty.
+	LastAt   *time.Time `json:"last_at,omitempty"`
+	LastKind string     `json:"last_kind,omitempty"`
+	Entries  int        `json:"entries"`
+}
+
+// Limits of SubagentRunSummary.TaskHead.
+const (
+	TaskHeadLines = 8
+	TaskHeadBytes = 500
+)
+
+// taskHead keeps the first TaskHeadLines lines of a task, at most TaskHeadBytes bytes, cut at a character boundary.
+func taskHead(task string) string {
+	lines := strings.SplitN(task, "\n", TaskHeadLines+1)
+	if len(lines) > TaskHeadLines {
+		lines = lines[:TaskHeadLines]
+	}
+	s := strings.Join(lines, "\n")
+	if len(s) > TaskHeadBytes {
+		s = s[:TaskHeadBytes]
+	}
+	return strings.TrimRight(strings.ToValidUTF8(s, ""), " \t\r\n")
+}
+
+// ListSubagentRunSummaries returns the short list of a chat's runs in the order they started. It reads the database
+// only; it never touches the chat's slot.
+func (s *Store) ListSubagentRunSummaries(ctx context.Context, chatID string) ([]SubagentRunSummary, error) {
+	rows, err := s.pool.Query(ctx, `
+WITH e AS (
+  SELECT run_id, count(*) AS n, min(created_at) AS first_at, max(created_at) AS last_at,
+         (array_agg(agent ORDER BY created_at) FILTER (WHERE agent <> ''))[1] AS agent,
+         (array_agg(left(payload->>'text', 2000) ORDER BY created_at) FILTER (WHERE kind = 'task'))[1] AS task,
+         (array_agg(kind ORDER BY created_at DESC, entry_id DESC))[1] AS last_kind
+  FROM subagent_entries WHERE chat_id = $1 GROUP BY run_id
+), r AS (SELECT * FROM subagent_runs WHERE chat_id = $1)
+SELECT COALESCE(r.run_id, e.run_id), COALESCE(NULLIF(r.agent, ''), e.agent, ''), COALESCE(r.label, ''),
+       COALESCE(r.state, ''), COALESCE(e.task, ''), LEAST(r.started_at, e.first_at), r.ended_at,
+       GREATEST(e.last_at, r.ended_at), COALESCE(e.last_kind, ''), COALESCE(e.n, 0)
+FROM r FULL OUTER JOIN e ON e.run_id = r.run_id
+WHERE e.run_id IS NOT NULL OR r.started_at IS NOT NULL
+ORDER BY 6 NULLS LAST, 1`, chatID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []SubagentRunSummary{}
+	for rows.Next() {
+		var r SubagentRunSummary
+		var task string
+		if err := rows.Scan(&r.RunID, &r.Agent, &r.Label, &r.State, &task, &r.StartedAt, &r.EndedAt, &r.LastAt, &r.LastKind, &r.Entries); err != nil {
+			return nil, err
+		}
+		r.TaskHead = taskHead(task)
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // ChatImage is a display image of a reply (not an artifact), saved in S3.
 type ChatImage struct {
 	ChatID      string    `json:"chat_id"`
