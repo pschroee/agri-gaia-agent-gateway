@@ -302,10 +302,13 @@ type Approval = {
   created_at: string; decided_at?: string;
   preview?: string;       // first 4 KiB, text only
 };
-type SocketCall = { id: number; chat_id?: string; slot_id: string; via: "cli" | "mcp"; op: string; detail: string; result: string; created_at: string; session?: string; tool_call_id?: string;
+type SocketCall = { id: number; chat_id?: string; slot_id: string; via: "cli" | "mcp" | "api" | "user" /* user: the user's internet switch */; op: string; detail: string; result: string; created_at: string; session?: string; tool_call_id?: string;
   duration_ms?: number /* platform calls: round trip to the platform in ms (token exchange included, approval wait excluded); missing: not measured */ };
 // GET /api/activity (see "Activity across chats").
-type ActivityCall = SocketCall & { outcome: "ok" | "error" | "blocked" | "logged" | "rejected" | "refused";
+type ActivityCall = SocketCall & { kind: "platform" | "internet";
+  outcome?: "ok" | "error" | "blocked" | "logged" | "rejected" | "refused" /* platform calls only */;
+  internet?: { action: "request" | "off" | "switch"; origin: "agent" | "user";
+    result: "approved" | "already_on" | "rejected" | "expired" | "on" | "off" | "already_off" | "error" } /* internet entries only */;
   approval?: { id: string; state: Approval["state"]; created_at: string; decided_at?: string } };
 type ActivityPage = { calls: ActivityCall[]; chats: Record<string, { id: string; title: string; model: string; variant: string; delegation?: unknown }>;
   next_before?: number; summary: { total: number; outcomes: Record<ActivityCall["outcome"], number>; chats: number; runs: number;
@@ -341,7 +344,7 @@ type ActivityPage = { calls: ActivityCall[]; chats: Record<string, { id: string;
 | `GET /api/chats/{id}/commands` | `Command[]` | slash commands: built-in ones (`compact`, `autocompact`) and pi's (`get_commands`: extensions, prompt templates, skills). For a dormant chat the last known list |
 | `POST /api/chats/{id}/commands` `{command: "/compact focus on code"}` | `SendResult` | runs a slash command. `/compact [instructions]` compacts (409 if pi is working), `/autocompact on\|off` switches the automatic mode, `/rename <name>` renames the chat (no automatic naming afterwards), `/model <provider/model>` and `/effort <level>` like the two endpoints below, everything else goes to pi as a message (pi expands `/skill:…` and templates) |
 | `POST /api/chats/{id}/autocompact` `{enabled: boolean}` | `Chat` | automatic compaction on/off |
-| `POST /api/chats/{id}/internet` `{enabled: boolean}` | `Chat` | switch the sandbox's internet access on or off; for an active chat immediately (connect/disconnect network), otherwise on the next resume. The path to the language model and the socket always stay |
+| `POST /api/chats/{id}/internet` `{enabled: boolean}` | `Chat` | switch the sandbox's internet access on or off; for an active chat immediately (connect/disconnect network), otherwise on the next resume. The path to the language model and the socket always stay. Logged as `socket_calls` entry `via: "user"`, `op: "internet_set"`, `result` `on`, `off`, `already on` or `already off` (see *Activity across chats*) |
 | `POST /api/chats/{id}/model` `{model, compact_first?}` | `Chat` | switch model (409 `ErrRunning` while pi is working). If the last measured context does not fit under the new model's context window minus reserve: **409 with `code: "context_too_large"`** and `details: {model, tokens, window, limit}`. With `compact_first: true` it compacts first and switches after the end (`pending_model` in the chat until then) |
 | `POST /api/chats/{id}/effort` `{level}` | `Chat` | pi's thinking level (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`); levels pi does not report for the model (`thinking_levels`) give 400. For a dormant chat on resume |
 | `POST /api/chats/{id}/suspend` | `Chat` | let it idle: save the session, tear down the sandbox (409 with an open approval) |
@@ -353,7 +356,7 @@ type ActivityPage = { calls: ActivityCall[]; chats: Record<string, { id: string;
 | `POST /api/chats/{id}/files` (multipart, field `file`, may repeat) | `Artifact[]` (201) | user uploads files for the agent; for an active chat mirrored to `/workspace/inputs/` immediately, for a dormant one on resume. Limit `AGW_ARTIFACT_MAX_MB` per file |
 | `GET /api/approvals?state=pending` | `Approval[]` | open approvals of all chats |
 | `GET /api/events` | SSE | approvals across all the user's chats, see *SSE `GET /api/events`* |
-| `GET /api/activity?since=&until=&outcome=&chat=&limit=&before=` | `ActivityPage` | platform calls of the user's chats across all chats, newest first, with a summary of the period; see *Activity across chats* |
+| `GET /api/activity?kind=&since=&until=&outcome=&chat=&limit=&before=` | `ActivityPage` | platform calls (with `kind=internet\|all` also the internet switches) of the user's chats across all chats, newest first, with a summary of the period; see *Activity across chats* |
 | `POST /api/approvals/{id}` `{approve: boolean}` | `Approval` | approve or reject |
 | `GET /api/chats/{id}/events` | SSE | live events of the chat |
 
@@ -366,8 +369,9 @@ count. The per-chat log in `GET /api/chats/{id}` (`socket_calls`) and the SSE ev
 
 | Parameter | Meaning |
 |---|---|
+| `kind` | `platform` (default, as before issue #37), `internet` (only the internet switches) or `all` (both in one list, by id); 400 otherwise. Every entry carries `kind` |
 | `since`, `until` | period as RFC 3339 times (`2026-10-06T00:00:00+02:00`); `since` inclusive, `until` exclusive; 400 otherwise |
-| `outcome` | `ok`, `error`, `blocked` (violation blocked by the delegation), `logged` (violation let through and logged), `rejected` (by the user or no decision in time), `refused` (by the gateway before it went out); filters `calls` only, not `summary` |
+| `outcome` | `ok`, `error`, `blocked` (violation blocked by the delegation), `logged` (violation let through and logged), `rejected` (by the user or no decision in time), `refused` (by the gateway before it went out); filters `calls` only, not `summary`; it belongs to platform calls, so with `kind=all` it leaves out the internet entries |
 | `chat` | one chat of the user |
 | `limit` | page size, default 100, at most 500 (larger values are capped), 400 below 1 |
 | `before` | cursor: `next_before` of the previous page; only calls with a smaller id |
@@ -380,6 +384,19 @@ variant and delegation of the chats on the page. `summary` covers the whole peri
 `before` or `limit`): number of calls in total and per outcome, chats with platform calls, `runs` (requests to the
 agent, `chat_turns`, in the same chats and period) and the measured durations (`count`, average, 95th percentile,
 maximum in ms, rounded to 0.1 ms).
+
+**Internet entries** (issue #37) are the `socket_calls` entries with `op` `internet` (the agent's request, `detail` =
+its reason), `internet_off` (the agent switched off) and `internet_set` (the user's switch through
+`POST /api/chats/{id}/internet`, `via: "user"`). They have no `outcome` and no `duration_ms`, but `internet`:
+`action` `request`, `off` or `switch`; `origin` `agent` (main agent or a subagent, see `session`) or `user`; `result`
+`approved`, `already_on` (internet was on, nobody was asked), `rejected`, `expired` (no decision in time), `error` for a
+request; `off`, `already_off`, `error` for the agent's switch-off; `on`, `off`, `already_on`, `already_off` for the
+user's switch. A request with a `tool_call_id` carries its `internet_access` approval as `approval`. Requests logged
+before issue #37 wrote `rejected` also for an expired one; with a tool call the approval's state turns it into
+`expired`. The switch that follows an approval is not logged again (the request is the entry), nor is the setting
+reapplied on resume. **Internet entries never count in `summary`**: it stays the figures of the platform calls for
+every `kind`, so the key figures of the evaluation are unchanged. A gateway before issue #37 ignores `kind` and
+returns platform calls without `kind`; clients treat a missing `kind` as `platform`.
 
 `duration_ms` is measured around the request to the platform (`Platform.Do`, including the token exchange), after
 any approval, and stored with the log entry (column `socket_calls.duration_ms`). Calls that did not go out (blocked,
@@ -395,7 +412,7 @@ Each event is a `data:` line with JSON `{"kind": …, "data": …}`. Every 15 s 
 | `chat` | `Chat` (on every change of state) |
 | `approval` | `Approval` (new or decided) |
 | `artifact` | `Artifact` (newly stored) |
-| `socket_call` | `SocketCall` (op also `agent_limit`, `subagent_limit`, `extension_ui`, `internet`, `internet_off`) |
+| `socket_call` | `SocketCall` (op also `agent_limit`, `subagent_limit`, `extension_ui`, `internet`, `internet_off`, `internet_set`) |
 | `llm_call` | `LLMCall` (every model call, including subagents) |
 | `subagent` | `SubagentEntry` (new entries from the subagent sessions, about every 2 s) |
 | `tool_execution` | `ToolExecution` (every operation executed by the orchestrator, as soon as it is finished) |
@@ -698,8 +715,11 @@ without approval, because that only removes a right (issue #34). Both exist in e
   `POST /internet/off` (no body) → `{status: "off"|"already_off", name: "internet", message}`. A slot without a chat
   gets 409. MCP offers `request_internet` and `disable_internet` at both sockets.
 - **Log:** every call is a `socket_calls` entry: `op: "internet"` with the reason as `detail` and `result`
-  `approved`/`rejected`, `op: "internet_off"` with `result` `off`, `already off`, `refused: not assigned` or
-  `error: …`; the SSE event `socket_call` shows it in the chat's activity.
+  `approved`, `already on` (no approval needed), `rejected`, `expired` (no decision in time; before issue #37 logged as
+  `rejected`) or `error: …`, `op: "internet_off"` with `result` `off`, `already off`, `refused: not assigned` or
+  `error: …`; the user's switch is `via: "user"`, `op: "internet_set"`. The SSE event `socket_call` shows them in the
+  chat's activity, `GET /api/activity?kind=internet|all` across chats. The answer to the agent is unchanged
+  (`approved`/`rejected`).
 - **System note:** the agent is told to switch internet off again as soon as it is done with it.
 
 ## Limit for subagents
