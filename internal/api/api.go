@@ -205,6 +205,7 @@ func (s *Server) Handler() http.Handler {
 	chat("GET /api/chats/{id}/images", s.image)
 	chat("GET /api/chats/{id}/events", s.events)
 	mux.HandleFunc("GET /api/approvals", s.approvals)
+	mux.HandleFunc("GET /api/events", s.allEvents)
 	mux.HandleFunc("GET /api/activity", s.activity)
 	mux.Handle("POST /api/approvals/{id}", s.ownApproval(s.decide))
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
@@ -1030,25 +1031,100 @@ func (s *Server) approvals(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	if s.OIDC != nil && chatID == "" {
-		mine := map[string]bool{}
-		own := make([]store.Approval, 0, len(a))
-		for _, ap := range a {
-			ok, seen := mine[ap.ChatID]
-			if !seen {
-				if ok, err = s.owns(ctx, ap.ChatID); err != nil {
-					fail(w, err)
-					return
-				}
-				mine[ap.ChatID] = ok
-			}
-			if ok {
-				own = append(own, ap)
-			}
+	if chatID == "" {
+		if a, err = s.ownApprovals(ctx, a, map[string]bool{}); err != nil {
+			fail(w, err)
+			return
 		}
-		a = own
 	}
 	writeJSON(w, 200, a)
+}
+
+// ownApprovals keeps the approvals of the user's chats (all of them in token mode). mine caches the
+// ownership per chat ID and may be shared across calls of one request.
+func (s *Server) ownApprovals(ctx context.Context, a []store.Approval, mine map[string]bool) ([]store.Approval, error) {
+	if s.OIDC == nil {
+		return a, nil
+	}
+	own := make([]store.Approval, 0, len(a))
+	for _, ap := range a {
+		ok, seen := mine[ap.ChatID]
+		if !seen {
+			var err error
+			if ok, err = s.owns(ctx, ap.ChatID); err != nil {
+				return nil, err
+			}
+			mine[ap.ChatID] = ok
+		}
+		if ok {
+			own = append(own, ap)
+		}
+	}
+	return own, nil
+}
+
+// eventsRetryMs: reconnect delay the stream across chats suggests to EventSource (SSE "retry").
+const eventsRetryMs = 2000
+
+// allEvents is the stream across the user's chats (GET /api/events): first the pending approvals as
+// one "approvals" event (the complete state, also after every reconnect), then every new or decided
+// approval of the user's chats as "approval". Other users' approvals never appear in oidc mode.
+func (s *Server) allEvents(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	fl, ok := w.(http.Flusher)
+	if !ok {
+		writeErr(w, 500, "streaming not possible")
+		return
+	}
+	// Subscribe before reading the snapshot, so nothing decided in between is lost; an event that is
+	// already part of the snapshot only repeats its state.
+	ch, cancel := s.M.SubscribeAll()
+	defer cancel()
+	mine := map[string]bool{}
+	pending, err := s.M.Approvals(ctx, store.ApprovalPending, "")
+	if err == nil {
+		pending, err = s.ownApprovals(ctx, pending, mine)
+	}
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.WriteHeader(200)
+	_, _ = fmt.Fprintf(w, "retry: %d\n: connected\n\n", eventsRetryMs)
+	send := func(ev chat.Event) {
+		b, err := json.Marshal(ev)
+		if err != nil {
+			return
+		}
+		_, _ = fmt.Fprintf(w, "data: %s\n\n", b)
+		fl.Flush()
+	}
+	send(chat.Event{Kind: "approvals", Data: pending})
+	ping := time.NewTicker(15 * time.Second)
+	defer ping.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ping.C:
+			_, _ = io.WriteString(w, ": ping\n\n")
+			fl.Flush()
+		case ev := <-ch:
+			own, seen := mine[ev.ChatID]
+			if !seen {
+				if own, err = s.owns(ctx, ev.ChatID); err != nil {
+					return // the client reconnects and gets a fresh snapshot
+				}
+				mine[ev.ChatID] = own
+			}
+			if own {
+				send(ev.Event)
+			}
+		}
+	}
 }
 
 // Limits of GET /api/activity: page size by default and at most.

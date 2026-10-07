@@ -95,6 +95,14 @@ refer to this repository.
   round trip of `Platform.Do` handed from `platform.Result.Duration` to the log entry through the context
   (`store.WithDuration`); it never reaches the agent (`json:"-"`). Rules in `API.md`, *Activity across chats*.
 
+## Events across chats
+
+- `GET /api/events` (issue #32) streams the approvals of all the user's chats: first an `approvals` snapshot of the
+  pending ones, then `approval` events. `Manager.publish` forwards only the kinds in `crossChatKinds` to
+  `SubscribeAll`, which has **no** owner check; the API filters every event through `owns` (cached per connection).
+  Subscribe before reading the snapshot. A new kind there needs the owner filter and a case in
+  `internal/api/events_test.go` (foreign events must not appear). Rules in `API.md`, *SSE `GET /api/events`*.
+
 ## Testing
 
 - `./dev.sh test` is the everyday check, before every commit and before every push: Go with Postgres (with Go's
