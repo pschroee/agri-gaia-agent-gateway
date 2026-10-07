@@ -27,6 +27,21 @@ build() {
   return 1
 }
 
+# The slot images (agw-basis, agw-pi) are built by ./dev.sh start, not here. Go code that expects a
+# new file in them (an extension, a skill) makes every slot start fail against the old image (issue
+# #55: -e /opt/agw/ext/web-tools.ts on a two-day-old agw-pi, 1 110 failed starts in five hours).
+images_changed() {
+  find images third_party -name node_modules -prune -o -type f -newer /tmp/img-stamp -print -quit 2>/dev/null
+}
+
+warn_images() {
+  local f
+  f=$(images_changed)
+  [[ -n "$f" ]] || return 0
+  touch /tmp/img-stamp
+  log "WARNING: $f changed; hot reload does not rebuild the slot images. Run ./dev.sh start to rebuild them, otherwise new slots may fail to start (see \"pool slot discarded before first use\")."
+}
+
 start() { "$BIN" & pid=$!; log "orchestrator running (PID $pid)"; }
 
 stop() {
@@ -38,7 +53,7 @@ stop() {
 
 trap 'stop; exit 0' TERM INT
 
-touch /tmp/stamp
+touch /tmp/stamp /tmp/img-stamp
 until build; do
   while [[ -z "$(changed)" ]]; do sleep 1; done
   touch /tmp/stamp
@@ -47,6 +62,7 @@ start
 
 while true; do
   sleep 1 & wait $!
+  warn_images
   [[ -n "$(changed)" ]] || continue
   sleep 0.3 # coalesce several saved files
   touch /tmp/stamp
