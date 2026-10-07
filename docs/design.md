@@ -120,7 +120,7 @@ code. What is only installed at build time is not in the repository.
 | E4 | implemented for artifacts and MCP: one socket per slot in the volume `agwpoc_sockets`, only the slot's own directory mounted via subpath; the chat follows from the socket alone; unassigned slots answer “not assigned” |
 | E5 | implemented: orchestrator in Go, holds keys, sessions and log |
 | E6 | `agw-basis` implemented, by tag instead of digest (sufficient for stage 1); `agw-ml` is still missing |
-| E7 | implemented: target size per variant (`AGW_POOL_SIZE_CLI/MCP/BOTH`), single-use assignment, refilling |
+| E7 | implemented: target size for the combination of bindings in `AGW_TOOLSETS` (`AGW_POOL_SIZE`, default 4; per variant until issue #29), single-use assignment, refilling; other combinations of stored chats on demand |
 | E8 | implemented via Postgres instead of a host directory (as the later integration intends): the session file is saved after every turn, placed into the fresh sandbox via `exec` on resume and loaded with `switch_session`; in addition `/workspace` as an archive in RustFS (*Workspace per chat*) |
 | E9 | **implemented** (2026-09-29): a slot consists of two containers. pi runs without a shell; `exec-bridge.ts` routes all tools (`bash`, `read`, `write`, `edit`, `grep`, `find`, `ls`) of the main agent and the subagents over the socket to the orchestrator, which executes them in the execution sandbox and logs them in `tool_executions`; the proxy records the requested `toolCallId`s, and the two are reconciled. A guard blocks custom agents and foreign runtimes (bypasses found with the prototype); the scripts of `workflowScript` run in the execution sandbox instead of in the pi process, which makes chains and parallel subagents possible again. The findings of the code and security reviews have been incorporated. Details, measurements, reviews and deviations: [`e9-execution-sandbox.md`](e9-execution-sandbox.md) |
 
@@ -163,6 +163,12 @@ code. What is only installed at build time is not in the repository.
 
 The MCP variant gets no subagents, because the subagent `worker` would otherwise bring `bash`
 back and circumvent the variant's scope of action.
+
+**Since issue #29 (2026-10-07) the bindings are combined and fixed for the gateway:** `AGW_TOOLSETS` lists any
+combination of `cli`, `mcp` and `api` (default `cli`), and every new chat gets the union of their tools; there is no
+choice per chat any more. The table above gives the tools per binding; `cli,mcp` is the former `both`. The rules
+(parsing, stored keys, older chats, pool, API) are in `API.md`, *Bindings of new chats*; the code in
+`internal/toolset` (parsing, keys) and `internal/worker` (`Tools`, `piArgs`).
 
 Since E9 every variant loads `exec-bridge.ts`: the tools it has (in the MCP variant
 `read`, `write`, `ls`) run via the orchestrator in the execution sandbox. This gives all
@@ -934,8 +940,8 @@ rejection by the user `403` with `X-Agw-Outcome: rejected`. `/_agw/paths` return
 path index, `/_agw/rights` the delegated rights. In the variant `api`, pi gets only the tool
 `platform_http` (`images/agw-basis/ext/api.ts`); in the variants with `bash` the agent reaches the same
 endpoint with `curl --unix-socket /run/agw/agw.sock http://agw/platform-api/datasets`. Logged as
-`via: "api"` (pi) or `cli` (shell). Pool: `AGW_POOL_SIZE_API` (default 0, slots are created on
-demand).
+`via: "api"` (pi) or `cli` (shell). Pool: since issue #29 `AGW_TOOLSETS` decides whether new chats get
+`api` (alone or combined, e.g. `cli,api`); `AGW_POOL_SIZE_API` is gone.
 
 **Original design: direct calls to the interface via a platform proxy** (the
 author's request, 2026-10-05). As a third binding, initially as a test mode, the agent gets **neither CLI

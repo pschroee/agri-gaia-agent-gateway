@@ -365,7 +365,7 @@ cmd_e2e() {
   build_sandbox_image
   info "starting orchestrator with a low compaction threshold (kicks in at about 10,000 tokens)"
   ensure_dist
-  AGW_COMPACT_RESERVE_TOKENS=990000 AGW_COMPACT_KEEP_RECENT_TOKENS=2000 AGW_POOL_SIZE_CLI=2 AGW_POOL_SIZE_MCP=1 \
+  AGW_COMPACT_RESERVE_TOKENS=990000 AGW_COMPACT_KEEP_RECENT_TOKENS=2000 AGW_POOL_SIZE=2 \
     dc up -d $(build_flag) --wait >/dev/null
   wait_api
   local rc=0

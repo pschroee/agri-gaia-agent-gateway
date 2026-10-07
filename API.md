@@ -65,7 +65,9 @@ type Pricing = { input: number; output: number; cache_read: number; cache_write:
 type Tariff = { peak_windows_utc: { days: string /* "mon-fri" */; from: string /* "01:00" */; to: string }[]; offpeak_factor: number; note?: string; source?: string /* URL */; retrieved?: string };
 // pricing comes from pi's model registry (note names the pi version) or from our own catalogue.
 type Model = { id: string /* "deepseek/deepseek-flash" */; provider: string; model: string; name: string; default: boolean; pricing?: Pricing; tariff?: Tariff; peak_now?: boolean };
-type Variant = { id: "cli" | "mcp" | "both"; label: string; tools: string[] };
+// A combination of bindings (see *Bindings of new chats*). id: canonical key, the bindings in the order cli, mcp, api
+// joined by commas ("cli", "cli,api", "cli,mcp,api"); chats from before issue #29 may still carry "both" (= cli,mcp).
+type Variant = { id: string; label: string; bindings: ("cli" | "mcp" | "api")[]; tools: string[] /* union, each once */; active?: true /* new chats get it */ };
 
 type Activity = {
   kind: "idle" | "thinking" | "writing" | "tool" | "preparing" | "compacting" | "waiting_approval" | "starting";
@@ -90,7 +92,7 @@ type Slot = {
   activity?: Activity;    // only when assigned
   internet?: boolean;     // only when assigned
 };
-type Pool = { slots: Slot[]; targets: Record<Variant["id"], number>; totals: { cost: number; tokens: Tokens; chats_active: number } };
+type Pool = { slots: Slot[]; targets: Record<Variant["id"], number> /* only the combination of AGW_TOOLSETS */; toolsets: Variant["id"]; totals: { cost: number; tokens: Tokens; chats_active: number } };
 
 type Tokens = { input: number; output: number; cache_read: number; total: number };
 type Chat = {
@@ -309,12 +311,12 @@ type ActivityPage = { calls: ActivityCall[]; chats: Record<string, { id: string;
 | Method and path | Response | Purpose |
 |---|---|---|
 | `GET /api/models` | `Model[]` | selectable models |
-| `GET /api/variants` | `Variant[]` | binding variants |
-| `GET /api/config` | `{internet_default: boolean, approval_timeout_s: number, artifact_max_mb: number, idle_timeout_s: number, auto_compact_default: boolean, compact_reserve_tokens: number, compact_keep_recent_tokens: number, max_subagents: number /* at the same time per chat, fixed */, max_subagents_default: number /* deprecated, = max_subagents */, max_subagents_limit: number /* deprecated, = max_subagents */, workspace_max_mb: number /* 0 = workspace is not backed up */, bg_wakes_per_hour: number /* 0 = never wake */, bg_keepalive_s: number, auto_turns_max: number /* consecutive turns without the user, 0 = none */, executed_tools: string[] /* tools whose execution is proven at the socket, sorted */}` | defaults for the UI |
+| `GET /api/variants` | `Variant[]` | every combination of bindings; `active` marks the one new chats get (`AGW_TOOLSETS`) |
+| `GET /api/config` | `{internet_default: boolean, approval_timeout_s: number, artifact_max_mb: number, idle_timeout_s: number, auto_compact_default: boolean, compact_reserve_tokens: number, compact_keep_recent_tokens: number, max_subagents: number /* at the same time per chat, fixed */, max_subagents_default: number /* deprecated, = max_subagents */, max_subagents_limit: number /* deprecated, = max_subagents */, workspace_max_mb: number /* 0 = workspace is not backed up */, bg_wakes_per_hour: number /* 0 = never wake */, bg_keepalive_s: number, auto_turns_max: number /* consecutive turns without the user, 0 = none */, executed_tools: string[] /* tools whose execution is proven at the socket, sorted */, toolsets: Variant /* bindings of every new chat (AGW_TOOLSETS) */}` | defaults for the UI |
 | `GET /api/pool` | `Pool` | pool status (the UI polls every second) |
 | `GET /api/platform` | `{configured: boolean, api_url?, login?: "user" \| "account", account?: string /* login account only */, client_id?, token_exchange?: boolean, probe?: {reachable, http_status?, latency_ms, error?, checked_at}, last_exchange?: {chat_id, at, ok, error?}}` | binding to the platform, read-only. `probe`: unauthenticated `GET` on the API base, any HTTP answer counts as reachable, cached 10 s. `last_exchange`: newest token exchange among the user's own chats, also a failed one (e.g. the user's login expired); in memory only, empty after a restart until the next platform call. `{configured: false}` without `AGW_PLATFORM_API_URL` |
 | `GET /api/chats` | `Chat[]` | newest first |
-| `POST /api/chats` `{model?, variant?, title?, message?, internet?, auto_compact?, delegation?, language?}` | `Chat` (201) | takes a slot from the pool; `max_subagents` in the body is ignored (the limit is fixed, see *Limit for subagents*); with `message` it is sent immediately. `language`: preferred language according to the browser (BCP 47, only letters, digits, hyphen, at most 35 characters, otherwise 400), see *User language*. 503 if no slot is free |
+| `POST /api/chats` `{model?, variant?, title?, message?, internet?, auto_compact?, delegation?, language?}` | `Chat` (201) | takes a slot from the pool; the chat gets the bindings of `AGW_TOOLSETS` (see *Bindings of new chats*): `variant` may be left out, a `variant` naming another combination is refused with 400; `max_subagents` in the body is ignored (the limit is fixed, see *Limit for subagents*); with `message` it is sent immediately. `language`: preferred language according to the browser (BCP 47, only letters, digits, hyphen, at most 35 characters, otherwise 400), see *User language*. 503 if no slot is free |
 | `GET /api/chats/{id}` | `{chat, messages: StoredMessage[], artifacts: Artifact[], approvals: Approval[], socket_calls: SocketCall[], subagent_entries: SubagentEntry[], queue: QueueEntry[], queue_delivered: QueueDelivery[], background: BackgroundTask[]}` | complete chat; `queue_delivered`: handed to pi but not read yet, oldest first (see *Queue*) |
 | `GET /api/chats/{id}/background` | `BackgroundTask[]` | background tasks of the chat by `seq`; running ones with the current state of the slot |
 | `GET /api/chats/{id}/web_requests` | `WebRequest[]` | requests of `web_search`/`web_extract` through the web proxy, including refused ones (`denied`); for HTTPS only target and bytes |
@@ -441,7 +443,7 @@ a restart of the orchestrator the list is empty.
 
 ## Background tasks
 
-The agent starts a command with `bash` and `run_in_background: true` (variants `cli` and `both`, also in
+The agent starts a command with `bash` and `run_in_background: true` (combinations with `cli`, also in
 subagents). The orchestrator runs it in the execution sandbox and returns immediately; the tool reports the ID
 (`bg-<n>`) and the output file. `bg_output {id, tail_lines?}` returns the state and the end of the output,
 `bg_stop {id}` ends the task including its process group. At most `AGW_BG_MAX` (default 5) run at the same time
@@ -554,6 +556,36 @@ names (test `TestPageContextGrantsNoAccess`). A queued message keeps its context
 `chat_queue.context`), also when held after an abort; on delivery each message of the batch gets its own note before
 its text, and `queue_id` of the note names the entry. `POST /api/chats` (first message) and `…/commands` take no
 context.
+
+## Bindings of new chats
+
+Which bindings a chat has is fixed for the gateway, not chosen per chat (issue #29). `AGW_TOOLSETS` is a
+comma-separated list of `cli` (bash, file tools, subagents, `agw-platform` and `curl` to the socket), `mcp` (the
+`mcp_*` tools, `read`/`write`/`ls`, no bash) and `api` (the HTTP tool `platform_http`), in any order and
+combination, for example `AGW_TOOLSETS=cli,api`. Default: `cli`, the default variant before. Spaces and upper case
+are tolerated and a repeated entry counts once; an empty value, an empty entry (`cli,,api`) or anything else (also
+the old id `both`) stops the start with an error naming the variable.
+
+- **Tools:** every new chat gets the union of the tools of the listed bindings, each tool once (`read`, `write`,
+  `todo`, `web_search`, … are in several). With `cli` pi keeps its default tools and the extensions of the other
+  bindings are added; `ls` stays hidden in the main agent, as before. Without `cli` the list is strict (`--tools`) and
+  there are no subagents, because a subagent would bring `bash` back. `cli,mcp` is exactly the former variant
+  `both`: same pi arguments, tools, system note.
+- **Stored per chat:** `Chat.variant` holds the canonical key (`"cli,api"`), as the variant before. The order of the
+  entries does not matter (`api,cli` is stored as `cli,api`).
+- **Older chats** keep their stored variant (`cli`, `mcp`, `api`, `both`) and resume with it, also after a change of
+  `AGW_TOOLSETS`; `both` resumes as `cli,mcp`.
+- **Pool:** `AGW_POOL_SIZE` (default 4) warm slots are kept for the configured combination only, keyed by its
+  canonical key. A chat of another combination waits for a slot started on demand. The former
+  `AGW_POOL_SIZE_CLI|MCP|BOTH|API` are ignored; the orchestrator warns when one is set.
+- **`POST /api/chats`:** `variant` is optional. A value naming the same combination (in any order, `both` for
+  `cli,mcp`) is accepted, another known one gives 400 ("the bindings of new chats are fixed by the gateway
+  (AGW_TOOLSETS): requested …, new chats get …"), an unknown one 400 ("unknown binding variant"). Refusing rather
+  than ignoring keeps a client from silently getting other tools than it asked for.
+- **Reported** in `GET /api/config` (`toolsets`), `GET /api/variants` (`active`) and `GET /api/pool` (`toolsets`).
+- **Platform calls** are attributed to the path they came through, not to the chat's combination: `mcp` (MCP at pi's
+  socket), `api` (`platform_http`) and `cli` (`agw-platform` and `curl` at the sandbox's socket). In a combination all
+  of them reach the same checks (delegation, approval) of the same chat.
 
 ## Limit for subagents
 

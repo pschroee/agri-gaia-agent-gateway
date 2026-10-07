@@ -58,6 +58,16 @@ refer to this repository.
   `internal/chat/subagents.go`), not runs started in total; do not reintroduce `maxSubagentSpawnsPerSession` in the
   pi-subagents config, it caps runs in total. Rules in `API.md`, *Limit for subagents*.
 
+## Bindings (toolsets)
+
+- `AGW_TOOLSETS` (default `cli`) fixes the bindings of every new chat as any combination of `cli`, `mcp`, `api`
+  (issue #29); there is no choice per chat. The canonical key (order cli, mcp, api: `cli,api`) is what chats store as
+  `variant` and what the pool is keyed by; `both` of older chats means `cli,mcp`. Parsing and keys in
+  `internal/toolset`, tools and pi arguments in `internal/worker` (`Tools`, `piArgs`). `cli,mcp` must stay exactly the
+  former `both` (`TestOldVariantsUnchanged` holds the old arguments literally); a change to a binding's tools goes into
+  `bindingTools` and that test. Old chats of any combination resume through slots started on demand
+  (`pool.SetKnown`). Rules in `API.md`, *Bindings of new chats*.
+
 ## Activity across chats
 
 - `GET /api/activity` (issue #12) reads platform calls of the user's chats in one query (`internal/store/activity.go`):
