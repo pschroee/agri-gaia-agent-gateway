@@ -134,6 +134,17 @@ code. What is only installed at build time is not in the repository.
   `npm install` mostly do not work. With internet they go through the package caches
   (see below). Global npm packages end up in `~/.local` (`NPM_CONFIG_PREFIX`),
   which is on the `PATH`.
+- **Documents with markitdown** (skill `documents`, issue #42, 2026-10-07): `markitdown[docx,xlsx,xls,pptx,outlook,pdf]`
+  0.1.8 converts Word, Excel, PowerPoint, Outlook `.msg`, EPUB, HTML, CSV and ZIP to Markdown, without internet; the
+  dependencies are pinned in `images/agw-basis/markitdown/constraints.txt` (a rebuild must not pull new releases),
+  and the build converts a generated workbook as a check. It makes the image about 127 MB larger (arm64,
+  1.93 GB → 2.06 GB), most of it onnxruntime for magika, markitdown's file type detection. PDF stays with
+  `pdftotext` first, markitdown is the fallback: it sometimes returns nothing for a PDF without an error. The skill
+  tells the agent to convert into a file under `/workspace` and read it in parts (pages, slides, sheets) instead
+  of dumping it into the context, and to use pandas for real table work. Only bindings with `bash` can convert;
+  the system note tells `mcp` and `api` agents to say that they cannot read such attachments (`API.md`,
+  *Attachments to messages*). Each call takes about 0.8 s, mostly loading magika's model. onnxruntime warns on
+  stderr when the home is not writable; in a slot it is.
 - **Typst only with built-in packages:** the packages from `images/agw-basis/typst/packages.txt`
   are downloaded into `/opt/typst/packages` at build time (`TYPST_PACKAGE_CACHE_PATH`); the location is
   read-only at runtime. Other packages therefore cannot be loaded even with internet
@@ -156,7 +167,7 @@ code. What is only installed at build time is not in the repository.
 
 | Variant | Tools |
 |---|---|
-| `cli` | pi's standard tools, `pi-subagents`, task list `todo`, skills `artifacts` (`agw-artifact`), `internet` (`agw-internet`), `platform` (`agw-platform`), `writing-typst` and `charts` |
+| `cli` | pi's standard tools, `pi-subagents`, task list `todo`, skills `artifacts` (`agw-artifact`), `internet` (`agw-internet`), `platform` (`agw-platform`), `writing-typst`, `charts`, `mermaid` and `documents` |
 | `mcp` | `--tools read,write,ls,mcp_ping,mcp_list_artifacts,mcp_upload_artifact,mcp_request_internet,mcp_disable_internet,mcp_platform_*,todo`: **no** `bash`, **no** subagents |
 | `api` | only `platform_http` (the platform's REST API over the socket) and `request_internet`/`disable_internet`, plus `todo`, `web_search`, `web_extract`: **no** `bash`, **no** file tools |
 | `both` | the tools of `cli` and `mcp` together |
