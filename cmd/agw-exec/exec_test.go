@@ -797,3 +797,34 @@ func TestSubagentRuns(t *testing.T) {
 		t.Fatalf("parallel: %+v", r)
 	}
 }
+
+// Issue #62: a read with Root (a file the agent sends to the user) stays inside the root and refuses symbolic links;
+// the limit still applies.
+func TestReadWithRoot(t *testing.T) {
+	root, other := t.TempDir(), t.TempDir()
+	ctx := context.Background()
+	p := filepath.Join(root, "data.csv")
+	if err := os.WriteFile(p, []byte("a,b\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(other, "s.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(other, "s.txt"), filepath.Join(root, "link.txt")); err != nil {
+		t.Fatal(err)
+	}
+	_, f := do(t, ctx, execproto.Request{Op: "read", Path: p, Root: root})
+	var rr execproto.ReadResult
+	_ = json.Unmarshal(f.Result, &rr)
+	if f.Error != "" || string(rr.Data) != "a,b\n" {
+		t.Fatalf("read: %+v", f)
+	}
+	_, f = do(t, ctx, execproto.Request{Op: "read", Path: filepath.Join(root, "link.txt"), Root: root})
+	if f.Code != "EACCES" || !strings.Contains(f.Error, "symbolic link") {
+		t.Fatalf("symlink: %+v", f)
+	}
+	_, f = do(t, ctx, execproto.Request{Op: "read", Path: p, Root: root, Max: 2})
+	if f.Code != "EFBIG" {
+		t.Fatalf("limit: %+v", f)
+	}
+}

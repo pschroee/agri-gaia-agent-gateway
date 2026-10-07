@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"io"
@@ -24,7 +25,9 @@ type fakeBackend struct {
 	chat    string
 	calls   []string
 	uploads []string
-	decide  string // "approved" | "rejected"
+	decide  string   // uploads: "stored" | "rejected"; internet: "approved" | "rejected"
+	details []string // detail of every logged call
+	logTool []string // tool call ID of every logged call (CallerLogger)
 	files   map[string]string
 	calls2  []string // tool call IDs at upload (store.ToolCallFrom)
 	sess    []string // sessions at upload and internet (store.SessionFrom)
@@ -86,7 +89,15 @@ func (f *fakeBackend) DisableInternet(ctx context.Context, chatID, slotID, via s
 func (f *fakeBackend) LogCall(slotID, chatID, via, op, detail, result string) {
 	f.mu.Lock()
 	f.calls = append(f.calls, via+":"+op+":"+result)
+	f.details = append(f.details, detail)
 	f.mu.Unlock()
+}
+
+func (f *fakeBackend) LogCallBy(ctx context.Context, slotID, chatID, via, op, detail, result string) {
+	f.mu.Lock()
+	f.logTool = append(f.logTool, store.ToolCallFrom(ctx))
+	f.mu.Unlock()
+	f.LogCall(slotID, chatID, via, op, detail, result)
 }
 
 func start(t *testing.T, b Backend) *http.Client {
@@ -126,27 +137,52 @@ func TestUnassignedSlotRefuses(t *testing.T) {
 	}
 }
 
-func TestUploadApprovedViaCLI(t *testing.T) {
-	b := &fakeBackend{chat: "chat-1", decide: "approved"}
+// Issue #62: an upload is stored at once (no approval); the agent reads one line, and the socket log names name, size,
+// SHA-256 and the tool call.
+func TestUploadStoredViaCLI(t *testing.T) {
+	b := &fakeBackend{chat: "chat-1", decide: UploadStored}
 	c := start(t, b)
 	req, _ := http.NewRequest(http.MethodPost, "http://agw/artifacts?name=../../x.txt", strings.NewReader("abc"))
 	req.Header.Set("X-Agw-Via", "cli")
+	req.Header.Set("X-Agw-Tool-Call", "call_9")
 	resp, err := c.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var r UploadResult
 	json.NewDecoder(resp.Body).Decode(&r)
-	if resp.StatusCode != 200 || r.Status != "approved" || r.Name != "x.txt" {
+	const sum = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+	if resp.StatusCode != 200 || r.Status != UploadStored || r.Name != "x.txt" || !strings.HasPrefix(r.Text, `sent: "x.txt" is in the chat`) {
 		t.Fatalf("response: %d %+v", resp.StatusCode, r)
 	}
 	if len(b.uploads) != 1 || b.uploads[0] != "chat-1|cli|x.txt|abc" {
 		t.Fatalf("Upload: %v", b.uploads)
 	}
+	if len(b.calls) != 1 || b.calls[0] != "cli:upload:stored" || b.details[0] != "x.txt (3 bytes, sha256 "+sum+")" || b.logTool[0] != "call_9" {
+		t.Fatalf("socket log: %v %v %v", b.calls, b.details, b.logTool)
+	}
+}
+
+// A checksum mismatch stores nothing and says why, in the reply and in the log.
+func TestUploadRejectedResultText(t *testing.T) {
+	r := UploadResult{Status: UploadRejected, Name: "a.csv", Message: "checksum does not match"}
+	if got := UploadResultText(r); got != `not sent: "a.csv" was not stored (checksum does not match)` {
+		t.Fatalf("text: %s", got)
+	}
+	b := &fakeBackend{chat: "chat-1", decide: UploadRejected}
+	c := start(t, b)
+	resp, err := c.Post("http://agw/artifacts?name=a.csv", "text/csv", strings.NewReader("1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if len(b.calls) != 1 || b.calls[0] != "cli:upload:rejected" {
+		t.Fatalf("socket log: %v", b.calls)
+	}
 }
 
 func TestUploadTooLarge(t *testing.T) {
-	b := &fakeBackend{chat: "chat-1", decide: "approved"}
+	b := &fakeBackend{chat: "chat-1", decide: UploadStored}
 	c := start(t, b)
 	resp, err := c.Post("http://agw/artifacts?name=big.bin", "application/octet-stream", bytes.NewReader(make([]byte, 2<<20)))
 	if err != nil {
@@ -157,6 +193,14 @@ func TestUploadTooLarge(t *testing.T) {
 	}
 	if len(b.uploads) != 0 {
 		t.Fatal("oversized file passed on")
+	}
+	if len(b.calls) != 1 || b.calls[0] != "cli:upload:refused: too large" {
+		t.Fatalf("refusal not logged: %v", b.calls)
+	}
+	// MCP with base64: the same limit (1 MB in the test server)
+	res := mcpCall(t, c, "tools/call", map[string]any{"name": "upload_artifact", "arguments": map[string]any{"name": "big.bin", "content_base64": base64.StdEncoding.EncodeToString(make([]byte, 1<<20+1))}})
+	if res["isError"] != true || len(b.uploads) != 0 {
+		t.Fatalf("MCP: oversized file passed on: %v %v", res, b.uploads)
 	}
 }
 
@@ -219,7 +263,7 @@ func TestMCPToolsListWorksUnassigned(t *testing.T) {
 }
 
 func TestMCPPingAndUpload(t *testing.T) {
-	b := &fakeBackend{chat: "chat-9", decide: "rejected"}
+	b := &fakeBackend{chat: "chat-9", decide: UploadStored}
 	c := start(t, b)
 	res := mcpCall(t, c, "tools/call", map[string]any{"name": "ping", "arguments": map[string]any{}})
 	text := res["content"].([]any)[0].(map[string]any)["text"].(string)
@@ -228,8 +272,8 @@ func TestMCPPingAndUpload(t *testing.T) {
 	}
 	res = mcpCall(t, c, "tools/call", map[string]any{"name": "upload_artifact", "arguments": map[string]any{"name": "n.txt", "content_base64": "aGVsbG8="}})
 	text = res["content"].([]any)[0].(map[string]any)["text"].(string)
-	if !strings.Contains(text, "rejected") {
-		t.Fatalf("rejection not reported: %s", text)
+	if !strings.HasPrefix(text, `sent: "n.txt"`) || res["isError"] == true {
+		t.Fatalf("upload not reported as sent: %s", text)
 	}
 	if len(b.uploads) != 1 || b.uploads[0] != "chat-9|mcp|n.txt|hello" {
 		t.Fatalf("upload via MCP: %v", b.uploads)
@@ -242,6 +286,17 @@ func TestMCPPingAndUpload(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("ping not logged: %v", b.calls)
+	}
+	// the tool says the file goes to the user at once, without approval
+	list := mcpCall(t, c, "tools/list", map[string]any{})
+	for _, tl := range list["tools"].([]any) {
+		m := tl.(map[string]any)
+		if m["name"] == "upload_artifact" {
+			d := m["description"].(string)
+			if !strings.Contains(d, "without approval") || strings.Contains(d, "has to approve") {
+				t.Fatalf("description: %s", d)
+			}
+		}
 	}
 }
 

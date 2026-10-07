@@ -7,7 +7,7 @@ package sock
 //
 //	POST /tool/op      a file operation or search, JSON response
 //	POST /tool/bash    command, response as an NDJSON stream; closing the connection aborts
-//	POST /tool/upload  mcp_upload_artifact: file from the execution sandbox as an artifact
+//	POST /tool/upload  mcp_upload_artifact: file from the execution sandbox to the user (artifact, no approval)
 //	POST /tool/workflow workflowScript of pi-subagents: worker in the execution sandbox,
 //	                   NDJSON in both directions on one connection (closing aborts)
 //	POST /tool/bg/start  bash with run_in_background: start a background task, immediate response
@@ -613,17 +613,23 @@ func (th *toolHandler) internetState(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"enabled": on})
 }
 
-// upload: mcp_upload_artifact names a path; the file is in the
-// execution sandbox. The orchestrator reads it there (logged like a
-// read) and passes it on to the upload with confirmation.
+// upload: mcp_upload_artifact names a path; the file is in the execution sandbox. The orchestrator reads it there
+// (logged like a read) and stores it as an artifact the user sees at once (issue #62, no approval). The path must lie
+// inside /workspace and the file must be a regular file reached without symbolic links (agw-exec, Root).
 func (th *toolHandler) upload(w http.ResponseWriter, r *http.Request) {
 	tr, chat, release, ok := th.decode(w, r, false)
 	defer release()
 	if !ok {
 		return
 	}
-	req := execproto.Request{Op: execproto.OpRead, Path: tr.Path, Max: th.max}
+	ctx := store.WithSession(store.WithToolCall(r.Context(), tr.ToolCallID), SessionKey(tr.SessionFile))
+	req := execproto.Request{Op: execproto.OpRead, Path: tr.Path, Max: th.max, Root: execproto.Workspace}
 	if err := req.Validate(); err != nil {
+		if errors.Is(err, execproto.ErrOutsideRoot) {
+			th.logCall(ctx, chat, "mcp", "upload", tr.Path, "refused: outside "+execproto.Workspace)
+			writeJSON(w, http.StatusOK, map[string]string{"error": err.Error()})
+			return
+		}
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
@@ -642,9 +648,12 @@ func (th *toolHandler) upload(w http.ResponseWriter, r *http.Request) {
 		if msg == "" {
 			msg = err.Error()
 		}
-		if f.Code == "EFBIG" {
-			th.b.LogCall(th.slot, chat, "mcp", "upload", tr.Path, "refused: too large")
+		switch f.Code {
+		case "EFBIG":
+			th.logCall(ctx, chat, "mcp", "upload", tr.Path, "refused: too large")
 			msg = fmt.Sprintf("file larger than %d MB", th.max>>20)
+		case "EACCES":
+			th.logCall(ctx, chat, "mcp", "upload", tr.Path, "refused: "+msg)
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"error": msg})
 		return
@@ -657,7 +666,7 @@ func (th *toolHandler) upload(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"error": "invalid name"})
 		return
 	}
-	res, err := th.doUpload(store.WithSession(store.WithToolCall(r.Context(), tr.ToolCallID), SessionKey(tr.SessionFile)), chat, "mcp", name, rr.Data, "")
+	res, err := th.doUpload(ctx, chat, "mcp", name, rr.Data, "")
 	if err != nil {
 		writeJSON(w, http.StatusOK, map[string]string{"error": err.Error()})
 		return

@@ -1828,84 +1828,37 @@ func contentType(name string, head []byte) string {
 
 func objectKey(chatID, kind, name string) string { return path.Join(chatID, kind, name) }
 
-// Upload stores the file as pending and waits for the user's decision.
-// Timeout and cancellation count as rejection.
+// Upload stores a file the agent sends to the user (issue #62): no approval, the file is stored as an output
+// artifact of the chat right away and announced with the event "artifact", which the UI shows as a file message of
+// the agent. The socket has already checked size and name; the helpers in the sandbox check the path. A checksum
+// sent along (agw-artifact) must match, otherwise nothing is stored.
 func (m *Manager) Upload(ctx context.Context, chatID, slotID, via, name string, size int64, sha string, body io.Reader) (sock.UploadResult, error) {
 	data, err := io.ReadAll(body)
 	if err != nil {
 		return sock.UploadResult{}, err
 	}
-	if err := m.checkPendingLimit(ctx, chatID); err != nil {
-		return sock.UploadResult{}, err
-	}
 	sum := sha256.Sum256(data)
 	got := hex.EncodeToString(sum[:])
-	if sha != "" && !strings.EqualFold(sha, got) {
-		return sock.UploadResult{Status: "rejected", Name: name, Size: int64(len(data)), SHA256: got, Message: "checksum does not match"}, nil
-	}
-	ct := contentType(name, data)
-	preview := ""
-	if artifacts.IsText(data) {
-		p := data
-		if len(p) > 4096 {
-			p = p[:4096]
-		}
-		preview = strings.ToValidUTF8(string(p), "")
-	}
-	pendingKey := path.Join("pending", chatID, fmt.Sprintf("%d-%s", time.Now().UnixNano(), name))
-	if err := m.blobs.Put(ctx, pendingKey, bytes.NewReader(data), int64(len(data)), ct); err != nil {
-		return sock.UploadResult{}, fmt.Errorf("store: %w", err)
-	}
-	ap, err := m.st.CreateApproval(ctx, store.Approval{ChatID: chatID, Kind: "artifact_upload", Via: via, Name: name, Size: int64(len(data)), SHA256: got, ContentType: ct, PendingKey: pendingKey, Preview: preview,
-		Session: store.SessionFrom(ctx), ToolCallID: store.ToolCallFrom(ctx)})
-	if err != nil {
-		_ = m.blobs.Delete(ctx, pendingKey)
-		return sock.UploadResult{}, err
-	}
-	w := m.broker.Register(ap.ID)
-	var prevAct *pool.Activity
-	if s, ok := m.pool.Get(slotID); ok {
-		prevAct = s.Info().Activity
-		s.SetActivity("waiting_approval", "")
-	}
-	m.publish(chatID, Event{Kind: "approval", Data: ap})
-	m.publishChat(ctx, chatID)
-	slog.Info("approval requested", "chat", chatID, "approval", ap.ID, "name", name, "bytes", len(data), "via", via)
-
-	approved, werr := w.Wait(ctx, m.opt.ApprovalTimeout)
-	bg := context.WithoutCancel(ctx)
-	final := m.settle(bg, chatID, ap.ID, approved, werr)
-	msg := "rejected by the user"
-	if final == store.ApprovalExpired {
-		msg = "no decision within the waiting time"
-	}
-	if s, ok := m.pool.Get(slotID); ok {
-		if prevAct != nil && prevAct.Kind == "tool" {
-			s.SetActivity("tool", prevAct.Tool)
-		} else {
-			s.SetActivity("thinking", "")
-		}
-	}
 	res := sock.UploadResult{Name: name, Size: int64(len(data)), SHA256: got}
-	if final != store.ApprovalApproved {
-		_ = m.blobs.Delete(bg, pendingKey)
-		res.Status, res.Message = "rejected", msg
-		m.publishChat(bg, chatID)
+	if sha != "" && !strings.EqualFold(sha, got) {
+		res.Status, res.Message = sock.UploadRejected, "checksum does not match"
 		return res, nil
 	}
+	ct := contentType(name, data)
 	key := objectKey(chatID, store.KindOutput, name)
-	if err := m.blobs.Move(bg, pendingKey, key); err != nil {
-		return res, fmt.Errorf("store after approval: %w", err)
+	if err := m.blobs.Put(ctx, key, bytes.NewReader(data), int64(len(data)), ct); err != nil {
+		return sock.UploadResult{}, fmt.Errorf("store: %w", err)
 	}
 	art := store.Artifact{ChatID: chatID, Kind: store.KindOutput, Name: name, Size: int64(len(data)), SHA256: got, ContentType: ct, Via: via, ObjectKey: key,
 		ToolCallID: store.ToolCallFrom(ctx)}
-	if err := m.st.PutArtifact(bg, art); err != nil {
-		return res, err
+	if err := m.st.PutArtifact(context.WithoutCancel(ctx), art); err != nil {
+		return sock.UploadResult{}, err
 	}
 	art.CreatedAt = time.Now()
 	m.publish(chatID, Event{Kind: "artifact", Data: art})
-	m.publishChat(bg, chatID)
-	res.Status = "approved"
+	m.publishChat(ctx, chatID)
+	slog.Info("artifact sent to the user", "chat", chatID, "name", name, "bytes", len(data), "via", via)
+	res.Status = sock.UploadStored
 	return res, nil
 }
 

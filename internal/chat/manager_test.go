@@ -575,7 +575,9 @@ func TestSuspendAndResumeInFreshSandbox(t *testing.T) {
 	}
 }
 
-func TestUploadNeedsApproval(t *testing.T) {
+// Issue #62: the agent sends a file without approval. It is stored as an output artifact with its tool call at once,
+// the event "artifact" announces it, and no approval, pending object or waiting state is left behind.
+func TestUploadStoredWithoutApproval(t *testing.T) {
 	e := setup(t)
 	ctx := context.Background()
 	c, _ := e.m.Create(ctx, NewChat{})
@@ -583,81 +585,60 @@ func TestUploadNeedsApproval(t *testing.T) {
 	events, cancel := e.m.Subscribe(c.ID)
 	defer cancel()
 
-	type result struct {
-		r   string
-		err error
+	r, err := e.m.Upload(store.WithToolCall(ctx, "call_up"), c.ID, slot, "cli", "numbers.csv", 4, "", strings.NewReader("1,2\n"))
+	if err != nil || r.Status != sock.UploadStored || r.Size != 4 || r.SHA256 == "" {
+		t.Fatalf("Upload: %+v %v", r, err)
 	}
-	done := make(chan result, 1)
-	go func() {
-		r, err := e.m.Upload(store.WithToolCall(ctx, "call_up"), c.ID, slot, "cli", "numbers.csv", 4, "", strings.NewReader("1,2\n"))
-		done <- result{r.Status, err}
-	}()
-	ev := waitEvent(t, events, "approval", "")
-	ap := ev.Data.(store.Approval)
-	if ap.State != "pending" || ap.Preview != "1,2\n" {
-		t.Fatalf("request: %+v", ap)
-	}
-	info, _ := e.m.pool.Get(slot)
-	if info.Info().Activity.Kind != "waiting_approval" {
-		t.Fatalf("activity: %+v", info.Info().Activity)
-	}
-	if _, err := e.m.Suspend(ctx, c.ID); !errors.Is(err, ErrPendingApproval) {
-		t.Fatalf("idle despite pending approval: %v", err)
-	}
-	if _, err := e.m.Decide(ctx, ap.ID, true); err != nil {
-		t.Fatal(err)
-	}
-	r := <-done
-	if r.err != nil || r.r != "approved" {
-		t.Fatalf("Upload: %+v", r)
+	ev := waitEvent(t, events, "artifact", "")
+	art := ev.Data.(store.Artifact)
+	if art.Name != "numbers.csv" || art.Kind != store.KindOutput || art.ToolCallID != "call_up" || art.Via != "cli" || art.SHA256 != r.SHA256 || art.CreatedAt.IsZero() {
+		t.Fatalf("event: %+v", art)
 	}
 	arts, _ := e.st.ListArtifacts(ctx, c.ID)
-	if len(arts) != 1 || arts[0].Kind != "output" || arts[0].ToolCallID != "call_up" {
+	if len(arts) != 1 || arts[0].Kind != "output" || arts[0].ToolCallID != "call_up" || arts[0].Size != 4 || !strings.HasPrefix(arts[0].ContentType, "text/csv") {
 		t.Fatalf("artifacts: %+v", arts)
+	}
+	rc, size, err := e.m.OpenArtifact(ctx, c.ID, store.KindOutput, "numbers.csv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(rc)
+	rc.Close()
+	if string(body) != "1,2\n" || size != 4 {
+		t.Fatalf("content: %q %d", body, size)
+	}
+	if aps, _ := e.st.ListApprovals(ctx, "", c.ID); len(aps) != 0 {
+		t.Fatalf("approval created: %+v", aps)
 	}
 	for _, k := range e.blobs.keys() {
 		if strings.HasPrefix(k, "pending/") {
-			t.Fatalf("pending object left behind: %s", k)
+			t.Fatalf("pending object: %s", k)
 		}
 	}
-}
-
-func TestUploadRejected(t *testing.T) {
-	e := setup(t)
-	ctx := context.Background()
-	c, _ := e.m.Create(ctx, NewChat{})
-	slot := e.m.live[c.ID].slot.ID
-	events, cancel := e.m.Subscribe(c.ID)
-	defer cancel()
-	done := make(chan string, 1)
-	go func() {
-		r, _ := e.m.Upload(ctx, c.ID, slot, "mcp", "x.bin", 3, "", bytes.NewReader([]byte{0, 1, 2}))
-		done <- r.Status
-	}()
-	ap := waitEvent(t, events, "approval", "").Data.(store.Approval)
-	if _, err := e.m.Decide(ctx, ap.ID, false); err != nil {
-		t.Fatal(err)
+	if info, _ := e.m.pool.Get(slot); info.Info().Activity != nil && info.Info().Activity.Kind == "waiting_approval" {
+		t.Fatalf("activity: %+v", info.Info().Activity)
 	}
-	if s := <-done; s != "rejected" {
-		t.Fatalf("rejection does not arrive: %s", s)
+	// the same name again replaces the file (one card, the newer content)
+	if r, _ := e.m.Upload(ctx, c.ID, slot, "mcp", "numbers.csv", 6, "", strings.NewReader("1,2,3\n")); r.Status != sock.UploadStored {
+		t.Fatalf("second upload: %+v", r)
 	}
-	if len(e.blobs.keys()) != 0 {
-		t.Fatalf("objects left: %v", e.blobs.keys())
+	arts, _ = e.st.ListArtifacts(ctx, c.ID)
+	if len(arts) != 1 || arts[0].Size != 6 || arts[0].Via != "mcp" {
+		t.Fatalf("replaced: %+v", arts)
 	}
 }
 
-func TestUploadTimeoutExpires(t *testing.T) {
+// A checksum that does not match what arrived stores nothing.
+func TestUploadChecksumMismatch(t *testing.T) {
 	e := setup(t)
-	e.m.opt.ApprovalTimeout = 50 * time.Millisecond
 	ctx := context.Background()
 	c, _ := e.m.Create(ctx, NewChat{})
-	r, err := e.m.Upload(ctx, c.ID, e.m.live[c.ID].slot.ID, "cli", "a.txt", 1, "", strings.NewReader("a"))
-	if err != nil || r.Status != "rejected" || !strings.Contains(r.Message, "waiting time") {
-		t.Fatalf("expiry: %+v %v", r, err)
+	r, err := e.m.Upload(ctx, c.ID, e.m.live[c.ID].slot.ID, "cli", "a.txt", 1, strings.Repeat("0", 64), strings.NewReader("a"))
+	if err != nil || r.Status != sock.UploadRejected || !strings.Contains(r.Message, "checksum") {
+		t.Fatalf("mismatch: %+v %v", r, err)
 	}
-	aps, _ := e.st.ListApprovals(ctx, "", c.ID)
-	if len(aps) != 1 || aps[0].State != "expired" {
-		t.Fatalf("state: %+v", aps)
+	if arts, _ := e.st.ListArtifacts(ctx, c.ID); len(arts) != 0 || len(e.blobs.keys()) != 0 {
+		t.Fatalf("stored anyway: %+v %v", arts, e.blobs.keys())
 	}
 }
 

@@ -17,8 +17,8 @@ The backend is `Agg` (no display), `MPLBACKEND=Agg` is set.
    the image as a preview with an enlarged view. Allowed are PNG, JPEG, GIF and WebP under
    `/workspace`, `/tmp` or `/home/agent`, at most 10 MB. **Addresses from the internet and SVG
    are not displayed.**
-3. If the user should keep the file, also store it as an artifact (skill `artifacts`).
-   Displaying alone is not an upload.
+3. If the user should keep the file, also send it with `agw-artifact upload <file>` (skill `artifacts`;
+   no approval, it appears in the chat at once). Displaying alone does not send it.
 
 ## Defaults
 
@@ -40,7 +40,7 @@ The backend is `Agg` (no display), `MPLBACKEND=Agg` is set.
 - **plotly** is installed together with kaleido: `fig.write_image("/workspace/image.png")` writes a PNG
   (via the sandbox's Chromium, a few seconds for the first image). For images in the chat,
   matplotlib remains the first choice; plotly if the user wants it or an interactive HTML file
-  is needed (`fig.write_html(...)`, then store it as an artifact).
+  is needed (`fig.write_html(...)`, then send it with `agw-artifact upload`).
 
 ## Charts in Typst documents
 

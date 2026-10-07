@@ -122,7 +122,33 @@ func SystemNoteFor(variant string, bgMax int) string {
 	case ts.Has(toolset.MCP):
 		inputs = inputsMCP
 	}
-	return strings.NewReplacer("{{bg}}", bg, "{{mmdc}}", mmdc, "{{inputs}}", inputs, "{{internet}}", internetNote(ts)).Replace(systemNote)
+	return strings.NewReplacer("{{bg}}", bg, "{{mmdc}}", mmdc, "{{inputs}}", inputs, "{{internet}}", internetNote(ts), "{{send}}", sendNote(ts)).Replace(systemNote)
+}
+
+// sendFile names, per binding, how the agent sends a file to the user (issue #62); the REST binding has no file tools.
+var sendFile = map[toolset.Binding]string{
+	toolset.CLI: "agw-artifact upload <file> in bash",
+	toolset.MCP: "the tool mcp_upload_artifact",
+}
+
+// sendNote is the line of the system note on sending files (issue #62): no approval, the file shows in the chat at
+// once as a file message of the agent; only finished results, only from /workspace.
+func sendNote(ts toolset.Set) string {
+	var how []string
+	for _, b := range ts.Bindings() {
+		if h, ok := sendFile[b]; ok {
+			how = append(how, h)
+		}
+	}
+	if len(how) == 0 {
+		return "- You cannot send files to the user in this setup; give results in your reply."
+	}
+	n := "- Result files the user wants to keep or download (for example a CSV, a chart as PNG, a report as PDF) you send to the user with " +
+		strings.Join(how, " or ") + ": the file appears in the chat at once as a file message from you, without approval. Send finished results only, not intermediate files, and only files inside /workspace. Neither the backup of /workspace nor showing an image with ![…](…) sends a file."
+	if ts.Has(toolset.CLI) {
+		n += " Details in the skill artifacts."
+	}
+	return n
 }
 
 // internetSwitch names, per binding, how the agent requests internet (with the user's approval)
@@ -167,7 +193,7 @@ const systemNote = `You work in an isolated sandbox (Debian, Python 3, curl, jq,
   - /workspace is kept: it is backed up after every completed reply and when the chat goes idle, and restored on resume, up to the configured limit (default 200 MB). Excluded are folders named node_modules, .venv, __pycache__ and .cache as well as /workspace/inputs/ (it is provided again from the user's uploads). If /workspace is larger than the limit, it is not backed up, and on resume the last backup applies.
   - Lost are /tmp, your home directory /home/agent including everything you installed with pip install --user or npm install -g, running processes and environment variables you set. Reinstall such packages after resuming; do not install them into /workspace.
   - Files you will still need later (scripts, intermediate results, charts) therefore go under /workspace, not under /tmp.
-- Whatever should leave the chat (a result for the user) you upload as an artifact; the backup of /workspace does not replace that. Every upload must be approved by the user, and you wait for the decision.
+{{send}}
 {{internet}}
 - Your tools for commands and files run in this sandbox; the orchestrator executes and logs every call. pi itself runs separately from it.
 - For self-contained subtasks you can start subagents with the tool subagent: individually with agent and task, in the foreground or in the background, or with workflowScript (chains with runs.run, parallel runs with runs.all; the script runs in the sandbox). Subagents have the same tools as you, including web search once internet is on. Anything that takes longer than about a minute (research, several subagents) you start in the background with async: true: you are then free again immediately, the user can keep talking to you, and you are notified as soon as the subagents are done; do not wait for them actively. Subagents can ask you questions while they work with contact_supervisor; you answer with subagent_supervisor (action reply, replyTo from the request). You give a running background subagent further hints with subagent (action steer, id of the run). With the tool intercom you and the subagents talk to each other directly (action list shows the sessions, send sends a message, ask waits for a reply, reply answers); subagents can also write to each other this way. workflowScriptPath, named workflows, runs.host, gate/acceptance, cwd, output and creating or changing agents are blocked. Give every subagent a short, descriptive name (for runs.run/runs.all the key, e.g. "reid" or "datasets"); the user sees it in the UI. You read the results of subagents from their reply or from files they write under /workspace; paths under /agent/sessions from notes about subagents are not in your sandbox.

@@ -8,7 +8,8 @@
 //
 // mcp_upload_artifact names a path in the execution sandbox (E9). The file is not in the
 // pi container; the orchestrator reads it there itself (POST /tool/upload, logged like
-// a read) and passes it on to the same upload with approval as the MCP tool.
+// a read, only inside /workspace) and sends it to the user like the MCP tool: stored at
+// once, no approval (issue #62).
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { request } from "node:http";
 import { resolve } from "node:path";
@@ -138,10 +139,9 @@ export default async function (pi: ExtensionAPI) {
 						signal,
 					);
 					if (r.error) throw new Error(r.error);
-					if (r.status === "approved") {
-						return { content: [{ type: "text", text: `approved: artifact "${r.name}" stored (${r.size} bytes, sha256 ${r.sha256})` }], details: { structured: null } };
-					}
-					return { content: [{ type: "text", text: `rejected: artifact "${r.name}" was not stored (${r.message || "rejected by the user"})` }], details: { structured: null } };
+					const text = r.text || (r.status === "stored" ? `sent: "${r.name}" is in the chat for the user (${r.size} bytes, sha256 ${r.sha256})` : `not sent: "${r.name}" was not stored (${r.message || "not stored"})`);
+					if (r.status !== "stored") throw new Error(text);
+					return { content: [{ type: "text", text }], details: { structured: null } };
 				}
 				const result = await rpc("tools/call", { name: tool.name, arguments: args }, signal);
 				const content = (result?.content ?? []).map((c: any) =>

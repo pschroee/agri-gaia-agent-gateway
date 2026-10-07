@@ -453,12 +453,14 @@ changes leaves it running (checked).
 
 ### Confirmation by the user
 
-Three kinds: **artifact upload**, **internet access** and **writing platform call** (see
-*Platform binding (direct)*). Every upload of an artifact (via `agw-artifact upload` or `mcp_upload_artifact`) is held in the
-orchestrator: file as *pending* in RustFS, entry in `approvals`, card in the
-web UI. The agent's call waits until the user approves or rejects (default 10 min,
-after which the request counts as expired). This is enforced at the socket, not in pi. A chat
-with an open approval does not idle.
+Two kinds: **internet access** and **writing platform call** (see *Platform binding (direct)*). The agent's call
+waits until the user approves or rejects (default 10 min, after which the request counts as expired). This is
+enforced at the socket, not in pi. A chat with an open approval does not idle.
+
+Until issue #62 (2026-10-07) the **artifact upload** was a third kind: the file waited as *pending* in RustFS with an
+entry in `approvals`. Decision of the author: a file the agent sends to the user only adds something the user can
+look at and download, it changes nothing on the platform, so it needs no approval. Uploads are stored at once
+(checks and log in `API.md`, *Files the agent sends*); old `artifact_upload` approvals stay readable.
 
 **Who is asking via the socket** (2026-09-30). Besides `PI_AGW_TOOL_CALL_ID`, the orchestrator also sets
 `PI_AGW_SESSION` in every `bash`: `main` for the main agent, the run ID for a subagent (like
@@ -590,7 +592,7 @@ the backup and are not part of a chat's result.
 | `/home/agent` (including `pip install --user`, `npm install -g` in `~/.local`, matplotlib's font cache) | no | packages installed later are not kept |
 | running processes, shell environment variables | no | the sandbox is torn down |
 | `/agent` (pi, sessions) | session yes, via E8 | since E9 lives in pi's container, not in the execution sandbox |
-| artifacts | yes, permanently with the orchestrator | the result that leaves the chat; upload only with approval |
+| artifacts | yes, permanently with the orchestrator | the result that leaves the chat; sent without approval since issue #62 |
 
 **Procedure.**
 

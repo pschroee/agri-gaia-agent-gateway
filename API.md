@@ -233,7 +233,7 @@ type MessageSource = { kind: "user" | "system"; type?: string; refs?: string[]; 
 //  assistant:  { role:"assistant", content:[{type:"text",text}|{type:"thinking",thinking}|{type:"toolCall",id,name,arguments}], usage, stopReason, model }
 //  toolResult: { role:"toolResult", toolCallId, toolName, content:[{type:"text",text}], isError }
 
-// kind "output": uploaded by the agent (after approval); kind "input": uploaded by the user in the UI,
+// kind "output": sent by the agent (stored at once, no approval since issue #62, see "Files the agent sends"); kind "input": uploaded by the user in the UI,
 // lies in the sandbox at /workspace/inputs/<name>.
 // Model call recorded at the LLM proxy (tamper-proof: measured outside the sandbox).
 // main: the response belongs to the main session (responseId in the messages); otherwise subagent or similar.
@@ -304,7 +304,8 @@ type Command = { name: string /* without "/" */; description?: string; source: "
 
 type Artifact = { chat_id: string; kind: "input" | "output"; name: string; size: number; sha256: string; content_type: string; created_at: string; via: "cli" | "mcp" | "ui"; tool_call_id?: string /* tool call that uploaded the result (display only) */ };
 type Approval = {
-  // artifact_upload: name/size/sha256/preview describe the file.
+  // artifact_upload: name/size/sha256/preview describe the file. Only in chats from before issue #62; the gateway
+  //   creates none any more (files the agent sends need no approval), stored ones stay readable.
   // internet_access: the agent asks for internet access; name = the agent's reason, size 0.
   // platform_write: writing call to the Agri-Gaia platform; name = "METHOD path[?query]",
   //   size = length of the JSON body, preview = name plus indented body (up to 4,000 characters).
@@ -424,7 +425,7 @@ Each event is a `data:` line with JSON `{"kind": …, "data": …}`. Every 15 s 
 | `pi` | a pi RPC event unchanged (plus `compaction_start {reason}` and `compaction_end {reason, result, aborted, errorMessage?}`): `agent_start`, `message_start`, `message_update`, `message_end`, `tool_execution_start`, `tool_execution_update`, `tool_execution_end`, `turn_start`, `turn_end`, `agent_end`, `agent_settled`, `auto_retry_start`, … |
 | `chat` | `Chat` (on every change of state) |
 | `approval` | `Approval` (new or decided) |
-| `artifact` | `Artifact` (newly stored) |
+| `artifact` | `Artifact` (newly stored: a file the agent sends, at once without approval, or a file the user attached) |
 | `socket_call` | `SocketCall` (op also `agent_limit`, `subagent_limit`, `extension_ui`, `internet`, `internet_off`, `internet_set`) |
 | `llm_call` | `LLMCall` (every model call, including subagents) |
 | `subagent` | `SubagentEntry` (new entries from the subagent sessions, about every 2 s) |
@@ -831,6 +832,34 @@ schemes); it shows `data:image/(png|jpeg|gif|webp);base64` directly, SVG never.
 Display images are not artifacts: they need no approval, do not appear in `artifacts` and only go to the logged-in
 UI.
 
+## Files the agent sends
+
+Since issue #62 the agent sends result files to the user **without approval**: `agw-artifact upload <file> [--name
+<name>]` (CLI, socket `POST /artifacts?name=…`), `mcp_upload_artifact` with a path (MCP in pi, pi's socket
+`POST /tool/upload`) or the MCP tool `upload_artifact` with base64 content. The file is stored at once as an
+`Artifact` with `kind: "output"`, `via` and the `tool_call_id` of the call that sent it, and the event `artifact`
+announces it; the platform UI shows it as a file message of the agent after the step that sent it. Sending the same
+name again replaces the file. Writing platform calls (`platform_write`) and internet access keep their approval.
+
+Checks:
+
+- Size: at most `AGW_ARTIFACT_MAX_MB` (default 50) per file, at the socket for every channel (CLI 413
+  `file larger than <n> MB`, MCP an error result); refusals are logged as `refused: too large`.
+- Name: cleaned (`artifacts.SanitizeName`: last path segment, no control characters); empty names are refused.
+- Path: only regular files **inside `/workspace`**, opened with `O_NOFOLLOW|O_NONBLOCK` after the directories on the
+  way were resolved (`execproto.OpenInside`): no symbolic links, no FIFOs, no directories. `agw-artifact` checks
+  this in the sandbox before it sends anything; for `mcp_upload_artifact` the orchestrator refuses a path outside
+  (`refused: outside /workspace`) and `agw-exec` checks the rest when it reads (`Request.root`). A program that
+  posts bytes to the socket directly is bound by the size and name checks only; it can send nothing it could not
+  read in its sandbox anyway.
+- `agw-artifact` sends the SHA-256 along (`X-Agw-Sha256`); if it does not match what arrived, nothing is stored
+  (`status: "rejected"`, `message: "checksum does not match"`).
+
+Every upload is a `SocketCall` with `op: "upload"`, `detail: "<name> (<n> bytes, sha256 <hex>)"`, `result:
+"stored"` (or `rejected: …`, `refused: …`, `error: …`) and the `tool_call_id` of the call. The response at the
+socket is `{status: "stored" | "rejected", name, size, sha256, message?, text}`; `text` is the line the agent reads
+(`sent: "<name>" is in the chat for the user (…)`). `agw-artifact upload` exits with 0 when sent, 1 otherwise.
+
 ## Tool executions (E9)
 
 The orchestrator executes the tools `bash`, `read`, `write`, `edit`, `grep`, `find` and `ls` of the main agent and
@@ -887,7 +916,7 @@ not at the socket of the execution sandbox:
 |---|---|
 | `POST /tool/op` | a file operation or search, response JSON (last frame) |
 | `POST /tool/bash` | command; response NDJSON: `{"data":"<base64>"}` per chunk, at the end `{"done":true,"exit":n}` or `{"done":true,"error":…,"code":…}`, with `fullOutputPath` for long output. Closing the connection aborts |
-| `POST /tool/upload` | `mcp_upload_artifact`: the orchestrator reads the file in the execution sandbox and passes it on to the upload with approval |
+| `POST /tool/upload` | `mcp_upload_artifact`: the orchestrator reads the file in the execution sandbox (only inside `/workspace`, no symbolic links, regular files only) and stores it at once, without approval (see *Files the agent sends*) |
 | `POST /tool/bg/start` | `bash` with `run_in_background`: `{toolCallId, tool: "bash", sessionFile, req: {command, cwd, env, timeout}}`; response immediately `{task, max}` or `{error}` (for example limit reached, working directory missing) |
 | `POST /tool/bg/output` | `bg_output`: `{toolCallId, tool: "bg_output", sessionFile, id, tailLines}` → `{task, output}` (end of the output, up to 100 KiB) or `{error}` |
 | `POST /tool/bg/stop` | `bg_stop`: `{toolCallId, tool: "bg_stop", sessionFile, id}` → `{task}` or `{error}` |

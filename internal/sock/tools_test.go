@@ -28,6 +28,7 @@ type fakeRunner struct {
 	chunks []string
 	block  bool
 	file   []byte
+	fail   *execproto.Frame // read: this frame instead of the file
 }
 
 func (f *fakeRunner) Run(ctx context.Context, req execproto.Request, onData func([]byte)) (execproto.Frame, error) {
@@ -46,6 +47,9 @@ func (f *fakeRunner) Run(ctx context.Context, req execproto.Request, onData func
 		code := 0
 		return execproto.Frame{Done: true, Exit: &code, FullOutputPath: req.Spill}, nil
 	case execproto.OpRead:
+		if f.fail != nil {
+			return *f.fail, nil
+		}
 		if f.file == nil {
 			return execproto.Frame{Done: true, Error: "open " + req.Path + ": no such file or directory", Code: "ENOENT"}, nil
 		}
@@ -233,13 +237,13 @@ func TestToolBashStreamAndAbort(t *testing.T) {
 }
 
 func TestToolUploadFromExecSandbox(t *testing.T) {
-	b := &fakeBackend{chat: "chat-1", decide: "approved"}
+	b := &fakeBackend{chat: "chat-1", decide: UploadStored}
 	run, rec := &fakeRunner{file: []byte("MCP")}, &fakeRecorder{}
 	c := startPi(t, b, run, rec)
 	_, body := postJSON(t, c, "/tool/upload", map[string]any{"toolCallId": "call_u", "tool": "mcp_upload_artifact", "path": "/workspace/note.txt"})
 	var res UploadResult
 	_ = json.Unmarshal([]byte(body), &res)
-	if res.Status != "approved" || res.Name != "note.txt" || len(b.uploads) != 1 || b.uploads[0] != "chat-1|mcp|note.txt|MCP" {
+	if res.Status != UploadStored || res.Name != "note.txt" || !strings.HasPrefix(res.Text, "sent: ") || len(b.uploads) != 1 || b.uploads[0] != "chat-1|mcp|note.txt|MCP" {
 		t.Fatalf("Upload: %s %v", body, b.uploads)
 	}
 	if b.calls2[0] != "call_u" {
@@ -248,8 +252,12 @@ func TestToolUploadFromExecSandbox(t *testing.T) {
 	if r := rec.all(); len(r) != 1 || r[0].Tool != "mcp_upload_artifact" || r[0].Op != "read" {
 		t.Fatalf("entry: %+v", r)
 	}
-	if !strings.Contains(strings.Join(b.calls, " "), "mcp:upload:approved") {
-		t.Fatalf("socket log: %v", b.calls)
+	if !strings.Contains(strings.Join(b.calls, " "), "mcp:upload:stored") || b.logTool[len(b.logTool)-1] != "call_u" {
+		t.Fatalf("socket log: %v %v", b.calls, b.logTool)
+	}
+	// the read is confined to /workspace (agw-exec checks symbolic links and file type)
+	if r := run.reqs[0]; r.Op != execproto.OpRead || r.Root != execproto.Workspace {
+		t.Fatalf("read request: %+v", r)
 	}
 	run.file = nil
 	_, body = postJSON(t, c, "/tool/upload", map[string]any{"toolCallId": "call_v", "tool": "mcp_upload_artifact", "path": "/workspace/missing.txt"})
@@ -258,6 +266,32 @@ func TestToolUploadFromExecSandbox(t *testing.T) {
 	}
 	if resp, _ := postJSON(t, c, "/tool/upload", map[string]any{"toolCallId": "call_w", "tool": "read", "path": "/workspace/x"}); resp.StatusCode != 400 {
 		t.Fatalf("upload under a foreign tool: %d", resp.StatusCode)
+	}
+}
+
+// Issue #62: only files inside /workspace are sent; a path outside is refused before anything is read, and logged.
+func TestToolUploadOnlyFromWorkspace(t *testing.T) {
+	b := &fakeBackend{chat: "chat-1", decide: UploadStored}
+	run, rec := &fakeRunner{file: []byte("secret")}, &fakeRecorder{}
+	c := startPi(t, b, run, rec)
+	for _, p := range []string{"/etc/passwd", "/workspace/../etc/passwd", "/workspacex/a.txt"} {
+		_, body := postJSON(t, c, "/tool/upload", map[string]any{"toolCallId": "call_o", "tool": "mcp_upload_artifact", "path": p})
+		if !strings.Contains(body, "only files inside /workspace") {
+			t.Fatalf("%s: %s", p, body)
+		}
+	}
+	if len(run.reqs) != 0 || len(b.uploads) != 0 {
+		t.Fatalf("read or stored although outside: %v %v", run.reqs, b.uploads)
+	}
+	if len(b.calls) < 3 || b.calls[len(b.calls)-1] != "mcp:upload:refused: outside /workspace" {
+		t.Fatalf("socket log: %v", b.calls)
+	}
+	// agw-exec refuses a symbolic link (EACCES): passed on and logged
+	run.file = nil
+	run.fail = &execproto.Frame{Done: true, Error: "/workspace/l.txt is a symbolic link; send the file itself", Code: "EACCES"}
+	_, body := postJSON(t, c, "/tool/upload", map[string]any{"toolCallId": "call_l", "tool": "mcp_upload_artifact", "path": "/workspace/l.txt"})
+	if !strings.Contains(body, "symbolic link") || !strings.HasPrefix(b.calls[len(b.calls)-1], "mcp:upload:refused: ") {
+		t.Fatalf("symlink: %s %v", body, b.calls)
 	}
 }
 
