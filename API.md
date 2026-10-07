@@ -101,7 +101,7 @@ type Chat = {
   model: string;          // Model.id
   variant: Variant["id"];
   state: "active" | "dormant";  // dormant (idle): continues with the next message
-  internet: boolean;      // sandbox has internet access (switch per chat, takes effect immediately; off by default, the agent can ask for it via approval)
+  internet: boolean;      // sandbox has internet access (switch per chat, takes effect immediately; off by default, the agent can ask for it via approval and switch it off itself, see "Internet switch of the agent")
   auto_compact: boolean;  // automatic compaction (switch per chat)
   compactions: number;    // number of compactions so far
   max_subagents: number;  // at most this many subagents at the same time; fixed for the service, the same in every chat (see below)
@@ -392,7 +392,7 @@ Each event is a `data:` line with JSON `{"kind": …, "data": …}`. Every 15 s 
 | `chat` | `Chat` (on every change of state) |
 | `approval` | `Approval` (new or decided) |
 | `artifact` | `Artifact` (newly stored) |
-| `socket_call` | `SocketCall` (op also `agent_limit`, `subagent_limit`, `extension_ui`) |
+| `socket_call` | `SocketCall` (op also `agent_limit`, `subagent_limit`, `extension_ui`, `internet`, `internet_off`) |
 | `llm_call` | `LLMCall` (every model call, including subagents) |
 | `subagent` | `SubagentEntry` (new entries from the subagent sessions, about every 2 s) |
 | `tool_execution` | `ToolExecution` (every operation executed by the orchestrator, as soon as it is finished) |
@@ -620,7 +620,8 @@ never sees a chat idle):
 
 Which bindings a chat has is fixed for the gateway, not chosen per chat (issue #29). `AGW_TOOLSETS` is a
 comma-separated list of `cli` (bash, file tools, subagents, `agw-platform` and `curl` to the socket), `mcp` (the
-`mcp_*` tools, `read`/`write`/`ls`, no bash) and `api` (the HTTP tool `platform_http`), in any order and
+`mcp_*` tools, `read`/`write`/`ls`, no bash) and `api` (the HTTP tool `platform_http` plus `request_internet` and
+`disable_internet`), in any order and
 combination, for example `AGW_TOOLSETS=cli,api`. Default: `cli`, the default variant before. Spaces and upper case
 are tolerated and a repeated entry counts once; an empty value, an empty entry (`cli,,api`) or anything else (also
 the old id `both`) stops the start with an error naming the variable.
@@ -645,6 +646,35 @@ the old id `both`) stops the start with an error naming the variable.
 - **Platform calls** are attributed to the path they came through, not to the chat's combination: `mcp` (MCP at pi's
   socket), `api` (`platform_http`) and `cli` (`agw-platform` and `curl` at the sandbox's socket). In a combination all
   of them reach the same checks (delegation, approval) of the same chat.
+
+## Internet switch of the agent
+
+The sandbox has no internet by default (`Chat.internet`, `AGW_INTERNET_DEFAULT`). The agent can **request** it, which
+creates an `internet_access` approval and waits for the user's decision, and it can **switch it off** again itself
+without approval, because that only removes a right (issue #34). Both exist in every binding:
+
+| Binding | Request | Switch off |
+|---|---|---|
+| `cli` | `agw-internet "<reason>"` (exit 0 approved, 3 rejected) | `agw-internet off` (exit 0) |
+| `mcp` | `mcp_request_internet {reason}` | `mcp_disable_internet {}` |
+| `api` | `request_internet {reason}` | `disable_internet {}` |
+
+- **CLI syntax:** `off` as the only argument (any case) switches off; anything else is the reason of a request.
+  `off` followed by further arguments is refused with exit 1 instead of guessed. A reason that is literally `off` or
+  starts with `-` goes after `--` (`agw-internet -- off`). `agw-artifact internet …` takes the same arguments.
+- **Switching off is idempotent:** with internet already off the call succeeds with `status: "already_off"` and
+  changes nothing (no network change, no event); otherwise the orchestrator disconnects the execution sandbox from the
+  egress network like the user's switch (`POST /api/chats/{id}/internet`), stores `internet: false` and sends the
+  `chat` event, so the toggles of the gateway UI and the platform frontend follow live. The web tools `web_search`
+  and `web_extract` disappear from the next request on (`web-gate.ts`); the web proxy refuses at once.
+- **Socket endpoints** (both sockets; the channel follows from the socket: `cli` at the sandbox's socket, `api` at
+  pi's socket): `POST /internet {reason}` → `{status: "approved"|"rejected", name: "internet", message}`, and
+  `POST /internet/off` (no body) → `{status: "off"|"already_off", name: "internet", message}`. A slot without a chat
+  gets 409. MCP offers `request_internet` and `disable_internet` at both sockets.
+- **Log:** every call is a `socket_calls` entry: `op: "internet"` with the reason as `detail` and `result`
+  `approved`/`rejected`, `op: "internet_off"` with `result` `off`, `already off`, `refused: not assigned` or
+  `error: …`; the SSE event `socket_call` shows it in the chat's activity.
+- **System note:** the agent is told to switch internet off again as soon as it is done with it.
 
 ## Limit for subagents
 
@@ -764,6 +794,8 @@ not at the socket of the execution sandbox:
 | `POST /tool/bg/start` | `bash` with `run_in_background`: `{toolCallId, tool: "bash", sessionFile, req: {command, cwd, env, timeout}}`; response immediately `{task, max}` or `{error}` (for example limit reached, working directory missing) |
 | `POST /tool/bg/output` | `bg_output`: `{toolCallId, tool: "bg_output", sessionFile, id, tailLines}` → `{task, output}` (end of the output, up to 100 KiB) or `{error}` |
 | `POST /tool/bg/stop` | `bg_stop`: `{toolCallId, tool: "bg_stop", sessionFile, id}` → `{task}` or `{error}` |
+| `GET /tool/internet` | `web-gate.ts`: `{enabled}`, whether the chat has internet (shows or hides `web_search` and `web_extract`). A slot without a chat gets 409 without a log entry: every freshly started slot asks once before it is assigned |
+| `POST /internet`, `POST /internet/off` | `request_internet` and `disable_internet` of the REST binding (`api.ts`), logged with `via: "api"`; see *Internet switch of the agent* |
 | `POST /tool/workflow` | script of a workflow (`subagent` with `workflowScript`), NDJSON in both directions on one connection. Request: first line `{"toolCallId", "tool": "subagent", "sessionFile", "source"}` (`source` is the source code of pi-subagents' worker, at most 4 MiB), then one host message `{"m": …}` per line; the end of the request ends the input. Response: per line what the worker writes in the execution sandbox (`{"m": …}` or `{"__agw":"error","message":…}`), at the end `{"done":true,"exit":n}`. Closing the connection aborts. The caller is `remote-worker.mjs`, which sends every message of the worker through the guard before pi-subagents sees it |
 
 Limits per slot (all endpoints together): at most **32 concurrent requests**; requests with large content (body,

@@ -68,6 +68,17 @@ refer to this repository.
   `bindingTools` and that test. Old chats of any combination resume through slots started on demand
   (`pool.SetKnown`). Rules in `API.md`, *Bindings of new chats*.
 
+## Internet switch of the agent
+
+- The agent requests internet (approval) and switches it off itself (no approval) in every binding (issue #34):
+  `agw-internet "<reason>"` / `agw-internet off`, MCP `request_internet` / `disable_internet`, and in the REST binding
+  the tools `request_internet` / `disable_internet` of `api.ts` (socket `POST /internet`, `POST /internet/off` at pi's
+  socket, logged as `api`). `Manager.DisableInternet` reuses `SetInternet` (chat lock, `chat` event) and is a no-op
+  with `already_off` when internet is off. `agw-internet off` with further arguments is refused on purpose; a reason
+  that is literally `off` goes after `--`. Rules in `API.md`, *Internet switch of the agent*.
+- `GET /tool/internet` (web-gate.ts) is asked once by every fresh, unassigned slot; it answers 409 **without** a log
+  entry. Do not route it through `handler.chat`, which logs `refused: not assigned`.
+
 ## Creating chats
 
 - `POST /api/chats` with `async: true` (issue #30) returns at once also when the pool is empty: the chat is marked
