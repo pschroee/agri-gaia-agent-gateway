@@ -481,8 +481,10 @@ func (s *Store) SetThinkingLevel(ctx context.Context, id, level string) error {
 }
 
 // SetTitle sets the title as chosen by the user; automatic naming no longer applies afterwards.
+// It leaves updated_at alone: the chat list is ordered by it, and a rename is no activity, so the
+// chat keeps its place in the history (issue #49 of the thesis repository, as in ChatGPT).
 func (s *Store) SetTitle(ctx context.Context, id, title string) error {
-	return s.exec1(ctx, `UPDATE chats SET title=$2, title_source='user', updated_at=now() WHERE id=$1`, id, title)
+	return s.exec1(ctx, `UPDATE chats SET title=$2, title_source='user' WHERE id=$1`, id, title)
 }
 
 // ModelTitle replaces the title from the first question with the model's, but not if the
