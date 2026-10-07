@@ -13,6 +13,9 @@ package sock
 //	POST /tool/bg/start  bash with run_in_background: start a background task, immediate response
 //	POST /tool/bg/output bg_output: state and tail of the output of a background task
 //	POST /tool/bg/stop   bg_stop: end a background task
+//	GET  /tool/internet  web-gate.ts: is internet on? (shows or hides web_search and web_extract)
+//	POST /internet       request_internet of the REST binding (api.ts), waits for confirmation
+//	POST /internet/off   disable_internet of the REST binding (api.ts), no confirmation
 //
 // pi's socket is mounted only in the pi container; the execution
 // sandbox has its own socket without these endpoints.
@@ -207,6 +210,9 @@ func NewPiHandlerFg(slotID string, b Backend, maxBytes int64, run ToolRunner, re
 	mux.HandleFunc("POST /tool/bg/output", th.bgOutput)
 	mux.HandleFunc("POST /tool/bg/stop", th.bgStop)
 	mux.HandleFunc("GET /tool/internet", th.internetState)
+	// The internet tools of the REST binding (api.ts): request and switch off, logged with via api.
+	mux.HandleFunc("POST /internet", h.internet)
+	mux.HandleFunc("POST /internet/off", h.internetOff)
 	return h.withPlatformAPI(mux)
 }
 

@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"sync"
@@ -18,6 +20,7 @@ import (
 	"agw/internal/llmproxy"
 	"agw/internal/pool"
 	"agw/internal/rpc"
+	"agw/internal/sock"
 	"agw/internal/store"
 	"agw/internal/titler"
 	"agw/internal/toolset"
@@ -989,6 +992,87 @@ func TestInternetRequestRejected(t *testing.T) {
 	}
 	if e.agent(0).internet {
 		t.Fatal("internet on despite rejection")
+	}
+}
+
+// Issue #34: the agent switches internet off without approval; the stored switch and the sandbox follow,
+// the chat event carries the new state (the toggles follow it live). A second call is a success without effect.
+func TestDisableInternet(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	on := true
+	c, _ := e.m.Create(ctx, NewChat{Internet: &on})
+	slot := e.m.live[c.ID].slot.ID
+	if !e.agent(0).internet {
+		t.Fatal("internet not on at the start")
+	}
+	events, cancel := e.m.Subscribe(c.ID)
+	defer cancel()
+	r, err := e.m.DisableInternet(ctx, c.ID, slot, "cli")
+	if err != nil || r.Status != sock.InternetOff {
+		t.Fatalf("off: %+v %v", r, err)
+	}
+	ev := waitEvent(t, events, "chat", "")
+	if v := ev.Data.(ChatView); v.ID != c.ID || v.Internet {
+		t.Fatalf("chat event: %+v", v)
+	}
+	v, _ := e.m.View(ctx, c.ID)
+	if e.agent(0).internet || v.Internet {
+		t.Fatal("internet still on")
+	}
+	e.agent(0).mu.Lock()
+	calls := e.agent(0).netCalls
+	e.agent(0).mu.Unlock()
+	// Already off: success, no network change, no approval.
+	r, err = e.m.DisableInternet(ctx, c.ID, slot, "mcp")
+	if err != nil || r.Status != sock.InternetAlreadyOff {
+		t.Fatalf("already off: %+v %v", r, err)
+	}
+	e.agent(0).mu.Lock()
+	after := e.agent(0).netCalls
+	e.agent(0).mu.Unlock()
+	if after != calls {
+		t.Fatalf("network switched again: %d → %d", calls, after)
+	}
+	if aps, _ := e.st.ListApprovals(ctx, "", c.ID); len(aps) != 0 {
+		t.Fatalf("approvals created: %+v", aps)
+	}
+}
+
+// Issue #34 through the socket: the slot decides which chat is switched off, the call is logged, and a
+// slot without a chat changes nothing.
+func TestDisableInternetThroughSocket(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	on := true
+	a, _ := e.m.Create(ctx, NewChat{Internet: &on})
+	b, _ := e.m.Create(ctx, NewChat{Internet: &on})
+	slotA := e.m.live[a.ID].slot.ID
+	off := func(slot string) int {
+		rec := httptest.NewRecorder()
+		sock.NewHandler(slot, e.m, 1<<20).ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "http://agw/internet/off", nil))
+		return rec.Code
+	}
+	if code := off(slotA); code != http.StatusOK {
+		t.Fatalf("slot A: %d", code)
+	}
+	va, _ := e.m.View(ctx, a.ID)
+	vb, _ := e.m.View(ctx, b.ID)
+	if va.Internet || !vb.Internet {
+		t.Fatalf("A %v (want off), B %v (want on)", va.Internet, vb.Internet)
+	}
+	if code := off("p-unassigned"); code != http.StatusConflict {
+		t.Fatalf("unassigned: %d", code)
+	}
+	if vb, _ = e.m.View(ctx, b.ID); !vb.Internet {
+		t.Fatal("unassigned slot switched another chat off")
+	}
+	calls, _ := e.st.ListSocketCalls(ctx, a.ID)
+	if len(calls) != 1 || calls[0].Op != "internet_off" || calls[0].Result != "off" || calls[0].Via != "cli" {
+		t.Fatalf("log of A: %+v", calls)
+	}
+	if calls, _ = e.st.ListSocketCalls(ctx, b.ID); len(calls) != 0 {
+		t.Fatalf("log of B: %+v", calls)
 	}
 }
 

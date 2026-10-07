@@ -2,11 +2,13 @@ package worker
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 
 	"agw/internal/chat"
 	"agw/internal/config"
+	"agw/internal/toolset"
 )
 
 // The scope of action per variant: MCP without bash and without subagents.
@@ -164,7 +166,7 @@ func TestBackgroundTasksConfigured(t *testing.T) {
 			t.Errorf("variant %s (without bash) with background tasks: %q", v, n)
 		}
 	}
-	if a, err := PiArgs("api", "p", "m"); err != nil || !strings.Contains(strings.Join(a, " "), "--tools platform_http,todo,web_search,web_extract") || strings.Contains(strings.Join(a, " "), "mcp.ts") {
+	if a, err := PiArgs("api", "p", "m"); err != nil || !strings.Contains(strings.Join(a, " "), "--tools platform_http,request_internet,disable_internet,todo,web_search,web_extract") || strings.Contains(strings.Join(a, " "), "mcp.ts") {
 		t.Errorf("variant api: %v %v", a, err)
 	}
 	for _, v := range Variants {
@@ -224,6 +226,31 @@ func TestSystemNoteLanguageRule(t *testing.T) {
 		}
 		if strings.Contains(n, "Reply in German") {
 			t.Errorf("%s: system note still demands German", v)
+		}
+	}
+}
+
+// Issue #34: every binding can switch internet off without approval, and the system note says to do it once the
+// internet is no longer needed.
+func TestInternetOffInEveryBinding(t *testing.T) {
+	for _, v := range []string{"mcp", "api", "mcp,api", "cli,mcp,api"} {
+		ts, err := toolset.FromVariant(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tools := Tools(ts)
+		if ts.Has(toolset.MCP) && !slices.Contains(tools, "mcp_disable_internet") {
+			t.Errorf("%s: mcp_disable_internet missing in %v", v, tools)
+		}
+		if ts.Has(toolset.API) && (!slices.Contains(tools, "request_internet") || !slices.Contains(tools, "disable_internet")) {
+			t.Errorf("%s: internet tools of the REST binding missing in %v", v, tools)
+		}
+	}
+	// With the command line, agw-internet off is described in the note and in the skill.
+	note := SystemNoteFor("cli", 4)
+	for _, want := range []string{"agw-internet off", "mcp_disable_internet", "disable_internet", "switch it off again yourself", "needs no approval"} {
+		if !strings.Contains(note, want) {
+			t.Errorf("system note lacks %q", want)
 		}
 	}
 }

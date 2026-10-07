@@ -1,9 +1,9 @@
 ---
 name: internet
-description: Ask the user for internet access. Use before fetching anything from the network (pip install, curl, git clone, web pages), when network calls fail or will foreseeably be needed.
+description: Ask the user for internet access and switch it off again. Use before fetching anything from the network (pip install, curl, git clone, web pages), when network calls fail or will foreseeably be needed, and once the network is no longer needed.
 ---
 
-# Asking for internet access
+# Asking for internet access and switching it off
 
 This sandbox has **no internet by default**. Network calls then fail with name resolution or
 connection errors. The route to the language model and to the orchestrator exists regardless.
@@ -21,8 +21,26 @@ timeout (at least 900 seconds) and not in the background.
 - Exit code 3, `rejected: …` — do not ask again unless the user wants it. Continue without
   network or explain what cannot be done without internet.
 
+Give the reason as one quoted argument. `agw-internet off` switches internet off (see below), and
+`off` followed by further words is refused rather than guessed; a reason that is literally `off` or
+starts with `-` goes after `--`: `agw-internet -- off`.
+
 Do not ask as a precaution, only when the task really needs it. Preinstalled are, among
 others, numpy, pandas, matplotlib, plotly, jinja2 and openpyxl; these need no internet.
+
+## Switching it off again
+
+As soon as you no longer need the network (packages installed, files downloaded, research done),
+switch it off yourself:
+
+```bash
+agw-internet off
+```
+
+This needs **no** approval and returns at once with exit code 0: `off: …` when it was on,
+`already_off: …` when it was already off. Switching it on again needs a new request and the user's
+approval, so ask anew if a later step needs it. Packages you installed stay installed; the web search tools disappear
+from your next reply on.
 
 ## Installing packages
 

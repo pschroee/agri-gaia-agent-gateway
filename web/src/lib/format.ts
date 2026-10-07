@@ -124,6 +124,8 @@ const socketOps: Record<string, string> = {
   list: "List",
   get: "Fetch",
   ping: "Ping",
+  internet: "Internet request",
+  internet_off: "Internet off",
   agent_limit: "Limit of concurrent agents",
   subagent_limit: "Subagent limit exceeded – aborted",
   extension_ui: "Extension prompt declined",
