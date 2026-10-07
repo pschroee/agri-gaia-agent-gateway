@@ -117,6 +117,13 @@ refer to this repository.
   `sock.runPlatform`; a new result text there needs a case there and in `TestListActivity`. `duration_ms` is the
   round trip of `Platform.Do` handed from `platform.Result.Duration` to the log entry through the context
   (`store.WithDuration`); it never reaches the agent (`json:"-"`). Rules in `API.md`, *Activity across chats*.
+- **Internet switches in the activity (issue #37):** `kind=internet|all` adds the entries `op` `internet`,
+  `internet_off` and `internet_set`; the default stays `platform`, and `summary` counts platform calls only for every
+  kind (the key figures of the evaluation). Only the user's switch (`Manager.SetInternetByUser`, the API handler) logs
+  `internet_set` with `via: "user"`; `SetInternet` stays unlogged, because the switch after an approval and the
+  agent's off are already logged as their request. `UploadResult.Log` (`json:"-"`) gives the log a finer result than
+  the agent sees (`already on`, `expired`). A new result text needs a case in `internetSQL` and in
+  `TestListActivityInternet`.
 
 ## Events across chats
 

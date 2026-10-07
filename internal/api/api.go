@@ -695,7 +695,7 @@ func (s *Server) internet(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, `expected {"enabled": true|false}`)
 		return
 	}
-	c, err := s.M.SetInternet(r.Context(), r.PathValue("id"), *req.Enabled)
+	c, err := s.M.SetInternetByUser(r.Context(), r.PathValue("id"), *req.Enabled)
 	if err != nil {
 		fail(w, err)
 		return
@@ -1134,11 +1134,15 @@ const (
 )
 
 // activity lists the platform calls of the user's chats across all chats, newest first, with a summary of
-// the period (API.md, Activity across chats). In oidc mode the store filters by the owner, so another user's
+// the period (API.md, Activity across chats); kind=internet|all adds or selects the internet switches. In oidc mode the store filters by the owner, so another user's
 // calls never leave the database; a foreign chat in ?chat= gives an empty page, like an unknown one.
 func (s *Server) activity(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	f := store.ActivityFilter{ChatID: q.Get("chat"), Outcome: q.Get("outcome"), Limit: activityDefaultLimit}
+	f := store.ActivityFilter{Kind: q.Get("kind"), ChatID: q.Get("chat"), Outcome: q.Get("outcome"), Limit: activityDefaultLimit}
+	if f.Kind != "" && !slices.Contains(store.ActivityKinds, f.Kind) {
+		writeErr(w, http.StatusBadRequest, "kind: one of "+strings.Join(store.ActivityKinds, ", "))
+		return
+	}
 	for name, dst := range map[string]*time.Time{"since": &f.Since, "until": &f.Until} {
 		if v := q.Get(name); v != "" {
 			t, err := time.Parse(time.RFC3339, v)

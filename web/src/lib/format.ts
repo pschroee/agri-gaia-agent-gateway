@@ -126,6 +126,7 @@ const socketOps: Record<string, string> = {
   ping: "Ping",
   internet: "Internet request",
   internet_off: "Internet off",
+  internet_set: "Internet switch by the user",
   agent_limit: "Limit of concurrent agents",
   subagent_limit: "Subagent limit exceeded – aborted",
   extension_ui: "Extension prompt declined",

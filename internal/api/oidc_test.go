@@ -384,3 +384,59 @@ func TestOIDCActivityOwnership(t *testing.T) {
 		t.Fatalf("without login: %d", code)
 	}
 }
+
+// Issue #37: the user's internet switch is logged with origin user and shows with kind=internet, only to the
+// chat's owner; another user cannot switch (nor log) it, and the default kind and the summary stay platform only.
+func TestOIDCActivityInternet(t *testing.T) {
+	m, p, cat, st := ownershipEnv(t)
+	srv, is := oidcServer(t, m, p, cat, nil)
+	a := loggedIn(t, srv, is, anna)
+	b := loggedIn(t, srv, is, bert)
+	ctx := context.Background()
+	chatA, err := st.CreateChat(ctx, store.NewChat{Title: "by Anna", Model: "p/m", Variant: "cli", Owner: anna.Sub})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = st.SetState(ctx, chatA.ID, store.StateDormant)
+	if _, err := st.AddSocketCall(ctx, store.SocketCall{ChatID: chatA.ID, SlotID: "p", Via: "cli", Op: "internet", Detail: "docs", Result: "approved"}); err != nil {
+		t.Fatal(err)
+	}
+	if code, body := call(t, a, "POST", srv.URL+"/api/chats/"+chatA.ID+"/internet", `{"enabled":true}`); code != 200 {
+		t.Fatalf("Anna switches on: %d %s", code, body)
+	}
+	if code, _ := call(t, b, "POST", srv.URL+"/api/chats/"+chatA.ID+"/internet", `{"enabled":false}`); code == 200 {
+		t.Fatal("Bert switched Anna's internet")
+	}
+	get := func(br *oidctest.Browser, q string) (int, store.ActivityPage, string) {
+		code, body := call(t, br, "GET", srv.URL+"/api/activity"+q, "")
+		var pg store.ActivityPage
+		_ = json.Unmarshal([]byte(body), &pg)
+		return code, pg, body
+	}
+	code, pg, body := get(a, "?kind=internet")
+	if code != 200 || len(pg.Calls) != 2 || pg.Summary.Total != 0 {
+		t.Fatalf("Anna, internet: %d %s", code, body)
+	}
+	u := pg.Calls[0]
+	if u.Kind != "internet" || u.Via != "user" || u.Op != "internet_set" || u.Internet == nil ||
+		u.Internet.Origin != "user" || u.Internet.Action != "switch" || u.Internet.Result != "on" {
+		t.Fatalf("user switch: %+v", u)
+	}
+	if r := pg.Calls[1]; r.Internet == nil || r.Internet.Origin != "agent" || r.Internet.Result != "approved" || !strings.Contains(body, `"kind":"internet"`) {
+		t.Fatalf("agent request: %+v", r)
+	}
+	if code, pg, _ = get(a, ""); code != 200 || len(pg.Calls) != 0 {
+		t.Fatalf("Anna, default kind: %d %+v", code, pg.Calls)
+	}
+	if code, pg, _ = get(a, "?kind=all"); code != 200 || len(pg.Calls) != 2 {
+		t.Fatalf("Anna, all: %d %+v", code, pg.Calls)
+	}
+	for _, q := range []string{"?kind=internet", "?kind=all", "?kind=internet&chat=" + chatA.ID} {
+		if code, pg, body = get(b, q); code != 200 || len(pg.Calls) != 0 || strings.Contains(body, chatA.ID) {
+			t.Fatalf("Bert %s: %d %s", q, code, body)
+		}
+	}
+	if code, _, _ := get(a, "?kind=bogus"); code != 400 {
+		t.Fatalf("kind=bogus: %d", code)
+	}
+}

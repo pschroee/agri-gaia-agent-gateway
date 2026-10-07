@@ -206,3 +206,103 @@ func deref(v *float64) any {
 	}
 	return *v
 }
+
+// Issue #37: internet switches only with kind internet or all, only of the owner's chats, never in the summary;
+// the outcome filter leaves them out, and an older entry logged as "rejected" whose approval expired counts as
+// expired.
+func TestListActivityInternet(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	mk := func(owner string) Chat {
+		c, err := s.CreateChat(ctx, NewChat{Title: owner, Model: "p/m", Variant: "cli", Owner: owner})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	a, b := mk("sub-anna"), mk("sub-bert")
+	add := func(chat, via, op, detail, result, toolCall string) {
+		if _, err := s.AddSocketCall(ctx, SocketCall{ChatID: chat, SlotID: "p", Via: via, Op: op, Detail: detail, Result: result, ToolCallID: toolCall}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ap, err := s.CreateApproval(ctx, Approval{ChatID: a.ID, Kind: "internet_access", Via: "cli", Name: "docs", PendingKey: "-", ToolCallID: "tc-old"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.DecideApproval(ctx, ap.ID, ApprovalExpired); err != nil {
+		t.Fatal(err)
+	}
+	add(a.ID, "cli", "platform", "GET /datasets", "ok 200", "")
+	add(a.ID, "cli", "internet", "docs", "rejected", "tc-old") // before #37: expired was logged as rejected
+	add(a.ID, "mcp", "internet", "pip", "rejected", "")
+	add(a.ID, "cli", "platform", "POST /train", "violation blocked: no right", "")
+	add(a.ID, "api", "internet_off", "", "already off", "")
+	add(a.ID, "user", "internet_set", "", "on", "")
+	add(a.ID, "cli", "internet", "", "error: boom", "")
+	add(a.ID, "cli", "upload", "x", "ok", "")
+	add(b.ID, "user", "internet_set", "", "off", "")
+	add(b.ID, "cli", "internet", "bert's reason", "approved", "")
+
+	anna := "sub-anna"
+	plat, _ := s.ListActivity(ctx, ActivityFilter{Owner: &anna})
+	inet, err := s.ListActivity(ctx, ActivityFilter{Owner: &anna, Kind: KindInternet})
+	if err != nil {
+		t.Fatal(err)
+	}
+	all, _ := s.ListActivity(ctx, ActivityFilter{Owner: &anna, Kind: KindAll})
+	if len(plat.Calls) != 2 || len(inet.Calls) != 5 || len(all.Calls) != 7 {
+		t.Fatalf("platform %d, internet %d, all %d", len(plat.Calls), len(inet.Calls), len(all.Calls))
+	}
+	for _, p := range []ActivityPage{plat, inet, all} {
+		if p.Summary.Total != 2 || p.Summary.Outcomes["ok"] != 1 || p.Summary.Outcomes["blocked"] != 1 || p.Summary.Chats != 1 {
+			t.Fatalf("summary differs by kind: %+v", p.Summary)
+		}
+		for _, c := range p.Calls {
+			if c.ChatID == b.ID {
+				t.Fatalf("Bert's entry for Anna: %+v", c)
+			}
+		}
+	}
+	for _, c := range plat.Calls {
+		if c.Kind != KindPlatform || c.Internet != nil || c.Outcome == "" {
+			t.Fatalf("platform call: %+v", c)
+		}
+	}
+	got := []string{}
+	for _, c := range inet.Calls {
+		got = append(got, c.Internet.Action+"/"+c.Internet.Origin+"/"+c.Internet.Result)
+		if c.Kind != KindInternet || c.Outcome != "" {
+			t.Fatalf("internet entry: %+v", c)
+		}
+	}
+	want := "request/agent/error switch/user/on off/agent/already_off request/agent/rejected request/agent/expired"
+	if strings.Join(got, " ") != want {
+		t.Fatalf("internet entries:\n got %s\nwant %s", strings.Join(got, " "), want)
+	}
+	if last := inet.Calls[4]; last.Approval == nil || last.Approval.ID != ap.ID {
+		t.Fatalf("approval of the old request: %+v", last.Approval)
+	}
+	if len(inet.Chats) != 1 || inet.Chats[a.ID].ID != a.ID {
+		t.Fatalf("chats: %+v", inet.Chats)
+	}
+	// The outcome filter is about platform calls.
+	if p, _ := s.ListActivity(ctx, ActivityFilter{Owner: &anna, Kind: KindAll, Outcome: OutcomeError}); len(p.Calls) != 0 {
+		t.Fatalf("outcome error with kind all: %+v", p.Calls)
+	}
+	// Pages of two across both kinds: 2 + 2 + 2 + 1.
+	var before int64
+	n := 0
+	for i := 0; i < 4; i++ {
+		p, _ := s.ListActivity(ctx, ActivityFilter{Owner: &anna, Kind: KindAll, Limit: 2, Before: before})
+		n += len(p.Calls)
+		before = p.NextBefore
+	}
+	if n != 7 || before != 0 {
+		t.Fatalf("paging: %d entries, next %d", n, before)
+	}
+	// Token mode: both chats.
+	if p, _ := s.ListActivity(ctx, ActivityFilter{Kind: KindInternet}); len(p.Calls) != 7 {
+		t.Fatalf("token mode: %d", len(p.Calls))
+	}
+}

@@ -377,6 +377,9 @@ UPDATE chats SET title = 'New chat ' || substr(title, 12)
 ALTER TABLE socket_calls ADD COLUMN IF NOT EXISTS duration_ms double precision;
 -- Activity across all chats of a user (GET /api/activity) reads only platform calls, newest first.
 CREATE INDEX IF NOT EXISTS socket_calls_platform ON socket_calls (id) WHERE op = 'platform';
+-- With kind=internet|all it also reads the internet switches (issue #37): the agent's request and switch-off and the
+-- user's switch (via 'user', op 'internet_set').
+CREATE INDEX IF NOT EXISTS socket_calls_activity ON socket_calls (id) WHERE op IN ('platform', 'internet', 'internet_off', 'internet_set');
 
 -- Page context of a queued message from the user (issue #13): the platform page and the object the user had open
 -- when sending ({page, object?: {kind, id, name?}}, checked by chat.ParsePageContext); NULL: none. Goes to the agent

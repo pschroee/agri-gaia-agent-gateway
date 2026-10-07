@@ -883,9 +883,23 @@ func (m *Manager) Suspend(ctx context.Context, chatID string) (ChatView, error) 
 // could otherwise connect a new sandbox with a stale value
 // (Review H3).
 func (m *Manager) SetInternet(ctx context.Context, chatID string, on bool) (ChatView, error) {
+	return m.setInternet(ctx, chatID, on, false)
+}
+
+// SetInternetByUser is the user's switch (POST /api/chats/{id}/internet). Unlike the switches that follow an
+// approval or the agent's own "off", it is logged as a socket_calls entry with via "user" and op "internet_set"
+// (result "on", "off", "already on" or "already off"), so the activity shows who switched (issue #37).
+func (m *Manager) SetInternetByUser(ctx context.Context, chatID string, on bool) (ChatView, error) {
+	return m.setInternet(ctx, chatID, on, true)
+}
+
+// ViaUser marks the user's internet switch in the socket log (op store.OpInternetUser).
+const ViaUser = "user"
+
+func (m *Manager) setInternet(ctx context.Context, chatID string, on, byUser bool) (ChatView, error) {
 	unlock := m.lock(chatID)
 	defer unlock()
-	_, err := m.st.GetChat(ctx, chatID)
+	c, err := m.st.GetChat(ctx, chatID)
 	if err != nil {
 		return ChatView{}, err
 	}
@@ -900,7 +914,18 @@ func (m *Manager) SetInternet(ctx context.Context, chatID string, on bool) (Chat
 	if err := m.st.SetInternet(ctx, chatID, on); err != nil {
 		return ChatView{}, err
 	}
-	slog.Info("internet toggled", "chat", chatID, "on", on, "immediate", l != nil)
+	slog.Info("internet toggled", "chat", chatID, "on", on, "immediate", l != nil, "by_user", byUser)
+	if byUser {
+		result := map[bool]string{true: "on", false: "off"}[on]
+		if c.Internet == on {
+			result = "already " + result
+		}
+		slot := ""
+		if l != nil {
+			slot = l.slot.ID
+		}
+		m.LogCallBy(ctx, slot, chatID, ViaUser, store.OpInternetUser, "", result)
+	}
 	m.publishChat(ctx, chatID)
 	return m.View(ctx, chatID)
 }
@@ -1893,7 +1918,7 @@ func (m *Manager) RequestInternet(ctx context.Context, chatID, slotID, via, reas
 		return sock.UploadResult{}, err
 	}
 	if c.Internet {
-		return sock.UploadResult{Status: "approved", Name: "internet", Message: "internet access is already granted"}, nil
+		return sock.UploadResult{Status: "approved", Name: "internet", Message: "internet access is already granted", Log: "already on"}, nil
 	}
 	if err := m.checkPendingLimit(ctx, chatID); err != nil {
 		return sock.UploadResult{}, err
@@ -1925,7 +1950,7 @@ func (m *Manager) RequestInternet(ctx context.Context, chatID, slotID, via, reas
 	}
 	if final == store.ApprovalExpired {
 		m.publishChat(bg, chatID)
-		return sock.UploadResult{Status: "rejected", Name: "internet", Message: "no decision within the waiting time"}, nil
+		return sock.UploadResult{Status: "rejected", Name: "internet", Message: "no decision within the waiting time", Log: "expired"}, nil
 	}
 	if final != store.ApprovalApproved {
 		m.publishChat(bg, chatID)
