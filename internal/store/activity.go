@@ -35,8 +35,44 @@ const outcomeSQL = `CASE
 	WHEN sc.result LIKE 'ok%' THEN 'ok'
 	ELSE 'error' END`
 
-// ActivityFilter selects platform calls across chats. Zero values do not filter.
+// Kinds of activity entries (parameter kind of GET /api/activity, field kind of an entry).
+const (
+	KindPlatform = "platform" // platform calls (op platform); the default
+	KindInternet = "internet" // internet switches: requests and "off" by the agent, switches by the user
+	KindAll      = "all"      // both, in one list
+)
+
+// ActivityKinds lists the valid values of the kind parameter.
+var ActivityKinds = []string{KindPlatform, KindInternet, KindAll}
+
+// OpInternetUser is the user's internet switch in the socket log (via "user"); the agent's request and
+// switch-off are the ops internet and internet_off.
+const OpInternetUser = "internet_set"
+
+// internetSQL describes an internet entry: action, origin and result. Request results: approved, already_on
+// (internet was on, no approval), expired (no decision in time), rejected, error; switch-off by the agent: off,
+// already_off, error; the user's switch: on, off, already_on, already_off, error. Older entries logged an expired
+// request as "rejected"; with a tool call its approval tells (ap.state).
+const internetSQL = `CASE sc.op WHEN 'internet' THEN 'request' WHEN 'internet_off' THEN 'off' ELSE 'switch' END,
+	CASE WHEN sc.op = 'internet_set' THEN 'user' ELSE 'agent' END,
+	CASE sc.op
+	WHEN 'internet' THEN CASE
+		WHEN sc.result LIKE 'approved%' THEN 'approved'
+		WHEN sc.result LIKE 'already on%' THEN 'already_on'
+		WHEN sc.result LIKE 'expired%' OR (sc.result LIKE 'rejected%' AND ap.state = 'expired') THEN 'expired'
+		WHEN sc.result LIKE 'rejected%' THEN 'rejected'
+		ELSE 'error' END
+	ELSE CASE
+		WHEN sc.result IN ('on', 'off') THEN sc.result
+		WHEN sc.result IN ('already on', 'already off') THEN replace(sc.result, ' ', '_')
+		ELSE 'error' END
+	END`
+
+// ActivityFilter selects platform calls (and, with Kind, internet switches) across chats. Zero values do not
+// filter.
 type ActivityFilter struct {
+	// Kind: KindPlatform (also ""), KindInternet or KindAll.
+	Kind string
 	// Owner limits to the chats of this user; nil: all chats (token mode).
 	Owner   *string
 	ChatID  string
@@ -56,10 +92,24 @@ type ActivityApproval struct {
 	DecidedAt *time.Time `json:"decided_at,omitempty"`
 }
 
-// ActivityCall is a platform call with its outcome and approval.
+// ActivityInternet describes an internet entry (kind internet).
+type ActivityInternet struct {
+	// Action: request (the agent asked, with approval), off (the agent switched off), switch (the user's switch).
+	Action string `json:"action"`
+	// Origin: agent (main agent or subagent, see session) or user.
+	Origin string `json:"origin"`
+	// Result: approved, already_on, rejected, expired, on, off, already_off or error (see internetSQL).
+	Result string `json:"result"`
+}
+
+// ActivityCall is a platform call with its outcome and approval, or an internet entry.
 type ActivityCall struct {
 	SocketCall
-	Outcome  string            `json:"outcome"`
+	Kind string `json:"kind"` // KindPlatform or KindInternet
+	// Outcome of a platform call; empty for internet entries.
+	Outcome  string            `json:"outcome,omitempty"`
+	Internet *ActivityInternet `json:"internet,omitempty"`
+	// Approval: the platform_write approval of a platform call, the internet_access approval of a request.
 	Approval *ActivityApproval `json:"approval,omitempty"`
 }
 
@@ -80,7 +130,8 @@ type ActivityDuration struct {
 	MaxMs *float64 `json:"max_ms,omitempty"`
 }
 
-// ActivitySummary covers all platform calls of the filter except outcome, cursor and limit.
+// ActivitySummary covers all platform calls of the filter except outcome, cursor and limit; internet entries
+// never count (whatever the kind).
 type ActivitySummary struct {
 	Total    int              `json:"total"`
 	Outcomes map[string]int   `json:"outcomes"`
@@ -129,10 +180,18 @@ func (s *Store) ListActivity(ctx context.Context, f ActivityFilter) (ActivityPag
 	}
 
 	args := []any{}
-	where := append([]string{"sc.op = 'platform'"}, activityWhere(f, "sc", &args)...)
+	ops := "sc.op = 'platform'"
+	switch f.Kind {
+	case KindInternet:
+		ops = "sc.op IN ('internet', 'internet_off', 'internet_set')"
+	case KindAll:
+		ops = "sc.op IN ('platform', 'internet', 'internet_off', 'internet_set')"
+	}
+	where := append([]string{ops}, activityWhere(f, "sc", &args)...)
 	if f.Outcome != "" {
+		// Outcomes belong to platform calls: the filter leaves out internet entries.
 		args = append(args, f.Outcome)
-		where = append(where, fmt.Sprintf("(%s) = $%d", outcomeSQL, len(args)))
+		where = append(where, fmt.Sprintf("sc.op = 'platform' AND (%s) = $%d", outcomeSQL, len(args)))
 	}
 	if f.Before > 0 {
 		args = append(args, f.Before)
@@ -141,13 +200,18 @@ func (s *Store) ListActivity(ctx context.Context, f ActivityFilter) (ActivityPag
 	args = append(args, f.Limit+1)
 	// The approval of a writing call: same chat, same tool call and the same call text (one tool call may make
 	// several platform calls).
+	// An internet request's approval: same chat and tool call, internet_access; a request answered "already on"
+	// asked nobody.
 	q := `SELECT sc.id, sc.chat_id::text, sc.slot_id, sc.via, sc.op, sc.detail, sc.result, sc.created_at, sc.session,
-		sc.tool_call_id, sc.duration_ms, ` + outcomeSQL + `, ap.id::text, ap.state, ap.created_at, ap.decided_at
+		sc.tool_call_id, sc.duration_ms, ` + outcomeSQL + `, ` + internetSQL + `,
+		ap.id::text, ap.state, ap.created_at, ap.decided_at
 	FROM socket_calls sc JOIN chats c ON c.id = sc.chat_id
 	LEFT JOIN LATERAL (
 		SELECT a.id, a.state, a.created_at, a.decided_at FROM approvals a
-		WHERE a.chat_id = sc.chat_id AND a.kind = 'platform_write' AND sc.tool_call_id <> ''
-		  AND a.tool_call_id = sc.tool_call_id AND a.name = sc.detail AND a.created_at <= sc.created_at
+		WHERE a.chat_id = sc.chat_id AND sc.tool_call_id <> '' AND a.tool_call_id = sc.tool_call_id
+		  AND a.created_at <= sc.created_at
+		  AND ((sc.op = 'platform' AND a.kind = 'platform_write' AND a.name = sc.detail)
+		    OR (sc.op = 'internet' AND a.kind = 'internet_access' AND sc.result NOT LIKE 'already on%'))
 		ORDER BY a.created_at DESC LIMIT 1) ap ON true
 	WHERE ` + strings.Join(where, " AND ") + fmt.Sprintf(` ORDER BY sc.id DESC LIMIT $%d`, len(args))
 	rows, err := s.pool.Query(ctx, q, args...)
@@ -159,11 +223,18 @@ func (s *Store) ListActivity(ctx context.Context, f ActivityFilter) (ActivityPag
 	seen := map[string]bool{}
 	for rows.Next() {
 		var c ActivityCall
+		var in ActivityInternet
 		var apID, apState *string
 		var apCreated, apDecided *time.Time
 		if err := rows.Scan(&c.ID, &c.ChatID, &c.SlotID, &c.Via, &c.Op, &c.Detail, &c.Result, &c.CreatedAt, &c.Session,
-			&c.ToolCallID, &c.DurationMs, &c.Outcome, &apID, &apState, &apCreated, &apDecided); err != nil {
+			&c.ToolCallID, &c.DurationMs, &c.Outcome, &in.Action, &in.Origin, &in.Result,
+			&apID, &apState, &apCreated, &apDecided); err != nil {
 			return page, err
+		}
+		if c.Op == "platform" {
+			c.Kind = KindPlatform
+		} else {
+			c.Kind, c.Outcome, c.Internet = KindInternet, "", &in
 		}
 		if apID != nil {
 			c.Approval = &ActivityApproval{ID: *apID, State: *apState, CreatedAt: *apCreated, DecidedAt: apDecided}
