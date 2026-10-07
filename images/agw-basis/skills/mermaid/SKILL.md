@@ -1,6 +1,6 @@
 ---
 name: mermaid
-description: Show processes, architectures, states, sequences, schedules (Gantt) and data models (ER) as a Mermaid diagram directly in the answer. Use when the user wants a diagram, flowchart, process diagram, sequence diagram, state diagram, class diagram, ER diagram, Gantt chart, mind map or a sketch of an architecture, or when a relationship is clearer as a picture than as text.
+description: Show processes, architectures, states, sequences, schedules (Gantt) and data models (ER) as a Mermaid diagram directly in the answer. Use when the user wants a diagram, flowchart, process diagram, sequence diagram, state diagram, class diagram, ER diagram, Gantt chart, mind map or a sketch of an architecture, or when a relationship is clearer as a picture than as text. Rules, because the web UI renders strictly and without HTML - no HTML tags in labels (no <br>, no <b>), for a line break use a shorter label or a real line break inside a quoted label; put labels with spaces, umlauts, brackets or punctuation in double quotes, A["Größe (m²)"]; no %%{init}%% and no click directives. Check every diagram with mermaid-check before answering.
 ---
 
 # Showing Mermaid diagrams
@@ -24,9 +24,28 @@ flowchart TD
 ````
 
 The web UI renders the block as soon as it is closed; the user can switch between diagram and
-source and enlarge it. **Only the web UI renders**: in the CLI, in artifacts and in
+source and enlarge it. If it cannot render the block, the user only sees a note and has to ask you again. **Only the web UI renders**: in the CLI, in artifacts and in
 files it stays source text. That is the normal case; you only need a file if the user wants
 one.
+
+## Check before answering: mermaid-check
+
+Before you send a diagram, check it in the sandbox with `mermaid-check`. It renders with `mmdc` and the
+same settings as the web UI (`securityLevel: "strict"`, no HTML labels, `/opt/agw/mmdc/ui-config.json`)
+and also refuses HTML tags, so it finds the errors the UI would show:
+
+```bash
+mermaid-check - <<'EOF'
+flowchart LR
+  A["Größe prüfen"] --> B["fertig"]
+EOF
+mermaid-check diagram.mmd        # one diagram from a file
+mermaid-check answer.md          # every mermaid block of a Markdown file
+```
+
+`OK` means the UI renders it. Otherwise fix the line the message names (usually missing quotes or an
+HTML tag) and check again; send only a diagram that passed. Without bash (MCP, REST) there is no check,
+so follow the pitfalls below all the more strictly.
 
 ## If need be as a file: mmdc
 
@@ -40,6 +59,7 @@ mmdc -i report.md -o report.out.md          # replaces all mermaid blocks with S
 ```
 
 For display in the chat use **PNG** (the web UI does not display SVG), for Typst **SVG** or **PDF**.
+Add `-c /opt/agw/mmdc/ui-config.json` for the same look as in the web UI (no HTML labels).
 Store files under `/workspace`. If the call fails with a syntax error, the line is in
 the message; the pitfalls below apply just the same.
 
@@ -50,17 +70,24 @@ unreadable one. A sentence before it says what it shows.
 
 - **Labels in quotes** as soon as they contain umlauts, ß, spaces, brackets, colons,
   slashes, `#`, `&` or punctuation: `A["Größe prüfen (m²)"]`, edge text
-  `-->|"ja, bestätigt"|`. Write quotes within the text as `#quot;`.
+  `-->|"ja, bestätigt"|`. Avoid double quotes within the text (use `'` instead): `#quot;` shows
+  up literally as `&quot;` in the UI.
 - **Identifiers** (`A`, `check`, `db1`) only from ASCII letters, digits and `_`; no `end` as
   an identifier (keyword), use `End` or `finish` instead.
 - **No HTML** in labels (`<br>`, `<b>` …): the UI renders with `securityLevel: "strict"` and
-  without HTML labels. For line breaks, prefer shorter labels.
+  without HTML labels; `<b>` shows up as text. For a line break, prefer a shorter label, else a real
+  line break inside a quoted label:
+
+  ```
+  A["Vorlage wählen
+  Provider + Architektur"]
+  ```
 - **No `click` directives, links or callbacks**: they have no effect in strict mode.
 - **No `%%{init: …}%%` directives** for theme, font, HTML labels or security: the UI sets them
   itself and ignores changes to them.
 - No styles with addresses (`url(...)`) or images from the network; they are removed.
-- On a syntax error the UI shows the source with a note. Then look for the error (usually
-  missing quotes) and send the corrected block again.
+- On a syntax error the UI shows a note and the source collapsed. Then look for the error (usually
+  missing quotes), check it with `mermaid-check` and send the corrected block again.
 
 ## Common types
 
