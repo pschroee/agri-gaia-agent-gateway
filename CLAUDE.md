@@ -112,6 +112,19 @@ refer to this repository.
   `linkRule` of the system note (every binding; also platform links and files). Tests in
   `internal/worker/links_test.go`. Skill changes need both slot images rebuilt (see *Warm pool*).
 
+## Files the agent sends
+
+- The agent sends result files to the user **without approval** (issue #62): `agw-artifact upload`, `mcp_upload_artifact`
+  and the MCP tool `upload_artifact` store an output artifact at once (`Manager.Upload`), publish `artifact` and log
+  `upload` with name, size, SHA-256 and the tool call. `platform_write` and internet keep their approval. Old
+  `artifact_upload` approvals stay in the database and in the types; do not drop the kind.
+- The path checks (inside `/workspace`, no symbolic link on the way or at the end, regular files, `O_NOFOLLOW|O_NONBLOCK`)
+  live in one function, `execproto.OpenInside`, used by `agw-artifact` and by `agw-exec` for reads with `Request.Root`.
+  The CLI's workspace is a package variable, not an environment variable, so the agent cannot move it.
+- The guidance has three places that must agree: the **description** and text of the skill `artifacts`, `sendNote` in
+  the system note (per binding; REST has no file tools) and `sock.UploadToolDescription`. Tests in
+  `internal/worker/artifacts_test.go`. Skill changes need both slot images rebuilt (see *Warm pool*).
+
 ## Creating chats
 
 - `POST /api/chats` with `async: true` (issue #30) returns at once also when the pool is empty: the chat is marked
