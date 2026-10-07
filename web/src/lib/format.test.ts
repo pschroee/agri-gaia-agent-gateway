@@ -137,6 +137,8 @@ describe("socketOpLabel", () => {
     ["list", "List"],
     ["get", "Fetch"],
     ["ping", "Ping"],
+    ["internet", "Internet request"],
+    ["internet_off", "Internet off"],
     ["llm", "llm"],
   ])("%s → %s", (raw, expected) => {
     expect(socketOpLabel(raw)).toBe(expected)

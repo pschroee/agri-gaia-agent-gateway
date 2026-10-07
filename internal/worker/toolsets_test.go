@@ -13,7 +13,8 @@ import (
 )
 
 // oldPiArgs is piArgs as it was before issue #29 (four fixed variants), kept here to show that the
-// single bindings and cli,mcp (formerly both) start pi exactly as before.
+// single bindings and cli,mcp (formerly both) start pi exactly as before. Since issue #34 the MCP and REST
+// bindings also have the tools to switch internet off (and REST to request it).
 func oldPiArgs(variant, provider, model, note string) []string {
 	args := []string{"--provider", provider, "--model", model, "--append-system-prompt", note, "-e", bridgeExt, "-e", todoExt, "-e", searxExt, "-e", webGateExt}
 	skills := []string{"--skill", artifactSkil, "--skill", internetSkil, "--skill", platformSkil, "--skill", typstSkill, "--skill", diagramSkill, "--skill", mermaidSkill}
@@ -21,21 +22,21 @@ func oldPiArgs(variant, provider, model, note string) []string {
 	case "cli":
 		args = append(append(args, "-e", subagentsExt, "-e", intercomExt, "--exclude-tools", noLazySubagent), skills...)
 	case "mcp":
-		args = append(args, "-e", mcpExt, "--tools", "read,write,ls,mcp_ping,mcp_list_artifacts,mcp_upload_artifact,mcp_request_internet,"+strings.Join(platformMCPTools(), ",")+",todo,web_search,web_extract")
+		args = append(args, "-e", mcpExt, "--tools", "read,write,ls,mcp_ping,mcp_list_artifacts,mcp_upload_artifact,mcp_request_internet,mcp_disable_internet,"+strings.Join(platformMCPTools(), ",")+",todo,web_search,web_extract")
 	case "api":
-		args = append(args, "-e", apiExt, "--tools", "platform_http,todo,web_search,web_extract")
+		args = append(args, "-e", apiExt, "--tools", "platform_http,request_internet,disable_internet,todo,web_search,web_extract")
 	case "both":
 		args = append(append(args, "-e", subagentsExt, "-e", intercomExt, "--exclude-tools", noLazySubagent, "-e", mcpExt), skills...)
 	}
 	return args
 }
 
-// The tool lists of the four variants before issue #29.
+// The tool lists of the four variants before issue #29, plus the internet tools of issue #34.
 var oldTools = map[string][]string{
 	"cli":  {"read", "bash", "edit", "write", "subagent", "todo", "bg_output", "bg_stop", "web_search", "web_extract", "intercom"},
-	"mcp":  append([]string{"read", "write", "ls", "mcp_ping", "mcp_list_artifacts", "mcp_upload_artifact", "mcp_request_internet"}, append(platformMCPTools(), "todo", "web_search", "web_extract")...),
-	"api":  {"platform_http", "todo", "web_search", "web_extract"},
-	"both": append([]string{"read", "bash", "edit", "write", "subagent", "mcp_ping", "mcp_list_artifacts", "mcp_upload_artifact", "mcp_request_internet"}, append(platformMCPTools(), "todo", "bg_output", "bg_stop", "web_search", "web_extract", "intercom")...),
+	"mcp":  append([]string{"read", "write", "ls", "mcp_ping", "mcp_list_artifacts", "mcp_upload_artifact", "mcp_request_internet", "mcp_disable_internet"}, append(platformMCPTools(), "todo", "web_search", "web_extract")...),
+	"api":  {"platform_http", "request_internet", "disable_internet", "todo", "web_search", "web_extract"},
+	"both": append([]string{"read", "bash", "edit", "write", "subagent", "mcp_ping", "mcp_list_artifacts", "mcp_upload_artifact", "mcp_request_internet", "mcp_disable_internet"}, append(platformMCPTools(), "todo", "bg_output", "bg_stop", "web_search", "web_extract", "intercom")...),
 }
 
 func sorted(s []string) []string {
@@ -99,7 +100,7 @@ func TestToolsUnion(t *testing.T) {
 	}
 	// The example of the issue: command line and REST API together.
 	ca, _ := toolset.Parse("cli,api")
-	if got := Tools(ca); !slices.Equal(got, append(slices.Clone(oldTools["cli"]), "platform_http")) {
+	if got := Tools(ca); !slices.Equal(got, append(slices.Clone(oldTools["cli"]), "platform_http", "request_internet", "disable_internet")) {
 		t.Errorf("cli,api: %v", got)
 	}
 }

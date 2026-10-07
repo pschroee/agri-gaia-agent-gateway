@@ -49,7 +49,7 @@ func main() {
 		}
 		os.Exit(code)
 	}
-	// Called as agw-internet (symlink in the image): request internet access.
+	// Called as agw-internet (symlink in the image): request internet access or switch it off.
 	if filepath.Base(os.Args[0]) == "agw-internet" {
 		code, err := internet(hc, os.Args[1:])
 		if err != nil {
@@ -95,6 +95,7 @@ func usage() {
   agw-artifact list                             list the artifacts of this chat
   agw-artifact get <name> [-o <file>]           download an artifact (user inputs: --kind input)
   agw-internet "<reason>"                       request internet access; waits for the user
+  agw-internet off                              switch internet access off again (no approval)
   agw-platform <command> …                      Agri-Gaia platform (agw-platform --help)
 
 Exit code for upload: 0 approved, 3 rejected, 1 error.
@@ -179,15 +180,65 @@ func upload(hc *http.Client, args []string) (int, error) {
 	}
 }
 
-// internet asks the user for internet access and waits for the decision.
-func internet(hc *http.Client, args []string) (int, error) {
-	reason := strings.TrimSpace(strings.Join(args, " "))
-	if reason == "" || reason == "-h" || reason == "--help" {
-		fmt.Fprint(os.Stderr, "agw-internet \"<reason>\" — asks the user for internet access and waits for the decision.\nExit code: 0 granted, 3 rejected, 1 error.\n")
+const internetHelp = `agw-internet "<reason>"   asks the user for internet access and waits for the decision.
+                          Exit code: 0 granted, 3 rejected, 1 error.
+agw-internet off          switches internet access off again; needs no approval and succeeds
+                          also when it is already off. Exit code: 0 off, 1 error.
+agw-internet -- <reason>  requests with a reason that is literally "off" or starts with "-".
+`
+
+// Actions of agw-internet.
+const (
+	internetRequest = "request"
+	internetOff     = "off"
+	internetHelpCmd = "help"
+)
+
+// parseInternetArgs decides between request and switching off. "off" as the only argument (any case,
+// surrounding spaces ignored) switches off; everything after "--" is a reason, so a reason that is
+// literally "off" can still be given. "off" with further arguments is refused instead of guessed: it
+// could be meant either way.
+func parseInternetArgs(args []string) (action, reason string, err error) {
+	if len(args) > 0 && args[0] == "--" {
+		reason = strings.TrimSpace(strings.Join(args[1:], " "))
 		if reason == "" {
-			return 1, nil
+			return "", "", errors.New("no reason given after --")
 		}
+		return internetRequest, reason, nil
+	}
+	if len(args) == 0 {
+		return "", "", errors.New("no reason given")
+	}
+	first := strings.TrimSpace(args[0])
+	switch {
+	case len(args) == 1 && (first == "-h" || first == "--help"):
+		return internetHelpCmd, "", nil
+	case strings.EqualFold(first, internetOff):
+		if len(args) > 1 {
+			return "", "", errors.New(`"off" takes no further arguments; to request internet with a reason starting with "off", use: agw-internet -- <reason>`)
+		}
+		return internetOff, "", nil
+	}
+	reason = strings.TrimSpace(strings.Join(args, " "))
+	if reason == "" {
+		return "", "", errors.New("no reason given")
+	}
+	return internetRequest, reason, nil
+}
+
+// internet asks the user for internet access and waits for the decision, or switches it off.
+func internet(hc *http.Client, args []string) (int, error) {
+	action, reason, err := parseInternetArgs(args)
+	if err != nil {
+		fmt.Fprint(os.Stderr, internetHelp)
+		return 1, err
+	}
+	switch action {
+	case internetHelpCmd:
+		fmt.Fprint(os.Stderr, internetHelp)
 		return 0, nil
+	case internetOff:
+		return internetSwitchOff(hc)
 	}
 	body, _ := json.Marshal(map[string]string{"reason": reason})
 	fmt.Fprintln(os.Stderr, "Requesting internet access. Waiting for the user's decision …")
@@ -213,6 +264,27 @@ func internet(hc *http.Client, args []string) (int, error) {
 	}
 	fmt.Println("rejected:", r.Message)
 	return exitRejected, nil
+}
+
+// internetSwitchOff switches internet access off (POST /internet/off). Already off is a success.
+func internetSwitchOff(hc *http.Client) (int, error) {
+	req, _ := http.NewRequest(http.MethodPost, "http://agw/internet/off", nil)
+	setCaller(req)
+	resp, err := hc.Do(req)
+	if err != nil {
+		return 1, err
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return 1, fmt.Errorf("orchestrator responds %d: %s", resp.StatusCode, raw)
+	}
+	var r uploadResult
+	if err := json.Unmarshal(raw, &r); err != nil {
+		return 1, fmt.Errorf("unreadable response: %s", raw)
+	}
+	fmt.Printf("%s: %s\n", r.Status, r.Message)
+	return 0, nil
 }
 
 func list(hc *http.Client) error {

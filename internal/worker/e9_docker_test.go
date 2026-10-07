@@ -51,6 +51,9 @@ func (b *e9Backend) OpenArtifact(context.Context, string, string, string) (io.Re
 func (b *e9Backend) RequestInternet(context.Context, string, string, string, string) (sock.UploadResult, error) {
 	return sock.UploadResult{Status: "rejected"}, nil
 }
+func (b *e9Backend) DisableInternet(context.Context, string, string, string) (sock.UploadResult, error) {
+	return sock.UploadResult{Status: sock.InternetAlreadyOff}, nil
+}
 func (b *e9Backend) LogCall(slot, chat, via, op, detail, result string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()

@@ -1937,6 +1937,24 @@ func (m *Manager) RequestInternet(ctx context.Context, chatID, slotID, via, reas
 	return sock.UploadResult{Status: "approved", Name: "internet", Message: "internet access granted"}, nil
 }
 
+// DisableInternet: the agent switches its sandbox's internet off. It only removes a right, so it needs no
+// approval. Idempotent: if the chat has no internet, nothing changes and the result says so (status
+// "already_off"). Runs under the chat lock like SetInternet.
+func (m *Manager) DisableInternet(ctx context.Context, chatID, slotID, via string) (sock.UploadResult, error) {
+	c, err := m.st.GetChat(ctx, chatID)
+	if err != nil {
+		return sock.UploadResult{}, err
+	}
+	if !c.Internet {
+		return sock.UploadResult{Status: sock.InternetAlreadyOff, Name: "internet", Message: "internet access was already off"}, nil
+	}
+	if _, err := m.SetInternet(context.WithoutCancel(ctx), chatID, false); err != nil {
+		return sock.UploadResult{}, err
+	}
+	slog.Info("internet switched off by the agent", "chat", chatID, "slot", slotID, "via", via)
+	return sock.UploadResult{Status: sock.InternetOff, Name: "internet", Message: "internet access switched off"}, nil
+}
+
 // visibleControls writes control and bidi characters as \u sequences so that the preview of an
 // approval does not visually reorder or hide anything (Review W1). Newline and tab stay.
 func visibleControls(s string) string {

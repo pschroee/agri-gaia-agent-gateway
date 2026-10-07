@@ -6,6 +6,7 @@
 //	GET  /artifacts          artifacts of the chat
 //	GET  /artifacts/{name}   download (?kind=input|output)
 //	POST /internet           request internet access, waits for confirmation
+//	POST /internet/off       switch internet access off (no confirmation, idempotent)
 //	POST /platform/{tool}    tool of the platform binding (agw-platform); writing calls need confirmation
 //	POST /mcp                MCP (Streamable HTTP, stateless)
 package sock
@@ -53,6 +54,9 @@ type Backend interface {
 	ListArtifacts(ctx context.Context, chatID string) ([]store.Artifact, error)
 	OpenArtifact(ctx context.Context, chatID, kind, name string) (io.ReadCloser, int64, error)
 	RequestInternet(ctx context.Context, chatID, slotID, via, reason string) (UploadResult, error)
+	// DisableInternet switches the chat's internet off without approval (it only removes a right);
+	// status InternetOff or InternetAlreadyOff.
+	DisableInternet(ctx context.Context, chatID, slotID, via string) (UploadResult, error)
 	LogCall(slotID, chatID, via, op, detail, result string)
 }
 
@@ -67,6 +71,12 @@ type PlatformBackend interface {
 type PlatformPrechecker interface {
 	PlatformPrecheck(ctx context.Context, chatID string, req platform.Request) (platform.Result, bool)
 }
+
+// Statuses of DisableInternet.
+const (
+	InternetOff        = "off"
+	InternetAlreadyOff = "already_off"
+)
 
 type handler struct {
 	apiVia  string // channel under which the REST endpoint logs: api (pi) or cli (shell)
@@ -114,6 +124,7 @@ func NewHandlerRun(slotID string, b Backend, maxBytes int64, run ToolRunner) htt
 	mux.HandleFunc("GET /artifacts", h.list)
 	mux.HandleFunc("GET /artifacts/{name}", h.get)
 	mux.HandleFunc("POST /internet", h.internet)
+	mux.HandleFunc("POST /internet/off", h.internetOff)
 	mux.HandleFunc("POST /platform/{tool}", h.platform)
 	mux.Handle("/mcp", h.mcp)
 	return h.withPlatformAPI(mux)
@@ -240,18 +251,29 @@ func (h *handler) doUpload(ctx context.Context, chat, via, name string, data []b
 	return res, err
 }
 
+// restVia is the channel of the plain HTTP endpoints (/internet, /platform-api): cli at the socket of the
+// execution sandbox (agw-internet, curl), api at pi's socket (the tools of api.ts). It follows from the
+// socket, not from a statement by the agent.
+func (h *handler) restVia() string {
+	if h.apiVia == "" {
+		return "cli"
+	}
+	return h.apiVia
+}
+
 func (h *handler) internet(w http.ResponseWriter, r *http.Request) {
+	via := h.restVia()
 	var req struct {
 		Reason string `json:"reason"`
 	}
 	_ = json.NewDecoder(io.LimitReader(r.Body, 8<<10)).Decode(&req)
 	req.Reason = truncReason(req.Reason)
-	chat, err := h.chat("cli", "internet", req.Reason)
+	chat, err := h.chat(via, "internet", req.Reason)
 	if err != nil {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "not assigned"})
 		return
 	}
-	res, err := h.doInternet(callerCtx(r), chat, "cli", req.Reason)
+	res, err := h.doInternet(callerCtx(r), chat, via, req.Reason)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -266,6 +288,33 @@ func (h *handler) doInternet(ctx context.Context, chat, via, reason string) (Upl
 		result = "error: " + err.Error()
 	}
 	h.logCall(ctx, chat, via, "internet", reason, result)
+	return res, err
+}
+
+// internetOff: POST /internet/off switches the chat's internet off. No body, no approval.
+func (h *handler) internetOff(w http.ResponseWriter, r *http.Request) {
+	via := h.restVia()
+	chat, err := h.chat(via, "internet_off", "")
+	if err != nil {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "not assigned"})
+		return
+	}
+	res, err := h.doInternetOff(callerCtx(r), chat, via)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+// doInternetOff switches internet off and logs the call (op internet_off, result "off" or "already off").
+func (h *handler) doInternetOff(ctx context.Context, chat, via string) (UploadResult, error) {
+	res, err := h.b.DisableInternet(ctx, chat, h.slot, via)
+	result := strings.ReplaceAll(res.Status, "_", " ")
+	if err != nil {
+		result = "error: " + err.Error()
+	}
+	h.logCall(ctx, chat, via, "internet_off", "", result)
 	return res, err
 }
 
@@ -432,6 +481,7 @@ func (h *handler) get(w http.ResponseWriter, r *http.Request) {
 
 type pingIn struct{}
 type listIn struct{}
+type internetOffIn struct{}
 type internetIn struct {
 	Reason string `json:"reason" jsonschema:"Reason for the user: what is internet needed for?"`
 }
@@ -519,6 +569,18 @@ func (h *handler) mcpServer() *mcp.Server {
 				return textResult(false, "approved: %s", res.Message), nil, nil
 			}
 			return textResult(false, "rejected: %s", res.Message), nil, nil
+		})
+	mcp.AddTool(s, &mcp.Tool{Name: "disable_internet", Description: "Switches internet access for this sandbox off again, e.g. once downloads or web research are done. Needs no approval; if internet is already off, nothing changes."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, _ internetOffIn) (*mcp.CallToolResult, any, error) {
+			chat, err := h.chat("mcp", "internet_off", "")
+			if err != nil {
+				return textResult(true, "error: %v", err), nil, nil
+			}
+			res, err := h.doInternetOff(ctx, chat, "mcp")
+			if err != nil {
+				return textResult(true, "error: %v", err), nil, nil
+			}
+			return textResult(false, "%s: %s", res.Status, res.Message), nil, nil
 		})
 	for _, t := range platform.Tools {
 		s.AddTool(&mcp.Tool{Name: t.MCPName(), Description: t.Desc, InputSchema: t.Schema()},

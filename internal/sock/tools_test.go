@@ -422,3 +422,25 @@ func TestToolWorkflowDuplex(t *testing.T) {
 		t.Fatalf("foreign tool: %d", bad.StatusCode)
 	}
 }
+
+// Side finding of #29: web-gate.ts asks every freshly started slot for its internet state before the slot is
+// assigned. The answer stays "not assigned" (no internet), but it is no longer logged as a refused call.
+func TestInternetStateUnassignedQuiet(t *testing.T) {
+	b := &fakeBackend{}
+	pi := startPi(t, b, &fakeRunner{}, &fakeRecorder{})
+	resp, err := pi.Get("http://agw/tool/internet")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var r map[string]any
+	_ = json.NewDecoder(resp.Body).Decode(&r)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict || r["enabled"] == true {
+		t.Fatalf("unassigned: %d %v", resp.StatusCode, r)
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if len(b.calls) != 0 {
+		t.Fatalf("logged: %v", b.calls)
+	}
+}

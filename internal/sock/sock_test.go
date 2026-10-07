@@ -28,6 +28,8 @@ type fakeBackend struct {
 	files   map[string]string
 	calls2  []string // tool call IDs at upload (store.ToolCallFrom)
 	sess    []string // sessions at upload and internet (store.SessionFrom)
+	// internetOn is the chat's switch for DisableInternet.
+	internetOn bool
 }
 
 func (f *fakeBackend) ChatForSlot(string) string {
@@ -67,6 +69,18 @@ func (f *fakeBackend) RequestInternet(ctx context.Context, chatID, slotID, via, 
 	f.uploads = append(f.uploads, "internet|"+chatID+"|"+via+"|"+reason)
 	f.mu.Unlock()
 	return UploadResult{Status: f.decide, Name: "internet", Message: "x"}, nil
+}
+
+func (f *fakeBackend) DisableInternet(ctx context.Context, chatID, slotID, via string) (UploadResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sess = append(f.sess, store.SessionFrom(ctx))
+	f.uploads = append(f.uploads, "internet_off|"+chatID+"|"+via)
+	if !f.internetOn {
+		return UploadResult{Status: InternetAlreadyOff, Name: "internet", Message: "internet access was already off"}, nil
+	}
+	f.internetOn = false
+	return UploadResult{Status: InternetOff, Name: "internet", Message: "internet access switched off"}, nil
 }
 
 func (f *fakeBackend) LogCall(slotID, chatID, via, op, detail, result string) {

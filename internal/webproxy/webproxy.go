@@ -109,7 +109,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		deny(http.StatusForbidden, "request not assignable to a chat")
 		return
 	case !internet:
-		deny(http.StatusForbidden, "internet access is off for this chat; ask the user to allow it (agw-internet or mcp_request_internet)")
+		deny(http.StatusForbidden, "internet access is off for this chat; ask the user to allow it (agw-internet, mcp_request_internet or request_internet)")
 		return
 	case host == "":
 		deny(http.StatusBadRequest, "no target host")
