@@ -16,15 +16,15 @@ import (
 // single bindings and cli,mcp (formerly both) start pi exactly as before. Since issue #34 the MCP and REST
 // bindings also have the tools to switch internet off (and REST to request it); since issue #42 the
 // command line also loads the skill documents. Since issue #44 the web search is loaded through
-// web-tools.ts.
+// web-tools.ts and cli and mcp load the skill web-research.
 func oldPiArgs(variant, provider, model, note string) []string {
 	args := []string{"--provider", provider, "--model", model, "--append-system-prompt", note, "-e", bridgeExt, "-e", todoExt, "-e", webToolsExt, "-e", webGateExt}
-	skills := []string{"--skill", artifactSkil, "--skill", internetSkil, "--skill", platformSkil, "--skill", typstSkill, "--skill", diagramSkill, "--skill", mermaidSkill, "--skill", documentSkil}
+	skills := []string{"--skill", artifactSkil, "--skill", internetSkil, "--skill", webSkill, "--skill", platformSkil, "--skill", typstSkill, "--skill", diagramSkill, "--skill", mermaidSkill, "--skill", documentSkil}
 	switch variant {
 	case "cli":
 		args = append(append(args, "-e", subagentsExt, "-e", intercomExt, "--exclude-tools", noLazySubagent), skills...)
 	case "mcp":
-		args = append(args, "-e", mcpExt, "--tools", "read,write,ls,mcp_ping,mcp_list_artifacts,mcp_upload_artifact,mcp_request_internet,mcp_disable_internet,"+strings.Join(platformMCPTools(), ",")+",todo,web_search,web_extract")
+		args = append(args, "-e", mcpExt, "--skill", webSkill, "--tools", "read,write,ls,mcp_ping,mcp_list_artifacts,mcp_upload_artifact,mcp_request_internet,mcp_disable_internet,"+strings.Join(platformMCPTools(), ",")+",todo,web_search,web_extract")
 	case "api":
 		args = append(args, "-e", apiExt, "--tools", "platform_http,request_internet,disable_internet,todo,web_search,web_extract")
 	case "both":
@@ -134,7 +134,7 @@ func TestPiArgsCombinations(t *testing.T) {
 	a, _ = PiArgs("mcp,api", "p", "m")
 	s = strings.Join(a, " ")
 	i := slices.Index(a, "--tools")
-	if i < 0 || count(a, mcpExt) != 1 || count(a, apiExt) != 1 || count(a, subagentsExt) != 0 || strings.Contains(s, "--skill") {
+	if i < 0 || count(a, mcpExt) != 1 || count(a, apiExt) != 1 || count(a, subagentsExt) != 0 || count(a, "--skill") != 1 || !strings.Contains(s, "--skill "+webSkill) {
 		t.Fatalf("mcp,api: %s", s)
 	}
 	list := strings.Split(a[i+1], ",")

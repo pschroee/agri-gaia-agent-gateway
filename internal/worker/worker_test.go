@@ -246,9 +246,10 @@ func TestInternetOffInEveryBinding(t *testing.T) {
 			t.Errorf("%s: internet tools of the REST binding missing in %v", v, tools)
 		}
 	}
-	// With the command line, agw-internet off is described in the note and in the skill.
-	note := SystemNoteFor("cli", 4)
-	for _, want := range []string{"agw-internet off", "mcp_disable_internet", "disable_internet", "switch it off again yourself", "needs no approval"} {
+	// The note names the switch of each binding of the combination (since issue #44 only those; per binding in
+	// TestSystemNoteInternetPerBinding); agw-internet off is also described in the skills.
+	note := SystemNoteFor("cli,mcp,api", 4)
+	for _, want := range []string{"agw-internet off", "mcp_disable_internet", "the tool disable_internet", "switch it off yourself", "needs no approval"} {
 		if !strings.Contains(note, want) {
 			t.Errorf("system note lacks %q", want)
 		}

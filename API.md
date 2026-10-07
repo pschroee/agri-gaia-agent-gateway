@@ -667,6 +667,9 @@ without approval, because that only removes a right (issue #34). Both exist in e
   egress network like the user's switch (`POST /api/chats/{id}/internet`), stores `internet: false` and sends the
   `chat` event, so the toggles of the gateway UI and the platform frontend follow live. The web tools `web_search`
   and `web_extract` disappear from the next request on (`web-gate.ts`); the web proxy refuses at once.
+- **Guidance for the agent** (issue #44): the system note names only the switch tools of the chat's bindings and the
+  flow request, `web_search`, `web_extract`, cite sources with URL, switch off; the skill `web-research` (`cli`,
+  `mcp`) has the details, and `ext/web-tools.ts` gives the two web tools fuller descriptions.
 - **Socket endpoints** (both sockets; the channel follows from the socket: `cli` at the sandbox's socket, `api` at
   pi's socket): `POST /internet {reason}` → `{status: "approved"|"rejected", name: "internet", message}`, and
   `POST /internet/off` (no body) → `{status: "off"|"already_off", name: "internet", message}`. A slot without a chat
