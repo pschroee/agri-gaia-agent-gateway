@@ -448,3 +448,50 @@ func TestChatOwner(t *testing.T) {
 		t.Fatalf("not a UUID: %v", err)
 	}
 }
+
+// A rename by the user changes title and title_source but not updated_at, so the chat keeps its
+// place in the list (ordered by updated_at), and automatic naming no longer replaces the title.
+func TestSetTitleKeepsOrder(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	older, _ := s.CreateChat(ctx, NewChat{Title: "New chat 07.10. 09:00", TitleSource: TitleDefault, Model: "m", Variant: "cli"})
+	newer, _ := s.CreateChat(ctx, NewChat{Title: "Newer", Model: "m", Variant: "cli"})
+	if _, err := s.pool.Exec(ctx, `UPDATE chats SET updated_at = now() - interval '1 hour' WHERE id = $1`, older.ID); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := s.GetChat(ctx, older.ID)
+	order := func() []string {
+		l, err := s.ListChats(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var ids []string
+		for _, c := range l {
+			ids = append(ids, c.ID)
+		}
+		return ids
+	}
+	if got := order(); len(got) != 2 || got[0] != newer.ID || got[1] != older.ID {
+		t.Fatalf("order before: %v", got)
+	}
+	if err := s.SetTitle(ctx, older.ID, "Renamed"); err != nil {
+		t.Fatal(err)
+	}
+	if got := order(); got[0] != newer.ID || got[1] != older.ID {
+		t.Fatalf("rename moved the chat: %v", got)
+	}
+	after, _ := s.GetChat(ctx, older.ID)
+	if after.Title != "Renamed" || !after.UpdatedAt.Equal(before.UpdatedAt) {
+		t.Fatalf("title %q, updated_at %v → %v", after.Title, before.UpdatedAt, after.UpdatedAt)
+	}
+	var src string
+	if err := s.pool.QueryRow(ctx, `SELECT title_source FROM chats WHERE id = $1`, older.ID).Scan(&src); err != nil || src != TitleUser {
+		t.Fatalf("title_source %q (%v)", src, err)
+	}
+	if ok, _ := s.AutoTitle(ctx, older.ID, "From the question"); ok {
+		t.Fatal("automatic title replaced the user's")
+	}
+	if ok, _ := s.ModelTitle(ctx, older.ID, "From the model"); ok {
+		t.Fatal("model title replaced the user's")
+	}
+}

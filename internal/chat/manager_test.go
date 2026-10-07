@@ -1944,3 +1944,49 @@ func TestCreateAsyncStartFails(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 }
+
+// /rename keeps the chat's place in the history: updated_at and the list order stay, the title
+// changes and the chat event still goes out (issue #49 of the thesis repository).
+func TestRenameKeepsOrder(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	older, err := e.m.Create(ctx, NewChat{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	newer, err := e.st.CreateChat(ctx, store.NewChat{Title: "Newer", Model: "deepseek/deepseek-flash", Variant: "cli"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, _ := e.st.GetChat(ctx, older.ID)
+	order := func() []string {
+		l, err := e.st.ListChats(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var ids []string
+		for _, c := range l {
+			ids = append(ids, c.ID)
+		}
+		return ids
+	}
+	if got := order(); len(got) != 2 || got[0] != newer.ID || got[1] != older.ID {
+		t.Fatalf("order before: %v", got)
+	}
+	events, cancel := e.m.Subscribe(older.ID)
+	defer cancel()
+	if _, err := e.m.RunCommand(ctx, older.ID, "/rename  Pen 3 classes "); err != nil {
+		t.Fatal(err)
+	}
+	ev := waitEvent(t, events, "chat", "")
+	if v, ok := ev.Data.(ChatView); !ok || v.Title != "Pen 3 classes" {
+		t.Fatalf("chat event: %#v", ev.Data)
+	}
+	if got := order(); got[0] != newer.ID || got[1] != older.ID {
+		t.Fatalf("rename moved the chat: %v", got)
+	}
+	after, _ := e.st.GetChat(ctx, older.ID)
+	if after.Title != "Pen 3 classes" || !after.UpdatedAt.Equal(before.UpdatedAt) {
+		t.Fatalf("title %q, updated_at %v → %v", after.Title, before.UpdatedAt, after.UpdatedAt)
+	}
+}
