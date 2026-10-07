@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"agw/internal/toolset"
 )
 
 type Pricing struct {
@@ -306,21 +308,26 @@ type Env struct {
 	CompactKeepRecent    int
 	SocketVolume         string // named volume holding the socket directories
 	SocketRoot           string // mount point of this volume in the orchestrator
-	PoolSizes            map[string]int
-	IdleTimeout          time.Duration
-	ApprovalTimeout      time.Duration
-	ArtifactMaxBytes     int64
-	ImageMaxBytes        int64 // display images in responses (AGW_IMAGE_MAX_MB)
-	WorkspaceMaxBytes    int64 // backup of /workspace per chat (AGW_WORKSPACE_MAX_MB; 0 = off → -1)
-	SandboxMemoryMB      int64 // pi's container (pi and up to four subagents)
-	SandboxCPUs          float64
-	SandboxPids          int64
-	ExecMemoryMB         int64 // execution sandbox
-	ExecCPUs             float64
-	ExecPids             int64
-	DefaultModel         string
-	TitleModel           string // model for chat titles ("provider/model"; empty: the chat's, "off": none)
-	APIToken             string
+	// Toolsets: the bindings every new chat gets (AGW_TOOLSETS, comma-separated cli, mcp, api;
+	// default cli). Raw value; Toolset() checks it (issue #29).
+	Toolsets string
+	// PoolSize: warm slots kept ready for the configured combination (AGW_POOL_SIZE, default 4).
+	// Chats of another combination (stored before a change of AGW_TOOLSETS) get a slot on demand.
+	PoolSize          int
+	IdleTimeout       time.Duration
+	ApprovalTimeout   time.Duration
+	ArtifactMaxBytes  int64
+	ImageMaxBytes     int64 // display images in responses (AGW_IMAGE_MAX_MB)
+	WorkspaceMaxBytes int64 // backup of /workspace per chat (AGW_WORKSPACE_MAX_MB; 0 = off → -1)
+	SandboxMemoryMB   int64 // pi's container (pi and up to four subagents)
+	SandboxCPUs       float64
+	SandboxPids       int64
+	ExecMemoryMB      int64 // execution sandbox
+	ExecCPUs          float64
+	ExecPids          int64
+	DefaultModel      string
+	TitleModel        string // model for chat titles ("provider/model"; empty: the chat's, "off": none)
+	APIToken          string
 	// MaxSubagents: at most this many subagents run at the same time per chat (AGW_MAX_SUBAGENTS,
 	// default 5); fixed for the service, not a setting per chat.
 	MaxSubagents int
@@ -356,6 +363,30 @@ type Env struct {
 	BasePath string
 	// FrameAncestors: origins allowed to embed the UI (empty: frame-ancestors 'none').
 	FrameAncestors []string
+}
+
+// DefaultPoolSize: warm slots for the configured combination unless AGW_POOL_SIZE says otherwise.
+// Four (decision of the author, 2026-10-07): an idle warm slot needs about 100–210 MB in pi's
+// container plus about 3 MB in the execution sandbox (measured on the instance), so several chats
+// started in a row do not wait for a cold start.
+const DefaultPoolSize = 4
+
+// LegacyPoolSizeVars are the pool sizes per variant before issue #29; they are ignored now, and the
+// orchestrator warns at startup when one is set.
+var LegacyPoolSizeVars = []string{"AGW_POOL_SIZE_CLI", "AGW_POOL_SIZE_MCP", "AGW_POOL_SIZE_BOTH", "AGW_POOL_SIZE_API"}
+
+// toolsetsEnv reads AGW_TOOLSETS. Unlike other variables an empty value is not replaced by the
+// default: a variable set to "" is a configuration error that Toolset() reports.
+func toolsetsEnv() string {
+	if v, ok := os.LookupEnv(toolset.Env); ok {
+		return v
+	}
+	return toolset.Default
+}
+
+// Toolset checks AGW_TOOLSETS; an error stops the start.
+func (e Env) Toolset() (toolset.Set, error) {
+	return toolset.Parse(e.Toolsets)
 }
 
 // DefaultMaxSubagents: subagents that may run at the same time per chat unless AGW_MAX_SUBAGENTS says
@@ -396,12 +427,8 @@ func FromEnv() Env {
 		CompactKeepRecent:    num("AGW_COMPACT_KEEP_RECENT_TOKENS", 20000),
 		SocketVolume:         str("AGW_SOCKET_VOLUME", "agwpoc_sockets"),
 		SocketRoot:           str("AGW_SOCKET_ROOT", "/run/agw"),
-		PoolSizes: map[string]int{
-			"cli":  num("AGW_POOL_SIZE_CLI", 1),
-			"mcp":  num("AGW_POOL_SIZE_MCP", 1),
-			"both": num("AGW_POOL_SIZE_BOTH", 0),
-			"api":  num("AGW_POOL_SIZE_API", 0),
-		},
+		Toolsets:             toolsetsEnv(),
+		PoolSize:             max(0, num("AGW_POOL_SIZE", DefaultPoolSize)),
 		IdleTimeout:          dur("AGW_IDLE_TIMEOUT", 10*time.Minute),
 		ApprovalTimeout:      dur("AGW_APPROVAL_TIMEOUT", 10*time.Minute),
 		ArtifactMaxBytes:     int64(num("AGW_ARTIFACT_MAX_MB", 50)) << 20,

@@ -45,7 +45,7 @@ func (a *app) cmdChatList(args []string) error {
 
 func (a *app) chatFlags(fs *flag.FlagSet, req *agwclient.CreateChatRequest, inet *triBool) {
 	fs.StringVar(&req.Model, "model", "", "model (ID from agw models)")
-	fs.StringVar(&req.Variant, "variant", "", "binding: cli, mcp, api or both")
+	fs.StringVar(&req.Variant, "variant", "", "bindings (e.g. cli or cli,api); must match the gateway's AGW_TOOLSETS, default: those")
 	fs.StringVar(&req.Title, "title", "", "title of the chat")
 	fs.Var(inet, "internet", "internet access of the sandbox (true|false)")
 	fs.Func("delegation", "delegated rights as a JSON file (see docs/plan-delegation-rest-platform.md); - reads from stdin", func(p string) error {
@@ -72,7 +72,7 @@ func (a *app) cmdChatNew(args []string) error {
 	var req agwclient.CreateChatRequest
 	var inet triBool
 	a.chatFlags(fs, &req, &inet)
-	pos, err := a.parse(fs, args, 0, -1, "agw chat new [--model M] [--variant cli|mcp|api|both] [--title T] [--internet=true|false] [--delegation file.json] [message]")
+	pos, err := a.parse(fs, args, 0, -1, "agw chat new [--model M] [--variant V] [--title T] [--internet=true|false] [--delegation file.json] [message]")
 	if err != nil {
 		return err
 	}
@@ -804,7 +804,7 @@ func (a *app) cmdRun(args []string) error {
 	var inet triBool
 	a.chatFlags(fs, &req, &inet)
 	o := approvalFlags(fs)
-	pos, err := a.parse(fs, args, 1, -1, "agw run [--model M] [--variant cli|mcp|api|both] [--internet=true|false] [--delegation file.json] [--auto-approve|--auto-reject] [--thinking] [--verbose] \"<task>\"")
+	pos, err := a.parse(fs, args, 1, -1, "agw run [--model M] [--variant V] [--internet=true|false] [--delegation file.json] [--auto-approve|--auto-reject] [--thinking] [--verbose] \"<task>\"")
 	if err != nil {
 		return err
 	}

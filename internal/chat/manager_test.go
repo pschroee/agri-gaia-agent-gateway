@@ -20,6 +20,7 @@ import (
 	"agw/internal/rpc"
 	"agw/internal/store"
 	"agw/internal/titler"
+	"agw/internal/toolset"
 )
 
 // fakeAgent plays pi: prompt produces a response including agent_settled.
@@ -362,6 +363,7 @@ type env struct {
 	blobs  *memBlobs
 	mu     sync.Mutex
 	agents []*fakeAgent
+	slotOf map[string]string // variant each sandbox was created for, by agent name
 
 	failSwitch bool   // new sandboxes make switch_session fail
 	onSwitch   func() // for new sandboxes: runs when the session is restored
@@ -392,6 +394,10 @@ func setup(t *testing.T) *env {
 		defer e.mu.Unlock()
 		n++
 		a := newFakeAgent(fmt.Sprintf("a%d", n))
+		if e.slotOf == nil {
+			e.slotOf = map[string]string{}
+		}
+		e.slotOf[a.ContainerName()] = variant
 		a.failSwitch = e.failSwitch
 		a.onSwitch = e.onSwitch
 		e.agents = append(e.agents, a)
@@ -406,7 +412,8 @@ func setup(t *testing.T) *env {
 			close(fa.events) // like a torn-down container: pi's stream ends
 		}
 	}
-	p := pool.New[Agent](create, destroy, map[string]int{"cli": 1, "mcp": 0, "both": 0})
+	p := pool.New[Agent](create, destroy, map[string]int{"cli": 1})
+	p.SetKnown(toolset.Valid) // chats of other combinations get a slot on demand (issue #29)
 	pctx, cancel := context.WithCancel(ctx)
 	p.Start(pctx)
 	t.Cleanup(func() { cancel(); p.Shutdown(context.Background()) })
@@ -675,6 +682,83 @@ func TestUnknownModelAndVariant(t *testing.T) {
 	}
 	if _, err := e.m.Create(context.Background(), NewChat{Variant: "shell"}); !errors.Is(err, ErrUnknownVariant) {
 		t.Fatalf("variant: %v", err)
+	}
+}
+
+// Issue #29: new chats get the configured combination; a variant in the request must name the same
+// one, and chats stored with another combination or the older id "both" still resume.
+func TestToolsetsFixedForNewChats(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	if e.m.Options().Toolsets.Key() != "cli" {
+		t.Fatalf("default combination: %q", e.m.Options().Toolsets.Key())
+	}
+	for _, v := range []string{"", "cli", " CLI "} {
+		c, err := e.m.Create(ctx, NewChat{Variant: v})
+		if err != nil {
+			t.Fatalf("variant %q: %v", v, err)
+		}
+		if c.Variant != "cli" {
+			t.Fatalf("variant %q stored as %q", v, c.Variant)
+		}
+		_, _ = e.m.Suspend(ctx, c.ID)
+	}
+	for _, v := range []string{"mcp", "both", "cli,api"} {
+		if _, err := e.m.Create(ctx, NewChat{Variant: v}); !errors.Is(err, ErrVariantFixed) || !strings.Contains(err.Error(), `new chats get "cli"`) {
+			t.Fatalf("variant %q: %v", v, err)
+		}
+	}
+
+	// Older chats: stored variants of before and another combination resume in a slot of their
+	// own combination (started on demand), "both" as cli,mcp.
+	for stored, key := range map[string]string{"both": "cli,mcp", "mcp": "mcp", "api": "api", "cli,api": "cli,api"} {
+		old, err := e.st.CreateChat(ctx, store.NewChat{Title: "old " + stored, Model: "deepseek/deepseek-flash", Variant: stored})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = e.st.SetState(ctx, old.ID, store.StateDormant)
+		if _, err := e.m.Send(ctx, old.ID, "hello"); err != nil {
+			t.Fatalf("%s: %v", stored, err)
+		}
+		waitSettled(t, e, old.ID)
+		e.m.mu.Lock()
+		l := e.m.live[old.ID]
+		e.m.mu.Unlock()
+		if l == nil {
+			t.Fatalf("%s: not resumed", stored)
+		}
+		e.mu.Lock()
+		got := e.slotOf[l.slot.Worker.ContainerName()]
+		e.mu.Unlock()
+		if got != key || l.slot.Variant != key {
+			t.Fatalf("%s: slot of %q (pool key %q), want %q", stored, got, l.slot.Variant, key)
+		}
+		if v, _ := e.m.View(ctx, old.ID); v.Variant != stored {
+			t.Fatalf("%s: stored variant changed to %q", stored, v.Variant)
+		}
+	}
+}
+
+// A gateway configured with a combination gives it to every new chat.
+func TestToolsetsConfigured(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	ts, _ := toolset.Parse("api,cli")
+	opt := e.opt
+	opt.Toolsets = ts
+	m := NewManager(e.st, e.p, e.cat, e.blobs, artifacts.NewBroker(), opt)
+	for _, v := range []string{"", "cli,api", "api,cli"} {
+		c, err := m.Create(ctx, NewChat{Variant: v})
+		if err != nil {
+			t.Fatalf("%q: %v", v, err)
+		}
+		if c.Variant != "cli,api" {
+			t.Fatalf("%q stored as %q", v, c.Variant)
+		}
+		_, _ = m.Suspend(ctx, c.ID)
+	}
+	if _, err := m.Create(ctx, NewChat{Variant: "cli"}); !errors.Is(err, ErrVariantFixed) {
+		t.Fatalf("cli on a cli,api gateway: %v", err)
 	}
 }
 

@@ -29,6 +29,7 @@ import (
 	"agw/internal/sock"
 	"agw/internal/store"
 	"agw/internal/titler"
+	"agw/internal/toolset"
 )
 
 // Agent is the manager's view of a running sandbox with pi.
@@ -66,8 +67,10 @@ var (
 	ErrRunning         = errors.New("agent is working")
 	ErrUnknownModel    = errors.New("unknown model")
 	ErrUnknownVariant  = pool.ErrUnknownVariant
-	ErrNoSlot          = pool.ErrNoIdleSlot
-	ErrNotFound        = store.ErrNotFound
+	// ErrVariantFixed: a client asked for another binding than AGW_TOOLSETS gives new chats (issue #29).
+	ErrVariantFixed = errors.New("the bindings of new chats are fixed by the gateway (AGW_TOOLSETS)")
+	ErrNoSlot       = pool.ErrNoIdleSlot
+	ErrNotFound     = store.ErrNotFound
 )
 
 // Event is distributed to a chat's SSE subscribers.
@@ -214,6 +217,10 @@ type Options struct {
 
 	// Platform talks to the Agri-Gaia platform (nil: binding off).
 	Platform *platform.Client
+
+	// Toolsets: the bindings every new chat gets (AGW_TOOLSETS, issue #29); empty = toolset.Default.
+	// Stored chats keep the combination they were created with.
+	Toolsets toolset.Set
 }
 
 type Manager struct {
@@ -274,6 +281,9 @@ func NewManager(st *store.Store, p *pool.Pool[Agent], cat *config.Catalog, blobs
 		opt.AutoTurnsMax = DefaultAutoTurnsMax
 	case opt.AutoTurnsMax < 0:
 		opt.AutoTurnsMax = 0
+	}
+	if opt.Toolsets.Empty() {
+		opt.Toolsets, _ = toolset.Parse(toolset.Default)
 	}
 	return &Manager{st: st, pool: p, cat: cat, blobs: blobs, broker: broker, opt: opt,
 		live: map[string]*live{}, subs: map[string]map[chan Event]struct{}{}, chatMu: map[string]*sync.Mutex{},
@@ -445,12 +455,19 @@ func (m *Manager) Create(ctx context.Context, req NewChat) (ChatView, error) {
 	if _, _, ok := m.cat.Lookup(req.Model); !ok {
 		return ChatView{}, ErrUnknownModel
 	}
-	if req.Variant == "" {
-		req.Variant = "cli"
+	// The bindings come from AGW_TOOLSETS. A variant in the request is only accepted when it names
+	// the same combination (in any order, "both" = "cli,mcp"); another one is refused instead of
+	// quietly giving the chat other tools than the client asked for.
+	if req.Variant != "" {
+		ts, err := toolset.FromVariant(req.Variant)
+		if err != nil {
+			return ChatView{}, ErrUnknownVariant
+		}
+		if ts != m.opt.Toolsets {
+			return ChatView{}, fmt.Errorf("%w: requested %q, new chats get %q", ErrVariantFixed, ts.Key(), m.opt.Toolsets.Key())
+		}
 	}
-	if _, ok := m.pool.Targets()[req.Variant]; !ok {
-		return ChatView{}, ErrUnknownVariant
-	}
+	req.Variant = m.opt.Toolsets.Key()
 	internet := m.opt.InternetDefault
 	if req.Internet != nil {
 		internet = *req.Internet
@@ -515,7 +532,13 @@ func titleFrom(msg string) string {
 // p reports the steps when resuming (nil when creating).
 func (m *Manager) attach(ctx context.Context, c store.Chat, session []byte, p *resumeProgress) error {
 	p.run(PhaseAcquire)
-	slot, err := m.pool.AcquireWait(ctx, c.Variant, c.ID, m.opt.AcquireTimeout)
+	// The stored variant may be an older id ("both") or another combination than the configured one;
+	// the pool is keyed by the canonical key and starts such slots on demand.
+	ts, err := toolset.FromVariant(c.Variant)
+	if err != nil {
+		return ErrUnknownVariant
+	}
+	slot, err := m.pool.AcquireWait(ctx, ts.Key(), c.ID, m.opt.AcquireTimeout)
 	if err != nil {
 		return err
 	}
@@ -587,7 +610,7 @@ func (m *Manager) attach(ctx context.Context, c store.Chat, session []byte, p *r
 	m.mu.Lock()
 	m.live[c.ID] = l
 	m.mu.Unlock()
-	if c.Variant != "mcp" {
+	if ts.Has(toolset.CLI) { // subagents only come with the command line
 		go m.watchSubagents(c.ID, l)
 	}
 	_ = m.st.SetState(ctx, c.ID, store.StateActive)

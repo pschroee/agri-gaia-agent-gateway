@@ -41,9 +41,11 @@ type Model struct {
 }
 
 type Variant struct {
-	ID    string   `json:"id"`
-	Label string   `json:"label"`
-	Tools []string `json:"tools"`
+	ID       string   `json:"id"`
+	Label    string   `json:"label"`
+	Bindings []string `json:"bindings,omitempty"`
+	Tools    []string `json:"tools"`
+	Active   bool     `json:"active,omitempty"` // the combination new chats get (AGW_TOOLSETS)
 }
 
 type Config struct {
@@ -58,6 +60,9 @@ type Config struct {
 
 	// MaxSubagents: subagents at the same time per chat, fixed for the service.
 	MaxSubagents int `json:"max_subagents"`
+
+	// Toolsets: the bindings of every new chat (AGW_TOOLSETS); empty from gateways before issue #29.
+	Toolsets *Variant `json:"toolsets,omitempty"`
 }
 
 type Activity struct {

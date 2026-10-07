@@ -169,7 +169,7 @@ func TestBackgroundTasksConfigured(t *testing.T) {
 	}
 	for _, v := range Variants {
 		has := strings.Contains(strings.Join(v.Tools, ","), "bg_output,bg_stop")
-		if has != (v.ID == "cli" || v.ID == "both") { // only variants with bash
+		if has != strings.HasPrefix(v.ID, "cli") { // only combinations with bash
 			t.Errorf("%s: tools %v", v.ID, v.Tools)
 		}
 	}

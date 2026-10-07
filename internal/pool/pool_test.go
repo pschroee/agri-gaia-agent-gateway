@@ -7,6 +7,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"agw/internal/toolset"
 )
 
 type fakeWorker struct {
@@ -181,5 +183,40 @@ func TestActivityOnSlot(t *testing.T) {
 	info := s.Info()
 	if info.Activity == nil || info.Activity.Kind != "tool" || info.Activity.Tool != "bash" {
 		t.Fatalf("activity: %+v", info.Activity)
+	}
+}
+
+// Issue #29: the pool keeps warm slots only for the configured combination; chats of another
+// stored combination get a slot on demand, unknown keys are refused.
+func TestKnownVariantsOnDemand(t *testing.T) {
+	f := &fakeFactory{}
+	p := newTestPool(t, f, map[string]int{"cli,api": 2})
+	p.SetKnown(toolset.Valid)
+	waitFor(t, "pool filled", func() bool { return idle(p, "cli,api") == 2 })
+	if _, err := p.Acquire("nonsense", "c"); !errors.Is(err, ErrUnknownVariant) {
+		t.Fatalf("unknown key: %v", err)
+	}
+	ctx := context.Background()
+	for _, v := range []string{"cli", "mcp", "api", "cli,mcp"} {
+		s, err := p.AcquireWait(ctx, v, "chat-"+v, 2*time.Second)
+		if err != nil {
+			t.Fatalf("%s: %v", v, err)
+		}
+		if s.Variant != v || s.Worker.variant != v {
+			t.Fatalf("%s: slot of %q (worker %q)", v, s.Variant, s.Worker.variant)
+		}
+	}
+	// No warm slots for keys outside the targets, and the configured ones stay untouched.
+	time.Sleep(50 * time.Millisecond)
+	for _, v := range []string{"cli", "mcp", "api", "cli,mcp"} {
+		if n := idle(p, v); n != 0 {
+			t.Fatalf("%s kept %d warm slots", v, n)
+		}
+	}
+	if n := idle(p, "cli,api"); n != 2 {
+		t.Fatalf("configured combination: %d idle", n)
+	}
+	if got := p.Targets(); len(got) != 1 || got["cli,api"] != 2 {
+		t.Fatalf("targets: %v", got)
 	}
 }

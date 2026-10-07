@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -99,15 +100,19 @@ func TestUpstreamKey(t *testing.T) {
 }
 
 func TestEnvDefaults(t *testing.T) {
-	t.Setenv("AGW_POOL_SIZE_CLI", "")
-	t.Setenv("AGW_POOL_SIZE_MCP", "3")
+	t.Setenv("AGW_POOL_SIZE", "")
+	t.Setenv("AGW_TOOLSETS", "") // restored after the test
+	os.Unsetenv("AGW_TOOLSETS")  // unset: the default applies
 	t.Setenv("AGW_IDLE_TIMEOUT", "90s")
 	e := FromEnv()
 	if e.HTTPAddr != ":18480" || e.ProxyAddr != ":18481" {
 		t.Fatalf("addresses: %q %q", e.HTTPAddr, e.ProxyAddr)
 	}
-	if e.PoolSizes["cli"] != 1 || e.PoolSizes["mcp"] != 3 || e.PoolSizes["both"] != 0 {
-		t.Fatalf("pool sizes: %v", e.PoolSizes)
+	if e.PoolSize != DefaultPoolSize || DefaultPoolSize < 2 {
+		t.Fatalf("pool size: %d", e.PoolSize)
+	}
+	if e.Toolsets != "cli" {
+		t.Fatalf("toolsets default: %q", e.Toolsets)
 	}
 	if e.IdleTimeout.Seconds() != 90 || e.ApprovalTimeout.Minutes() != 10 || e.ArtifactMaxBytes != 50<<20 || e.ImageMaxBytes != 10<<20 {
 		t.Fatalf("timeouts/limits: %+v", e)
@@ -360,5 +365,28 @@ func TestEnvPublicURLWithPath(t *testing.T) {
 	t.Setenv("AGW_PUBLIC_URL", "")
 	if e := FromEnv(); e.BasePath != "" || e.PublicHost() != "" {
 		t.Fatalf("without AGW_PUBLIC_URL: %q %q", e.BasePath, e.PublicHost())
+	}
+}
+
+func TestEnvToolsets(t *testing.T) {
+	t.Setenv("AGW_TOOLSETS", "api, cli")
+	t.Setenv("AGW_POOL_SIZE", "3")
+	e := FromEnv()
+	ts, err := e.Toolset()
+	if err != nil || ts.Key() != "cli,api" || e.PoolSize != 3 {
+		t.Fatalf("toolsets %q (%v), pool %d", ts.Key(), err, e.PoolSize)
+	}
+	// Set but empty is an error, not the default.
+	t.Setenv("AGW_TOOLSETS", "")
+	if _, err := FromEnv().Toolset(); err == nil || !strings.Contains(err.Error(), "AGW_TOOLSETS is empty") {
+		t.Fatalf("empty AGW_TOOLSETS: %v", err)
+	}
+	t.Setenv("AGW_TOOLSETS", "cli,shell")
+	if _, err := FromEnv().Toolset(); err == nil || !strings.Contains(err.Error(), `unknown binding "shell"`) {
+		t.Fatalf("unknown binding: %v", err)
+	}
+	t.Setenv("AGW_POOL_SIZE", "-1")
+	if e := FromEnv(); e.PoolSize != 0 {
+		t.Fatalf("negative pool size: %d", e.PoolSize)
 	}
 }
