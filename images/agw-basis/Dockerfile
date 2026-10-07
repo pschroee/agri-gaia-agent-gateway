@@ -146,6 +146,15 @@ RUN apt-get update \
  && chmod 0755 /usr/local/bin/mmdc \
  && printf 'flowchart LR\n  A["Größe prüfen"] --> B["fertig"]\n' > /tmp/t.mmd \
  && HOME=/tmp mmdc -q -i /tmp/t.mmd -o /tmp/t.png && test -s /tmp/t.png && rm -f /tmp/t.mmd /tmp/t.png
+# mermaid-check: mmdc with the web UI's settings (securityLevel strict, no HTML labels) plus the rule "no HTML
+# tags in a diagram", so the agent finds before answering what the UI would not render (issue #59, skill
+# mermaid). The build check renders one diagram and expects a parse error and an HTML tag to fail.
+COPY images/agw-basis/mmdc/ui-config.json /opt/agw/mmdc/ui-config.json
+COPY images/agw-basis/mmdc/mermaid-check /usr/local/bin/mermaid-check
+RUN chmod 0644 /opt/agw/mmdc/ui-config.json && chmod 0755 /usr/local/bin/mermaid-check \
+ && printf 'flowchart LR\n  A["Größe (m²)"] --> B["fertig"]\n' | HOME=/tmp mermaid-check - \
+ && ! printf 'flowchart LR\n  A[Training (CPU)] --> B\n' | HOME=/tmp mermaid-check - 2>/dev/null \
+ && ! printf 'flowchart LR\n  A[a<br/>b] --> B\n' | HOME=/tmp mermaid-check - 2>/dev/null
 # The same Chromium writes images for plotly (kaleido 1.x finds the browser via BROWSER_PATH).
 ENV BROWSER_PATH=/usr/bin/chromium
 # fd for the find tool (M2): pi calls fd with fixed arguments and otherwise downloads it itself;

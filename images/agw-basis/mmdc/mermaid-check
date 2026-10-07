@@ -1,0 +1,49 @@
+#!/bin/sh
+# SPDX-FileCopyrightText: 2026 Philipp Schröer
+#
+# SPDX-License-Identifier: MIT
+
+# Checks Mermaid diagrams the way the web UI renders them (issue #59): mmdc with the UI's settings
+# (securityLevel strict, no HTML labels, ui-config.json) plus the rule "no HTML tags in labels", which
+# mermaid itself does not enforce (it shows <b> as text). Prints OK or the error and exits non-zero.
+#   mermaid-check diagram.mmd     one diagram
+#   mermaid-check answer.md       every mermaid block of a Markdown file
+#   mermaid-check - <<'EOF'       a diagram on stdin
+set -eu
+CONFIG=${MERMAID_CHECK_CONFIG:-/opt/agw/mmdc/ui-config.json}
+if [ $# -ne 1 ]; then
+  echo "usage: mermaid-check <diagram.mmd | answer.md | ->" >&2
+  exit 2
+fi
+dir=$(mktemp -d)
+trap 'rm -rf "$dir"' EXIT
+in=$1
+case "$in" in
+  -) cat > "$dir/in.mmd"; in="$dir/in.mmd"; out="$dir/out.svg"; md=0 ;;
+  *.md | *.markdown) out="$dir/out.md"; md=1 ;;
+  *) out="$dir/out.svg"; md=0 ;;
+esac
+[ -r "$in" ] || { echo "mermaid-check: cannot read $1" >&2; exit 2; }
+
+# The diagram lines (in Markdown only those inside mermaid blocks), with their line numbers.
+if [ "$md" = 1 ]; then
+  awk '/^[ \t]*(```|~~~)[ \t]*mermaid([ \t]|$)/ { f = 1; next } f && /^[ \t]*(```|~~~)/ { f = 0; next } f { print FNR ": " $0 }' "$in" > "$dir/lines"
+else
+  awk '{ print FNR ": " $0 }' "$in" > "$dir/lines"
+fi
+status=0
+if grep -iE '<[/]?[a-z][^<>]*>' "$dir/lines" > "$dir/html"; then
+  echo "HTML tag in a diagram (the web UI renders without HTML; for a line break use a shorter label or a real line break inside a quoted label):" >&2
+  sed 's/^/  line /' "$dir/html" >&2
+  status=1
+fi
+if ! mmdc -q -c "$CONFIG" -i "$in" -o "$out" > "$dir/log" 2>&1; then
+  grep -v '^\s*at ' "$dir/log" | head -20 >&2
+  status=1
+fi
+if [ "$status" = 0 ]; then
+  echo "OK: renders as in the web UI"
+else
+  echo "FAILED: fix the diagram before you send it" >&2
+fi
+exit "$status"

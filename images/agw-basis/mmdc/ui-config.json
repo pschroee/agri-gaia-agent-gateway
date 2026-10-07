@@ -1,0 +1,6 @@
+{
+  "securityLevel": "strict",
+  "htmlLabels": false,
+  "flowchart": { "htmlLabels": false },
+  "maxTextSize": 50000
+}
