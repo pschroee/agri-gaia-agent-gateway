@@ -678,6 +678,12 @@ the old id `both`) stops the start with an error naming the variable.
 - **Pool:** `AGW_POOL_SIZE` (default 4) warm slots are kept for the configured combination only, keyed by its
   canonical key. A chat of another combination waits for a slot started on demand. The former
   `AGW_POOL_SIZE_CLI|MCP|BOTH|API` are ignored; the orchestrator warns when one is set.
+- **Failed slot starts** (issue #55): each is logged as WARN `pool slot discarded before first use` with
+  `reason=start_failed` and the error (e.g. pi's stderr). The warm start of that combination then waits 3 s, doubled
+  after every further failure in a row up to 5 min; from the third failure in a row the orchestrator logs one ERROR
+  `pool slots keep failing to start …`, and one INFO `pool slots start again` once a start succeeds. Every
+  `slot torn down` line carries `reason=` (`start_failed`, `chat_suspended`, `agent_died:pi|exec`, `attach_failed`,
+  `shutdown`).
 - **`POST /api/chats`:** `variant` is optional. A value naming the same combination (in any order, `both` for
   `cli,mcp`) is accepted, another known one gives 400 ("the bindings of new chats are fixed by the gateway
   (AGW_TOOLSETS): requested …, new chats get …"), an unknown one 400 ("unknown binding variant"). Refusing rather
