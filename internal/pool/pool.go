@@ -9,6 +9,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"log/slog"
 	"sort"
 	"sync"
 	"time"
@@ -29,7 +30,63 @@ var (
 )
 
 type CreateFunc[W any] func(ctx context.Context, slotID, variant string) (W, error)
+
+// DestroyFunc tears a worker down. The context carries the reason (Reason), which the
+// destroy function logs with its teardown (issue #55).
 type DestroyFunc[W any] func(ctx context.Context, w W)
+
+// Reasons for tearing a slot down, logged as reason= (issue #55).
+const (
+	ReasonStartFailed  = "start_failed"   // the start failed; the slot never became free
+	ReasonShutdown     = "shutdown"       // the orchestrator stops
+	ReasonSuspended    = "chat_suspended" // the chat went idle (timer, user, close)
+	ReasonAgentDied    = "agent_died"     // pi or the execution sandbox of the chat ended
+	ReasonAttachFailed = "attach_failed"  // the chat could not take the slot over
+	ReasonUnspecified  = "unspecified"    // no reason in the context (tests, direct calls)
+)
+
+type reasonKey struct{}
+
+// WithReason returns ctx carrying the reason for a teardown.
+func WithReason(ctx context.Context, reason string) context.Context {
+	return context.WithValue(ctx, reasonKey{}, reason)
+}
+
+// Reason is the teardown reason carried by ctx, ReasonUnspecified if there is none.
+func Reason(ctx context.Context) string {
+	if r, ok := ctx.Value(reasonKey{}).(string); ok && r != "" {
+		return r
+	}
+	return ReasonUnspecified
+}
+
+// Backoff of the warm start after failed starts (issue #55): retryDelay doubles with every failure
+// in a row up to maxRetryDelay; from failStreakAlarm failures in a row on the pool reports it once
+// as an error, and once more when a start succeeds again.
+const (
+	defaultRetryDelay = 3 * time.Second
+	defaultMaxRetry   = 5 * time.Minute
+	failStreakAlarm   = 3
+)
+
+// backoffDelay is the wait before the next warm start after n failures in a row (n >= 1).
+func backoffDelay(n int, base, max time.Duration) time.Duration {
+	d := base
+	for i := 1; i < n && d < max; i++ {
+		d *= 2
+	}
+	if d > max {
+		d = max
+	}
+	return d
+}
+
+// failState counts failed starts in a row per variant.
+type failState struct {
+	streak  int
+	until   time.Time // no warm start before this time
+	alarmed bool      // the streak has been reported as an error
+}
 
 type Activity struct {
 	Kind  string    `json:"kind"`
@@ -112,12 +169,15 @@ type Pool[W any] struct {
 	mu      sync.Mutex
 	slots   map[string]*Slot[W]
 	lastErr map[string]string
+	fails   map[string]*failState
 	wake    chan struct{}
 	idleCh  chan struct{} // closed and replaced on every new free slot
 	ctx     context.Context
 	wg      sync.WaitGroup
 
-	retryDelay time.Duration
+	retryDelay    time.Duration
+	maxRetryDelay time.Duration
+	log           *slog.Logger
 }
 
 func New[W any](create CreateFunc[W], destroy DestroyFunc[W], targets map[string]int) *Pool[W] {
@@ -127,9 +187,10 @@ func New[W any](create CreateFunc[W], destroy DestroyFunc[W], targets map[string
 	}
 	return &Pool[W]{
 		create: create, destroy: destroy, targets: t,
-		slots: map[string]*Slot[W]{}, lastErr: map[string]string{},
+		slots: map[string]*Slot[W]{}, lastErr: map[string]string{}, fails: map[string]*failState{},
 		wake: make(chan struct{}, 1), idleCh: make(chan struct{}),
-		retryDelay: 3 * time.Second,
+		retryDelay: defaultRetryDelay, maxRetryDelay: defaultMaxRetry,
+		log: slog.Default(),
 	}
 }
 
@@ -178,11 +239,16 @@ func (p *Pool[W]) loop(ctx context.Context) {
 
 // fill starts the missing slots and returns at once. Each start runs on its own, so a slot taken
 // while others are still starting is replaced right away instead of after the slowest start of the
-// running batch (issue #30). A failed start kicks the loop again after retryDelay.
+// running batch (issue #30). After a failed start the variant waits (backoff, issue #55); the
+// failure kicks the loop again when the wait is over.
 func (p *Pool[W]) fill(ctx context.Context) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	now := time.Now()
 	for variant, target := range p.targets {
+		if f := p.fails[variant]; f != nil && now.Before(f.until) {
+			continue
+		}
 		have := 0
 		for _, s := range p.slots {
 			if st := s.State(); s.Variant == variant && (st == StateIdle || st == StateStarting) {
@@ -195,15 +261,49 @@ func (p *Pool[W]) fill(ctx context.Context) {
 			p.wg.Add(1)
 			go func() {
 				defer p.wg.Done()
-				if !p.start(ctx, s) {
-					p.retryLater(ctx)
+				if d, failed := p.startWarm(ctx, s); failed {
+					p.retryLater(ctx, d)
 				}
 			}()
 		}
 	}
 }
 
+// startWarm starts a slot of the warm pool and keeps the backoff of its variant: after a failure
+// it returns the wait before the next warm start and true.
+func (p *Pool[W]) startWarm(ctx context.Context, s *Slot[W]) (time.Duration, bool) {
+	ok := p.start(ctx, s)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	f := p.fails[s.Variant]
+	if ok {
+		if f != nil && f.alarmed {
+			p.log.Info("pool slots start again", "variant", s.Variant, "failed_before", f.streak)
+		}
+		delete(p.fails, s.Variant)
+		return 0, false
+	}
+	if ctx.Err() != nil {
+		return 0, true // shutting down; retryLater returns at once
+	}
+	if f == nil {
+		f = &failState{}
+		p.fails[s.Variant] = f
+	}
+	f.streak++
+	d := backoffDelay(f.streak, p.retryDelay, p.maxRetryDelay)
+	f.until = time.Now().Add(d)
+	if f.streak >= failStreakAlarm && !f.alarmed {
+		f.alarmed = true
+		p.log.Error("pool slots keep failing to start; starting new ones with growing delay until one succeeds",
+			"variant", s.Variant, "failures", f.streak, "next_try_in", d.String(), "max_delay", p.maxRetryDelay.String(),
+			"error", p.lastErr[s.Variant])
+	}
+	return d, true
+}
+
 // start creates the worker of a slot registered as starting and makes it idle. False if the start failed.
+// A failed start is logged as a WARN with its error: the slot is discarded before its first use.
 func (p *Pool[W]) start(ctx context.Context, s *Slot[W]) bool {
 	w, err := p.create(ctx, s.ID, s.Variant)
 	p.mu.Lock()
@@ -211,6 +311,10 @@ func (p *Pool[W]) start(ctx context.Context, s *Slot[W]) bool {
 		delete(p.slots, s.ID)
 		p.lastErr[s.Variant] = err.Error()
 		p.mu.Unlock()
+		if ctx.Err() == nil {
+			p.log.Warn("pool slot discarded before first use", "slot", s.ID, "variant", s.Variant,
+				"reason", ReasonStartFailed, "after_ms", time.Since(s.createdAt).Milliseconds(), "error", err.Error())
+		}
 		return false
 	}
 	if ctx.Err() != nil {
@@ -218,7 +322,7 @@ func (p *Pool[W]) start(ctx context.Context, s *Slot[W]) bool {
 		// goroutine, otherwise Shutdown would return before the container is gone.
 		delete(p.slots, s.ID)
 		p.mu.Unlock()
-		p.destroy(context.WithoutCancel(ctx), w)
+		p.destroy(WithReason(context.WithoutCancel(ctx), ReasonShutdown), w)
 		return true
 	}
 	defer p.mu.Unlock()
@@ -231,11 +335,13 @@ func (p *Pool[W]) start(ctx context.Context, s *Slot[W]) bool {
 	return true
 }
 
-// retryLater kicks the fill loop after retryDelay (a failed start), unless the pool shuts down.
-func (p *Pool[W]) retryLater(ctx context.Context) {
+// retryLater kicks the fill loop after d (a failed start), unless the pool shuts down.
+func (p *Pool[W]) retryLater(ctx context.Context, d time.Duration) {
+	t := time.NewTimer(d)
+	defer t.Stop()
 	select {
 	case <-ctx.Done():
-	case <-time.After(p.retryDelay):
+	case <-t.C:
 		p.kick()
 	}
 }
@@ -321,8 +427,8 @@ func (p *Pool[W]) spawnOnDemandLocked(variant string) {
 	}()
 }
 
-// Release destroys an assigned slot (single assignment).
-func (p *Pool[W]) Release(ctx context.Context, s *Slot[W]) {
+// Release destroys an assigned slot (single assignment); reason is logged with the teardown.
+func (p *Pool[W]) Release(ctx context.Context, s *Slot[W], reason string) {
 	s.mu.Lock()
 	if s.state == StateStopping {
 		s.mu.Unlock()
@@ -333,7 +439,7 @@ func (p *Pool[W]) Release(ctx context.Context, s *Slot[W]) {
 	p.wg.Add(1)
 	go func() {
 		defer p.wg.Done()
-		p.destroy(context.WithoutCancel(ctx), s.Worker)
+		p.destroy(WithReason(context.WithoutCancel(ctx), reason), s.Worker)
 		p.mu.Lock()
 		delete(p.slots, s.ID)
 		p.mu.Unlock()
@@ -384,7 +490,7 @@ func (p *Pool[W]) Shutdown(ctx context.Context) {
 			continue
 		}
 		wg.Add(1)
-		go func(s *Slot[W]) { defer wg.Done(); p.destroy(ctx, s.Worker) }(s)
+		go func(s *Slot[W]) { defer wg.Done(); p.destroy(WithReason(ctx, ReasonShutdown), s.Worker) }(s)
 	}
 	wg.Wait()
 }

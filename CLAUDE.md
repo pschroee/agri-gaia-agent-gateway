@@ -109,6 +109,22 @@ refer to this repository.
   live, starting and resuming chats (`internal/chat/resume_open_test.go`). Do not confuse it with the wake-ups of
   background tasks (`BgWakesPerHour`), which start a turn. Rules in `API.md`, *Resuming a chat when it is opened*.
 
+## Warm pool and slot teardown
+
+- Every `slot torn down` log line carries `reason=` (issue #55). The reason travels in the context
+  (`pool.WithReason`, read by `worker.Factory.Destroy` via `pool.Reason`); `Pool.Release` takes it from the caller
+  (`chat_suspended`, `agent_died:<cause>`, `attach_failed`), the pool sets `shutdown`, `worker.Create` sets
+  `start_failed`. A new path that tears a slot down passes its own reason; `unspecified` in the log means one was
+  forgotten.
+- A failed start is a WARN `pool slot discarded before first use` with the error; the pool used to keep the error
+  only in `lastErr` (never shown) and retried every 3 s, which looked like a silent teardown loop. The warm start of
+  a combination now backs off (3 s doubling to 5 min, `backoffDelay`), reports the streak once as ERROR from the
+  third failure and the recovery once as INFO. Tests in `internal/pool/pool_test.go` (no Docker).
+- **Hot reload rebuilds Go, not the slot images.** Go code that passes pi a new extension or skill fails every
+  slot start against the old `agw-pi:dev` (pi: `Extension path does not exist`). That was the loop of issue #55:
+  `-e /opt/agw/ext/web-tools.ts` against an image from two days before. `dev/go-hot.sh` warns when `images/` or
+  `third_party/` change; then run `./dev.sh start`, which rebuilds both images.
+
 ## Activity across chats
 
 - `GET /api/activity` (issue #12) reads platform calls of the user's chats in one query (`internal/store/activity.go`):

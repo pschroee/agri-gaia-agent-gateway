@@ -642,7 +642,7 @@ func (m *Manager) attachSlot(ctx context.Context, c store.Chat, session []byte, 
 	ts, err := toolset.FromVariant(c.Variant)
 	if err != nil {
 		if slot != nil {
-			m.pool.Release(ctx, slot)
+			m.pool.Release(ctx, slot, pool.ReasonAttachFailed)
 		}
 		return ErrUnknownVariant
 	}
@@ -655,7 +655,7 @@ func (m *Manager) attachSlot(ctx context.Context, c store.Chat, session []byte, 
 	p.done(ResumeStep{Detail: slot.ID})
 	a := slot.Worker
 	fail := func(err error) error {
-		m.pool.Release(ctx, slot)
+		m.pool.Release(ctx, slot, pool.ReasonAttachFailed)
 		return err
 	}
 	p.run(PhaseSession)
@@ -872,7 +872,7 @@ func (m *Manager) Suspend(ctx context.Context, chatID string) (ChatView, error) 
 		return ChatView{}, ErrRunning
 	}
 	if l != nil {
-		m.detach(ctx, chatID, l, true, true)
+		m.detach(ctx, chatID, l, true, true, pool.ReasonSuspended)
 	}
 	_ = m.st.SetState(ctx, chatID, store.StateDormant)
 	m.publishChat(ctx, chatID)
@@ -932,7 +932,7 @@ func (m *Manager) setInternet(ctx context.Context, chatID string, on, byUser boo
 
 // detach saves the session (save) and the workspace (workspace) and
 // returns the slot (single use).
-func (m *Manager) detach(ctx context.Context, chatID string, l *live, save, workspace bool) {
+func (m *Manager) detach(ctx context.Context, chatID string, l *live, save, workspace bool, reason string) {
 	// The exchanged platform token belongs to the sandbox session; resuming exchanges anew.
 	m.opt.Platform.Forget(chatID)
 	m.setPendingModel(chatID, "") // a scheduled model switch only applies to this sandbox
@@ -966,8 +966,8 @@ func (m *Manager) detach(ctx context.Context, chatID string, l *live, save, work
 		return // already torn down (e.g. idling and simultaneous end of the stream)
 	}
 	_ = m.st.EndRun(ctx, l.runID)
-	m.pool.Release(ctx, l.slot)
-	slog.Info("slot returned", "chat", chatID, "slot", l.slot.ID)
+	m.pool.Release(ctx, l.slot, reason)
+	slog.Info("slot returned", "chat", chatID, "slot", l.slot.ID, "reason", reason)
 }
 
 func (m *Manager) saveSession(ctx context.Context, chatID string, a Agent) error {
@@ -1120,7 +1120,7 @@ func (m *Manager) agentDied(chatID string, l *live, cause string) {
 		// The execution sandbox is still alive (H1): save the workspace as far as possible.
 		slog.Warn("workspace not saved", "chat", chatID, "error", err)
 	}
-	m.detach(ctx, chatID, l, false, false)
+	m.detach(ctx, chatID, l, false, false, pool.ReasonAgentDied+":"+cause)
 	_ = m.st.SetState(ctx, chatID, store.StateDormant)
 	m.publishChat(ctx, chatID)
 }
@@ -2378,7 +2378,7 @@ func (m *Manager) Shutdown(ctx context.Context) {
 		if l == nil {
 			continue
 		}
-		m.detach(ctx, id, l, true, true)
+		m.detach(ctx, id, l, true, true, pool.ReasonShutdown)
 		_ = m.st.SetState(ctx, id, store.StateDormant)
 	}
 }

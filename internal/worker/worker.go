@@ -35,6 +35,7 @@ import (
 	"agw/internal/execbox"
 	"agw/internal/execproto"
 	"agw/internal/platform"
+	"agw/internal/pool"
 	"agw/internal/rpc"
 	"agw/internal/sandbox"
 	"agw/internal/sock"
@@ -466,7 +467,7 @@ func (f *Factory) Create(ctx context.Context, slotID, variant string) (chat.Agen
 		return nil, err
 	}
 	w := &Worker{rt: f.RT, dir: filepath.Join(f.Env.SocketRoot, slotID), image: f.Env.PiImage}
-	cleanup := func() { f.Destroy(context.WithoutCancel(ctx), w) }
+	cleanup := func() { f.Destroy(pool.WithReason(context.WithoutCancel(ctx), pool.ReasonStartFailed), w) }
 	if w.net, err = f.RT.CreateSlotNetwork(ctx, slotID); err != nil {
 		return nil, err
 	}
@@ -654,7 +655,8 @@ func tail(s string, n int) string {
 	return s
 }
 
-// Destroy tears down both containers, both sockets and both networks.
+// Destroy tears down both containers, both sockets and both networks. The reason in ctx
+// (pool.WithReason) is logged with the teardown.
 func (f *Factory) Destroy(ctx context.Context, a chat.Agent) {
 	w, ok := a.(*Worker)
 	if !ok || w == nil {
@@ -698,6 +700,6 @@ func (f *Factory) Destroy(ctx context.Context, a chat.Agent) {
 		if w.inst != nil {
 			name = w.inst.Name
 		}
-		slog.Info("slot torn down", "container", name)
+		slog.Info("slot torn down", "slot", filepath.Base(w.dir), "container", name, "reason", pool.Reason(ctx))
 	})
 }

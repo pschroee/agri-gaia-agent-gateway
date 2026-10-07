@@ -3,6 +3,7 @@ package pool
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -133,7 +134,7 @@ func TestReleaseDestroysNeverReuses(t *testing.T) {
 	waitFor(t, "filled", func() bool { return idle(p, "cli") == 1 })
 	s, _ := p.Acquire("cli", "chat-1")
 	first := s.ID
-	p.Release(context.Background(), s)
+	p.Release(context.Background(), s, "test")
 	waitFor(t, "destroyed", func() bool { _, d := f.counts(); return d == 1 })
 	for _, info := range p.Snapshot() {
 		if info.ID == first {
@@ -284,4 +285,166 @@ func TestRefillDoesNotWaitForRunningStarts(t *testing.T) {
 	waitFor(t, "second replacement ready", func() bool { return idle(p, "cli") == 1 })
 	close(slow)
 	waitFor(t, "pool full again", func() bool { return idle(p, "cli") == 2 })
+}
+
+// Issue #55: the wait before the next warm start doubles with every failure in a row and is capped.
+func TestBackoffDelay(t *testing.T) {
+	base, max := 3*time.Second, 5*time.Minute
+	for n, want := range map[int]time.Duration{
+		1: 3 * time.Second, 2: 6 * time.Second, 3: 12 * time.Second, 4: 24 * time.Second,
+		7: 192 * time.Second, 8: 5 * time.Minute, 30: 5 * time.Minute,
+	} {
+		if got := backoffDelay(n, base, max); got != want {
+			t.Errorf("backoffDelay(%d) = %v, want %v", n, got, want)
+		}
+	}
+}
+
+func TestReasonFromContext(t *testing.T) {
+	if r := Reason(context.Background()); r != ReasonUnspecified {
+		t.Fatalf("without reason: %q", r)
+	}
+	if r := Reason(WithReason(context.Background(), ReasonShutdown)); r != ReasonShutdown {
+		t.Fatalf("with reason: %q", r)
+	}
+}
+
+// reasonFactory records the teardown reason of every destroyed worker.
+type reasonFactory struct {
+	fakeFactory
+	rmu     sync.Mutex
+	reasons map[string]string
+}
+
+func (f *reasonFactory) Destroy(ctx context.Context, w *fakeWorker) {
+	f.rmu.Lock()
+	if f.reasons == nil {
+		f.reasons = map[string]string{}
+	}
+	f.reasons[w.id] = Reason(ctx)
+	f.rmu.Unlock()
+	f.fakeFactory.Destroy(ctx, w)
+}
+
+func (f *reasonFactory) reason(id string) string {
+	f.rmu.Lock()
+	defer f.rmu.Unlock()
+	return f.reasons[id]
+}
+
+// Every teardown through the pool carries a reason: the caller's on Release, shutdown on Shutdown.
+func TestTeardownCarriesReason(t *testing.T) {
+	f := &reasonFactory{}
+	p := New[*fakeWorker](f.Create, f.Destroy, map[string]int{"cli": 2})
+	p.retryDelay = 10 * time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	p.Start(ctx)
+	waitFor(t, "pool filled", func() bool { return idle(p, "cli") == 2 })
+	s, err := p.Acquire("cli", "chat-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Release(context.Background(), s, ReasonSuspended)
+	waitFor(t, "released slot destroyed", func() bool { return f.reason(s.ID) != "" })
+	if r := f.reason(s.ID); r != ReasonSuspended {
+		t.Fatalf("release reason: %q", r)
+	}
+	waitFor(t, "pool refilled", func() bool { return idle(p, "cli") == 2 })
+	var rest []string
+	for _, i := range p.Snapshot() {
+		rest = append(rest, i.ID)
+	}
+	cancel()
+	p.Shutdown(context.Background())
+	for _, id := range rest {
+		if r := f.reason(id); r != ReasonShutdown {
+			t.Fatalf("slot %s: shutdown reason %q", id, r)
+		}
+	}
+}
+
+// logRecorder is a slog handler that keeps the records.
+type logRecorder struct {
+	mu   sync.Mutex
+	recs []slog.Record
+}
+
+func (h *logRecorder) Enabled(context.Context, slog.Level) bool { return true }
+func (h *logRecorder) Handle(_ context.Context, r slog.Record) error {
+	h.mu.Lock()
+	h.recs = append(h.recs, r.Clone())
+	h.mu.Unlock()
+	return nil
+}
+func (h *logRecorder) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *logRecorder) WithGroup(string) slog.Handler      { return h }
+
+// count returns how many records have the level and message; attrs of the last one by key.
+func (h *logRecorder) count(level slog.Level, msg string) (int, map[string]string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	n, attrs := 0, map[string]string{}
+	for _, r := range h.recs {
+		if r.Level == level && r.Message == msg {
+			n++
+			r.Attrs(func(a slog.Attr) bool { attrs[a.Key] = a.Value.String(); return true })
+		}
+	}
+	return n, attrs
+}
+
+// Issue #55: slots that fail to start are logged with their error as discarded before first use, the
+// warm start backs off instead of retrying in a fixed rhythm, the streak is reported once as an error,
+// and the recovery once as info.
+func TestFailedStartsBackOffAndAreReportedOnce(t *testing.T) {
+	f := &fakeFactory{}
+	f.fail.Store(5)
+	rec := &logRecorder{}
+	p := New[*fakeWorker](f.Create, f.Destroy, map[string]int{"cli": 1})
+	p.retryDelay, p.maxRetryDelay, p.log = 20*time.Millisecond, 80*time.Millisecond, slog.New(rec)
+	ctx, cancel := context.WithCancel(context.Background())
+	began := time.Now()
+	p.Start(ctx)
+	t.Cleanup(func() { cancel(); p.Shutdown(context.Background()) })
+	waitFor(t, "filled after five failures", func() bool { return idle(p, "cli") == 1 })
+	// Waits 20+40+80+80+80 ms between the six starts, at least 300 ms in all; a fixed 20 ms
+	// rhythm would have taken 100 ms.
+	if d := time.Since(began); d < 300*time.Millisecond {
+		t.Fatalf("no backoff: filled after %v", d)
+	}
+	n, attrs := rec.count(slog.LevelWarn, "pool slot discarded before first use")
+	if n != 5 || attrs["reason"] != ReasonStartFailed || attrs["error"] != "start failed" || attrs["variant"] != "cli" {
+		t.Fatalf("discard warnings: %d %v", n, attrs)
+	}
+	if n, attrs := rec.count(slog.LevelError, "pool slots keep failing to start; starting new ones with growing delay until one succeeds"); n != 1 || attrs["failures"] != "3" || attrs["error"] != "start failed" {
+		t.Fatalf("streak reported %d times: %v", n, attrs)
+	}
+	if n, attrs := rec.count(slog.LevelInfo, "pool slots start again"); n != 1 || attrs["failed_before"] != "5" {
+		t.Fatalf("recovery reported %d times: %v", n, attrs)
+	}
+}
+
+// A single failure is a warning, not yet a streak: no error, and the backoff resets after a success.
+func TestSingleFailureNoAlarm(t *testing.T) {
+	f := &fakeFactory{}
+	f.fail.Store(1)
+	rec := &logRecorder{}
+	p := New[*fakeWorker](f.Create, f.Destroy, map[string]int{"cli": 1})
+	p.retryDelay, p.log = 10*time.Millisecond, slog.New(rec)
+	ctx, cancel := context.WithCancel(context.Background())
+	p.Start(ctx)
+	t.Cleanup(func() { cancel(); p.Shutdown(context.Background()) })
+	waitFor(t, "filled", func() bool { return idle(p, "cli") == 1 })
+	if n, _ := rec.count(slog.LevelError, "pool slots keep failing to start; starting new ones with growing delay until one succeeds"); n != 0 {
+		t.Fatalf("error after one failure")
+	}
+	if n, _ := rec.count(slog.LevelInfo, "pool slots start again"); n != 0 {
+		t.Fatalf("recovery reported without an alarm")
+	}
+	p.mu.Lock()
+	_, left := p.fails["cli"]
+	p.mu.Unlock()
+	if left {
+		t.Fatal("failure streak not reset after a successful start")
+	}
 }
