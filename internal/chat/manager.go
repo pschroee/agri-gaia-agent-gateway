@@ -79,6 +79,15 @@ type Event struct {
 	Data any    `json:"data"`
 }
 
+// ChatEvent is an event of one chat as seen by the subscribers of all chats (SubscribeAll).
+type ChatEvent struct {
+	ChatID string
+	Event
+}
+
+// crossChatKinds: event kinds that also go to the subscribers of all chats.
+var crossChatKinds = map[string]bool{"approval": true}
+
 type ChatView struct {
 	store.Chat
 	Running bool   `json:"running"`
@@ -237,6 +246,8 @@ type Manager struct {
 	mu   sync.Mutex
 	live map[string]*live
 	subs map[string]map[chan Event]struct{}
+	// allSubs: subscribers of approval events of every chat (GET /api/events); the API filters by owner.
+	allSubs map[chan ChatEvent]struct{}
 	// chatMu serializes state changes per chat (resuming, idling, closing).
 	chatMu map[string]*sync.Mutex
 	// imgMu serializes saving the display images per chat.
@@ -291,7 +302,7 @@ func NewManager(st *store.Store, p *pool.Pool[Agent], cat *config.Catalog, blobs
 		opt.Toolsets, _ = toolset.Parse(toolset.Default)
 	}
 	return &Manager{st: st, pool: p, cat: cat, blobs: blobs, broker: broker, opt: opt,
-		live: map[string]*live{}, subs: map[string]map[chan Event]struct{}{}, chatMu: map[string]*sync.Mutex{},
+		live: map[string]*live{}, subs: map[string]map[chan Event]struct{}{}, allSubs: map[chan ChatEvent]struct{}{}, chatMu: map[string]*sync.Mutex{},
 		imgMu: map[string]*sync.Mutex{}, wsMu: map[string]*sync.Mutex{}, qMu: map[string]*sync.Mutex{},
 		sending: map[string]bool{}, delivering: map[string][]*turnMeta{}, resuming: map[string]bool{}, starting: map[string]bool{}, pendingModel: map[string]string{}, levels: map[string][]string{}, userAt: map[string]time.Time{}, aborts: map[string]uint64{}}
 }
@@ -334,28 +345,53 @@ func (m *Manager) Subscribe(chatID string) (<-chan Event, func()) {
 	}
 }
 
+// SubscribeAll delivers the approval events (new and decided) of every chat, with the chat's ID, for the
+// stream across chats (GET /api/events). It carries no ownership check: the caller filters by owner.
+func (m *Manager) SubscribeAll() (<-chan ChatEvent, func()) {
+	ch := make(chan ChatEvent, 256)
+	m.mu.Lock()
+	m.allSubs[ch] = struct{}{}
+	m.mu.Unlock()
+	return ch, func() {
+		m.mu.Lock()
+		delete(m.allSubs, ch)
+		m.mu.Unlock()
+	}
+}
+
 func (m *Manager) publish(chatID string, ev Event) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	important := ev.Kind == "approval" || ev.Kind == "chat" || ev.Kind == "error"
 	for ch := range m.subs[chatID] {
-		select {
-		case ch <- ev:
-		default:
-			if !important {
-				continue // slow reader: drop the stream event instead of holding up the chat
-			}
-			// Approvals and state changes must not get lost: drop the oldest
-			// event to make room.
-			select {
-			case <-ch:
-			default:
-			}
-			select {
-			case ch <- ev:
-			default:
-			}
+		sendDropOldest(ch, ev, important)
+	}
+	if crossChatKinds[ev.Kind] {
+		for ch := range m.allSubs {
+			sendDropOldest(ch, ChatEvent{ChatID: chatID, Event: ev}, true)
 		}
+	}
+}
+
+// sendDropOldest hands ev to a subscriber without blocking. With a full buffer an unimportant event is
+// dropped (slow reader: do not hold up the chat); approvals and state changes must not get lost, so the
+// oldest buffered event makes room for them.
+func sendDropOldest[T any](ch chan T, ev T, important bool) {
+	select {
+	case ch <- ev:
+		return
+	default:
+	}
+	if !important {
+		return
+	}
+	select {
+	case <-ch:
+	default:
+	}
+	select {
+	case ch <- ev:
+	default:
 	}
 }
 

@@ -349,6 +349,7 @@ type ActivityPage = { calls: ActivityCall[]; chats: Record<string, { id: string;
 | `GET /api/chats/{id}/images?path=<path>&msg=<id>` | image | display image of a response (see below); 400 for an invalid path or ID, 404 if not available |
 | `POST /api/chats/{id}/files` (multipart, field `file`, may repeat) | `Artifact[]` (201) | user uploads files for the agent; for an active chat mirrored to `/workspace/inputs/` immediately, for a dormant one on resume. Limit `AGW_ARTIFACT_MAX_MB` per file |
 | `GET /api/approvals?state=pending` | `Approval[]` | open approvals of all chats |
+| `GET /api/events` | SSE | approvals across all the user's chats, see *SSE `GET /api/events`* |
 | `GET /api/activity?since=&until=&outcome=&chat=&limit=&before=` | `ActivityPage` | platform calls of the user's chats across all chats, newest first, with a summary of the period; see *Activity across chats* |
 | `POST /api/approvals/{id}` `{approve: boolean}` | `Approval` | approve or reject |
 | `GET /api/chats/{id}/events` | SSE | live events of the chat |
@@ -408,6 +409,24 @@ Each event is a `data:` line with JSON `{"kind": …, "data": …}`. Every 15 s 
 `message_end.message` is authoritative and replaces what was assembled. Tool executions run via
 `tool_execution_start|update|end` with `toolCallId`; `update.partialResult` is the output so far (replace, do not
 append). `message_start`/`message_end` with `role == "system"` are not displayed.
+
+## SSE `GET /api/events`
+
+One stream across all the user's chats (issue #32), for a counter of open approvals that follows at once, e.g. the
+badge on the platform's floating agent button. In oidc mode it carries only the user's own chats, like
+`GET /api/approvals`; another user's approvals never appear. Same format as the stream of a chat (`data:` lines with
+`{"kind": …, "data": …}`, a comment `: ping` every 15 s); the stream starts with `retry: 2000`, so `EventSource`
+reconnects after 2 s.
+
+| `kind` | `data` |
+|---|---|
+| `approvals` | `Approval[]`: the pending approvals of the user's chats, oldest first. Always the first event, also after every reconnect: it replaces whatever the client held. |
+| `approval` | `Approval` (new or decided, with `chat_id`): `state: "pending"` adds it, any other state (`approved`, `rejected`, `expired`) removes it. |
+
+The subscription starts before the snapshot is read, so an approval decided in between is never lost; an event may
+repeat a state the snapshot already has, so applying it must be idempotent (keyed by `id`). Approvals expired by a
+restart of the gateway send no event; the snapshot after the reconnect has them gone. A client should still poll
+`GET /api/approvals?state=pending` slowly as a fallback (the platform frontend does so every 60 s).
 
 ## Queue
 
