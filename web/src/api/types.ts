@@ -1,6 +1,10 @@
 // Types following poc/API.md (binding contract).
 
-export type VariantId = "cli" | "mcp" | "api" | "both"
+/**
+ * Bindings of a chat: a combination of cli, mcp and api as canonical key ("cli", "cli,api",
+ * "cli,mcp,api"), or the older id "both" (= cli,mcp) of chats from before issue #29.
+ */
+export type VariantId = string
 
 export type Pricing = {
   input: number
@@ -41,7 +45,15 @@ export type Model = {
   context_window?: number
 }
 
-export type Variant = { id: VariantId; label: string; tools: string[] }
+export type Variant = {
+  id: VariantId
+  label: string
+  /** The bindings of the combination in canonical order (cli, mcp, api). */
+  bindings?: string[]
+  tools: string[]
+  /** The combination new chats get (AGW_TOOLSETS). */
+  active?: boolean
+}
 
 export type ActivityKind = "idle" | "thinking" | "writing" | "tool" | "waiting_approval" | "starting" | "preparing" | "compacting"
 
@@ -73,6 +85,8 @@ export type Tokens = { input: number; output: number; cache_read: number; total:
 export type Pool = {
   slots: Slot[]
   targets: Partial<Record<VariantId, number>>
+  /** Key of the combination kept warm for new chats (AGW_TOOLSETS); missing from older gateways. */
+  toolsets?: VariantId
   totals?: { cost: number; tokens: Tokens; chats_active: number }
 }
 
@@ -505,7 +519,6 @@ export type SubagentRunMeta = {
 
 export type CreateChatRequest = {
   model?: string
-  variant?: VariantId
   title?: string
   message?: string
   internet?: boolean
@@ -531,6 +544,8 @@ export type Config = {
   max_subagents?: number
   /** Tools whose execution is verified at the socket (E9) */
   executed_tools?: string[]
+  /** Bindings of every new chat (AGW_TOOLSETS, issue #29); missing from older gateways. */
+  toolsets?: Variant
 }
 
 /** Slash command; `name` without the leading slash. */

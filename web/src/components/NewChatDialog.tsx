@@ -1,7 +1,7 @@
 import { useState } from "react"
 import { GlobeIcon, KeyRoundIcon, PlusIcon, ShrinkIcon } from "lucide-react"
 import { ApiError, api } from "@/api/client"
-import type { Chat, Model, Pricing, VariantId } from "@/api/types"
+import type { Chat, Model, Pricing } from "@/api/types"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import {
@@ -23,6 +23,7 @@ import type { Meta } from "@/hooks/useMeta"
 import { DEFAULT_DELEGATION_HOURS, DELEGATION_TEMPLATES, delegationFrom } from "@/lib/delegationTemplates"
 import { formatPrice, modelPriceSource, sourceLabel } from "@/lib/format"
 import { browserLanguage } from "@/lib/language"
+import { activeToolsets } from "@/lib/toolsets"
 import { formatPeakWindows } from "@/lib/tariff"
 import { cn } from "@/lib/utils"
 
@@ -32,7 +33,6 @@ export function NewChatDialog({ meta, onCreated, compact }: Props) {
   const { reload } = meta
   const [open, setOpen] = useState(false)
   const [modelChoice, setModel] = useState("")
-  const [variantChoice, setVariant] = useState<VariantId | "">("")
   const [title, setTitle] = useState("")
   const [message, setMessage] = useState("")
   const [internet, setInternet] = useState(false)
@@ -46,7 +46,6 @@ export function NewChatDialog({ meta, onCreated, compact }: Props) {
 
   // derive defaults as long as nothing is chosen
   const model = modelChoice || (meta.models.find((m) => m.default) ?? meta.models[0])?.id || ""
-  const variant = variantChoice || meta.variants[0]?.id || ""
 
   const onOpenChange = (next: boolean) => {
     setOpen(next)
@@ -59,7 +58,8 @@ export function NewChatDialog({ meta, onCreated, compact }: Props) {
 
   const autoCompact = autoCompactChoice ?? meta.config?.auto_compact_default ?? true
   const selected = meta.models.find((m) => m.id === model)
-  const selectedVariant = meta.variants.find((v) => v.id === variant)
+  // Fixed by the gateway (AGW_TOOLSETS); there is no choice per chat (issue #29).
+  const toolsets = activeToolsets(meta.config, meta.variants)
 
   const submit = async () => {
     setBusy(true)
@@ -67,7 +67,6 @@ export function NewChatDialog({ meta, onCreated, compact }: Props) {
     try {
       const chat = await api.createChat({
         model: model || undefined,
-        variant: variant || undefined,
         title: title.trim() || undefined,
         message: message.trim() || undefined,
         internet,
@@ -100,7 +99,7 @@ export function NewChatDialog({ meta, onCreated, compact }: Props) {
       <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-lg [&>*]:min-w-0">
         <DialogHeader>
           <DialogTitle>New chat</DialogTitle>
-          <DialogDescription>The chat gets a free slot from the pool of the chosen variant.</DialogDescription>
+          <DialogDescription>The chat gets a free slot from the warm pool.</DialogDescription>
         </DialogHeader>
         <div className="grid gap-4 [&>*]:min-w-0">
           <div className="grid gap-1.5">
@@ -119,24 +118,15 @@ export function NewChatDialog({ meta, onCreated, compact }: Props) {
             </Select>
             {selected?.pricing && <PricingInfo model={selected} />}
           </div>
-          <div className="grid gap-1.5">
-            <Label>Variant</Label>
-            <Select value={variant} onValueChange={(v) => setVariant(v as VariantId)}>
-              <SelectTrigger className="w-full min-w-0">
-                <SelectValue placeholder="Choose variant" />
-              </SelectTrigger>
-              <SelectContent>
-                {meta.variants.map((v) => (
-                  <SelectItem key={v.id} value={v.id}>
-                    {v.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            {selectedVariant && selectedVariant.tools.length > 0 && (
-              <p className="text-xs text-muted-foreground">Tools: {selectedVariant.tools.join(", ")}</p>
-            )}
-          </div>
+          {toolsets && (
+            <div className="grid gap-1 rounded-md bg-muted/60 px-2.5 py-1.5 text-xs text-muted-foreground" data-testid="toolsets">
+              <div>
+                <span className="font-medium text-foreground">Bindings:</span> {toolsets.label}{" "}
+                <span className="font-mono">({toolsets.id})</span>, set for all new chats by the gateway (AGW_TOOLSETS)
+              </div>
+              {toolsets.tools.length > 0 && <div className="break-words">Tools: {toolsets.tools.join(", ")}</div>}
+            </div>
+          )}
           <div className="grid gap-1.5 rounded-md border px-3 py-2">
             <Label className="flex items-center gap-1.5">
               <KeyRoundIcon className="size-3.5" /> Agent rights (delegation)
