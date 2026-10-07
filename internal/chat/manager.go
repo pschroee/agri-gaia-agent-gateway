@@ -85,6 +85,9 @@ type ChatView struct {
 	SlotID  string `json:"slot_id,omitempty"`
 	// Resuming: the chat is being resumed in a fresh sandbox.
 	Resuming bool `json:"resuming"`
+	// Starting: a new chat created with Async waits for its first sandbox (Resuming is set as well, so
+	// clients that only know resuming keep working).
+	Starting bool `json:"starting,omitempty"`
 	// QueueHeld: there are queued messages that are not handed over on their own
 	// (after an abort, while the chat is idle); they go along with the next message.
 	QueueHeld bool `json:"queue_held"`
@@ -249,6 +252,8 @@ type Manager struct {
 	delivering map[string][]*turnMeta
 	// resuming: the chat is being resumed (for display).
 	resuming map[string]bool
+	// starting: a new chat waits for its first sandbox (Create with Async, for display).
+	starting map[string]bool
 	// pendingModel: model switch waiting for the end of a compaction (SetModel with compactFirst).
 	pendingModel map[string]string
 	// levels: thinking levels per model, as pi last reported them (get_available_thinking_levels).
@@ -288,7 +293,7 @@ func NewManager(st *store.Store, p *pool.Pool[Agent], cat *config.Catalog, blobs
 	return &Manager{st: st, pool: p, cat: cat, blobs: blobs, broker: broker, opt: opt,
 		live: map[string]*live{}, subs: map[string]map[chan Event]struct{}{}, chatMu: map[string]*sync.Mutex{},
 		imgMu: map[string]*sync.Mutex{}, wsMu: map[string]*sync.Mutex{}, qMu: map[string]*sync.Mutex{},
-		sending: map[string]bool{}, delivering: map[string][]*turnMeta{}, resuming: map[string]bool{}, pendingModel: map[string]string{}, levels: map[string][]string{}, userAt: map[string]time.Time{}, aborts: map[string]uint64{}}
+		sending: map[string]bool{}, delivering: map[string][]*turnMeta{}, resuming: map[string]bool{}, starting: map[string]bool{}, pendingModel: map[string]string{}, levels: map[string][]string{}, userAt: map[string]time.Time{}, aborts: map[string]uint64{}}
 }
 
 // userActive records an action of the user (postponement by background tasks, M1).
@@ -386,6 +391,7 @@ func (m *Manager) view(c store.Chat) ChatView {
 		}
 	}
 	v.Resuming = m.resuming[c.ID]
+	v.Starting = m.starting[c.ID]
 	v.ThinkingLevels = m.levels[c.Model]
 	v.PendingModel = m.pendingModel[c.ID]
 	v.QueueHeld = c.Queued > 0 && !m.sending[c.ID] && (!ok || l.holdQueue)
@@ -446,6 +452,11 @@ type NewChat struct {
 	// Language: the user's preferred language according to the browser (BCP 47, e.g. "en-US");
 	// optional. Goes to the agent as a note with the first request (language.go).
 	Language string `json:"language,omitempty"`
+	// Async: do not wait for a sandbox when the pool has no free slot. The chat comes back at once
+	// with starting (and resuming) set, the SSE event "resume" (start: true) reports the steps, and a
+	// message sent meanwhile waits until the sandbox is assigned. With a free slot nothing changes.
+	// Only without Message: a first message in the request keeps the synchronous behaviour.
+	Async bool `json:"async,omitempty"`
 }
 
 func (m *Manager) Create(ctx context.Context, req NewChat) (ChatView, error) {
@@ -499,6 +510,27 @@ func (m *Manager) Create(ctx context.Context, req NewChat) (ChatView, error) {
 		return ChatView{}, err
 	}
 	unlock := m.lock(c.ID)
+	if req.Async && strings.TrimSpace(req.Message) == "" {
+		slot, err := m.pool.Acquire(c.Variant, c.ID)
+		switch {
+		case errors.Is(err, pool.ErrNoIdleSlot):
+			// Unlocked by startLater once the sandbox is assigned or the start failed.
+			m.startLater(ctx, c, unlock)
+			return m.View(ctx, c.ID)
+		case err != nil:
+			unlock()
+			_ = m.st.SetState(context.WithoutCancel(ctx), c.ID, store.StateDormant)
+			return ChatView{}, err
+		}
+		err = m.attachSlot(ctx, c, nil, nil, slot)
+		unlock()
+		if err != nil {
+			_ = m.st.SetState(context.WithoutCancel(ctx), c.ID, store.StateDormant)
+			m.publishChat(context.WithoutCancel(ctx), c.ID)
+			return ChatView{}, err
+		}
+		return m.View(ctx, c.ID)
+	}
 	err = m.attach(ctx, c, nil, nil)
 	unlock()
 	if err != nil {
@@ -513,6 +545,37 @@ func (m *Manager) Create(ctx context.Context, req NewChat) (ChatView, error) {
 		}
 	}
 	return m.View(ctx, c.ID)
+}
+
+// startLater assigns the first sandbox of a new chat in the background (Create with Async and an
+// empty pool). The caller holds the chat lock; startLater releases it when done, so a message sent
+// meanwhile waits in ensureLive and then finds the chat active instead of starting a second sandbox.
+func (m *Manager) startLater(ctx context.Context, c store.Chat, unlock func()) {
+	ctx = context.WithoutCancel(ctx)
+	p := m.newResume(c.ID)
+	p.first = true
+	m.mu.Lock()
+	m.resuming[c.ID] = true
+	m.starting[c.ID] = true
+	m.mu.Unlock()
+	m.publishChat(ctx, c.ID)
+	go func() {
+		defer func() {
+			m.mu.Lock()
+			delete(m.resuming, c.ID)
+			delete(m.starting, c.ID)
+			m.mu.Unlock()
+			unlock()
+			m.publishChat(ctx, c.ID)
+		}()
+		if err := m.attach(ctx, c, nil, p); err != nil {
+			// Without a sandbox the chat rests; the next message tries again like a resume.
+			p.fail(err)
+			_ = m.st.SetState(ctx, c.ID, store.StateDormant)
+			return
+		}
+		p.ready()
+	}()
 }
 
 func titleFrom(msg string) string {
@@ -531,17 +594,28 @@ func titleFrom(msg string) string {
 // session != nil, the saved session. The caller holds the chat lock.
 // p reports the steps when resuming (nil when creating).
 func (m *Manager) attach(ctx context.Context, c store.Chat, session []byte, p *resumeProgress) error {
+	return m.attachSlot(ctx, c, session, p, nil)
+}
+
+// attachSlot is attach with a slot the caller already acquired for the chat (nil: acquire one here).
+func (m *Manager) attachSlot(ctx context.Context, c store.Chat, session []byte, p *resumeProgress, slot *pool.Slot[Agent]) error {
+	start := time.Now()
 	p.run(PhaseAcquire)
 	// The stored variant may be an older id ("both") or another combination than the configured one;
 	// the pool is keyed by the canonical key and starts such slots on demand.
 	ts, err := toolset.FromVariant(c.Variant)
 	if err != nil {
+		if slot != nil {
+			m.pool.Release(ctx, slot)
+		}
 		return ErrUnknownVariant
 	}
-	slot, err := m.pool.AcquireWait(ctx, ts.Key(), c.ID, m.opt.AcquireTimeout)
-	if err != nil {
-		return err
+	if slot == nil {
+		if slot, err = m.pool.AcquireWait(ctx, ts.Key(), c.ID, m.opt.AcquireTimeout); err != nil {
+			return err
+		}
 	}
+	waited := time.Since(start)
 	p.done(ResumeStep{Detail: slot.ID})
 	a := slot.Worker
 	fail := func(err error) error {
@@ -575,8 +649,12 @@ func (m *Manager) attach(ctx context.Context, c store.Chat, session []byte, p *r
 		p.done(ResumeStep{Detail: "no session saved"})
 	}
 	p.run(PhaseSettings)
-	if err := a.SetInternet(ctx, c.Internet); err != nil {
-		return fail(fmt.Errorf("set internet: %w", err))
+	// A slot is assigned only once and starts without the egress network (worker.Create), so only
+	// switching internet on does anything here; off would cost several Docker calls for nothing.
+	if c.Internet {
+		if err := a.SetInternet(ctx, true); err != nil {
+			return fail(fmt.Errorf("set internet: %w", err))
+		}
 	}
 	if _, err := a.Call(ctx, map[string]any{"type": "set_auto_compaction", "enabled": c.AutoCompact}); err != nil {
 		return fail(fmt.Errorf("set auto-compaction: %w", err))
@@ -606,7 +684,6 @@ func (m *Manager) attach(ctx context.Context, c store.Chat, session []byte, p *r
 		p.done(ResumeStep{Size: int64p(size), Files: intp(n)})
 	}
 	l.runID, _ = m.st.StartRun(ctx, c.ID, slot.ID, a.ContainerID())
-	m.applySubagentConfig(l, l.maxSub)
 	m.mu.Lock()
 	m.live[c.ID] = l
 	m.mu.Unlock()
@@ -617,7 +694,8 @@ func (m *Manager) attach(ctx context.Context, c store.Chat, session []byte, p *r
 	go m.pump(c.ID, l)
 	m.armIdle(c.ID, l)
 	go m.refreshInfo(context.WithoutCancel(ctx), c.ID, a)
-	slog.Info("chat assigned", "chat", c.ID, "slot", slot.ID, "container", a.ContainerName(), "resumed", session != nil)
+	slog.Info("chat assigned", "chat", c.ID, "slot", slot.ID, "container", a.ContainerName(), "resumed", session != nil,
+		"wait_ms", waited.Milliseconds(), "ms", time.Since(start).Milliseconds())
 	m.publishChat(ctx, c.ID)
 	return nil
 }

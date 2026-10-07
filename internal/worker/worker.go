@@ -398,6 +398,7 @@ func (w *Worker) SetInternet(ctx context.Context, on bool) error {
 // already talks to the socket when pi starts; the execution sandbox before
 // pi, so that tool calls have a target right away.
 func (f *Factory) Create(ctx context.Context, slotID, variant string) (chat.Agent, error) {
+	began := time.Now()
 	prov, model, _ := f.Cat.Lookup(f.Cat.Default)
 	args, err := piArgs(variant, prov.ID, model.ID, SystemNoteFor(variant, f.bgMax()))
 	if err != nil {
@@ -494,6 +495,11 @@ func (f *Factory) Create(ctx context.Context, slotID, variant string) (chat.Agen
 		cleanup()
 		return nil, fmt.Errorf("execution sandbox does not respond: %v %s", err, fr.Error)
 	}
+	// The subagent limit is the same for every chat; written here, it costs nothing when a chat takes the slot.
+	if _, err := w.ExecPi(rctx, []string{"agw-exec", "put", chat.SubagentConfigPath}, bytes.NewReader(chat.SubagentConfig(f.Env.MaxSubagents))); err != nil {
+		// as before: the proxy and the monitoring still hold the limit
+		slog.Warn("pi-subagents configuration not written", "slot", slotID, "err", err)
+	}
 	// Extension errors at startup (e.g. MCP unreachable) are on stderr.
 	if s := w.inst.Stderr.String(); bytes.Contains([]byte(s), []byte("[agw-mcp]")) || bytes.Contains([]byte(s), []byte("[agw-exec-bridge]")) {
 		slog.Warn("pi reports at startup", "slot", slotID, "stderr", tail(s, 400))
@@ -501,7 +507,7 @@ func (f *Factory) Create(ctx context.Context, slotID, variant string) (chat.Agen
 	if !f.Cat.HasRegistry() {
 		f.loadRegistry(rctx, w)
 	}
-	slog.Info("slot ready", "slot", slotID, "variant", variant, "pi", w.inst.Name, "exec", w.exec.Name)
+	slog.Info("slot ready", "slot", slotID, "variant", variant, "pi", w.inst.Name, "exec", w.exec.Name, "ms", time.Since(began).Milliseconds())
 	return w, nil
 }
 

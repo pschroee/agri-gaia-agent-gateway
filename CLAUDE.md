@@ -68,6 +68,16 @@ refer to this repository.
   `bindingTools` and that test. Old chats of any combination resume through slots started on demand
   (`pool.SetKnown`). Rules in `API.md`, *Bindings of new chats*.
 
+## Creating chats
+
+- `POST /api/chats` with `async: true` (issue #30) returns at once also when the pool is empty: the chat is marked
+  `starting`/`resuming` and `startLater` assigns the slot in the background while holding the chat lock, so a message
+  sent meanwhile waits in `ensureLive` instead of taking a second slot. With a free slot it is assigned before the
+  response. Keep slot assignment cheap: anything that is the same for every chat belongs into `worker.Create` (slot
+  start), not into `attachSlot` (pi-subagents' config moved there; internet off is skipped because a fresh slot never
+  had egress). The pool starts every replacement on its own (`Pool.fill` does not wait for a batch). Rules in
+  `API.md`, *Creating a chat without waiting*.
+
 ## Activity across chats
 
 - `GET /api/activity` (issue #12) reads platform calls of the user's chats in one query (`internal/store/activity.go`):

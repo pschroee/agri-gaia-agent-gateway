@@ -31,6 +31,8 @@ type ResumeStep struct {
 	Files  *int      `json:"files,omitempty"` // workspace, inputs: number of files
 	At     time.Time `json:"at"`
 	Ms     int64     `json:"ms,omitempty"` // duration of the step; for ready and failed the total duration
+	// Start: the first sandbox of a new chat (Create with Async), not a resume of a resting chat.
+	Start bool `json:"start,omitempty"`
 }
 
 var resumeSeq struct {
@@ -47,6 +49,7 @@ type resumeProgress struct {
 	start  time.Time
 	phase  string
 	since  time.Time
+	first  bool // the first sandbox of a new chat (ResumeStep.Start)
 }
 
 func (m *Manager) newResume(chatID string) *resumeProgress {
@@ -61,6 +64,7 @@ func (m *Manager) newResume(chatID string) *resumeProgress {
 func (p *resumeProgress) emit(s ResumeStep) {
 	s.ID = p.id
 	s.At = time.Now()
+	s.Start = p.first
 	p.m.publish(p.chatID, Event{Kind: "resume", Data: s})
 }
 
