@@ -160,7 +160,9 @@ code. What is only installed at build time is not in the repository.
   (`/opt/agw/mmdc/puppeteer.json`); about 1 s per diagram, checked without internet, as uid 10001 with a
   read-only file system. The system note mentions it for `cli` and `both` as a fallback,
   the skill `mermaid` describes the invocation. Chromium and mermaid-cli make the image about 1.1 GB
-  larger (810 MB → 1.9 GB). For diagrams in Typst it points to cetz/cetz-plot and lilaq. The
+  larger (810 MB → 1.9 GB). **`mermaid-check`** (issue #59) runs `mmdc` with the web UI's settings
+  (`/opt/agw/mmdc/ui-config.json`: strict, no HTML labels) and refuses HTML tags; the agent checks every
+  diagram with it before answering. For diagrams in Typst it points to cetz/cetz-plot and lilaq. The
   Docker integration test creates a matplotlib PNG without internet and checks the magic bytes.
 
 ### Variants in stage 1

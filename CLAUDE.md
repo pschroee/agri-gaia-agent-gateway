@@ -91,6 +91,20 @@ refer to this repository.
 - `GET /tool/internet` (web-gate.ts) is asked once by every fresh, unassigned slot; it answers 409 **without** a log
   entry. Do not route it through `handler.chat`, which logs `refused: not assigned`.
 
+## Mermaid diagrams
+
+- The rules the web UI enforces on mermaid blocks (strict, no HTML labels: no HTML tags in labels, labels with
+  spaces, umlauts or brackets in double quotes, no `%%{init}%%` or `click`) live in three places that must stay
+  consistent (issue #59): the **description** of the skill `mermaid` (pi puts only the description into the
+  context; the agent read the skill's text only after the UI had refused a diagram), the skill's text, and
+  `mermaidRules` in the system note (every binding; MCP and REST list no skill `mermaid`). Tests in
+  `internal/worker/mermaid_test.go`; the description stays a plain YAML scalar on one line (no `: `, no ` #`,
+  at most 1024 characters).
+- `mermaid-check` (`images/agw-basis/mmdc/`, exec image only) renders with `ui-config.json`, the same settings as
+  the UI's `mermaidConfig`; a change there belongs into both. Measured with mermaid 12: `<br/>` alone renders,
+  `<b>` shows as text, `#quot;` shows literally as `&quot;`, and unquoted brackets (`A[Training (CPU)]`) are the
+  usual parse error. Changes to skills or `images/agw-basis/mmdc/` need both slot images rebuilt (see *Warm pool*).
+
 ## Creating chats
 
 - `POST /api/chats` with `async: true` (issue #30) returns at once also when the pool is empty: the chat is marked
