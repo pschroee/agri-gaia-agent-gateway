@@ -123,6 +123,14 @@ refer to this repository.
   live, starting and resuming chats (`internal/chat/resume_open_test.go`). Do not confuse it with the wake-ups of
   background tasks (`BgWakesPerHour`), which start a turn. Rules in `API.md`, *Resuming a chat when it is opened*.
 
+## Subagent runs of a chat that is not open
+
+- `GET /api/chats/{id}/subagent-runs` (issue #60) is the short list the chat selector loads when the user expands the
+  subagents of a chat that is not open. It must stay a read of the database (`store.ListSubagentRunSummaries`): no
+  `View`, `Resume` or `ensureLive`, so that expanding never wakes a chat or takes a slot (`TestSubagentRunsList`
+  counts slot requests). It carries `task_head` instead of a finished title, so the UI's `runTitle` stays the only
+  title rule. Rules in `API.md`, *Subagent runs without opening a chat*.
+
 ## Warm pool and slot teardown
 
 - Every `slot torn down` log line carries `reason=` (issue #55). The reason travels in the context
