@@ -95,7 +95,7 @@ func TestBridgeLoadedEverywhere(t *testing.T) {
 	if err := json.Unmarshal(PiSettings(config.Env{CompactReserveTokens: 123}), &s); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Join(s.Subagents.Only, ",") != "/opt/agw/ext/exec-bridge.ts,/opt/agw/pihome/npm/node_modules/pi-searxng-suite/index.ts,/opt/agw/ext/web-gate.ts,/opt/agw/pihome/npm/node_modules/pi-intercom/index.ts" || s.Compaction.Reserve != 123 {
+	if strings.Join(s.Subagents.Only, ",") != "/opt/agw/ext/exec-bridge.ts,/opt/agw/ext/web-tools.ts,/opt/agw/ext/web-gate.ts,/opt/agw/pihome/npm/node_modules/pi-intercom/index.ts" || s.Compaction.Reserve != 123 {
 		t.Fatalf("settings.json: %+v", s)
 	}
 	if BridgeHide("cli") != "grep,find,ls" || BridgeHide("both") != "grep,find,ls" || BridgeHide("mcp") != "" {

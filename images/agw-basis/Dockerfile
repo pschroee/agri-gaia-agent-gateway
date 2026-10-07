@@ -28,7 +28,7 @@ RUN npm install -g @earendil-works/pi-coding-agent@${PI_VERSION} \
 ARG RPIV_TODO_VERSION=2.11.0
 # Web search: web_search and web_extract from pi-searxng-suite (MIT, unchanged). The requests go
 # through the orchestrator's web proxy to our own SearXNG or to the web, only with internet;
-# web-gate.ts hides the tools without internet (docs/design.md, "Web search").
+# ext/web-tools.ts loads it and sets fuller tool texts; web-gate.ts hides the tools without internet (docs/design.md, "Web search").
 ARG SEARXNG_SUITE_VERSION=0.2.3
 # Messages between the sessions of a slot (main agent and subagents): pi-intercom (MIT),
 # tool intercom; the broker runs in the pi container over a Unix socket in the home. pi install

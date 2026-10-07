@@ -51,9 +51,12 @@ const (
 	bridgeExt = "/opt/agw/ext/exec-bridge.ts"
 	// Task list (tool todo); no effect on the outside world, hence in all variants.
 	todoExt = "/opt/agw/pihome/npm/node_modules/@juicesharp/rpiv-todo/index.ts"
-	// Web search (pi-searxng-suite) and the extension that offers it only with internet.
-	searxExt   = "/opt/agw/pihome/npm/node_modules/pi-searxng-suite/index.ts"
-	webGateExt = "/opt/agw/ext/web-gate.ts"
+	// Web search: pi-searxng-suite (unchanged) loaded through web-tools.ts, which gives its tools
+	// web_search and web_extract fuller descriptions (issue #44), and the extension that offers
+	// them only with internet.
+	searxExt    = "/opt/agw/pihome/npm/node_modules/pi-searxng-suite/index.ts"
+	webToolsExt = "/opt/agw/ext/web-tools.ts"
+	webGateExt  = "/opt/agw/ext/web-gate.ts"
 	// Messages between the main agent and the subagents of a slot (pi-intercom, tool intercom).
 	intercomExt  = "/opt/agw/pihome/npm/node_modules/pi-intercom/index.ts"
 	artifactSkil = "/opt/agw/skills/artifacts"
@@ -227,7 +230,7 @@ func piArgs(variant, provider, model, note string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	args := []string{"--provider", provider, "--model", model, "--append-system-prompt", note, "-e", bridgeExt, "-e", todoExt, "-e", searxExt, "-e", webGateExt}
+	args := []string{"--provider", provider, "--model", model, "--append-system-prompt", note, "-e", bridgeExt, "-e", todoExt, "-e", webToolsExt, "-e", webGateExt}
 	if ts.Has(toolset.CLI) {
 		args = append(args, "-e", subagentsExt, "-e", intercomExt, "--exclude-tools", noLazySubagent)
 	}
@@ -282,7 +285,7 @@ func PiSettings(env config.Env) []byte {
 	b, _ := json.Marshal(map[string]any{
 		"httpIdleTimeoutMs": 600000,
 		"compaction":        map[string]any{"enabled": true, "reserveTokens": env.CompactReserveTokens, "keepRecentTokens": env.CompactKeepRecent},
-		"subagents": map[string]any{"defaultSubagentOnlyExtensions": []string{bridgeExt, searxExt, webGateExt, intercomExt},
+		"subagents": map[string]any{"defaultSubagentOnlyExtensions": []string{bridgeExt, webToolsExt, webGateExt, intercomExt},
 			"agentOverrides": SubagentToolOverrides()},
 	})
 	return b
