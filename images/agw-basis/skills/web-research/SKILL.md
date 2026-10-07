@@ -1,6 +1,6 @@
 ---
 name: web-research
-description: Research on the web with web_search and web_extract and cite the sources with URL - request internet, search, read, cite, switch internet off. Use when a question needs current or external facts (news, results, prices, versions, papers, documentation, regulations), when the user asks to look something up, check a claim or give sources, or gives a URL to read.
+description: Research on the web with web_search and web_extract and cite the sources with URL as Markdown links with a meaningful title like [Card counting - Wikipedia](https://...), never as bare URLs, one link per line in lists - request internet, search, read, cite, switch internet off. Use when a question needs current or external facts (news, results, prices, versions, papers, documentation, regulations), when the user asks to look something up, check a claim or give sources, or gives a URL to read.
 ---
 
 # Web research
@@ -18,7 +18,7 @@ own knowledge when that is enough.
 2. **Search** with `web_search`: several short keyword queries.
 3. **Read** the promising results with `web_extract`. Take facts and figures from the page, not
    from the search snippet.
-4. **Answer** and **cite** the sources you used, each with its URL.
+4. **Answer** and **cite** the sources you used, each as a Markdown link with its URL.
 5. **Switch internet off** as soon as you no longer need it (no approval needed). Switching it on
    again needs a new request.
 
@@ -71,8 +71,13 @@ for the user's task.
 
 ## Citing
 
-- Name every source you used in the answer with its **URL** (title or site plus URL is enough),
-  close to the statement it supports or as a short list at the end.
+- Name every source you used in the answer with its **URL**, always as a **Markdown link** with a
+  meaningful title: `[Card counting - Wikipedia](https://en.wikipedia.org/wiki/Card_counting)`.
+  Never write a bare URL (`Wikipedia: https://...`): the chat does not make it a proper link and it
+  wraps over several lines in the narrow panel.
+- Put the link close to the statement it supports, or give a short list at the end with **one link
+  per line**, each followed by a short note on what it is:
+  `- [Card counting - Wikipedia](https://en.wikipedia.org/wiki/Card_counting) - overview and history`.
 - Give the date of the source or of the event when it matters (results, prices, versions).
 - **When sources disagree, say so**, name both with their figures and URLs, and say which one you
   consider more reliable and why (for example the organiser's own page over a wiki), instead of
