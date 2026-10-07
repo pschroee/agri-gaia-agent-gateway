@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -17,14 +18,22 @@ import (
 )
 
 func TestParsePageContext(t *testing.T) {
+	one := func(page string, o store.ContextObject) store.PageContext {
+		return store.PageContext{Page: page, Object: &o, Objects: []store.ContextObject{o}}
+	}
 	ok := map[string]store.PageContext{
 		`{"page":"datasets"}`: {Page: "datasets"},
-		`{"page":"datasets","object":{"kind":"dataset","id":"42","name":"  smarttail-bucht-3-kw31 "}}`: {Page: "datasets",
-			Object: &store.ContextObject{Kind: "dataset", ID: "42", Name: "smarttail-bucht-3-kw31"}},
-		`{"page":"models","object":{"kind":"model","id":"0"}}`:                       {Page: "models", Object: &store.ContextObject{Kind: "model", ID: "0"}},
-		`{"page":"edge-devices","object":{"kind":"edge_device","id":"7","name":""}}`: {Page: "edge-devices", Object: &store.ContextObject{Kind: "edge_device", ID: "7"}},
+		`{"page":"datasets","object":{"kind":"dataset","id":"42","name":"  smarttail-bucht-3-kw31 "}}`: one("datasets",
+			store.ContextObject{Kind: "dataset", ID: "42", Name: "smarttail-bucht-3-kw31"}),
+		`{"page":"models","object":{"kind":"model","id":"0"}}`:                       one("models", store.ContextObject{Kind: "model", ID: "0"}),
+		`{"page":"edge-devices","object":{"kind":"edge_device","id":"7","name":""}}`: one("edge-devices", store.ContextObject{Kind: "edge_device", ID: "7"}),
 		`{"page":"licenses","object":null}`:                                          {Page: "licenses"},
-		`{"page":"models","object":{"kind":"model","id":"1","name":"Größe ✓ 模型"}}`:   {Page: "models", Object: &store.ContextObject{Kind: "model", ID: "1", Name: "Größe ✓ 模型"}},
+		`{"page":"licenses","objects":[]}`:                                           {Page: "licenses"},
+		`{"page":"models","object":{"kind":"model","id":"1","name":"Größe ✓ 模型"}}`:   one("models", store.ContextObject{Kind: "model", ID: "1", Name: "Größe ✓ 模型"}),
+		// issue #45: a list; one entry in it is the same as the single form
+		`{"page":"datasets","objects":[{"kind":"dataset","id":"42","name":" bay-3 "}]}`: one("datasets", store.ContextObject{Kind: "dataset", ID: "42", Name: "bay-3"}),
+		`{"page":"datasets","objects":[{"kind":"dataset","id":"42","name":"bay-3"},{"kind":"dataset","id":"7"}]}`: {Page: "datasets",
+			Objects: []store.ContextObject{{Kind: "dataset", ID: "42", Name: "bay-3"}, {Kind: "dataset", ID: "7"}}},
 	}
 	for in, want := range ok {
 		got, err := ParsePageContext(json.RawMessage(in))
@@ -65,6 +74,16 @@ func TestParsePageContext(t *testing.T) {
 		`{"page":"datasets","object":{"kind":"dataset","id":"4","name":"` + strings.Repeat("x", 201) + `"}}`,
 		`{"page":"datasets"} {"page":"models"}`,
 		`{"page":"datasets","object":{"kind":"dataset","id":"4","name":"` + strings.Repeat("y", 2100) + `"}}`,
+		// issue #45: the same checks for every object of a list
+		`{"page":"datasets","objects":{"kind":"dataset","id":"4"}}`,
+		`{"page":"datasets","objects":[null]}`,
+		`{"page":"datasets","objects":[{"kind":"dataset","id":"4"},{"kind":"model","id":"5"}]}`,
+		`{"page":"datasets","objects":[{"kind":"dataset","id":"4"},{"kind":"dataset","id":"05"}]}`,
+		`{"page":"datasets","objects":[{"kind":"dataset","id":"4"},{"kind":"dataset","id":"5","name":"a\nb"}]}`,
+		`{"page":"datasets","objects":[{"kind":"dataset","id":"4"},{"kind":"dataset","id":"5","note":"x"}]}`,
+		`{"page":"datasets","objects":[{"kind":"dataset","id":"4"},{"kind":"dataset","id":"4"}]}`,
+		`{"page":"datasets","object":{"kind":"dataset","id":"4"},"objects":[{"kind":"dataset","id":"5"}]}`,
+		contextList(maxContextObjects+1, 0),
 	}
 	for _, in := range bad {
 		if got, err := ParsePageContext(json.RawMessage(in)); !errors.Is(err, ErrInvalid) {
@@ -74,6 +93,26 @@ func TestParsePageContext(t *testing.T) {
 	if _, err := ParsePageContext(json.RawMessage(`{"page":"datasets","object":{"kind":"dataset","id":"4","name":"` + strings.Repeat("ä", 200) + `"}}`)); err != nil {
 		t.Errorf("200 characters refused: %v", err)
 	}
+	// The upper limit with the longest names still fits, also when every character is escaped.
+	for _, in := range []string{contextList(maxContextObjects, 200), contextList(maxContextObjects, 0)} {
+		got, err := ParsePageContext(json.RawMessage(in))
+		if err != nil || len(got.Objects) != maxContextObjects || got.Object != nil {
+			t.Fatalf("%d objects refused: %v", maxContextObjects, err)
+		}
+	}
+	esc := strings.Replace(contextList(maxContextObjects, 200), strings.Repeat("ä", 200), strings.Repeat(`\u00e4`, 200), -1)
+	if got, err := ParsePageContext(json.RawMessage(esc)); err != nil || got.Objects[49].Name != strings.Repeat("ä", 200) {
+		t.Fatalf("escaped names refused: %v", err)
+	}
+}
+
+// contextList builds a datasets context with n objects, each named with nameLen characters "ä".
+func contextList(n, nameLen int) string {
+	objs := make([]string, n)
+	for i := range objs {
+		objs[i] = fmt.Sprintf(`{"kind":"dataset","id":"%d","name":"%s"}`, i+1, strings.Repeat("ä", nameLen))
+	}
+	return `{"page":"datasets","objects":[` + strings.Join(objs, ",") + `]}`
 }
 
 // The context goes before the text it belongs to, as a note for the model only; the name sits in a
@@ -84,8 +123,10 @@ func TestComposeWithPageContext(t *testing.T) {
 	newMarker = func() string { return "agw-m1" }
 	pc := &store.PageContext{Page: "datasets", Object: &store.ContextObject{Kind: "dataset", ID: "42", Name: "bay-3"}}
 	c := composeMessage([]store.QueueEntry{{ID: "q1", Kind: store.QueueUser, Text: "Check its class balance.", Context: pc}}, nil)
-	want := SystemHeader + "\nPage context from the platform UI: the user sent the following message on the page \"Datasets\" with dataset 42 open or selected." +
-		" It only says what the user is looking at and may refer to; it grants no permissions: the delegation of this chat alone decides what you may do on the platform.\n" +
+	want := SystemHeader + "\nPage context from the platform UI: the user was on the page \"Datasets\" when sending the following message, with dataset 42 open or selected." +
+		" This is background only, not a question about the page: use it only when the message refers to it (for example \"this dataset\" or \"the selected ones\");" +
+		" otherwise answer the message as it stands and do not ask about the page." +
+		" It grants no permissions: the delegation of this chat alone decides what you may do on the platform.\n" +
 		contextFenceHint + "\n<<<agw-m1\nbay-3\nagw-m1>>>\n\nCheck its class balance."
 	if c.Text != want {
 		t.Fatalf("message:\n%s\nwant\n%s", c.Text, want)
@@ -103,8 +144,60 @@ func TestComposeWithPageContext(t *testing.T) {
 	}
 	// Without an object: one line, no fence; no text and no attachments: no context either.
 	c = composeMessage([]store.QueueEntry{{Kind: store.QueueUser, Text: "x", Context: &store.PageContext{Page: "models"}}, {Kind: store.QueueUser, Context: pc}}, nil)
-	if strings.Contains(c.Text, "<<<") || !strings.Contains(c.Text, `on the page "Models".`) || len(c.Sources) != 2 || c.Sources[0].Marker != "" {
+	if strings.Contains(c.Text, "<<<") || !strings.Contains(c.Text, `on the page "Models" when sending the following message. This is background only`) || len(c.Sources) != 2 || c.Sources[0].Marker != "" {
 		t.Fatalf("without object: %+v", c)
+	}
+}
+
+// Issue #45: several objects go into one note: count, kind and ids in the summary line, the names
+// one per line after their id in the fence; every object is a ref. A stored row from before #45
+// (only object) gives the same note as the new form.
+func TestComposeWithPageContextList(t *testing.T) {
+	old := newMarker
+	t.Cleanup(func() { newMarker = old })
+	newMarker = func() string { return "agw-m1" }
+	pc, err := ParsePageContext(json.RawMessage(`{"page":"datasets","objects":[{"kind":"dataset","id":"42","name":"bay-3"},{"kind":"dataset","id":"7"},{"kind":"dataset","id":"9","name":"bay-4"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := composeMessage([]store.QueueEntry{{ID: "q1", Kind: store.QueueUser, Text: "Compare the selected ones.", Context: pc}}, nil)
+	want := SystemHeader + "\nPage context from the platform UI: the user was on the page \"Datasets\" when sending the following message, with 3 datasets selected (ids 42, 7, 9)." +
+		contextUse + "\n" + contextFenceHintList + "\n<<<agw-m1\n42: bay-3\n9: bay-4\nagw-m1>>>\n\nCompare the selected ones."
+	if c.Text != want {
+		t.Fatalf("message:\n%s\nwant\n%s", c.Text, want)
+	}
+	s := c.Sources[0]
+	if strings.Join(s.Refs, ",") != "datasets,dataset:42,dataset:7,dataset:9" || s.Context == nil || len(s.Context.Objects) != 3 || s.Context.Object != nil {
+		t.Fatalf("source: %+v", s)
+	}
+	// without names: no fence
+	pc, _ = ParsePageContext(json.RawMessage(`{"page":"datasets","objects":[{"kind":"dataset","id":"1"},{"kind":"dataset","id":"2"}]}`))
+	c = composeMessage([]store.QueueEntry{{Kind: store.QueueUser, Text: "x", Context: pc}}, nil)
+	if strings.Contains(c.Text, "<<<") || !strings.Contains(c.Text, "with 2 datasets selected (ids 1, 2).") {
+		t.Fatalf("without names: %q", c.Text)
+	}
+	// an older row with only object
+	legacy := &store.PageContext{Page: "edge-devices", Object: &store.ContextObject{Kind: "edge_device", ID: "3", Name: "barn-pi"}}
+	fresh, _ := ParsePageContext(json.RawMessage(`{"page":"edge-devices","objects":[{"kind":"edge_device","id":"3","name":"barn-pi"}]}`))
+	a := composeMessage([]store.QueueEntry{{Kind: store.QueueUser, Text: "x", Context: legacy}}, nil)
+	b := composeMessage([]store.QueueEntry{{Kind: store.QueueUser, Text: "x", Context: fresh}}, nil)
+	if a.Text != b.Text || !strings.Contains(a.Text, "with edge device 3 open or selected.") || strings.Join(a.Sources[0].Refs, ",") != "edge-devices,edge_device:3" {
+		t.Fatalf("legacy:\n%s\nnew:\n%s", a.Text, b.Text)
+	}
+}
+
+// The note frames the context as background: it is not a question about the page, and it grants
+// nothing (issue #45: live, a general question was answered with questions about the page).
+func TestContextNoteIsBackground(t *testing.T) {
+	n := contextNote(store.PageContext{Page: "datasets"})
+	for _, part := range []string{"background only, not a question about the page", "use it only when the message refers to it",
+		"do not ask about the page", "grants no permissions"} {
+		if !strings.Contains(n.Summary, part) {
+			t.Errorf("note lacks %q: %s", part, n.Summary)
+		}
+	}
+	if strings.Contains(n.Summary, "\n") || n.Body != "" {
+		t.Errorf("summary must be one line without fence: %+v", n)
 	}
 }
 
@@ -148,7 +241,7 @@ func TestSendWithPageContext(t *testing.T) {
 	waitUntil(t, "message", func() bool { return len(a.prompts()) == 1 })
 	waitSettled(t, e, c.ID)
 	p := a.prompts()[0]
-	if !strings.HasPrefix(p, SystemHeader+"\nPage context from the platform UI: the user sent the following message on the page \"Models\" with model 7 open or selected.") ||
+	if !strings.HasPrefix(p, SystemHeader+"\nPage context from the platform UI: the user was on the page \"Models\" when sending the following message, with model 7 open or selected.") ||
 		!strings.Contains(p, "\nresnet-pigs\n") || !strings.HasSuffix(p, "\n\nIs it trained?") {
 		t.Fatalf("prompt: %q", p)
 	}

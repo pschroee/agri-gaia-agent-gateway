@@ -43,10 +43,15 @@ refer to this repository.
 
 ## Page context
 
-- The platform UI sends the current page and the open or selected object with a message (`context` of
+- The platform UI sends the current page and the open or selected objects with a message (`context` of
   `POST …/messages`, issue #13). `chat.ParsePageContext` checks it against fixed lists (pages, kinds, integer ids, one-line
-  names up to 200 characters, no unknown fields); it goes to pi as a `page_context` note with `audience: "agent"` before
-  the text it belongs to, the name in a fence, and is stored on queue entries (`chat_queue.context`) and in the source.
+  names up to 200 characters, no unknown fields); objects come as one `object` (old form, still accepted) or as
+  `objects` (issue #45, at most 50, each checked alike, no duplicates); the result has `objects` and, for exactly one,
+  `object` too, and code reads it through `PageContext.List()` (old rows have only `object`). It goes to pi as a
+  `page_context` note with `audience: "agent"` before the text it belongs to, the names in a fence, and is stored on
+  queue entries (`chat_queue.context`) and in the source. The note says the page is **background, not a question
+  about the page** (`contextUse`); keep that when rewording it (live, the model once asked about the page instead of
+  answering a general question).
   New pages or kinds go into `contextPages`/`contextKinds` in `internal/chat/pagecontext.go` with a test. **It never
   grants rights**; the delegation stays authoritative (`TestPageContextGrantsNoAccess`). Rules in `API.md`, *Page context*.
 

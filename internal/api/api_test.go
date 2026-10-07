@@ -217,6 +217,9 @@ func TestSendRefusesInvalidPageContext(t *testing.T) {
 		`{"page":"admin"}`,
 		`{"page":"datasets","object":{"kind":"dataset","id":"1","name":"a\nb"}}`,
 		`"datasets"`,
+		// issue #45: more than 50 objects, both forms at once
+		`{"page":"datasets","objects":[` + strings.Repeat(`{"kind":"dataset","id":"1"},`, 50) + `{"kind":"dataset","id":"2"}]}`,
+		`{"page":"datasets","object":{"kind":"dataset","id":"1"},"objects":[{"kind":"dataset","id":"2"}]}`,
 	} {
 		r := httptest.NewRequest("POST", "http://127.0.0.1:18480/api/chats/x/messages", strings.NewReader(`{"text":"hi","context":`+ctx+`}`))
 		r.SetPathValue("id", "00000000-0000-0000-0000-000000000000")
