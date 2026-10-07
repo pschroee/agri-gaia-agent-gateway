@@ -121,6 +121,7 @@ type Chat = {
   pending_approvals: number;
   workspace?: WorkspaceBackup; // last backup of /workspace; missing as long as nothing was backed up or skipped
   resuming: boolean;      // is being resumed in a fresh sandbox right now (steps: SSE resume)
+  starting?: boolean;     // a new chat created with async waits for its first sandbox (resuming is true as well)
   queued: number;         // queued messages not yet delivered
   queue_held: boolean;    // queued entries are not sent on their own (after an abort, for a dormant chat, above a limit on turns without the user) but with the next message or via POST …/queue/send
   hold_reason?: "abort" | "wake_limit" | "auto_turns"; // why held (only for an active chat with queue_held)
@@ -178,7 +179,8 @@ type BackgroundTask = {
 // Response to POST …/messages, …/commands and …/queue/send.
 type SendResult = { ok: true; resumed: boolean; queued: boolean; queue_id?: string /* when queued */ };
 
-// Step when resuming a dormant chat (SSE resume). Per step first status "running", then
+// Step when resuming a dormant chat (SSE resume); start: true when it is the first sandbox of a new chat
+// created with async (see *Creating a chat without waiting*). Per step first status "running", then
 // "done", "warning" (continued despite a problem, detail names it) or "error" (resuming failed).
 // Phases in this order, exactly the steps of attach:
 //  acquire   take a slot from the pool (waits up to AGW_ACQUIRE_TIMEOUT); detail = slot
@@ -191,7 +193,8 @@ type SendResult = { ok: true; resumed: boolean; queued: boolean; queue_id?: stri
 //  ready     done (status done, ms = total duration); afterwards the instruction goes to pi via prompt
 //  failed    failed (status error, detail = reason, ms = total duration); nothing was sent
 type ResumeStep = { id: string /* ID of this resume */; phase: "acquire" | "session" | "settings" | "workspace" | "inputs" | "ready" | "failed";
-  status: "running" | "done" | "warning" | "error"; detail?: string; size?: number; files?: number; at: string; ms?: number };
+  status: "running" | "done" | "warning" | "error"; detail?: string; size?: number; files?: number; at: string; ms?: number;
+  start?: boolean };
 
 // Backup of the workspace (/workspace without inputs/, node_modules, .venv, __pycache__, .cache),
 // after every run and when idling; restored into the fresh sandbox on resume.
@@ -316,7 +319,7 @@ type ActivityPage = { calls: ActivityCall[]; chats: Record<string, { id: string;
 | `GET /api/pool` | `Pool` | pool status (the UI polls every second) |
 | `GET /api/platform` | `{configured: boolean, api_url?, login?: "user" \| "account", account?: string /* login account only */, client_id?, token_exchange?: boolean, probe?: {reachable, http_status?, latency_ms, error?, checked_at}, last_exchange?: {chat_id, at, ok, error?}}` | binding to the platform, read-only. `probe`: unauthenticated `GET` on the API base, any HTTP answer counts as reachable, cached 10 s. `last_exchange`: newest token exchange among the user's own chats, also a failed one (e.g. the user's login expired); in memory only, empty after a restart until the next platform call. `{configured: false}` without `AGW_PLATFORM_API_URL` |
 | `GET /api/chats` | `Chat[]` | newest first |
-| `POST /api/chats` `{model?, variant?, title?, message?, internet?, auto_compact?, delegation?, language?}` | `Chat` (201) | takes a slot from the pool; the chat gets the bindings of `AGW_TOOLSETS` (see *Bindings of new chats*): `variant` may be left out, a `variant` naming another combination is refused with 400; `max_subagents` in the body is ignored (the limit is fixed, see *Limit for subagents*); with `message` it is sent immediately. `language`: preferred language according to the browser (BCP 47, only letters, digits, hyphen, at most 35 characters, otherwise 400), see *User language*. 503 if no slot is free |
+| `POST /api/chats` `{model?, variant?, title?, message?, internet?, auto_compact?, delegation?, language?, async?}` | `Chat` (201) | takes a slot from the pool; the chat gets the bindings of `AGW_TOOLSETS` (see *Bindings of new chats*): `variant` may be left out, a `variant` naming another combination is refused with 400; `max_subagents` in the body is ignored (the limit is fixed, see *Limit for subagents*); with `message` it is sent immediately. `language`: preferred language according to the browser (BCP 47, only letters, digits, hyphen, at most 35 characters, otherwise 400), see *User language*. 503 if no slot is free. `async: true` (without `message`): returns at once also when no slot is free, see *Creating a chat without waiting* |
 | `GET /api/chats/{id}` | `{chat, messages: StoredMessage[], artifacts: Artifact[], approvals: Approval[], socket_calls: SocketCall[], subagent_entries: SubagentEntry[], queue: QueueEntry[], queue_delivered: QueueDelivery[], background: BackgroundTask[]}` | complete chat; `queue_delivered`: handed to pi but not read yet, oldest first (see *Queue*) |
 | `GET /api/chats/{id}/background` | `BackgroundTask[]` | background tasks of the chat by `seq`; running ones with the current state of the slot |
 | `GET /api/chats/{id}/web_requests` | `WebRequest[]` | requests of `web_search`/`web_extract` through the web proxy, including refused ones (`denied`); for HTTPS only target and bytes |
@@ -556,6 +559,25 @@ names (test `TestPageContextGrantsNoAccess`). A queued message keeps its context
 `chat_queue.context`), also when held after an abort; on delivery each message of the batch gets its own note before
 its text, and `queue_id` of the note names the entry. `POST /api/chats` (first message) and `…/commands` take no
 context.
+
+## Creating a chat without waiting
+
+`POST /api/chats` with `async: true` (issue #30; the platform UI's "New chat" uses it):
+
+- **A free slot:** nothing changes. The slot is assigned before the response, the chat comes back `active` with its
+  `slot_id`, ready for the first message. Assigning a warm slot takes some tens of milliseconds: model, thinking level
+  and auto-compaction are RPC calls to pi; a fresh slot never had the egress network, so internet off costs no Docker
+  call; pi-subagents' configuration is written when the slot starts, not when it is assigned. The log line
+  `chat assigned` names `wait_ms` (waiting for a slot) and `ms` (in total), `slot ready` the start of a slot in `ms`.
+- **No free slot:** the chat is stored and comes back at once with `starting: true` and `resuming: true`. The slot is
+  assigned in the background; SSE `resume` reports the steps with `start: true`, ending with `ready` or `failed`
+  (after `AGW_ACQUIRE_TIMEOUT` without a slot). A message sent meanwhile waits for the start, like a message to a
+  resuming chat, and never takes a second slot. After `failed` the chat rests (`dormant`); the next message tries
+  again like a resume.
+- With `message` the request keeps the synchronous behaviour (the first message needs the slot anyway).
+
+The pool replaces every taken slot at once: each start runs on its own, so taking several slots in a row starts their
+replacements in parallel instead of one batch after another.
 
 ## Bindings of new chats
 

@@ -220,3 +220,68 @@ func TestKnownVariantsOnDemand(t *testing.T) {
 		t.Fatalf("targets: %v", got)
 	}
 }
+
+// gatedFactory holds back chosen starts (counted from 1) until their gate is closed.
+type gatedFactory struct {
+	fakeFactory
+	gmu     sync.Mutex
+	started int
+	gates   map[int]chan struct{}
+}
+
+func (f *gatedFactory) hold(n int) chan struct{} {
+	f.gmu.Lock()
+	defer f.gmu.Unlock()
+	if f.gates == nil {
+		f.gates = map[int]chan struct{}{}
+	}
+	g := make(chan struct{})
+	f.gates[n] = g
+	return g
+}
+
+func (f *gatedFactory) count() int {
+	f.gmu.Lock()
+	defer f.gmu.Unlock()
+	return f.started
+}
+
+func (f *gatedFactory) Create(ctx context.Context, slotID, variant string) (*fakeWorker, error) {
+	f.gmu.Lock()
+	f.started++
+	g := f.gates[f.started]
+	f.gmu.Unlock()
+	if g != nil {
+		select {
+		case <-g:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	return f.fakeFactory.Create(ctx, slotID, variant)
+}
+
+// Issue #30: a slot taken while another replacement is still starting is replaced at once, not after
+// the running start has finished (the pool used to wait for the whole batch before filling again).
+func TestRefillDoesNotWaitForRunningStarts(t *testing.T) {
+	f := &gatedFactory{}
+	p := New[*fakeWorker](f.Create, f.Destroy, map[string]int{"cli": 2})
+	p.retryDelay = 10 * time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	p.Start(ctx)
+	t.Cleanup(func() { cancel(); p.Shutdown(context.Background()) })
+	waitFor(t, "pool filled", func() bool { return idle(p, "cli") == 2 })
+
+	slow := f.hold(3) // the first replacement hangs
+	if _, err := p.Acquire("cli", "chat-1"); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "first replacement starting", func() bool { return f.count() == 3 })
+	if _, err := p.Acquire("cli", "chat-2"); err != nil {
+		t.Fatal(err)
+	}
+	// the second replacement becomes free while the first still hangs
+	waitFor(t, "second replacement ready", func() bool { return idle(p, "cli") == 1 })
+	close(slow)
+	waitFor(t, "pool full again", func() bool { return idle(p, "cli") == 2 })
+}

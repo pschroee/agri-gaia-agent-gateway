@@ -167,26 +167,21 @@ func (p *Pool[W]) kick() {
 func (p *Pool[W]) loop(ctx context.Context) {
 	defer p.wg.Done()
 	for {
-		failed := p.fill(ctx)
-		var retry <-chan time.Time
-		if failed {
-			retry = time.After(p.retryDelay)
-		}
+		p.fill(ctx)
 		select {
 		case <-ctx.Done():
 			return
 		case <-p.wake:
-		case <-retry:
 		}
 	}
 }
 
-// fill starts missing slots in parallel and waits for all. Returns true
-// if a start failed.
-func (p *Pool[W]) fill(ctx context.Context) bool {
-	type job struct{ slot *Slot[W] }
-	var jobs []job
+// fill starts the missing slots and returns at once. Each start runs on its own, so a slot taken
+// while others are still starting is replaced right away instead of after the slowest start of the
+// running batch (issue #30). A failed start kicks the loop again after retryDelay.
+func (p *Pool[W]) fill(ctx context.Context) {
 	p.mu.Lock()
+	defer p.mu.Unlock()
 	for variant, target := range p.targets {
 		have := 0
 		for _, s := range p.slots {
@@ -197,46 +192,52 @@ func (p *Pool[W]) fill(ctx context.Context) bool {
 		for ; have < target; have++ {
 			s := &Slot[W]{ID: newID(), Variant: variant, state: StateStarting, createdAt: time.Now()}
 			p.slots[s.ID] = s
-			jobs = append(jobs, job{s})
+			p.wg.Add(1)
+			go func() {
+				defer p.wg.Done()
+				if !p.start(ctx, s) {
+					p.retryLater(ctx)
+				}
+			}()
 		}
 	}
-	p.mu.Unlock()
+}
 
-	var wg sync.WaitGroup
-	var failed sync.Once
-	anyFailed := false
-	for _, j := range jobs {
-		wg.Add(1)
-		go func(s *Slot[W]) {
-			defer wg.Done()
-			w, err := p.create(ctx, s.ID, s.Variant)
-			p.mu.Lock()
-			if err != nil {
-				delete(p.slots, s.ID)
-				p.lastErr[s.Variant] = err.Error()
-				p.mu.Unlock()
-				failed.Do(func() { anyFailed = true })
-				return
-			}
-			if ctx.Err() != nil {
-				// Finished only after shutdown began: tear down here, not in a separate
-				// goroutine, otherwise Shutdown would return before the container is gone.
-				delete(p.slots, s.ID)
-				p.mu.Unlock()
-				p.destroy(context.WithoutCancel(ctx), w)
-				return
-			}
-			defer p.mu.Unlock()
-			s.mu.Lock()
-			s.Worker = w
-			s.state = StateIdle
-			s.mu.Unlock()
-			close(p.idleCh)
-			p.idleCh = make(chan struct{})
-		}(j.slot)
+// start creates the worker of a slot registered as starting and makes it idle. False if the start failed.
+func (p *Pool[W]) start(ctx context.Context, s *Slot[W]) bool {
+	w, err := p.create(ctx, s.ID, s.Variant)
+	p.mu.Lock()
+	if err != nil {
+		delete(p.slots, s.ID)
+		p.lastErr[s.Variant] = err.Error()
+		p.mu.Unlock()
+		return false
 	}
-	wg.Wait()
-	return anyFailed
+	if ctx.Err() != nil {
+		// Finished only after shutdown began: tear down here, not in a separate
+		// goroutine, otherwise Shutdown would return before the container is gone.
+		delete(p.slots, s.ID)
+		p.mu.Unlock()
+		p.destroy(context.WithoutCancel(ctx), w)
+		return true
+	}
+	defer p.mu.Unlock()
+	s.mu.Lock()
+	s.Worker = w
+	s.state = StateIdle
+	s.mu.Unlock()
+	close(p.idleCh)
+	p.idleCh = make(chan struct{})
+	return true
+}
+
+// retryLater kicks the fill loop after retryDelay (a failed start), unless the pool shuts down.
+func (p *Pool[W]) retryLater(ctx context.Context) {
+	select {
+	case <-ctx.Done():
+	case <-time.After(p.retryDelay):
+		p.kick()
+	}
 }
 
 func (p *Pool[W]) LastError(variant string) string {
@@ -313,20 +314,10 @@ func (p *Pool[W]) spawnOnDemandLocked(variant string) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	p.wg.Add(1)
 	go func() {
-		w, err := p.create(ctx, s.ID, variant)
-		p.mu.Lock()
-		defer p.mu.Unlock()
-		if err != nil {
-			delete(p.slots, s.ID)
-			p.lastErr[variant] = err.Error()
-			return
-		}
-		s.mu.Lock()
-		s.Worker, s.state = w, StateIdle
-		s.mu.Unlock()
-		close(p.idleCh)
-		p.idleCh = make(chan struct{})
+		defer p.wg.Done()
+		p.start(ctx, s)
 	}()
 }
 

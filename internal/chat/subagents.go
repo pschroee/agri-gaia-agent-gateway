@@ -82,17 +82,18 @@ func (m *Manager) LimitHit(chatID string, max int) {
 
 // --- Limit ---
 
-// applySubagentConfig writes the limit into the configuration of
-// pi-subagents (cooperative level): at most n runs at the same time, no cap on runs in total. The
-// sandbox can change the file; the limit is therefore only hard through the proxy and monitoring.
-func (m *Manager) applySubagentConfig(l *live, n int) {
+// SubagentConfigPath is pi-subagents' configuration inside pi's container.
+const SubagentConfigPath = "/agent/config/extensions/subagent/config.json"
+
+// SubagentConfig is the configuration of pi-subagents for the limit n (cooperative level): at most n
+// runs at the same time, no cap on runs in total. The sandbox can change the file; the limit is
+// therefore only hard through the proxy and monitoring. The limit is the same for every chat
+// (AGW_MAX_SUBAGENTS), so the worker writes the file when it starts a slot (worker.Create), not when
+// the slot is assigned: that docker exec cost up to a quarter of a second of creating a chat (issue #30).
+func SubagentConfig(n int) []byte {
 	// 0 would mean "unlimited" there; a limit of 0 is enforced hard via proxy and monitoring.
-	cfg := map[string]any{"maxActiveAsyncRunsPerSession": max(n, 1), "globalConcurrencyLimit": max(n, 1)}
-	b, _ := json.Marshal(cfg)
-	_, err := execPiT(l.slot.Worker, []string{"agw-exec", "put", "/agent/config/extensions/subagent/config.json"}, bytes.NewReader(b), callTimeout)
-	if err != nil {
-		slog.Warn("pi-subagents configuration not written", "err", err)
-	}
+	b, _ := json.Marshal(map[string]any{"maxActiveAsyncRunsPerSession": max(n, 1), "globalConcurrencyLimit": max(n, 1)})
+	return b
 }
 
 // subagentQuiet: a run without any sign of life for this long no longer counts as running. Signs of

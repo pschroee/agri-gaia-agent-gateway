@@ -30,6 +30,7 @@ type fakeAgent struct {
 	cmds     []map[string]any
 	files    map[string][]byte
 	internet bool
+	netCalls int // SetInternet calls
 	closed   bool
 	events   chan rpc.Event
 	pollOut  string   // response to the subagents' read script
@@ -290,8 +291,15 @@ func (a *fakeAgent) Notify(cmd map[string]any) error {
 func (a *fakeAgent) SetInternet(_ context.Context, on bool) error {
 	a.mu.Lock()
 	a.internet = on
+	a.netCalls++
 	a.mu.Unlock()
 	return nil
+}
+
+func (a *fakeAgent) file(path string) []byte {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.files[path]
 }
 
 func (a *fakeAgent) hasCmds() bool {
@@ -365,8 +373,9 @@ type env struct {
 	agents []*fakeAgent
 	slotOf map[string]string // variant each sandbox was created for, by agent name
 
-	failSwitch bool   // new sandboxes make switch_session fail
-	onSwitch   func() // for new sandboxes: runs when the session is restored
+	failSwitch bool          // new sandboxes make switch_session fail
+	onSwitch   func()        // for new sandboxes: runs when the session is restored
+	gate       chan struct{} // set: new sandboxes start only once it is closed
 }
 
 func (e *env) agent(i int) *fakeAgent {
@@ -390,6 +399,16 @@ func setup(t *testing.T) *env {
 	e := &env{st: st, blobs: &memBlobs{m: map[string][]byte{}}}
 	n := 0
 	create := func(ctx context.Context, slotID, variant string) (Agent, error) {
+		e.mu.Lock()
+		gate := e.gate
+		e.mu.Unlock()
+		if gate != nil {
+			select {
+			case <-gate:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
 		e.mu.Lock()
 		defer e.mu.Unlock()
 		n++
@@ -1091,10 +1110,11 @@ func TestSubagentLimitFixedForService(t *testing.T) {
 	if att := e.m.Attribute(e.agent(0).IP()); att.MaxConcurrent != 6 {
 		t.Fatalf("proxy limit: %+v", att)
 	}
-	a := e.agent(0)
-	a.mu.Lock()
-	cfg := string(a.files["/agent/config/extensions/subagent/config.json"])
-	a.mu.Unlock()
+	// The worker writes the file when it starts the slot (issue #30); its content is SubagentConfig.
+	if cfg := string(e.agent(0).file(SubagentConfigPath)); cfg != "" {
+		t.Fatalf("configuration written when the chat took the slot: %s", cfg)
+	}
+	cfg := string(SubagentConfig(c.MaxSubagents))
 	if !strings.Contains(cfg, `"globalConcurrencyLimit":5`) || !strings.Contains(cfg, `"maxActiveAsyncRunsPerSession":5`) || strings.Contains(cfg, "maxSubagentSpawnsPerSession") {
 		t.Fatalf("pi-subagents configuration (at the same time, no cap in total): %s", cfg)
 	}
@@ -1676,5 +1696,167 @@ func TestParseChildSessionAgentFromSessionInfo(t *testing.T) {
 	}
 	if es := parseChildSession("c", "r", "scout", data); es[0].Agent != "scout" {
 		t.Fatalf("known agent overwritten: %+v", es)
+	}
+}
+
+// waitIdleSlot waits until the pool has a free slot.
+func waitIdleSlot(t *testing.T, e *env) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, s := range e.p.Snapshot() {
+			if s.State == pool.StateIdle {
+				return
+			}
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("no free slot")
+}
+
+// holdStarts makes new sandboxes wait; the returned function lets them start.
+func (e *env) holdStarts(t *testing.T) func() {
+	g := make(chan struct{})
+	e.mu.Lock()
+	e.gate = g
+	e.mu.Unlock()
+	var once sync.Once
+	release := func() { once.Do(func() { close(g) }) }
+	t.Cleanup(release)
+	return release
+}
+
+// Issue #30: with a free slot, an async create behaves like before: the chat comes back active with
+// its sandbox, and a fresh sandbox is not told to switch internet off (it never had it).
+func TestCreateAsyncWithFreeSlot(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	waitIdleSlot(t, e)
+	v, err := e.m.Create(ctx, NewChat{Async: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.State != store.StateActive || v.SlotID == "" || v.Starting || v.Resuming {
+		t.Fatalf("not assigned right away: %+v", v)
+	}
+	a := e.agent(0)
+	a.mu.Lock()
+	calls := a.netCalls
+	a.mu.Unlock()
+	if calls != 0 {
+		t.Fatalf("SetInternet called %d times for a fresh sandbox with internet off", calls)
+	}
+	on := true
+	w, err := e.m.Create(ctx, NewChat{Internet: &on})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b := e.agent(1); !b.internet || !w.Internet {
+		t.Fatalf("internet on not applied: sandbox %v, chat %v", b.internet, w.Internet)
+	}
+}
+
+// Issue #30: without a free slot an async create returns at once; the sandbox is assigned in the
+// background with resume steps marked start, and a message sent meanwhile waits for it instead of
+// taking a second sandbox.
+func TestCreateAsyncWaitsForSlotInBackground(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	waitIdleSlot(t, e)
+	release := e.holdStarts(t) // before taking the slot, so that the refill hangs too
+	if _, err := e.m.Create(ctx, NewChat{}); err != nil { // takes the only warm slot
+		t.Fatal(err)
+	}
+	began := time.Now()
+	v, err := e.m.Create(ctx, NewChat{Async: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if took := time.Since(began); took > time.Second {
+		t.Fatalf("create waited %v for a slot", took)
+	}
+	if !v.Starting || !v.Resuming || v.SlotID != "" {
+		t.Fatalf("not marked as starting: %+v", v)
+	}
+	events, cancel := e.m.Subscribe(v.ID)
+	defer cancel()
+	sent := make(chan error, 1)
+	go func() { _, err := e.m.Send(ctx, v.ID, "hello"); sent <- err }()
+	time.Sleep(50 * time.Millisecond) // negative check: the message must not get through yet
+	select {
+	case err := <-sent:
+		t.Fatalf("message went out before the sandbox was there: %v", err)
+	default:
+	}
+	release()
+	var steps []ResumeStep
+	for done := false; !done; {
+		s := waitEvent(t, events, "resume", "").Data.(ResumeStep)
+		steps = append(steps, s)
+		done = s.Phase == PhaseReady || s.Phase == PhaseFailed
+	}
+	for _, s := range steps {
+		if !s.Start {
+			t.Fatalf("step not marked as start: %+v", s)
+		}
+	}
+	if last := steps[len(steps)-1]; last.Phase != PhaseReady {
+		t.Fatalf("start did not finish: %+v", steps)
+	}
+	if err := <-sent; err != nil {
+		t.Fatal(err)
+	}
+	waitSettled(t, e, v.ID)
+	after, _ := e.m.View(ctx, v.ID)
+	if after.Starting || after.Resuming || after.SlotID == "" {
+		t.Fatalf("after the start: %+v", after)
+	}
+	n := 0
+	for _, s := range e.p.Snapshot() {
+		if s.ChatID == v.ID {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("chat holds %d slots", n)
+	}
+}
+
+// Issue #30: when no sandbox comes within the acquire timeout, the async start fails visibly and the
+// chat rests, so the next message tries again like a resume.
+func TestCreateAsyncStartFails(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	waitIdleSlot(t, e)
+	e.holdStarts(t)
+	if _, err := e.m.Create(ctx, NewChat{}); err != nil {
+		t.Fatal(err)
+	}
+	e.m.opt.AcquireTimeout = 100 * time.Millisecond
+	v, err := e.m.Create(ctx, NewChat{Async: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	events, cancel := e.m.Subscribe(v.ID)
+	defer cancel()
+	for {
+		s := waitEvent(t, events, "resume", "").Data.(ResumeStep)
+		if s.Phase == PhaseFailed {
+			break
+		}
+		if s.Phase == PhaseReady {
+			t.Fatal("start reported ready without a sandbox")
+		}
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		after, _ := e.m.View(ctx, v.ID)
+		if after.State == store.StateDormant && !after.Starting && !after.Resuming {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("chat after the failed start: %+v", after)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
