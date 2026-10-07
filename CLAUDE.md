@@ -76,6 +76,13 @@ refer to this repository.
   socket, logged as `api`). `Manager.DisableInternet` reuses `SetInternet` (chat lock, `chat` event) and is a no-op
   with `already_off` when internet is off. `agw-internet off` with further arguments is refused on purpose; a reason
   that is literally `off` goes after `--`. Rules in `API.md`, *Internet switch of the agent*.
+- **Guidance on web research** (issue #44) has three layers that must stay consistent: the tool texts in
+  `images/agw-basis/ext/web-tools.ts` (loaded in place of pi-searxng-suite, which stays unchanged; pi keeps the first
+  registration of a tool name, so the texts are set while the suite registers, through a proxy of the API), the
+  system note (`internetNote` in `internal/worker/worker.go`, only the switch tools of the chat's bindings) and the
+  skill `web-research` (cli and mcp; pi lists skills only with `read` or `bash`, so `api` alone has none). Tests in
+  `internal/worker/web_research_test.go`. Check a change to web-tools.ts by loading it with pi's `loadExtensions`
+  in the `agw-pi` image (`docker run --entrypoint node …`), since no everyday test runs pi.
 - `GET /tool/internet` (web-gate.ts) is asked once by every fresh, unassigned slot; it answers 409 **without** a log
   entry. Do not route it through `handler.chat`, which logs `refused: not assigned`.
 
