@@ -14,10 +14,11 @@ import (
 
 // oldPiArgs is piArgs as it was before issue #29 (four fixed variants), kept here to show that the
 // single bindings and cli,mcp (formerly both) start pi exactly as before. Since issue #34 the MCP and REST
-// bindings also have the tools to switch internet off (and REST to request it).
+// bindings also have the tools to switch internet off (and REST to request it); since issue #42 the
+// command line also loads the skill documents.
 func oldPiArgs(variant, provider, model, note string) []string {
 	args := []string{"--provider", provider, "--model", model, "--append-system-prompt", note, "-e", bridgeExt, "-e", todoExt, "-e", searxExt, "-e", webGateExt}
-	skills := []string{"--skill", artifactSkil, "--skill", internetSkil, "--skill", platformSkil, "--skill", typstSkill, "--skill", diagramSkill, "--skill", mermaidSkill}
+	skills := []string{"--skill", artifactSkil, "--skill", internetSkil, "--skill", platformSkil, "--skill", typstSkill, "--skill", diagramSkill, "--skill", mermaidSkill, "--skill", documentSkil}
 	switch variant {
 	case "cli":
 		args = append(append(args, "-e", subagentsExt, "-e", intercomExt, "--exclude-tools", noLazySubagent), skills...)

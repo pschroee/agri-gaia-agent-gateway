@@ -62,6 +62,7 @@ const (
 	typstSkill   = "/opt/agw/skills/writing-typst"
 	diagramSkill = "/opt/agw/skills/charts"
 	mermaidSkill = "/opt/agw/skills/mermaid"
+	documentSkil = "/opt/agw/skills/documents" // Office, PDF, EPUB, HTML: markitdown and pdftotext (issue #42)
 )
 
 // noLazySubagent turns off pi-subagents' switch subagents_enable; the tool subagent is then
@@ -81,19 +82,33 @@ const bgNote = "- Background tasks: commands that take longer than about a minut
 // mmdcNote: Mermaid as a file, only for variants with bash (the MCP variant does not run commands).
 const mmdcNote = " If you need the diagram as a file as a fallback (for example for an artifact, a Typst document or a display with ![…](…)), render it with mmdc: mmdc -i diagram.mmd -o diagram.png (also .svg or .pdf; with -i file.md all mermaid blocks of a Markdown file are replaced)."
 
+// Attachments per binding (issue #42): with bash the agent converts documents itself (skill
+// documents); MCP reads files only as they are, so binary documents stay unreadable; REST has no
+// file tools at all. The agent says so instead of guessing the content.
+const (
+	inputsCLI = " Word, Excel, PowerPoint, PDF, EPUB and HTML files are binary or markup: convert them with markitdown or pdftotext before reading, in parts for large files (skill documents)."
+	inputsMCP = " With read you can read plain-text files among them (CSV, TXT, Markdown, JSON, HTML); Word, Excel, PowerPoint, PDF and EPUB files cannot be converted with your tools: tell the user you cannot read them in this setup instead of guessing their content."
+	inputsAPI = " You have no file tools, so you cannot read them: if the user refers to an attachment, tell them you cannot read files in this setup instead of guessing their content."
+)
+
 // SystemNoteFor is the system note of a variant; with bash including background tasks (at most
 // bgMax at the same time). It is fixed per orchestrator (no per-turn content), so the prefix cache
 // is preserved.
 func SystemNoteFor(variant string, bgMax int) string {
-	bg, mmdc := "", ""
-	if ts, err := toolset.FromVariant(variant); err == nil && ts.Has(toolset.CLI) { // only with bash
-		bg, mmdc = fmt.Sprintf(bgNote, bgMax), mmdcNote
+	bg, mmdc, inputs := "", "", inputsAPI
+	if ts, err := toolset.FromVariant(variant); err == nil {
+		switch {
+		case ts.Has(toolset.CLI): // only with bash
+			bg, mmdc, inputs = fmt.Sprintf(bgNote, bgMax), mmdcNote, inputsCLI
+		case ts.Has(toolset.MCP):
+			inputs = inputsMCP
+		}
 	}
-	return strings.NewReplacer("{{bg}}", bg, "{{mmdc}}", mmdc).Replace(systemNote)
+	return strings.NewReplacer("{{bg}}", bg, "{{mmdc}}", mmdc, "{{inputs}}", inputs).Replace(systemNote)
 }
 
-const systemNote = `You work in an isolated sandbox (Debian, Python 3, curl, jq, ripgrep, git, typst, mmdc, pdfinfo/pdftotext/pdftoppm, strings) in the directory /workspace.
-- Files the user uploaded for you are in /workspace/inputs/ (read only).
+const systemNote = `You work in an isolated sandbox (Debian, Python 3, curl, jq, ripgrep, git, typst, mmdc, pdfinfo/pdftotext/pdftoppm, markitdown, strings) in the directory /workspace.
+- Files the user uploaded for you are in /workspace/inputs/ (read only).{{inputs}}
 - A chat can go idle in between; the next message then resumes it in a fresh sandbox. The following applies:
   - /workspace is kept: it is backed up after every completed reply and when the chat goes idle, and restored on resume, up to the configured limit (default 200 MB). Excluded are folders named node_modules, .venv, __pycache__ and .cache as well as /workspace/inputs/ (it is provided again from the user's uploads). If /workspace is larger than the limit, it is not backed up, and on resume the last backup applies.
   - Lost are /tmp, your home directory /home/agent including everything you installed with pip install --user or npm install -g, running processes and environment variables you set. Reinstall such packages after resuming; do not install them into /workspace.
@@ -225,7 +240,7 @@ func piArgs(variant, provider, model, note string) ([]string, error) {
 		args = append(args, "-e", apiExt)
 	}
 	if ts.Has(toolset.CLI) {
-		args = append(args, "--skill", artifactSkil, "--skill", internetSkil, "--skill", platformSkil, "--skill", typstSkill, "--skill", diagramSkill, "--skill", mermaidSkill)
+		args = append(args, "--skill", artifactSkil, "--skill", internetSkil, "--skill", platformSkil, "--skill", typstSkill, "--skill", diagramSkill, "--skill", mermaidSkill, "--skill", documentSkil)
 	} else {
 		args = append(args, "--tools", strings.Join(Tools(ts), ","))
 	}

@@ -714,6 +714,19 @@ The stored user message contains this block; the UI recognises it by the header
 `[Attachments in /workspace/inputs/]` at the end of the message and shows the files as attachments. Without text,
 "See attachments." is sent.
 
+Any file type may be uploaded; the server does not check types, only the size: more than `AGW_ARTIFACT_MAX_MB`
+(default 50) per file answers 413 with `<name> is larger than <n> MB` (`artifact_max_mb` of `GET /api/config` names
+the limit, so a UI can check before uploading). What the agent can read depends on the binding (issue #42):
+
+| Binding | Plain text (CSV, TXT, Markdown, JSON, HTML) | Word, Excel, PowerPoint, PDF, EPUB, Outlook `.msg` |
+|---|---|---|
+| `cli` (also in a combination) | `read` | converted with `markitdown` or `pdftotext` (skill `documents`) |
+| `mcp` without `cli` | `read` | not readable: the agent has no command to convert them and says so |
+| `api` alone | not readable (no file tools) | not readable; the agent says so |
+
+The system note tells the agent which case applies, so it does not guess the content of a file it cannot read.
+Old binary formats (`.doc`, `.ppt`) and OpenDocument (`.odt`, `.ods`, `.odp`) are not converted in any binding.
+
 ## Display images
 
 If the agent shows an image in a response via Markdown with a local path (`![Chart](/workspace/plot.png)`,
