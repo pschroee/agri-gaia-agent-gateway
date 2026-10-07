@@ -46,6 +46,9 @@ type UploadResult struct {
 	Size    int64  `json:"size"`
 	SHA256  string `json:"sha256"`
 	Message string `json:"message,omitempty"`
+	// Log is the result text for the socket log when it says more than Status (internet requests:
+	// "already on", "expired"); never sent to the agent.
+	Log string `json:"-"`
 }
 
 type Backend interface {
@@ -284,6 +287,9 @@ func (h *handler) internet(w http.ResponseWriter, r *http.Request) {
 func (h *handler) doInternet(ctx context.Context, chat, via, reason string) (UploadResult, error) {
 	res, err := h.b.RequestInternet(ctx, chat, h.slot, via, reason)
 	result := res.Status
+	if res.Log != "" {
+		result = res.Log
+	}
 	if err != nil {
 		result = "error: " + err.Error()
 	}

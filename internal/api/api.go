@@ -695,7 +695,7 @@ func (s *Server) internet(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, `expected {"enabled": true|false}`)
 		return
 	}
-	c, err := s.M.SetInternet(r.Context(), r.PathValue("id"), *req.Enabled)
+	c, err := s.M.SetInternetByUser(r.Context(), r.PathValue("id"), *req.Enabled)
 	if err != nil {
 		fail(w, err)
 		return
