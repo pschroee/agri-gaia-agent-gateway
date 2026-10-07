@@ -420,3 +420,9 @@ func short(s string) string {
 func (m *Manager) SubagentRuns(ctx context.Context, chatID string) ([]store.SubagentRun, error) {
 	return m.st.ListSubagentRuns(ctx, chatID)
 }
+
+// SubagentRunSummaries is the short list of a chat's runs for the chat selector (issue #60). It reads the database
+// only and never wakes the chat or takes a slot.
+func (m *Manager) SubagentRunSummaries(ctx context.Context, chatID string) ([]store.SubagentRunSummary, error) {
+	return m.st.ListSubagentRunSummaries(ctx, chatID)
+}
