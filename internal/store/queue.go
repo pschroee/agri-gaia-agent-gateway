@@ -32,12 +32,29 @@ type QueueEntry struct {
 	Context *PageContext `json:"context,omitempty"`
 }
 
-// PageContext is the platform page the user was on when sending, and the object opened or
-// selected there (issue #13). The orchestrator checks it (chat.ParsePageContext) before it is
-// stored; it tells the agent what the user refers to and grants no rights.
+// PageContext is the platform page the user was on when sending, and the objects opened or
+// selected there (issue #13; several since issue #45). The orchestrator checks it
+// (chat.ParsePageContext) before it is stored; it tells the agent what the user may refer to and
+// grants no rights.
+//
+// Objects lists every object. Object is set as well when there is exactly one, so that UIs that only
+// know the single form still show it; rows stored before issue #45 carry only Object. Read both
+// through List.
 type PageContext struct {
-	Page   string         `json:"page"`             // page id from a fixed list (chat.contextPages)
-	Object *ContextObject `json:"object,omitempty"` // opened or selected object, if any
+	Page    string          `json:"page"`              // page id from a fixed list (chat.contextPages)
+	Object  *ContextObject  `json:"object,omitempty"`  // the opened or selected object when there is exactly one
+	Objects []ContextObject `json:"objects,omitempty"` // all opened or selected objects, in the order sent
+}
+
+// List returns the objects of the context: Objects, or the single Object of an older row.
+func (c PageContext) List() []ContextObject {
+	if len(c.Objects) > 0 {
+		return c.Objects
+	}
+	if c.Object != nil {
+		return []ContextObject{*c.Object}
+	}
+	return nil
 }
 
 // ContextObject is an object of the platform: kind as the delegation names the resource

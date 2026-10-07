@@ -87,4 +87,14 @@ func TestQueuePageContext(t *testing.T) {
 	if len(list) != 1 || list[0].Context == nil || list[0].Context.Page != "datasets" {
 		t.Fatalf("reopened: %+v", list)
 	}
+	// issue #45: a list of objects comes back in order; List reads old rows (object only) as well
+	many := &PageContext{Page: "datasets", Objects: []ContextObject{{Kind: "dataset", ID: "42", Name: "bay-3"}, {Kind: "dataset", ID: "7"}}}
+	m, _ := s.EnqueueUser(ctx, c.ID, "three", nil, many)
+	list, _ = s.ListQueue(ctx, c.ID)
+	if len(list) != 2 || list[1].ID != m.ID || list[1].Context == nil || len(list[1].Context.List()) != 2 || list[1].Context.List()[1].ID != "7" {
+		t.Fatalf("list of objects: %+v", list)
+	}
+	if got := list[0].Context.List(); len(got) != 1 || got[0] != *pc.Object {
+		t.Fatalf("single object: %+v", got)
+	}
 }
