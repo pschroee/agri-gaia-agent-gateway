@@ -78,6 +78,14 @@ refer to this repository.
   had egress). The pool starts every replacement on its own (`Pool.fill` does not wait for a batch). Rules in
   `API.md`, *Creating a chat without waiting*.
 
+## Resuming on open
+
+- `POST /api/chats/{id}/resume` (issue #31) resumes an idle chat in the background (`Manager.Resume`): it sets
+  `resuming` before answering and runs `ensureLive` in a goroutine, so the steps and the chat lock are the same as for a
+  resume through a message and a message sent meanwhile waits instead of taking a second slot. It must stay a no-op for
+  live, starting and resuming chats (`internal/chat/resume_open_test.go`). Do not confuse it with the wake-ups of
+  background tasks (`BgWakesPerHour`), which start a turn. Rules in `API.md`, *Resuming a chat when it is opened*.
+
 ## Activity across chats
 
 - `GET /api/activity` (issue #12) reads platform calls of the user's chats in one query (`internal/store/activity.go`):

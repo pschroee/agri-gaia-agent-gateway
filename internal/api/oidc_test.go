@@ -247,6 +247,7 @@ func TestOIDCChatOwnership(t *testing.T) {
 		{"GET", "/api/chats/" + chatA.ID + "/artifacts", ""},
 		{"POST", "/api/chats/" + chatA.ID + "/messages", `{"text":"hello"}`},
 		{"POST", "/api/chats/" + chatA.ID + "/abort", ""},
+		{"POST", "/api/chats/" + chatA.ID + "/resume", ""},
 		{"POST", "/api/chats/" + chatA.ID + "/internet", `{"enabled":true}`},
 		{"DELETE", "/api/chats/" + chatA.ID + "/queue/1", ""},
 		{"POST", "/api/approvals/" + apA.ID, `{"approve":true}`},
