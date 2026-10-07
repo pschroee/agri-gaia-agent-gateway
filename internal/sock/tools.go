@@ -590,9 +590,13 @@ type InternetStater interface {
 
 // internetState: GET /tool/internet → {"enabled": bool}. The switch is enforced at the web proxy;
 // this only controls whether the tools are offered to the model.
+//
+// A freshly started slot asks once before it is assigned (web-gate.ts on session_start). That is
+// expected and answered quietly, without a log entry: a slot without a chat has no internet, so the
+// answer is the same 409 as before, and the extension treats it as "off".
 func (th *toolHandler) internetState(w http.ResponseWriter, r *http.Request) {
-	chat, err := th.chat("tool", "tool", "internet")
-	if err != nil {
+	chat := th.b.ChatForSlot(th.slot)
+	if chat == "" {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "slot not assigned"})
 		return
 	}
