@@ -424,6 +424,21 @@ func (h *handler) platform(w http.ResponseWriter, r *http.Request) {
 // doPlatform builds the call from the tool table, has the backend execute it
 // (with confirmation if it writes) and logs it.
 func (h *handler) doPlatform(ctx context.Context, chat, via string, tool platform.Tool, raw json.RawMessage) (platform.Result, error) {
+	if tool.HasSteps() {
+		// Every step goes through runPlatform like a single call: delegation, approval and log.
+		res, refused, err := tool.Run(ctx, raw, func(ctx context.Context, r platform.Request) (platform.Result, error) {
+			n, err := platform.Normalize(r)
+			if err != nil {
+				h.logCall(ctx, chat, via, "platform", tool.Name, "refused: "+err.Error())
+				return platform.Result{Status: "error", Message: err.Error()}, nil
+			}
+			return h.runPlatform(ctx, chat, via, n)
+		})
+		if refused != "" {
+			h.logCall(ctx, chat, via, "platform", tool.Name, "refused: "+refused)
+		}
+		return res, err
+	}
 	req, err := tool.Build(raw)
 	if err != nil {
 		h.logCall(ctx, chat, via, "platform", tool.Name, "refused: "+err.Error())

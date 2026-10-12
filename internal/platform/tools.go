@@ -37,6 +37,8 @@ type Tool struct {
 	// method of the built call, so for raw access the agent's method).
 	Write bool
 	build func(a Args) (Request, error)
+	// steps, if set, runs the tool as several calls (steps.go); build still describes its last call.
+	steps Steps
 }
 
 // MCPName is the name on the MCP server (in pi with prefix mcp_).
