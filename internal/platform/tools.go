@@ -37,6 +37,8 @@ type Tool struct {
 	// method of the built call, so for raw access the agent's method).
 	Write bool
 	build func(a Args) (Request, error)
+	// steps, if set, runs the tool as several calls (steps.go); build still describes its last call.
+	steps Steps
 }
 
 // MCPName is the name on the MCP server (in pi with prefix mcp_).
@@ -331,7 +333,7 @@ var Tools = []Tool{
 			{Name: "category", Type: "string", Desc: "category of the architecture according to platform_train_options, e.g. Classification", Required: true},
 			{Name: "dataset_id", Type: "integer", Desc: "id of the dataset", Required: true},
 			{Name: "train_config", Type: "object", Desc: "training parameters following the template's schema (values from platform_train_options as a starting point)", Required: true},
-			{Name: "export_config", Type: "object", Desc: "settings for the ONNX export; omit for no export"},
+			{Name: "export_config", Type: "object", Desc: "settings for the ONNX export. Always send it: without it the platform saves model.pt without tensor metadata, and no inference container can be built from the model. Example for img-size 64: {\"model_type\":\"pytorch\",\"input_names\":[],\"output_names\":[],\"input_shapes\":[[1,3,64,64]],\"input_types\":[\"float32\"],\"verbose\":false,\"dynamo\":false,\"opset_version\":18}; the last two numbers of input_shapes are the img-size of the train_config; keep dynamo false (detection models cannot be traced with it)"},
 		},
 		Write: true,
 		build: func(a Args) (Request, error) {
