@@ -114,6 +114,45 @@ export function ApprovalCard({ approval: a, onDecided, compact, chatLabel, runs 
     )
   }
 
+  if (a.kind === "plan") {
+    return (
+      <div
+        className={cn(
+          "rounded-lg border p-3 text-sm",
+          pending ? "border-violet-400 bg-violet-50 shadow-sm ring-1 ring-violet-300" : "bg-muted/40",
+        )}
+      >
+        <div className="flex flex-wrap items-center gap-2">
+          <ServerIcon className={cn("size-4", pending ? "text-violet-600" : "text-muted-foreground")} />
+          <span className="font-medium">{who} proposes a plan</span>
+          <ApprovalStateBadge state={a.state} />
+          {origin}
+          {chatLabel}
+        </div>
+        <div className="mt-2 font-medium">{a.name}</div>
+        {!compact && a.preview && (
+          <pre className="mt-2 max-h-64 overflow-auto rounded border bg-background p-2 font-mono text-xs whitespace-pre-wrap">
+            {a.preview}
+          </pre>
+        )}
+        <div className="mt-2 text-xs text-muted-foreground">
+          <span className="font-mono uppercase">{a.via}</span> · {pending ? "requested" : "decided"}{" "}
+          {formatTime(pending ? a.created_at : (a.decided_at ?? a.created_at))}
+        </div>
+        {pending && (
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Button size="sm" disabled={busy} onClick={() => void decide(true)}>
+              <CheckIcon /> Approve plan
+            </Button>
+            <Button size="sm" variant="destructive" disabled={busy} onClick={() => void decide(false)}>
+              <XIcon /> Reject
+            </Button>
+          </div>
+        )}
+      </div>
+    )
+  }
+
   return (
     <div
       className={cn(
