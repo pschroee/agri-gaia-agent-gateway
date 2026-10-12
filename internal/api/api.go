@@ -701,6 +701,8 @@ func subagentMessageFail(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, chat.ErrMessageRate):
 		status, code = http.StatusTooManyRequests, "rate_limited"
+	case errors.Is(err, chat.ErrSubagentStarting):
+		status, code = http.StatusConflict, "run_starting"
 	case errors.Is(err, chat.ErrSubagentForeground):
 		status, code = http.StatusConflict, "foreground_run"
 	case errors.Is(err, chat.ErrMessagePending):

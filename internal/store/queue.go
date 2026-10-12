@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -30,6 +32,41 @@ type QueueEntry struct {
 	// Context: page context of a message from the user (only user entries; nil: none). It goes to
 	// pi as a note of its own (NoteContext) before the text, never inside it.
 	Context *PageContext `json:"context,omitempty"`
+	// Subagent: only for NoteSubagentUser entries (issue #82), read from the entry; not stored.
+	Subagent *SubagentNote `json:"subagent,omitempty"`
+}
+
+// SubagentNote is the readable form of a passive note about a message the user wrote to a subagent (issue #82):
+// the run, its agent (from the note's first line) and the beginning of the text. Text keeps the whole note.
+type SubagentNote struct {
+	RunID    string `json:"run_id"`
+	Agent    string `json:"agent,omitempty"`
+	TextHead string `json:"text_head"`
+}
+
+// subagentNoteRe reads the agent from the first line of a passive note (notePassive in internal/chat).
+var subagentNoteRe = regexp.MustCompile(`^The user wrote directly to subagent \S+ \(([^)]*)\);`)
+
+// subagentTextHeadRunes limits SubagentNote.TextHead.
+const subagentTextHeadRunes = 200
+
+// subagentNoteOf builds SubagentNote for a passive note; the text is split like chat.noteOf does (first line summary).
+func subagentNoteOf(e QueueEntry) *SubagentNote {
+	n := &SubagentNote{}
+	if len(e.Refs) > 0 {
+		n.RunID = e.Refs[0]
+	}
+	sum, body, _ := strings.Cut(e.Text, "\n")
+	if m := subagentNoteRe.FindStringSubmatch(sum); m != nil {
+		n.Agent = m[1]
+	}
+	r := []rune(strings.TrimSpace(body))
+	if len(r) > subagentTextHeadRunes {
+		n.TextHead = string(r[:subagentTextHeadRunes]) + " …"
+	} else {
+		n.TextHead = string(r)
+	}
+	return n
 }
 
 // PageContext is the platform page the user was on when sending, and the objects opened or
@@ -101,6 +138,9 @@ func scanQueue(rows pgx.Rows) ([]QueueEntry, error) {
 		_ = json.Unmarshal(refs, &e.Refs)
 		if len(e.Refs) == 0 {
 			e.Refs = nil
+		}
+		if e.Note == NoteSubagentUser {
+			e.Subagent = subagentNoteOf(e)
 		}
 		_ = json.Unmarshal(att, &e.Attachments)
 		if e.Attachments == nil {

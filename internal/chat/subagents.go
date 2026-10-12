@@ -305,6 +305,7 @@ func (m *Manager) pollSubagents(chatID string, l *live, offsets map[string]int64
 	ctx := context.Background()
 	changed := false
 	now := time.Now()
+	var avail *bool // availability of messages for the chat, read once per poll when a run changed
 	for key, ri := range res.Runs {
 		if len(key) > 80 || runs[key] == ri {
 			continue
@@ -318,6 +319,15 @@ func (m *Manager) pollSubagents(chatID string, l *live, offsets map[string]int64
 		}
 		runs[key] = ri
 		changed = true
+		if avail == nil {
+			v, err := m.subagentsAvailable(ctx, chatID)
+			if err != nil {
+				v = false
+			}
+			avail = &v
+		}
+		// the poll holds pollMu: the running check must not take it again (runningNow)
+		r.MessageState = m.messageState(l, r, m.runningNow(l, key, now), *avail)
 		m.publish(chatID, Event{Kind: "subagent_run", Data: r})
 		if ri.State != "" && !runningStates[strings.ToLower(ri.State)] {
 			m.failSteers(ctx, chatID, key) // a steer that did not arrive before the end (issue #81)
@@ -440,13 +450,42 @@ func short(s string) string {
 	return s
 }
 
-// SubagentRuns for the chat view.
+// SubagentRuns for the chat view, with message_state (issue #82).
 func (m *Manager) SubagentRuns(ctx context.Context, chatID string) ([]store.SubagentRun, error) {
-	return m.st.ListSubagentRuns(ctx, chatID)
+	runs, err := m.st.ListSubagentRuns(ctx, chatID)
+	if err != nil {
+		return nil, err
+	}
+	return runs, m.withMessageStates(ctx, chatID, runs)
 }
 
 // SubagentRunSummaries is the short list of a chat's runs for the chat selector (issue #60). It reads the database
-// only and never wakes the chat or takes a slot.
+// only and never wakes the chat or takes a slot. Each run carries message_state (issue #82): the run's record is
+// taken from subagent_runs, and runs known from their entries alone get the agent of their entries (as SubagentRunOf).
 func (m *Manager) SubagentRunSummaries(ctx context.Context, chatID string) ([]store.SubagentRunSummary, error) {
-	return m.st.ListSubagentRunSummaries(ctx, chatID)
+	rows, err := m.st.ListSubagentRunSummaries(ctx, chatID)
+	if err != nil {
+		return nil, err
+	}
+	known, err := m.st.ListSubagentRuns(ctx, chatID)
+	if err != nil {
+		return nil, err
+	}
+	byID := make(map[string]store.SubagentRun, len(known))
+	for _, r := range known {
+		byID[r.RunID] = r
+	}
+	recs := make([]store.SubagentRun, len(rows))
+	for i, row := range rows {
+		rec := byID[row.RunID]
+		rec.ChatID, rec.RunID, rec.Agent = chatID, row.RunID, row.Agent
+		recs[i] = rec
+	}
+	if err := m.withMessageStates(ctx, chatID, recs); err != nil {
+		return nil, err
+	}
+	for i := range rows {
+		rows[i].MessageState = recs[i].MessageState
+	}
+	return rows, nil
 }

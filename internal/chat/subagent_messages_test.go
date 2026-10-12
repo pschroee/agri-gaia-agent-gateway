@@ -575,3 +575,103 @@ func TestSubagentMessageEventOnlyInChatStream(t *testing.T) {
 		}
 	}
 }
+
+// A background run whose status file is known but whose pi-subagents ID has not arrived yet (first seconds) answers
+// ErrSubagentStarting, not ErrSubagentForeground; nothing is stored.
+func TestSubagentMessageRunStarting(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	c := seedRun(t, e, "alice", "cli", "run-starting", "worker", "", "running")
+	startSeeded(t, e, c.ID)
+	l := e.m.liveOf(c.ID)
+	if l == nil {
+		t.Fatal("chat is not live")
+	}
+	l.pollMu.Lock()
+	l.track("run-starting", time.Now()).State = "running"
+	l.pollMu.Unlock()
+	_, err := e.m.SendSubagentMessage(ctx, c.ID, "run-starting", "hint")
+	if !errors.Is(err, ErrSubagentStarting) || errors.Is(err, ErrSubagentForeground) {
+		t.Fatalf("starting run: %v", err)
+	}
+	if list, _ := e.st.ListSubagentMessages(ctx, c.ID); len(list) != 0 {
+		t.Fatalf("a refused message was stored: %+v", list)
+	}
+}
+
+// A run inside a step of the main agent (no status file, no ID) still answers ErrSubagentForeground.
+func TestSubagentMessageForegroundStill(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	c := seedRun(t, e, "alice", "cli", "run-fg2", "worker", "", "")
+	startSeeded(t, e, c.ID)
+	l := e.m.liveOf(c.ID)
+	l.pollMu.Lock()
+	l.track("run-fg2", time.Now()).State = "running"
+	l.pollMu.Unlock()
+	if _, err := e.m.SendSubagentMessage(ctx, c.ID, "run-fg2", "hint"); !errors.Is(err, ErrSubagentForeground) {
+		t.Fatalf("foreground run: %v", err)
+	}
+}
+
+// startedRun stores a run with its start time, so that the short list (summary) contains it.
+func startedRun(t *testing.T, e *env, chatID, run, agent, piRun, state string) {
+	t.Helper()
+	now := time.Now()
+	if _, err := e.st.UpsertSubagentRun(context.Background(), store.SubagentRun{ChatID: chatID, RunID: run, Agent: agent,
+		PiRunID: piRun, State: state, StartedAt: &now}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// message_state of the run lists: all five values, from the same rule as the endpoint (relayRoute).
+func TestSubagentRunMessageState(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	// a chat in a binding without the CLI: every run is unavailable
+	api := seedRun(t, e, "alice", "api", "run-api", "worker", "pi-api", "complete")
+	startedRun(t, e, api.ID, "run-api", "worker", "pi-api", "complete")
+	sum, err := e.m.SubagentRunSummaries(ctx, api.ID)
+	if err != nil || len(sum) != 1 || sum[0].MessageState != MessageUnavailable {
+		t.Fatalf("binding without CLI: %+v %v", sum, err)
+	}
+	// a live chat with four runs
+	c := seedRun(t, e, "alice", "cli", "", "", "", "")
+	startSeeded(t, e, c.ID)
+	startedRun(t, e, c.ID, "run-ok", "worker", "pi-ok", "complete")
+	startedRun(t, e, c.ID, "run-end", "custom-agent", "pi-end", "complete")
+	startedRun(t, e, c.ID, "run-start", "worker", "", "running")
+	startedRun(t, e, c.ID, "run-fg", "worker", "", "")
+	l := e.m.liveOf(c.ID)
+	l.pollMu.Lock()
+	l.track("run-start", time.Now()).State = "running"
+	l.track("run-fg", time.Now()).State = "running"
+	l.pollMu.Unlock()
+	want := map[string]string{
+		"run-ok":    MessageOK,         // finished, resumable: a message resumes it
+		"run-end":   MessageEnded,      // finished, agent not allowed to continue
+		"run-start": MessageStarting,   // running, status file known, no pi-subagents ID yet
+		"run-fg":    MessageForeground, // running inside a step of the main agent
+	}
+	runs, err := e.m.SubagentRuns(ctx, c.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range runs {
+		if w, ok := want[r.RunID]; ok && r.MessageState != w {
+			t.Errorf("run %s: message_state %q, want %q", r.RunID, r.MessageState, w)
+		}
+	}
+	sum, err = e.m.SubagentRunSummaries(ctx, c.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range sum {
+		if w, ok := want[r.RunID]; ok && r.MessageState != w {
+			t.Errorf("summary %s: message_state %q, want %q", r.RunID, r.MessageState, w)
+		}
+	}
+	if _, err := e.m.SendSubagentMessage(ctx, c.ID, "run-start", "hint"); !errors.Is(err, ErrSubagentStarting) {
+		t.Fatalf("the endpoint and the list disagree (starting): %v", err)
+	}
+}

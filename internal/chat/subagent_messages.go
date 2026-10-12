@@ -53,6 +53,7 @@ const (
 // Errors of messages to subagents; the API maps them to codes (api.go, subagentMessageFail).
 var (
 	ErrSubagentForeground   = errors.New("the subagent runs inside a step of the main agent; write to it when it has finished")
+	ErrSubagentStarting     = errors.New("the subagent is starting; it can take a message in a moment")
 	ErrMessagePending       = errors.New("a message to this subagent has not arrived yet; wait for it")
 	ErrSubagentLimit        = errors.New("the subagents are at the limit; try again when one has finished")
 	ErrNotResumable         = errors.New("this subagent cannot continue: its agent is not allowed")
@@ -106,6 +107,11 @@ func (m *Manager) SubagentMessages(ctx context.Context, chatID string) ([]store.
 func (m *Manager) runIsRunning(l *live, run string, now time.Time) bool {
 	l.pollMu.Lock()
 	defer l.pollMu.Unlock()
+	return m.runningNow(l, run, now)
+}
+
+// runningNow is runIsRunning for a caller that holds l.pollMu already (the poll itself).
+func (m *Manager) runningNow(l *live, run string, now time.Time) bool {
 	m.mu.Lock()
 	var turnStart time.Time
 	if l.running {
@@ -118,6 +124,108 @@ func (m *Manager) runIsRunning(l *live, run string, now time.Time) bool {
 		}
 	}
 	return false
+}
+
+// liveChat returns the live state of a chat, nil when it rests. It reads memory only.
+func (m *Manager) liveChat(chatID string) *live {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.live[chatID]
+}
+
+// Values of message_state (issue #82): what a message to a run would meet now. Pending messages and the rate limit
+// are not part of it; they refuse a single message at once.
+const (
+	MessageOK          = "ok"
+	MessageStarting    = "starting"
+	MessageForeground  = "foreground"
+	MessageEnded       = "ended"
+	MessageUnavailable = "unavailable"
+)
+
+// relayRoute decides how a message to a run is relayed now (steer, resume or restart), or why it is refused.
+// It is the one rule behind SendSubagentMessage and behind message_state of the run lists (messageState).
+// running: the monitoring counts the run as running; l is nil for a chat that rests.
+func (m *Manager) relayRoute(l *live, rec store.SubagentRun, running bool) (string, error) {
+	mode := "restart"
+	switch {
+	case l != nil && running:
+		if rec.PiRunID != "" {
+			return "steer", nil
+		}
+		// a background run whose status file is known but whose pi-subagents ID is not yet: starting
+		if rec.State != "" {
+			return "", ErrSubagentStarting
+		}
+		return "", ErrSubagentForeground
+	case l != nil && rec.PiRunID != "":
+		mode = "resume"
+	}
+	if !relayAgents[rec.Agent] {
+		return "", ErrNotResumable
+	}
+	if l != nil {
+		m.mu.Lock()
+		full := l.subRunning >= l.maxSub
+		m.mu.Unlock()
+		if full {
+			return "", ErrSubagentLimit
+		}
+	}
+	return mode, nil
+}
+
+// messageState is message_state of a run: relayRoute's answer as a value for the run lists. available is false
+// for a chat in the trash or a binding without the CLI.
+func (m *Manager) messageState(l *live, rec store.SubagentRun, running, available bool) string {
+	if !available {
+		return MessageUnavailable
+	}
+	_, err := m.relayRoute(l, rec, running)
+	switch {
+	case err == nil:
+		return MessageOK
+	case errors.Is(err, ErrSubagentStarting):
+		return MessageStarting
+	case errors.Is(err, ErrSubagentForeground):
+		return MessageForeground
+	case errors.Is(err, ErrNotResumable):
+		return MessageEnded
+	}
+	return MessageUnavailable
+}
+
+// subagentsAvailable reports whether the chat takes messages to subagents at all: not in the trash, and a binding
+// with the CLI. It reads the database only.
+func (m *Manager) subagentsAvailable(ctx context.Context, chatID string) (bool, error) {
+	trashed, err := m.st.ChatTrashed(ctx, chatID)
+	if err != nil || trashed {
+		return false, err
+	}
+	c, err := m.st.GetChat(ctx, chatID)
+	if err != nil {
+		return false, err
+	}
+	ts, err := toolset.FromVariant(c.Variant)
+	return err == nil && ts.Has(toolset.CLI), nil
+}
+
+// withMessageStates sets message_state on runs of a chat from the database and the monitoring's memory. It never
+// wakes the chat or takes a slot.
+func (m *Manager) withMessageStates(ctx context.Context, chatID string, runs []store.SubagentRun) error {
+	available, err := m.subagentsAvailable(ctx, chatID)
+	if err != nil {
+		return err
+	}
+	l := m.liveChat(chatID)
+	for i := range runs {
+		running := false
+		if l != nil {
+			running = m.runIsRunning(l, runs[i].RunID, time.Now())
+		}
+		runs[i].MessageState = m.messageState(l, runs[i], running, available)
+	}
+	return nil
 }
 
 // SendSubagentMessage stores a message of the user to a subagent of the chat and starts its relay in the background.
@@ -164,31 +272,11 @@ func (m *Manager) SendSubagentMessage(ctx context.Context, chatID, run, text str
 	if n >= maxSubagentMessagesPerHr {
 		return store.SubagentMessage{}, ErrMessageRate
 	}
-	m.mu.Lock()
-	l := m.live[chatID]
-	m.mu.Unlock()
-	mode := "restart"
-	switch {
-	case l != nil && m.runIsRunning(l, run, time.Now()):
-		if rec.PiRunID == "" {
-			return store.SubagentMessage{}, ErrSubagentForeground
-		}
-		mode = "steer"
-	case l != nil && rec.PiRunID != "":
-		mode = "resume"
-	}
-	if mode != "steer" {
-		if !relayAgents[rec.Agent] {
-			return store.SubagentMessage{}, ErrNotResumable
-		}
-		if l != nil {
-			m.mu.Lock()
-			full := l.subRunning >= l.maxSub
-			m.mu.Unlock()
-			if full {
-				return store.SubagentMessage{}, ErrSubagentLimit
-			}
-		}
+	l := m.liveChat(chatID)
+	running := l != nil && m.runIsRunning(l, run, time.Now())
+	mode, err := m.relayRoute(l, rec, running)
+	if err != nil {
+		return store.SubagentMessage{}, err
 	}
 	msg, err := m.st.CreateSubagentMessage(ctx, store.SubagentMessage{ChatID: chatID, RunID: run, Ref: newSubagentRef(), Mode: mode, Text: text, Status: store.SubagentMsgSending})
 	if err != nil {

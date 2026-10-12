@@ -6,8 +6,10 @@ package store
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func TestSubagentMessagesCRUD(t *testing.T) {
@@ -110,5 +112,49 @@ func TestRunContinuesNotOverwrittenByUpsert(t *testing.T) {
 	}
 	if _, err := s.SubagentRunOf(ctx, c.ID, "run-404"); err != ErrNotFound {
 		t.Fatalf("unknown run: %v", err)
+	}
+}
+
+// A passive note about a message to a subagent (issue #82) carries its type, run, agent and the beginning of the
+// text in the queue; other system notes carry no subagent part.
+func TestQueueEntryNoteType(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	c, err := s.CreateChat(ctx, NewChat{Title: "Subagent note", Model: "deepseek/deepseek-flash", Variant: "cli", Owner: "alice"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := "The user wrote directly to subagent 0000-run (scout); it receives the message after its current step.\n" +
+		"Scout, please check the second source first. " + strings.Repeat("ä", 250)
+	if _, err := s.EnqueueSystem(ctx, c.ID, NoteSubagentUser, []string{"0000-run"}, text); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.EnqueueSystem(ctx, c.ID, NoteBackground, []string{"bg-1"}, "Background task bg-1 ended.\nout"); err != nil {
+		t.Fatal(err)
+	}
+	list, err := s.ListQueue(ctx, c.ID)
+	if err != nil || len(list) != 2 {
+		t.Fatalf("ListQueue: %+v %v", list, err)
+	}
+	var sub, bg QueueEntry
+	for _, e := range list {
+		if e.Note == NoteSubagentUser {
+			sub = e
+		} else {
+			bg = e
+		}
+	}
+	if sub.Subagent == nil || sub.Subagent.RunID != "0000-run" || sub.Subagent.Agent != "scout" {
+		t.Fatalf("subagent part: %+v", sub.Subagent)
+	}
+	if !strings.HasPrefix(sub.Subagent.TextHead, "Scout, please check") || !strings.HasSuffix(sub.Subagent.TextHead, " …") ||
+		utf8.RuneCountInString(sub.Subagent.TextHead) != subagentTextHeadRunes+2 {
+		t.Fatalf("text head: %q", sub.Subagent.TextHead)
+	}
+	if !strings.Contains(sub.Text, "Scout, please check the second source first.") {
+		t.Fatalf("the whole note stays in text: %q", sub.Text)
+	}
+	if bg.Subagent != nil {
+		t.Fatalf("other note with subagent part: %+v", bg.Subagent)
 	}
 }
