@@ -25,16 +25,17 @@ func trashFixture(t *testing.T, s *Store, owner string) (chatID string, apprID s
 		DurationMs: &dur, Effect: "read", ToolCallID: "t0"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.AddSocketCall(ctx, SocketCall{ChatID: c.ID, SlotID: "s1", Via: "cli", Op: "internet",
-		Detail: "a secret reason", Result: "rejected: no decision", ToolCallID: "t1"}); err != nil {
-		t.Fatal(err)
-	}
+	// the approval exists before the call is logged, as in the real flow
 	ap, err := s.CreateApproval(ctx, Approval{ChatID: c.ID, Kind: "internet_access", Via: "cli", Name: "reason", ContentType: "text/plain",
 		PendingKey: "-", ToolCallID: "t1"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := s.DecideApproval(ctx, ap.ID, ApprovalExpired); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AddSocketCall(ctx, SocketCall{ChatID: c.ID, SlotID: "s1", Via: "cli", Op: "internet",
+		Detail: "a secret reason", Result: "rejected: no decision", ToolCallID: "t1"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.AddLLMCall(ctx, LLMCall{ChatID: c.ID, SlotID: "s1", SourceIP: "10.0.0.2", Model: "m", Status: 200,

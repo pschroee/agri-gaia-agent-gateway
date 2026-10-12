@@ -7,6 +7,7 @@ package chat
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -220,5 +221,52 @@ func TestTrashRetention(t *testing.T) {
 	<-done
 	if _, err := e.st.GetChat(ctx, recent); err != nil {
 		t.Fatalf("recent chat deleted by the retention: %v", err)
+	}
+}
+
+// TestTrashStopsRunningTurnTaskAndPlan: a chat that is working (a turn in progress, a background task, a plan
+// waiting for a decision) stops in every part when it moves to the trash (issue #76, phase B).
+func TestTrashStopsRunningTurnTaskAndPlan(t *testing.T) {
+	e := setup(t)
+	ctx := store.WithSession(context.Background(), "main")
+	id, a, release := busyChat(t, e)
+	defer release()
+	if v, _ := e.m.View(ctx, id); !v.Running {
+		t.Fatalf("the turn is not running: %+v", v)
+	}
+	task, err := e.st.CreateBackgroundTask(ctx, store.BackgroundTask{ChatID: id, SlotID: "s1", Command: "sleep 600"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proposed, err := e.st.CreatePlan(ctx, store.Plan{ChatID: id, Title: "p", Session: "main", Via: "cli", Steps: []store.PlanStep{
+		{Idx: 1, Method: "DELETE", Path: "/models/5", Effect: "irreversible"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	approved := approvedPlan(t, e, ctx, id, planTwo)
+	v, err := e.m.Trash(ctx, id)
+	if err != nil {
+		t.Fatalf("Trash: %v", err)
+	}
+	if v.TrashedAt == nil || v.Running || v.SlotID != "" {
+		t.Fatalf("after Trash: %+v", v)
+	}
+	a.mu.Lock()
+	aborted := strings.Contains(fmt.Sprint(a.cmds), "abort")
+	a.mu.Unlock()
+	if !aborted {
+		t.Fatal("the running turn was not aborted")
+	}
+	got, err := e.st.GetBackgroundTask(ctx, id, task.Seq)
+	if err != nil || got.State != store.BgStopped {
+		t.Fatalf("background task after Trash: %+v %v", got, err)
+	}
+	for _, pid := range []string{proposed.ID, approved.ID} {
+		if p, _ := e.st.GetPlan(ctx, pid); p.State != "expired" {
+			t.Fatalf("plan %s after Trash: %s", pid, p.State)
+		}
+	}
+	if n := slotsOf(e, id); n != 0 {
+		t.Fatalf("%d sandboxes still assigned", n)
 	}
 }
