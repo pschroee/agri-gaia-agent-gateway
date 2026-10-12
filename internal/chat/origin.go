@@ -72,7 +72,11 @@ func (n systemNote) entry(id string) store.QueueEntry {
 // noteOf reads a note back from a system entry (first line summary, the rest data).
 func noteOf(e store.QueueEntry) systemNote {
 	sum, body, _ := strings.Cut(e.Text, "\n")
-	return systemNote{Type: e.Note, Refs: e.Refs, Summary: sum, Body: body}
+	n := systemNote{Type: e.Note, Refs: e.Refs, Summary: sum, Body: body}
+	if e.Note == store.NoteSubagentUser {
+		n.FenceHint = subagentUserHint
+	}
+	return n
 }
 
 // composed is a message to pi together with its origin.

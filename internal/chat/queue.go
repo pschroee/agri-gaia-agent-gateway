@@ -564,7 +564,8 @@ func (m *Manager) deliverQueue(chatID string, l *live) {
 		return
 	}
 	open, err := m.st.ListQueue(ctx, chatID)
-	if err != nil || len(open) == 0 {
+	if err != nil || len(open) == 0 || onlyPassive(open) {
+		// passive notes (messages to subagents, issue #81) never start a turn on their own
 		unlock()
 		if err != nil {
 			slog.Warn("queue not readable", "chat", chatID, "err", err)
@@ -629,7 +630,8 @@ func (m *Manager) steerQueue(chatID string, l *live) {
 	open, err := m.st.ListQueue(ctx, chatID)
 	user := false
 	for _, e := range open {
-		if e.Kind != store.QueueSystem {
+		// a passive note about a message to a subagent goes in with the next tool step (issue #81)
+		if e.Kind != store.QueueSystem || e.Note == store.NoteSubagentUser {
 			user = true
 			break
 		}
