@@ -332,6 +332,8 @@ CREATE INDEX IF NOT EXISTS web_requests_chat ON web_requests (chat_id, id);
 
 -- Tool call that uploaded an artifact (shown at the right place in the history).
 ALTER TABLE artifacts ADD COLUMN IF NOT EXISTS tool_call_id text NOT NULL DEFAULT '';
+-- Preview kind of the file (image, pdf, table, text, none); empty for artifacts from before this column.
+ALTER TABLE artifacts ADD COLUMN IF NOT EXISTS preview text NOT NULL DEFAULT '';
 
 -- Who asked via the socket: main agent ("main") or subagent run, along with the tool call.
 ALTER TABLE approvals ADD COLUMN IF NOT EXISTS session text NOT NULL DEFAULT '';
