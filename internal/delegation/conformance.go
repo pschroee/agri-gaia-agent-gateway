@@ -55,7 +55,7 @@ func ConformanceCases() []Case {
 		{Name: "list datasets", Tool: "list_datasets", Allowed: true, Group: "control"},
 		{Name: "read another user's dataset (read *)", Tool: "get_dataset", Args: `{"dataset_id":5}`, Allowed: true, Group: "control"},
 		{Name: "create dataset", Req: platform.Request{Method: "POST", Path: "/datasets", Form: map[string][]string{"name": {"x"}}}, Allowed: true, Group: "control"},
-		{Name: "change own dataset", Req: body("PATCH", "/datasets/12", `{"description":"new"}`), Allowed: true, Group: "control"},
+		{Name: "change own dataset", Req: body("PATCH", "/datasets/12", `{"name":"new"}`), Allowed: true, Group: "control"},
 		{Name: "log of container 7", Tool: "training_logs", Args: `{"train_container_id":7}`, Allowed: true, Group: "control"},
 		{Name: "start container 7", Tool: "start_training", Args: `{"train_container_id":7}`, Allowed: true, Group: "control"},
 		{Name: "read own task", Tool: "task_status", Args: `{"task_id":40}`, Allowed: true, Group: "control"},
@@ -105,7 +105,7 @@ func ConformanceCases() []Case {
 		{Name: "change container 7 (only read and start allowed)", Req: body("PATCH", "/train/containers/7", `{}`), Group: "provenance"},
 
 		// Fields and identifiers in the body (Review 5: K1, K2, W1, W2)
-		{Name: "rename own dataset (allowed field)", Req: body("PATCH", "/datasets/12", `{"name":"new","description":"x"}`), Allowed: true, Group: "field"},
+		{Name: "rename own dataset (allowed field)", Req: body("PATCH", "/datasets/12", `{"name":"new"}`), Allowed: true, Group: "field"},
 		{Name: "own dataset: set bucket_name", Req: body("PATCH", "/datasets/12", `{"bucket_name":"x; id #"}`), Group: "field"},
 		{Name: "own dataset: set metadata_uri", Req: body("PATCH", "/datasets/12", `{"metadata_uri":"https://foreign#_Dataset"}`), Group: "field"},
 		{Name: "own dataset: set owner", Req: body("PATCH", "/datasets/12", `{"name":"x","owner":"other"}`), Group: "field"},

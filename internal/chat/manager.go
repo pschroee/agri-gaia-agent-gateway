@@ -1981,6 +1981,11 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 	}
 	// Delegation (step 1): classification from method and path alone, check before any confirmation.
 	access := delegation.Classify(req)
+	// Field allowlists hold without a delegation too (issue #65): a body with a field the platform would take
+	// over is refused before the delegation check and before any approval.
+	if access.Problem != "" {
+		return platform.Result{Status: "denied", Message: "refused: " + access.Problem}, nil
+	}
 	violation := ""
 	if del != nil {
 		own := func(res, id string) bool {
@@ -2089,6 +2094,9 @@ func (m *Manager) PlatformPrecheck(ctx context.Context, chatID string, req platf
 	del, err := m.delegationOf(ctx, chatID)
 	if err != nil {
 		return platform.Result{Status: "denied", Message: err.Error()}, false
+	}
+	if p := delegation.Classify(req).Problem; p != "" { // field allowlists hold without a delegation (issue #65)
+		return platform.Result{Status: "denied", Message: "refused: " + p}, false
 	}
 	if del == nil || !del.Enforcing() {
 		return platform.Result{}, true
