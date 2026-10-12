@@ -138,6 +138,27 @@ CREATE TABLE IF NOT EXISTS subagent_runs (
     PRIMARY KEY (chat_id, run_id)
 );
 
+-- Subagent run that a run continues (issue #81): set only by the gateway when a message to a finished or
+-- running subagent starts a new run. Never taken from the sandbox; upserts leave it alone.
+ALTER TABLE subagent_runs ADD COLUMN IF NOT EXISTS continues_run_id text NOT NULL DEFAULT '';
+
+-- Messages the user wrote directly to a subagent (issue #81), stored by the gateway before they are relayed, so
+-- that the sandbox cannot forge or drop them. origin is always user (the table has only one writer, the API).
+CREATE TABLE IF NOT EXISTS subagent_messages (
+    id           bigserial PRIMARY KEY,
+    chat_id      uuid NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+    run_id       text NOT NULL,          -- run the user addressed (root of the transcript)
+    target_run_id text NOT NULL DEFAULT '', -- new run for resume and restart
+    ref          text NOT NULL UNIQUE,   -- marker in the text the subagent receives
+    mode         text NOT NULL,          -- steer | resume | restart
+    text         text NOT NULL,
+    status       text NOT NULL,          -- sending | sent | delivered | failed
+    error        text NOT NULL DEFAULT '',
+    created_at   timestamptz NOT NULL DEFAULT now(),
+    delivered_at timestamptz
+);
+CREATE INDEX IF NOT EXISTS subagent_messages_chat_run ON subagent_messages (chat_id, run_id);
+
 -- Display images: images the agent shows in a reply via Markdown
 -- (![..](/workspace/plot.png)). The orchestrator reads them from the sandbox and stores
 -- them in S3 so that they stay visible while the chat is idle. Not artifacts:

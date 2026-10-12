@@ -1032,16 +1032,18 @@ FROM subagent_entries e WHERE e.chat_id = $1 ORDER BY e.created_at, e.run_id`, c
 
 // SubagentRun: name and state of a run (ID as in subagent_entries.run_id).
 type SubagentRun struct {
-	ChatID      string     `json:"chat_id"`
-	RunID       string     `json:"run_id"`
-	Agent       string     `json:"agent"`
-	Label       string     `json:"label,omitempty"`
-	State       string     `json:"state,omitempty"`
-	PiRunID     string     `json:"pi_run_id,omitempty"`
-	ParentRunID string     `json:"parent_run_id,omitempty"`
-	StartedAt   *time.Time `json:"started_at,omitempty"`
-	EndedAt     *time.Time `json:"ended_at,omitempty"`
-	UpdatedAt   time.Time  `json:"updated_at"`
+	ChatID      string `json:"chat_id"`
+	RunID       string `json:"run_id"`
+	Agent       string `json:"agent"`
+	Label       string `json:"label,omitempty"`
+	State       string `json:"state,omitempty"`
+	PiRunID     string `json:"pi_run_id,omitempty"`
+	ParentRunID string `json:"parent_run_id,omitempty"`
+	// ContinuesRunID is the run this run continues after a message of the user (issue #81); set by SetRunContinues only.
+	ContinuesRunID string     `json:"continues_run_id,omitempty"`
+	StartedAt      *time.Time `json:"started_at,omitempty"`
+	EndedAt        *time.Time `json:"ended_at,omitempty"`
+	UpdatedAt      time.Time  `json:"updated_at"`
 }
 
 // UpsertSubagentRun stores name and state of a run; empty fields overwrite nothing.
@@ -1065,7 +1067,7 @@ RETURNING agent, label, state, pi_run_id, parent_run_id, started_at, ended_at, u
 }
 
 func (s *Store) ListSubagentRuns(ctx context.Context, chatID string) ([]SubagentRun, error) {
-	rows, err := s.pool.Query(ctx, `SELECT run_id, agent, label, state, pi_run_id, parent_run_id, started_at, ended_at, updated_at
+	rows, err := s.pool.Query(ctx, `SELECT run_id, agent, label, state, pi_run_id, parent_run_id, continues_run_id, started_at, ended_at, updated_at
 FROM subagent_runs WHERE chat_id=$1 ORDER BY started_at NULLS LAST, run_id`, chatID)
 	if err != nil {
 		return nil, err
@@ -1074,7 +1076,7 @@ FROM subagent_runs WHERE chat_id=$1 ORDER BY started_at NULLS LAST, run_id`, cha
 	out := []SubagentRun{}
 	for rows.Next() {
 		r := SubagentRun{ChatID: chatID}
-		if err := rows.Scan(&r.RunID, &r.Agent, &r.Label, &r.State, &r.PiRunID, &r.ParentRunID, &r.StartedAt, &r.EndedAt, &r.UpdatedAt); err != nil {
+		if err := rows.Scan(&r.RunID, &r.Agent, &r.Label, &r.State, &r.PiRunID, &r.ParentRunID, &r.ContinuesRunID, &r.StartedAt, &r.EndedAt, &r.UpdatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, r)
@@ -1099,6 +1101,8 @@ type SubagentRunSummary struct {
 	LastAt   *time.Time `json:"last_at,omitempty"`
 	LastKind string     `json:"last_kind,omitempty"`
 	Entries  int        `json:"entries"`
+	// ContinuesRunID: the run this one continues after a message of the user (issue #81).
+	ContinuesRunID string `json:"continues_run_id,omitempty"`
 }
 
 // Limits of SubagentRunSummary.TaskHead.
@@ -1133,7 +1137,7 @@ WITH e AS (
 ), r AS (SELECT * FROM subagent_runs WHERE chat_id = $1)
 SELECT COALESCE(r.run_id, e.run_id), COALESCE(NULLIF(r.agent, ''), e.agent, ''), COALESCE(r.label, ''),
        COALESCE(r.state, ''), COALESCE(e.task, ''), LEAST(r.started_at, e.first_at), r.ended_at,
-       GREATEST(e.last_at, r.ended_at), COALESCE(e.last_kind, ''), COALESCE(e.n, 0)
+       GREATEST(e.last_at, r.ended_at), COALESCE(e.last_kind, ''), COALESCE(e.n, 0), COALESCE(r.continues_run_id, '')
 FROM r FULL OUTER JOIN e ON e.run_id = r.run_id
 WHERE e.run_id IS NOT NULL OR r.started_at IS NOT NULL
 ORDER BY 6 NULLS LAST, 1`, chatID)
@@ -1145,7 +1149,7 @@ ORDER BY 6 NULLS LAST, 1`, chatID)
 	for rows.Next() {
 		var r SubagentRunSummary
 		var task string
-		if err := rows.Scan(&r.RunID, &r.Agent, &r.Label, &r.State, &task, &r.StartedAt, &r.EndedAt, &r.LastAt, &r.LastKind, &r.Entries); err != nil {
+		if err := rows.Scan(&r.RunID, &r.Agent, &r.Label, &r.State, &task, &r.StartedAt, &r.EndedAt, &r.LastAt, &r.LastKind, &r.Entries, &r.ContinuesRunID); err != nil {
 			return nil, err
 		}
 		r.TaskHead = taskHead(task)
