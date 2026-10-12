@@ -331,7 +331,10 @@ type Env struct {
 	// MaxSubagents: at most this many subagents run at the same time per chat (AGW_MAX_SUBAGENTS,
 	// default 5); fixed for the service, not a setting per chat.
 	MaxSubagents int
-	AllowedHosts []string
+	// ComputeMaxPerChat: compute calls per chat that the platform may accept (AGW_COMPUTE_MAX_PER_CHAT,
+	// default 3; below 1 counts as 1). Enforced by the gateway, see internal/chat/effect.go.
+	ComputeMaxPerChat int
+	AllowedHosts      []string
 	// Background tasks: at most BgMax at a time per slot (AGW_BG_MAX), at most
 	// BgWakesPerHour wake-ups per chat and hour (AGW_BG_WAKES_PER_HOUR, 0 = never); running tasks
 	// keep the chat awake until BgKeepAlive after the last activity (AGW_BG_KEEPALIVE).
@@ -446,6 +449,7 @@ func FromEnv() Env {
 		TitleModel:           str("AGW_TITLE_MODEL", ""),
 		APIToken:             str("AGW_API_TOKEN", ""),
 		MaxSubagents:         max(0, num("AGW_MAX_SUBAGENTS", DefaultMaxSubagents)),
+		ComputeMaxPerChat:    max(1, num("AGW_COMPUTE_MAX_PER_CHAT", DefaultComputeMaxPerChat)),
 		AllowedHosts:         strings.Split(str("AGW_ALLOWED_HOSTS", "127.0.0.1:18480,localhost:18480"), ","),
 		BgMax:                max(1, num("AGW_BG_MAX", 5)),
 		BgWakesPerHour:       wakes(num("AGW_BG_WAKES_PER_HOUR", 10)),
