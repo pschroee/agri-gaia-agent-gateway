@@ -163,6 +163,10 @@ func (a *fakeAgent) Call(_ context.Context, cmd map[string]any) (rpc.Response, e
 		return rpc.Response{Success: true, Data: b}, nil
 	case "prompt":
 		msg := cmd["message"].(string)
+		if strings.HasPrefix(msg, "/todos") {
+			// a command of an extension: pi runs it without a run (no agent_start, no agent_settled)
+			return rpc.Response{Success: true}, nil
+		}
 		a.mu.Lock()
 		if cmd["streamingBehavior"] == "steer" && a.streaming {
 			a.steered = append(a.steered, msg)

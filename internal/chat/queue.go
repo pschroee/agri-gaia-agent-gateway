@@ -504,7 +504,85 @@ func (m *Manager) dispatch(ctx context.Context, chatID string, tm *turnMeta, gen
 	}
 	m.touchIdle(chatID)
 	m.publishChat(ctx, chatID)
+	if !running {
+		// A prompt that pi answers without starting a run (a command of an extension such as
+		// /todos) never produces agent_start; the optimistic running flag has to be taken back.
+		go m.settleUnstarted(chatID, l, tm)
+	}
 	return SendResult{Resumed: resumed}, nil
+}
+
+// settleDelay: how long after a prompt (or an abort) the orchestrator waits before it asks pi
+// whether a run is really going on (tests shorten it).
+var settleDelay atomic.Int64
+
+func init() { settleDelay.Store(int64(2 * time.Second)) }
+
+// settleUnstarted takes back the "running" flag of a prompt that pi accepted without starting a
+// run: commands of extensions (/todos, /subagents-doctor …) run inside pi and end without
+// agent_start and agent_settled. Without this the chat stays "working" for ever: queued messages
+// are not delivered and the abort changes nothing, because nothing ever ends the run.
+func (m *Manager) settleUnstarted(chatID string, l *live, tm *turnMeta) {
+	time.Sleep(time.Duration(settleDelay.Load()))
+	m.mu.Lock()
+	started := tm.isConsumed() || !l.agentStartAt.Before(tm.at)
+	gone := m.live[chatID] != l
+	m.mu.Unlock()
+	if started || gone {
+		return
+	}
+	if m.settleIfIdle(chatID, l) {
+		// the turn of the command has no user message: drop it
+		m.mu.Lock()
+		for i, p := range l.pendingTurns {
+			if p == tm {
+				l.pendingTurns = append(l.pendingTurns[:i:i], l.pendingTurns[i+1:]...)
+				break
+			}
+		}
+		m.mu.Unlock()
+		if tm.id > 0 {
+			_ = m.st.DeleteTurn(context.Background(), tm.id)
+		}
+	}
+}
+
+// settleIfIdle asks pi whether it is working. If not although the orchestrator believes it is,
+// the run is over like after agent_settled: the flag is reset and queued messages are delivered.
+// Reports whether it did so.
+func (m *Manager) settleIfIdle(chatID string, l *live) bool {
+	m.mu.Lock()
+	running := l.running && m.live[chatID] == l
+	m.mu.Unlock()
+	if !running {
+		return false
+	}
+	resp, err := callT(l.slot.Worker, map[string]any{"type": "get_state"}, callTimeout)
+	if err != nil {
+		return false
+	}
+	var st struct {
+		IsStreaming  bool `json:"isStreaming"`
+		IsCompacting bool `json:"isCompacting"`
+	}
+	if json.Unmarshal(resp.Data, &st) != nil || st.IsStreaming || st.IsCompacting {
+		return false
+	}
+	m.mu.Lock()
+	// a run that began while we asked: leave it alone
+	if !l.running || m.live[chatID] != l || (!l.agentStartAt.IsZero() && time.Since(l.agentStartAt) < time.Second) {
+		m.mu.Unlock()
+		return false
+	}
+	l.toolsRunning = 0
+	m.mu.Unlock()
+	slog.Warn("run flag without a run in pi, reset", "chat", chatID)
+	m.setRunning(l, false)
+	l.slot.SetActivity("idle", "")
+	m.publishChat(context.Background(), chatID)
+	m.background(l, func() { m.deliverQueue(chatID, l) })
+	m.armIdle(chatID, l)
+	return true
 }
 
 // acceptedAnyway: has pi accepted a message although prompt returned an error (e.g. timeout)? Yes,
