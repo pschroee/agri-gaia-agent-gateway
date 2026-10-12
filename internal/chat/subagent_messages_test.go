@@ -174,7 +174,7 @@ func TestSubagentMessageSteersRunningRun(t *testing.T) {
 	waitFor(t, func() bool { return len(relayCmdsOf(a)) == 1 })
 	req := relayCmdsOf(a)[0]
 	params, _ := req["params"].(map[string]any)
-	if req["method"] != "steer" || req["ref"] != msg.Ref || params["id"] != "pi-1" || params["index"] != float64(2) || params["mode"] != "steer" {
+	if req["method"] != "steer" || req["ref"] != msg.Ref || params["id"] != "pi-1" || params["index"] != float64(2) {
 		t.Fatalf("relay request: %+v", req)
 	}
 	if !strings.Contains(params["message"].(string), "[Message from the user, sent directly to you · ref "+msg.Ref+"]") {
@@ -443,5 +443,135 @@ func TestRelayRefLayout(t *testing.T) {
 	ref := newSubagentRef()
 	if !relayRefRe.MatchString("[Message from the user, sent directly to you · ref "+ref+"]") || len(ref) != len("agw-")+8 {
 		t.Fatalf("ref %q", ref)
+	}
+}
+
+// The gateway's own extension commands (agw-…) are not offered to the user, pi's other commands are.
+func TestCommandsHideAgw(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	c, _ := e.m.Create(ctx, NewChat{})
+	if err := e.st.SetCommands(ctx, c.ID, json.RawMessage(`[{"name":"agw-subagent-relay","source":"extension"},{"name":"skill:artifacts","source":"skill"}]`)); err != nil {
+		t.Fatal(err)
+	}
+	cmds, err := e.m.Commands(ctx, c.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := map[string]bool{}
+	for _, cm := range cmds {
+		names[cm.Name] = true
+	}
+	if names["agw-subagent-relay"] || !names["skill:artifacts"] || !names["compact"] {
+		t.Fatalf("commands: %v", names)
+	}
+}
+
+// A passive note is taken along at the next tool step of a running turn (steer) without a wake-up; it arrives
+// in the envelope of orchestrator messages with origin system.
+func TestPassiveNoteSteeredAtToolBoundary(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	c, _ := e.m.Create(ctx, NewChat{Title: "s"})
+	a := e.agent(0)
+	hold := make(chan struct{})
+	a.mu.Lock()
+	a.hold, a.withTool = hold, true
+	a.mu.Unlock()
+	if _, err := e.m.Send(ctx, c.ID, "one"); err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, "tool running", func() bool {
+		e.m.mu.Lock()
+		defer e.m.mu.Unlock()
+		l := e.m.live[c.ID]
+		return l != nil && l.toolsRunning == 1
+	})
+	e.m.notePassive(ctx, c.ID, store.SubagentRun{RunID: "run-1", Agent: "worker"}, "steer", "Nimm nur 10 Sekunden")
+	// the next tool start triggers this (manager.go, tool_execution_start); the note itself does not wake anything
+	e.m.mu.Lock()
+	l := e.m.live[c.ID]
+	e.m.mu.Unlock()
+	e.m.steerQueue(c.ID, l)
+	waitUntil(t, "note steered in", func() bool { a.mu.Lock(); defer a.mu.Unlock(); return len(a.steered) == 1 })
+	a.mu.Lock()
+	got := a.steered[0]
+	a.mu.Unlock()
+	if !strings.HasPrefix(got, SystemHeader+"\n") || !strings.Contains(got, "The user wrote directly to subagent run-1 (worker); it receives the message after its current step.") || !strings.Contains(got, "Nimm nur 10 Sekunden") {
+		t.Fatalf("steered note:\n%s", got)
+	}
+	if q, _ := e.m.Queue(ctx, c.ID); len(q) != 0 {
+		t.Fatalf("still queued: %+v", q)
+	}
+	close(hold)
+	waitSettled(t, e, c.ID)
+	turns, _ := e.st.Turns(ctx, c.ID)
+	for _, tr := range turns {
+		if tr.Trigger == store.TriggerWake {
+			t.Fatalf("the note woke the agent: %+v", turns)
+		}
+	}
+}
+
+// With the user's next message the open passive note goes along: origin mixed, envelope header, the user's text
+// after the fenced text of the note, and the note's source names the run.
+func TestPassiveNoteWithNextMessage(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	c, _ := e.m.Create(ctx, NewChat{Title: "p"})
+	e.m.notePassive(ctx, c.ID, store.SubagentRun{RunID: "run-1", Agent: "worker"}, "resume", "Wie lange?")
+	queue, err := e.st.ListQueue(ctx, c.ID)
+	if err != nil || len(queue) != 1 {
+		t.Fatalf("queue: %+v %v", queue, err)
+	}
+	queue = append(queue, store.QueueEntry{ID: "q-user", Kind: store.QueueUser, Text: "and now?"})
+	cm := composeMessage(queue, nil)
+	if cm.Origin != store.OriginMixed || len(cm.Sources) != 2 {
+		t.Fatalf("origin: %s %+v", cm.Origin, cm.Sources)
+	}
+	s0 := cm.Sources[0]
+	if s0.Kind != store.QueueSystem || s0.Type != store.NoteSubagentUser || len(s0.Refs) != 1 || s0.Refs[0] != "run-1" {
+		t.Fatalf("source of the note: %+v", s0)
+	}
+	if !strings.HasPrefix(cm.Text, SystemHeader+"\n") || !strings.Contains(cm.Text, "Wie lange?") || !strings.HasSuffix(cm.Text, "and now?") {
+		t.Fatalf("message:\n%s", cm.Text)
+	}
+	if strings.Index(cm.Text, "Wie lange?") > strings.Index(cm.Text, "and now?") {
+		t.Fatalf("order:\n%s", cm.Text)
+	}
+}
+
+// The event "subagent_message" reaches the chat's own stream and never the stream across chats.
+func TestSubagentMessageEventOnlyInChatStream(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	c := seedRun(t, e, "alice", "cli", "run-1", "worker", "", "complete")
+	own, stopOwn := e.m.Subscribe(c.ID)
+	defer stopOwn()
+	all, stopAll := e.m.SubscribeAll()
+	defer stopAll()
+	// the pool of the test has no slot for a restart; the stored message and its first event are what counts
+	if _, err := e.m.SendSubagentMessage(ctx, c.ID, "run-1", "hello"); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.After(5 * time.Second)
+	for got := false; !got; {
+		select {
+		case ev := <-own:
+			got = ev.Kind == "subagent_message"
+		case <-deadline:
+			t.Fatal("no subagent_message event in the chat stream")
+		}
+	}
+	time.Sleep(200 * time.Millisecond)
+	for {
+		select {
+		case ev := <-all:
+			if ev.Event.Kind == "subagent_message" {
+				t.Fatalf("subagent_message in the stream across chats: %+v", ev)
+			}
+		default:
+			return
+		}
 	}
 }

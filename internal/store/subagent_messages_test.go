@@ -85,7 +85,8 @@ func TestRunContinuesNotOverwrittenByUpsert(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.UpsertSubagentRun(ctx, SubagentRun{ChatID: c.ID, RunID: "run-2", Agent: "researcher", State: "running"}); err != nil {
+	started := time.Now()
+	if _, err := s.UpsertSubagentRun(ctx, SubagentRun{ChatID: c.ID, RunID: "run-2", Agent: "researcher", State: "running", StartedAt: &started}); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.SetRunContinues(ctx, c.ID, "run-2", "run-1"); err != nil {
