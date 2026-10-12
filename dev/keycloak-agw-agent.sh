@@ -61,12 +61,15 @@ if [ -z "$ID" ]; then
 else
   echo "exists" >&2
 fi
+# Lifespan of exchanged tokens at this client (issue #71): 5 min instead of the 7 days of the realm; the exp claim
+# of an exchanged token shows whether Keycloak applies it.
 # Login through the platform (gateway as a platform service, since 2026-10-05): standard flow with PKCE and
 # the redirect URI of the gateway. Also runs for an existing client; the password grant stays allowed for local
 # development.
 $K update clients/$ID $C -s standardFlowEnabled=true -s directAccessGrantsEnabled=true \
   -s "redirectUris=[\"https://app.$BASE/agent/oidc/callback\"]" -s "webOrigins=[\"https://app.$BASE\"]" \
   -s "attributes.\"pkce.code.challenge.method\"=S256" \
+  -s "attributes.\"access.token.lifespan\"=300" \
   -s "attributes.\"post.logout.redirect.uris\"=https://app.$BASE/agent/*" >/dev/null
 echo "standard flow and redirect URI set" >&2
 $K get clients/$ID/client-secret $C --fields value --format csv --noquotes
