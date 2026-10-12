@@ -206,6 +206,8 @@ type Options struct {
 	// MaxSubagents: at most this many subagents run at the same time per chat (AGW_MAX_SUBAGENTS).
 	// Fixed for the service: there is no setting per chat, and stored values of older chats are ignored.
 	MaxSubagents int
+	// ComputeMaxPerChat: compute calls per chat the platform may accept (AGW_COMPUTE_MAX_PER_CHAT, below 1: default).
+	ComputeMaxPerChat int
 
 	// ImageMaxBytes limits display images (default DefaultImageMaxBytes).
 	ImageMaxBytes int64
@@ -1960,9 +1962,10 @@ func (m *Manager) PlatformExchanged(chatID string, cl platform.Claims) {
 	m.LogCall(m.slotOf(chatID), chatID, "orchestrator", "token_exchange", cl.String(), "ok")
 }
 
-// PlatformCall performs a call to the Agri-Gaia platform. Reading calls (GET)
-// go straight through; everything else waits for the user's approval and is
-// only executed on approval. The approval shows method, path and body.
+// PlatformCall performs a call to the Agri-Gaia platform. Every call has an effect class (delegation.Classify,
+// issue #63): read calls go straight through; write and compute calls wait for the user's approval unless the
+// delegation says confirm none; irreversible calls always wait; compute calls are limited per chat. The
+// approval shows method, path, the class and the body. A call whose class cannot be determined is refused.
 func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, req platform.Request) (platform.Result, error) {
 	if m.opt.Platform == nil {
 		return platform.Result{Status: "error", Message: platform.ErrNotConfigured.Error()}, nil
@@ -1990,6 +1993,9 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 	if access.Problem != "" {
 		return platform.Result{Status: "denied", Message: "refused: " + access.Problem}, nil
 	}
+	if refusal, refused := effectRefusal(access.Effect); refused {
+		return refusal, nil
+	}
 	violation := ""
 	if del != nil {
 		own := func(res, id string) bool {
@@ -2003,11 +2009,20 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 			violation = dec.Reason // stage without protective measure: only log
 		}
 	}
-	if req.Writes() && (del == nil || del.ConfirmWrites()) {
+	if access.Effect == delegation.EffectCompute {
+		res, allowed, err := m.computeAllowed(ctx, chatID)
+		if err != nil {
+			return platform.Result{}, err
+		}
+		if !allowed {
+			return res, nil
+		}
+	}
+	if needsApproval(access.Effect, req.Writes(), del) {
 		if err := m.checkPendingLimit(ctx, chatID); err != nil {
 			return platform.Result{}, err
 		}
-		preview := req.String() + "\nClassification: " + access.String()
+		preview := req.String() + "\n" + effectLine(access.Effect, m.computeMax()) + "\nClassification: " + access.String()
 		if del != nil && violation == "" {
 			preview += " (within the delegated rights)"
 		}
@@ -2022,6 +2037,7 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 				preview += "\n\n" + string(req.Body)
 			}
 		}
+		preview += irreversibleNote(access.Effect, req.Body)
 		preview = visibleControls(preview)
 		// The user only approves what they see in full: better refuse than truncate (Review W1).
 		if n := len([]rune(preview)); n > maxPlatformPreview {
@@ -2032,7 +2048,8 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 			size += int64(len(u.Data))
 		}
 		ap, err := m.st.CreateApproval(ctx, store.Approval{ChatID: chatID, Kind: "platform_write", Via: via, Name: req.String(), Size: size,
-			ContentType: "application/json", PendingKey: "-", Preview: preview, Session: store.SessionFrom(ctx), ToolCallID: store.ToolCallFrom(ctx)})
+			ContentType: "application/json", PendingKey: "-", Preview: preview, Session: store.SessionFrom(ctx), ToolCallID: store.ToolCallFrom(ctx),
+			Effect: string(access.Effect)})
 		if err != nil {
 			return platform.Result{}, err
 		}
@@ -2072,10 +2089,28 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 			}
 		}
 	}
+	// A compute call counts against the chat's limit once the platform takes it (not when refused or not
+	// accepted; see ReleaseCompute).
+	reserved := false
+	if access.Effect == delegation.EffectCompute {
+		ok, rerr := m.st.ReserveCompute(context.WithoutCancel(ctx), chatID, m.computeMax())
+		if rerr != nil {
+			return platform.Result{}, rerr
+		}
+		if !ok {
+			return computeLimitResult(m.computeMax()), nil
+		}
+		reserved = true
+	}
 	// Duration of the round trip to the platform (token exchange included), without the approval's waiting time.
 	t0 := time.Now()
 	res, err := m.opt.Platform.Do(ctx, chatID, req)
 	took := time.Since(t0)
+	if reserved && (err != nil || res.Status != "ok") {
+		if rerr := m.st.ReleaseCompute(context.WithoutCancel(ctx), chatID); rerr != nil {
+			slog.Error("compute call not given back", "chat", chatID, "error", rerr)
+		}
+	}
 	if err != nil {
 		return platform.Result{Status: "error", Message: err.Error(), Violation: violation, Duration: took}, nil
 	}
@@ -2134,7 +2169,7 @@ func (m *Manager) delegationOf(ctx context.Context, chatID string) (*delegation.
 // rightsText describes to the agent its rights together with the objects it has created.
 func (m *Manager) rightsText(ctx context.Context, chatID string, del *delegation.Delegation) string {
 	if del == nil {
-		return "No delegation is set for this chat: reading works without confirmation, every writing call needs the user's approval."
+		return "No delegation is set for this chat.\n" + effectRules(m.computeMax())
 	}
 	s := del.Summary()
 	if objs, err := m.st.ListDelegationObjects(ctx, chatID); err == nil && len(objs) > 0 {
@@ -2143,7 +2178,7 @@ func (m *Manager) rightsText(ctx context.Context, chatID string, del *delegation
 			s += "\n  " + o.Resource + " " + o.ObjectID
 		}
 	}
-	return s
+	return s + "\n" + effectRules(m.computeMax())
 }
 
 // checkPendingLimit limits pending approvals per chat (Review H2).

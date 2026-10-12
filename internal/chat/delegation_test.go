@@ -211,8 +211,9 @@ func TestDelegationAuditOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	res, _ := e.m.PlatformCall(ctx, c.ID, e.m.live[c.ID].slot.ID, "api", platform.Request{Method: "DELETE", Path: "/models/3"})
-	if res.Status != "ok" || !strings.Contains(res.Violation, "delete model 3") || len(f.reached()) != 1 {
+	// A deleting call would ask anyway (irreversible, issue #63, also with confirm none); a write runs at once.
+	res, _ := e.m.PlatformCall(ctx, c.ID, e.m.live[c.ID].slot.ID, "api", platform.Request{Method: "PATCH", Path: "/models/3", Body: json.RawMessage(`{}`)})
+	if res.Status != "ok" || !strings.Contains(res.Violation, "update model 3") || len(f.reached()) != 1 {
 		t.Fatalf("log only: %+v %v", res, f.reached())
 	}
 	if _, err := e.m.Create(ctx, NewChat{Delegation: json.RawMessage(`{"rules":[{"action":"fly","resource":"dataset"}]}`)}); err == nil {
