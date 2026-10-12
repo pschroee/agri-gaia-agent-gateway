@@ -38,6 +38,14 @@ The output is `HTTP <code>` followed by JSON. Exit code 0 ok, 3 rejected by the 
 5. Start: `agw-platform start-training <train_container_id>`, follow with
    `agw-platform training-status <id>` and `agw-platform training-logs <id> --tail 50`.
 
+## Taking over a trained model
+
+Once a training is `exited`, `agw-platform model-from-training <train_container_id>` creates a platform model
+from it (ONNX when the training was created with an export). It needs approval. **Every call creates another
+model**, so do it once per training and only when the user wants the model. Without `export_config` in
+`create-training` the model has no tensor metadata and no inference container can be built from it; the example
+is in `agw-platform create-training --help`.
+
 ## Uploading files
 
 You upload files from the sandbox with two commands; the orchestrator reads them itself from the

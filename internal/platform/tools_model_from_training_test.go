@@ -138,3 +138,25 @@ func TestModelFromTrainingRefusesUnfinished(t *testing.T) {
 		}
 	}
 }
+
+func TestCreateTrainingExportConfigDescription(t *testing.T) {
+	tool, ok := Lookup("create_training")
+	if !ok {
+		t.Fatal("create_training not found")
+	}
+	var desc string
+	for _, p := range tool.Params {
+		if p.Name == "export_config" {
+			desc = p.Desc
+		}
+	}
+	if desc == "" {
+		t.Fatal("export_config has no description")
+	}
+	for _, want := range []string{"Always send it", "model.pt without tensor metadata", `"input_shapes":[[1,3,64,64]]`,
+		`"opset_version":18`, `"dynamo":false`, "img-size"} {
+		if !strings.Contains(desc, want) {
+			t.Errorf("description lacks %q", want)
+		}
+	}
+}
