@@ -8,6 +8,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
@@ -94,5 +96,34 @@ func TestSubagentMessageRoute(t *testing.T) {
 	}
 	if code, body := call(t, a, "POST", path, `{"text":"hallo"}`); code != 409 || !strings.Contains(body, "chat_in_trash") {
 		t.Errorf("chat in the trash: %d %s", code, body)
+	}
+}
+
+// Every refusal of a message to a subagent has its status and code; wrapped errors count the same.
+func TestSubagentMessageFailMapping(t *testing.T) {
+	cases := []struct {
+		err    error
+		status int
+		code   string
+	}{
+		{chat.ErrMessageRate, 429, "rate_limited"},
+		{chat.ErrSubagentForeground, 409, "foreground_run"},
+		{chat.ErrMessagePending, 409, "message_pending"},
+		{chat.ErrSubagentLimit, 409, "subagent_limit"},
+		{chat.ErrNotResumable, 409, "not_resumable"},
+		{chat.ErrSubagentsUnavailable, 409, "subagents_unavailable"},
+		{chat.ErrTrashed, 409, "chat_in_trash"},
+		{store.ErrNotFound, 404, ""},
+		{chat.ErrInvalid, 400, ""},
+		{fmt.Errorf("wrapped: %w", chat.ErrMessagePending), 409, "message_pending"},
+	}
+	for _, c := range cases {
+		rec := httptest.NewRecorder()
+		subagentMessageFail(rec, c.err)
+		var body map[string]string
+		_ = json.Unmarshal(rec.Body.Bytes(), &body)
+		if rec.Code != c.status || body["code"] != c.code {
+			t.Errorf("%v: %d %v, want %d %q", c.err, rec.Code, body, c.status, c.code)
+		}
 	}
 }
