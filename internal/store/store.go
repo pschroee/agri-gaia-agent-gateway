@@ -261,7 +261,7 @@ func OpenSchema(ctx context.Context, url, schema string) (*Store, error) {
 			return nil, err
 		}
 	}
-	if _, err := p.Exec(ctx, schemaSQL); err != nil {
+	if _, err := p.Exec(ctx, schemaSQL+"\n"+planSchemaSQL); err != nil {
 		p.Close()
 		return nil, fmt.Errorf("creating schema: %w", err)
 	}

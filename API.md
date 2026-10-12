@@ -350,6 +350,7 @@ type ActivityPage = { calls: ActivityCall[]; chats: Record<string, { id: string;
 | `GET /api/chats/{id}/llm_calls` | `LLMCall[]` | all model calls of the chat according to the proxy |
 | `GET /api/chats/{id}/tool_executions` | `{calls: ReconciledCall[], summary: Record<ReconciledCall["state"], number>, executions: ToolExecution[], executed_tools: string[]}` | tool executions of the orchestrator and reconciliation with the calls requested at the proxy (E9), sorted by time |
 | `GET /api/chats/{id}/subagent-runs` | `SubagentRunSummary[]` | short list of the chat's subagent runs in the order they started, from the database alone: does not wake the chat and takes no slot; 404 for foreign and unknown chats. See *Subagent runs without opening a chat* |
+| `GET /api/chats/{id}/plans` | `Plan[]` | plans of the chat, oldest first, with their steps; 404 for foreign and unknown chats. See *Plans with one approval* |
 | `POST /api/chats/{id}/subagents` | 410 | removed: the subagent limit is fixed for the service (see *Limit for subagents*); the answer says so |
 | `POST /api/chats/{id}/messages` `{text, attachments?: string[], context?: PageContext}` | `SendResult` | sends (`context`: see *Page context*; invalid: 400); a dormant chat is resumed in a fresh sandbox (response after resuming, steps beforehand via SSE `resume`). If pi is working, the chat is being resumed or another instruction is in flight, the message is queued (`queued: true`, see *Queue*). Held entries go along |
 | `GET /api/chats/{id}/queue` | `QueueEntry[]` | open entries of the queue |
@@ -860,6 +861,46 @@ Every upload is a `SocketCall` with `op: "upload"`, `detail: "<name> (<n> bytes,
 "stored"` (or `rejected: …`, `refused: …`, `error: …`) and the `tool_call_id` of the call. The response at the
 socket is `{status: "stored" | "rejected", name, size, sha256, message?, text}`; `text` is the line the agent reads
 (`sent: "<name>" is in the chat for the user (…)`). `agw-artifact upload` exits with 0 when sent, 1 otherwise.
+
+## Plans with one approval
+
+An agent proposes several writing platform calls at once with `propose_plan` (CLI `agw-platform propose-plan`, MCP
+`platform_propose_plan`, REST `POST /platform-api/_agw/plan`, body = the plan). One approval by the user covers the
+steps; each step then runs without a new approval, if the call matches the next open step exactly. Issue #70; the
+effects come from the delegation rules once #63 is merged (until then `plan.FallbackEffect`).
+Status of the work: the proposal, the approval and the stored plan exist; until the matching in `PlatformCall` is
+merged (strand G-B), an approved plan does not yet change how the steps are approved.
+
+- **Proposal:** `{"title": string (1 to 120 characters), "steps": [step]}`, at most 10 steps. A step is either
+  `{"tool": "<platform tool>", "args": {...}}` or `{"method", "path", "query", "body"}`, each with an optional
+  `description` (at most 200 characters). Unknown fields, duplicate keys and reading calls are refused. Plans cannot
+  contain `propose_plan`, `rights` or `/_agw/…`.
+- **Placeholders:** the id of an object an earlier step created is written `"{{stepN.id}}"`, as a whole argument, body
+  value, path segment or query value. It resolves only to an object that this plan created in this chat (the
+  provenance register `delegation_objects`), and only once that step is `done`. A placeholder may point only backwards,
+  and only at steps whose delegation action is `create` or `run`.
+- **Matching:** after the delegation check, a non-reading call matches the next open step only if method, path, query,
+  canonical body (key order and whitespace ignored, numbers as written), form and upload SHA-256 are equal. The step is
+  then claimed (`running`) and runs without a new approval. Any other call needs its own approval.
+- **Irreversible steps** (delete, toggle-public, and what #63 classifies as irreversible) are shown in the plan with
+  `covered: false`. They still ask for their own approval; the plan does not approve them.
+- **Validity:** 30 minutes after the approval (`expires_at`), bound to the chat and to the agent session (main agent
+  or subagent run). A newly approved plan of the same session ends the older approved ones (`superseded`). A failed
+  step fails the plan; when all steps are done it is `completed`. A restart fails running steps and expires proposals.
+- **Uploads:** the orchestrator reads each uploaded file when the plan is proposed and writes its SHA-256 into the
+  step; the approval covers that content. Hashes written by the agent are replaced.
+- **Approval:** `Approval.kind` is `plan`; the preview lists every step with its effect and parameters. Answer after
+  approval: `{"plan_id", "state": "approved", "expires_at", "steps": [{"step", "call", "effect", "covered"}], "note"}`
+  with status `ok`. A rejected or expired plan answers `rejected` and executes nothing.
+- **Types:** `Plan = {id, chat_id, approval_id?, title, session?, tool_call_id?, via, state, created_at, decided_at?,
+  expires_at?, steps: PlanStep[]}`; `PlanStep = {idx, description?, tool?, method, path, query?, body?, body_sha256?,
+  form?, form_sha256?, files?: {field, path, sha256}[], effect, covered, state, result?, created_resource?, created_id?,
+  done_at?}`. Plan states: `proposed | approved | rejected | expired | completed | failed | superseded`; step states:
+  `open | running | done | failed`.
+- **Endpoint:** `GET /api/chats/{id}/plans` → `Plan[]`, oldest first; 404 for foreign and unknown chats. SSE
+  `GET /api/chats/{id}/events` sends `plan` with the `Plan` on every change of state. `plan` is not a cross-chat kind.
+- **Limits of the design:** the session is taken from a header in the CLI, which the agent can change; MCP and REST
+  have no `tool_call_id`. In the activity a proposal appears as the platform call `POST /_agw/plan`.
 
 ## Tool executions (E9)
 

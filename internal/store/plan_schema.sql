@@ -1,0 +1,44 @@
+-- SPDX-FileCopyrightText: 2026 Philipp Schröer
+--
+-- SPDX-License-Identifier: MIT
+
+-- Plans with one approval (issue #70). Executed after schema.sql at every start; idempotent.
+-- Text instead of jsonb for bodies and queries: jsonb would reorder keys and normalise numbers,
+-- and the exact match of a call against its step depends on the stored bytes.
+
+CREATE TABLE IF NOT EXISTS plans (
+    id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    chat_id      uuid NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+    approval_id  text NOT NULL DEFAULT '',
+    title        text NOT NULL,
+    session      text NOT NULL DEFAULT '',
+    tool_call_id text NOT NULL DEFAULT '',
+    via          text NOT NULL,
+    state        text NOT NULL DEFAULT 'proposed',  -- proposed | approved | rejected | expired | completed | failed | superseded
+    created_at   timestamptz NOT NULL DEFAULT now(),
+    decided_at   timestamptz,
+    expires_at   timestamptz
+);
+CREATE INDEX IF NOT EXISTS plans_chat ON plans (chat_id, created_at);
+
+CREATE TABLE IF NOT EXISTS plan_steps (
+    plan_id          uuid NOT NULL REFERENCES plans(id) ON DELETE CASCADE,
+    idx              integer NOT NULL,                  -- from 1
+    description      text NOT NULL DEFAULT '',
+    tool             text NOT NULL DEFAULT '',          -- empty for a raw call
+    method           text NOT NULL,
+    path             text NOT NULL,                     -- may contain {{stepN.id}}
+    query            text NOT NULL DEFAULT '',
+    body             text NOT NULL DEFAULT '',
+    body_sha256      text NOT NULL DEFAULT '',
+    form             text NOT NULL DEFAULT '',
+    form_sha256      text NOT NULL DEFAULT '',
+    files            text NOT NULL DEFAULT '[]',        -- JSON [{field,path,sha256}]
+    effect           text NOT NULL,                     -- read | write | compute | irreversible
+    state            text NOT NULL DEFAULT 'open',      -- open | running | done | failed
+    result           text NOT NULL DEFAULT '',
+    created_resource text NOT NULL DEFAULT '',
+    created_id       text NOT NULL DEFAULT '',
+    done_at          timestamptz,
+    PRIMARY KEY (plan_id, idx)
+);

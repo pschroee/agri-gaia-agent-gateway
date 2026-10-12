@@ -23,7 +23,8 @@ const description = `Calls the REST API of the Agri-Gaia platform (datasets, mod
 - Which paths exist: GET /_agw/paths (one line per operation, narrow down with query prefix=/train). Which rights you have: GET /_agw/rights.
 - Body only as JSON; files cannot be uploaded this way.
 - Response 403 with "denied by the authorization service": outside your rights, do not try another way. 403 with "rejected by the user": the user rejected the writing call.
-- Writing calls wait until the user decides.`;
+- Writing calls wait until the user decides.
+- Two or more writing calls in a row: propose them once with POST /_agw/plan (body {"title": …, "steps": [{"method","path","query","body","description"}]}); the user approves the plan once, and each call that matches the next step exactly then runs without a new approval. An id from an earlier step is written as "{{stepN.id}}".`;
 
 function call(method: string, path: string, query: Record<string, string> | undefined, body: unknown, signal?: AbortSignal): Promise<{ status: number; headers: any; text: string }> {
 	let full = PREFIX + (path.startsWith("/") ? path : "/" + path);

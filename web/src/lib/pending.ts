@@ -22,13 +22,14 @@ export function pendingMenuItems(approvals: Approval[], titles: Record<string, s
     .map((a) => {
       const internet = a.kind === "internet_access"
       const plattform = a.kind === "platform_write"
-      let detail = internet || plattform ? a.name : `${a.name} · ${formatBytes(a.size)}`
+      const plan = a.kind === "plan"
+      let detail = internet || plattform || plan ? a.name : `${a.name} · ${formatBytes(a.size)}`
       if (detail.length > MAX_DETAIL) detail = detail.slice(0, MAX_DETAIL - 1) + "…"
       return {
         id: a.id,
         chatId: a.chat_id,
         chatTitle: titles[a.chat_id] ?? `Chat ${a.chat_id.slice(0, 8)}`,
-        label: internet ? "Internet access" : plattform ? "Platform call" : "Upload artifact",
+        label: internet ? "Internet access" : plattform ? "Platform call" : plan ? "Plan" : "Upload artifact",
         detail,
         createdAt: a.created_at,
         href: `#/chats/${a.chat_id}`,

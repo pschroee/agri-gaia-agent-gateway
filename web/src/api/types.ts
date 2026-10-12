@@ -378,8 +378,9 @@ export type Approval = {
    * artifact_upload: upload a file (only in older chats: since issue #62 the agent sends files without approval);
    * internet_access: request for internet access, `name` is the reason;
    * platform_write: writing call to the Agri-Gaia platform, `name` is "METHOD path", `preview` including the body.
+   * plan: several platform calls approved at once (issue #70), `name` is "Plan: <title>", `preview` lists the steps.
    */
-  kind: "artifact_upload" | "internet_access" | "platform_write"
+  kind: "artifact_upload" | "internet_access" | "platform_write" | "plan"
   via: "cli" | "mcp"
   name: string
   size: number

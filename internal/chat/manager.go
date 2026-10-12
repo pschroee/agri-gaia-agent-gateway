@@ -1979,6 +1979,9 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 	if req.Path == platform.RightsPath {
 		return platform.Result{Status: "ok", HTTPStatus: 200, Body: m.rightsText(ctx, chatID, del)}, nil
 	}
+	if req.Path == platform.PlanPath {
+		return m.ProposePlan(ctx, chatID, slotID, via, req)
+	}
 	// Delegation (step 1): classification from method and path alone, check before any confirmation.
 	access := delegation.Classify(req)
 	// Field allowlists hold without a delegation too (issue #65): a body with a field the platform would take
@@ -2302,6 +2305,9 @@ func (m *Manager) syncInputs(ctx context.Context, chatID string, a Agent) (files
 func (m *Manager) Recover(ctx context.Context) error {
 	n, err := m.st.ExpirePendingApprovals(ctx)
 	if err != nil {
+		return err
+	}
+	if err := m.st.RecoverPlans(ctx); err != nil {
 		return err
 	}
 	active, err := m.st.ChatsInState(ctx, store.StateActive)
