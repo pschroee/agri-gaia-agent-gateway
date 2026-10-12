@@ -300,6 +300,7 @@ func TestComputeNotAcceptedGivesBack(t *testing.T) {
 // Rights name the classes and the compute limit (the agent reads them through /_agw/rights).
 func TestRightsNameEffects(t *testing.T) {
 	e := setup(t)
+	withPlatform(t, e)
 	ctx := context.Background()
 	c, _ := e.m.Create(ctx, NewChat{})
 	r, err := e.m.PlatformCall(ctx, c.ID, e.m.live[c.ID].slot.ID, "cli", platform.Request{Method: "GET", Path: platform.RightsPath})

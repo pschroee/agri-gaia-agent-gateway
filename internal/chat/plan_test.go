@@ -10,10 +10,13 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 
 	"agw/internal/plan"
 	"agw/internal/platform"
@@ -23,7 +26,7 @@ import (
 // planTwo: a GET that creates model 42 (the fake platform answers so), then a rename of it.
 const planTwo = `{"title":"Model and rename","steps":[
  {"method":"GET","path":"/train/containers/7/model"},
- {"method":"PATCH","path":"/models/{{step1.id}}","body":{"name":"pigs v1"}}]}`
+ {"method":"PATCH","path":"/models/{{step1.id}}","body":{"name":"pigs v1","format":"onnx","input_name":"i","input_datatype":"float32","input_shape":[1,3],"input_semantics":"NCHW","output_name":"o","output_datatype":"float32","output_shape":[1,2],"output_labels":["0","1"]}}]}`
 
 // withPlanPlatform answers GET /train/containers/7/model with model 42 and every other call with {}.
 func withPlanPlatform(t *testing.T, e *env) { withPlanPlatformPatch(t, e, http.StatusOK) }
@@ -190,7 +193,7 @@ func TestPlanMatchOrder(t *testing.T) {
 	ctx := store.WithSession(context.Background(), "main")
 	c, _ := e.m.Create(ctx, NewChat{})
 	pl := approvedPlan(t, e, ctx, c.ID, planTwo)
-	if st := e.m.planMatch(ctx, c.ID, liveCall(t, "PATCH", "/models/42", `{"name":"pigs v1"}`)); st != nil {
+	if st := e.m.planMatch(ctx, c.ID, liveCall(t, "PATCH", "/models/42", `{"name":"pigs v1","format":"onnx","input_name":"i","input_datatype":"float32","input_shape":[1,3],"input_semantics":"NCHW","output_name":"o","output_datatype":"float32","output_shape":[1,2],"output_labels":["0","1"]}`)); st != nil {
 		t.Fatalf("second step matched before the first: %+v", st)
 	}
 	if p, _ := e.st.GetPlan(ctx, pl.ID); p.Steps[0].State != plan.StepOpen {
@@ -209,7 +212,7 @@ func TestPlanMatchPlaceholderOwnObjectsOnly(t *testing.T) {
 	if ok, err := e.st.FinishPlanStep(ctx, pl.ID, 1, plan.StepRunning, plan.StepDone, "ok", "model", "42"); err != nil || !ok {
 		t.Fatalf("finish: %v %v", ok, err)
 	}
-	rename := liveCall(t, "PATCH", "/models/42", `{"name":"pigs v1"}`)
+	rename := liveCall(t, "PATCH", "/models/42", `{"name":"pigs v1","format":"onnx","input_name":"i","input_datatype":"float32","input_shape":[1,3],"input_semantics":"NCHW","output_name":"o","output_datatype":"float32","output_shape":[1,2],"output_labels":["0","1"]}`)
 	if st := e.m.planMatch(ctx, c.ID, rename); st != nil {
 		t.Fatalf("id not in the register matched: %+v", st)
 	}
@@ -283,7 +286,7 @@ func TestPlanRecover(t *testing.T) {
 // planCover: a GET that creates model 42, then a PATCH whose body has two keys (the call may order them differently).
 const planCover = `{"title":"Create and tag","steps":[
  {"method":"GET","path":"/train/containers/7/model"},
- {"method":"PATCH","path":"/models/{{step1.id}}","body":{"name":"pigs v1","tag":"a"}}]}`
+ {"method":"PATCH","path":"/models/{{step1.id}}","body":{"name":"pigs v1","format":"onnx","input_name":"i","input_datatype":"float32","input_shape":[1,3],"input_semantics":"NCHW","output_name":"a","output_datatype":"float32","output_shape":[1,2],"output_labels":["0","1"]}}]}`
 
 // planDelete: a GET that creates model 42, then an irreversible DELETE of it.
 const planDelete = `{"title":"Create and delete","steps":[
@@ -293,8 +296,8 @@ const planDelete = `{"title":"Create and delete","steps":[
 // planThree: a GET that creates model 42, then two renames; the second one follows a failed step.
 const planThree = `{"title":"Three steps","steps":[
  {"method":"GET","path":"/train/containers/7/model"},
- {"method":"PATCH","path":"/models/{{step1.id}}","body":{"name":"pigs v1"}},
- {"method":"PATCH","path":"/models/{{step1.id}}","body":{"name":"pigs v2"}}]}`
+ {"method":"PATCH","path":"/models/{{step1.id}}","body":{"name":"pigs v1","format":"onnx","input_name":"i","input_datatype":"float32","input_shape":[1,3],"input_semantics":"NCHW","output_name":"o","output_datatype":"float32","output_shape":[1,2],"output_labels":["0","1"]}},
+ {"method":"PATCH","path":"/models/{{step1.id}}","body":{"name":"pigs v2","format":"onnx","input_name":"i","input_datatype":"float32","input_shape":[1,3],"input_semantics":"NCHW","output_name":"o","output_datatype":"float32","output_shape":[1,2],"output_labels":["0","1"]}}]}`
 
 // onlyPlan returns the single plan of a chat.
 func onlyPlan(t *testing.T, e *env, ctx context.Context, chatID string) store.Plan {
@@ -334,7 +337,7 @@ func TestPlanCoversSteps(t *testing.T) {
 	if r, err := e.m.PlatformCall(ctx, c.ID, slot, "cli", liveCall(t, "GET", "/train/containers/7/model", "")); err != nil || r.Status != "ok" {
 		t.Fatalf("step 1: %+v %v", r, err)
 	}
-	if r, err := e.m.PlatformCall(ctx, c.ID, slot, "cli", liveCall(t, "PATCH", "/models/42", `{"tag":"a","name":"pigs v1"}`)); err != nil || r.Status != "ok" {
+	if r, err := e.m.PlatformCall(ctx, c.ID, slot, "cli", liveCall(t, "PATCH", "/models/42", `{"output_name":"a","name":"pigs v1","format":"onnx","input_name":"i","input_datatype":"float32","input_shape":[1,3],"input_semantics":"NCHW","output_datatype":"float32","output_shape":[1,2],"output_labels":["0","1"]}`)); err != nil || r.Status != "ok" {
 		t.Fatalf("step 2: %+v %v", r, err)
 	}
 	if kinds := approvalKinds(t, e, ctx, c.ID); len(kinds) != 1 || kinds[0] != "plan" {
@@ -358,7 +361,7 @@ func TestPlanChangedCallNeedsApproval(t *testing.T) {
 	if r, err := e.m.PlatformCall(ctx, c.ID, slot, "cli", liveCall(t, "GET", "/train/containers/7/model", "")); err != nil || r.Status != "ok" {
 		t.Fatalf("step 1: %+v %v", r, err)
 	}
-	changed := liveCall(t, "PATCH", "/models/42", `{"name":"other"}`)
+	changed := liveCall(t, "PATCH", "/models/42", `{"name":"other","format":"onnx","input_name":"i","input_datatype":"float32","input_shape":[1,3],"input_semantics":"NCHW","output_name":"o","output_datatype":"float32","output_shape":[1,2],"output_labels":["0","1"]}`)
 	done := make(chan platform.Result, 1)
 	go func() {
 		r, _ := e.m.PlatformCall(ctx, c.ID, slot, "cli", changed)
@@ -427,7 +430,7 @@ func TestPlanSameOverCLIMCPREST(t *testing.T) {
 		if r, err := e.m.PlatformCall(ctx, c.ID, slot, via, liveCall(t, "GET", "/train/containers/7/model", "")); err != nil || r.Status != "ok" {
 			t.Fatalf("%s: step 1 %+v %v", via, r, err)
 		}
-		if r, err := e.m.PlatformCall(ctx, c.ID, slot, via, liveCall(t, "PATCH", "/models/42", `{"tag":"a","name":"pigs v1"}`)); err != nil || r.Status != "ok" {
+		if r, err := e.m.PlatformCall(ctx, c.ID, slot, via, liveCall(t, "PATCH", "/models/42", `{"output_name":"a","name":"pigs v1","format":"onnx","input_name":"i","input_datatype":"float32","input_shape":[1,3],"input_semantics":"NCHW","output_datatype":"float32","output_shape":[1,2],"output_labels":["0","1"]}`)); err != nil || r.Status != "ok" {
 			t.Fatalf("%s: step 2 %+v %v", via, r, err)
 		}
 		if kinds := approvalKinds(t, e, ctx, c.ID); len(kinds) != 1 || kinds[0] != "plan" {
@@ -449,14 +452,14 @@ func TestPlanFailedStepEndsPlan(t *testing.T) {
 	if r, err := e.m.PlatformCall(ctx, c.ID, slot, "cli", liveCall(t, "GET", "/train/containers/7/model", "")); err != nil || r.Status != "ok" {
 		t.Fatalf("step 1: %+v %v", r, err)
 	}
-	if r, err := e.m.PlatformCall(ctx, c.ID, slot, "cli", liveCall(t, "PATCH", "/models/42", `{"name":"pigs v1"}`)); err != nil || r.Status == "ok" {
+	if r, err := e.m.PlatformCall(ctx, c.ID, slot, "cli", liveCall(t, "PATCH", "/models/42", `{"name":"pigs v1","format":"onnx","input_name":"i","input_datatype":"float32","input_shape":[1,3],"input_semantics":"NCHW","output_name":"o","output_datatype":"float32","output_shape":[1,2],"output_labels":["0","1"]}`)); err != nil || r.Status == "ok" {
 		t.Fatalf("step 2 should fail: %+v %v", r, err)
 	}
 	p := onlyPlan(t, e, ctx, c.ID)
 	if p.State != "failed" || p.Steps[1].State != plan.StepFailed || p.Steps[2].State != plan.StepOpen {
 		t.Fatalf("after the failed step: plan %s, steps %+v", p.State, p.Steps)
 	}
-	next := liveCall(t, "PATCH", "/models/42", `{"name":"pigs v2"}`)
+	next := liveCall(t, "PATCH", "/models/42", `{"name":"pigs v2","format":"onnx","input_name":"i","input_datatype":"float32","input_shape":[1,3],"input_semantics":"NCHW","output_name":"o","output_datatype":"float32","output_shape":[1,2],"output_labels":["0","1"]}`)
 	done := make(chan platform.Result, 1)
 	go func() {
 		r, _ := e.m.PlatformCall(ctx, c.ID, slot, "cli", next)
@@ -471,5 +474,67 @@ func TestPlanFailedStepEndsPlan(t *testing.T) {
 	}
 	if r := <-done; r.Status != "rejected" {
 		t.Fatalf("next call: %+v", r)
+	}
+}
+
+// failComputeReserve makes every update of chats.compute_calls fail in the chat's test schema, so that
+// ReserveCompute errors after the plan step was claimed.
+func failComputeReserve(t *testing.T, chatID string) {
+	t.Helper()
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, os.Getenv("AGW_TEST_DATABASE_URL"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { conn.Close(context.Background()) })
+	rows, err := conn.Query(ctx, `SELECT table_schema FROM information_schema.tables WHERE table_name='chats' AND table_schema LIKE 'chattest\_%'`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schemas []string
+	for rows.Next() {
+		var s string
+		if err := rows.Scan(&s); err != nil {
+			t.Fatal(err)
+		}
+		schemas = append(schemas, s)
+	}
+	rows.Close()
+	for _, s := range schemas {
+		var n int
+		if err := conn.QueryRow(ctx, fmt.Sprintf(`SELECT count(*) FROM %s.chats WHERE id=$1`, pgx.Identifier{s}.Sanitize()), chatID).Scan(&n); err != nil || n == 0 {
+			continue
+		}
+		q := pgx.Identifier{s}.Sanitize()
+		if _, err := conn.Exec(ctx, fmt.Sprintf(`CREATE FUNCTION %s.fail_reserve() RETURNS trigger AS $$ BEGIN RAISE EXCEPTION 'reserve refused'; END $$ LANGUAGE plpgsql`, q)); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := conn.Exec(ctx, fmt.Sprintf(`CREATE TRIGGER fail_reserve BEFORE UPDATE OF compute_calls ON %s.chats FOR EACH ROW EXECUTE FUNCTION %s.fail_reserve()`, q, q)); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	t.Fatal("test schema of the chat not found")
+}
+
+// A claimed plan step that returns before the call to the platform (here: ReserveCompute fails) must not
+// stay running: the step fails and so does the plan.
+func TestPlanClaimedStepFailsOnEarlyReturn(t *testing.T) {
+	e := setup(t)
+	withPlanPlatform(t, e)
+	ctx := store.WithSession(context.Background(), "main")
+	c, _ := e.m.Create(ctx, NewChat{})
+	slot := e.m.live[c.ID].slot.ID
+	const body = `{"title":"Run","steps":[{"method":"POST","path":"/train/containers/7/run"}]}`
+	if r, _ := proposeAndDecide(t, e, ctx, c.ID, slot, body, true); r.Status != "ok" {
+		t.Fatalf("plan: %+v", r)
+	}
+	failComputeReserve(t, c.ID)
+	if _, err := e.m.PlatformCall(ctx, c.ID, slot, "cli", liveCall(t, "POST", "/train/containers/7/run", "")); err == nil {
+		t.Fatal("expected the reservation error")
+	}
+	p := onlyPlan(t, e, ctx, c.ID)
+	if p.State != "failed" || p.Steps[0].State != plan.StepFailed {
+		t.Fatalf("after the early return: plan %s, step %+v", p.State, p.Steps[0])
 	}
 }

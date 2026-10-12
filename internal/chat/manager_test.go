@@ -1832,7 +1832,7 @@ func TestCreateAsyncWaitsForSlotInBackground(t *testing.T) {
 	e := setup(t)
 	ctx := context.Background()
 	waitIdleSlot(t, e)
-	release := e.holdStarts(t) // before taking the slot, so that the refill hangs too
+	release := e.holdStarts(t)                            // before taking the slot, so that the refill hangs too
 	if _, err := e.m.Create(ctx, NewChat{}); err != nil { // takes the only warm slot
 		t.Fatal(err)
 	}

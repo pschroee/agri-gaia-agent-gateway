@@ -60,7 +60,12 @@ func ReadJSON(ctx context.Context, do Doer, r Request, v any) (res Result, stop 
 	if err != nil {
 		return res, true, err
 	}
-	if res.Status != "ok" || res.HTTPStatus < 200 || res.HTTPStatus >= 300 {
+	if res.Status != "ok" {
+		return res, true, nil
+	}
+	if res.HTTPStatus < 200 || res.HTTPStatus >= 300 {
+		res.Status = "error"
+		res.Message = fmt.Sprintf("%s: the platform answered HTTP %d", r.String(), res.HTTPStatus)
 		return res, true, nil
 	}
 	d := json.NewDecoder(bytes.NewReader([]byte(res.Body)))
