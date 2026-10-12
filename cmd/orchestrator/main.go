@@ -154,6 +154,7 @@ func run() error {
 		ArtifactMaxBytes: env.ArtifactMaxBytes, InternetDefault: env.InternetDefault, ImageMaxBytes: env.ImageMaxBytes,
 		WorkspaceMaxBytes:  env.WorkspaceMaxBytes,
 		MaxSubagents:       env.MaxSubagents,
+		ComputeMaxPerChat:  env.ComputeMaxPerChat,
 		AutoCompactDefault: env.AutoCompactDefault, CompactReserveTokens: env.CompactReserveTokens, CompactKeepRecent: env.CompactKeepRecent,
 		BgWakesPerHour: env.BgWakesPerHour, BgKeepAlive: env.BgKeepAlive, AutoTurnsMax: env.AutoTurnsMax,
 		Titler: newTitler(cat, env.TitleModel), Platform: plat, Toolsets: toolsets,

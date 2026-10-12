@@ -369,6 +369,9 @@ export type Artifact = {
   tool_call_id?: string
 }
 
+/** Class of a platform call (gateway issue #63): what it does, and whether the user must approve it. */
+export type Effect = "read" | "write" | "compute" | "irreversible"
+
 export type ApprovalState = "pending" | "approved" | "rejected" | "expired"
 
 export type Approval = {
@@ -395,6 +398,8 @@ export type Approval = {
   tool_call_id?: string
   /** Platform calls: round trip to the platform in ms, without the approval's wait (missing: not measured). */
   duration_ms?: number
+  /** platform_write: class of the call (missing on older entries). */
+  effect?: Effect
 }
 
 export type SocketCall = {
@@ -410,6 +415,8 @@ export type SocketCall = {
   /** "main" or a subagent run that made the call (empty: unknown). */
   session?: string
   tool_call_id?: string
+  /** Platform calls: class of the call (missing on older entries). */
+  effect?: Effect
 }
 
 export type ChatDetail = {

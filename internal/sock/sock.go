@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"agw/internal/artifacts"
+	"agw/internal/delegation"
 	"agw/internal/execproto"
 	"agw/internal/platform"
 	"agw/internal/store"
@@ -481,6 +482,8 @@ func (h *handler) runPlatform(ctx context.Context, chat, via string, req platfor
 	switch {
 	case res.Status == "denied":
 		result = "violation blocked: " + res.Message
+	case res.Status == "error" && strings.HasPrefix(res.Message, platform.RefusedPrefix):
+		result = res.Message // refused by the gateway before the platform (issue #63)
 	case res.Violation != "":
 		result += " · violation, logged only: " + res.Violation
 	}
@@ -489,6 +492,9 @@ func (h *handler) runPlatform(ctx context.Context, chat, via string, req platfor
 	}
 	if res.Duration > 0 {
 		ctx = store.WithDuration(ctx, res.Duration)
+	}
+	if eff := delegation.Classify(req).Effect; eff.Valid() {
+		ctx = store.WithEffect(ctx, string(eff))
 	}
 	h.logCall(ctx, chat, via, "platform", req.String(), result)
 	return res, err

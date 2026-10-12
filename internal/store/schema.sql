@@ -389,3 +389,10 @@ ALTER TABLE chat_queue ADD COLUMN IF NOT EXISTS context jsonb;
 -- Size in bytes of the request body of a model call that the proxy forwarded unchanged (issue #69). Sizes only, never
 -- contents. NULL: not measured (older rows).
 ALTER TABLE llm_calls ADD COLUMN IF NOT EXISTS request_bytes bigint;
+
+-- Effect class of a platform call (issue #63): read, write, compute or irreversible; NULL for older
+-- entries and for calls that are no platform calls. Approvals carry the class of the call they ask about.
+ALTER TABLE approvals ADD COLUMN IF NOT EXISTS effect text;
+ALTER TABLE socket_calls ADD COLUMN IF NOT EXISTS effect text;
+-- Compute calls per chat that the platform accepted (issue #63), counted against AGW_COMPUTE_MAX_PER_CHAT.
+ALTER TABLE chats ADD COLUMN IF NOT EXISTS compute_calls integer NOT NULL DEFAULT 0;

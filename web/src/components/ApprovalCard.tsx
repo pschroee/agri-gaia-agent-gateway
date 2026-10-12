@@ -6,6 +6,7 @@ import type { Approval } from "@/api/types"
 import { AgentOrigin } from "@/components/AgentOrigin"
 import { ApprovalStateBadge } from "@/components/badges"
 import { Button } from "@/components/ui/button"
+import { approvalEffect, EFFECT_BADGE, EFFECT_LABEL } from "@/lib/effect"
 import { formatBytes, formatTime, shortHash } from "@/lib/format"
 import { isSubagentSession, type SubagentRun } from "@/lib/subagents"
 import { cn } from "@/lib/utils"
@@ -76,23 +77,48 @@ export function ApprovalCard({ approval: a, onDecided, compact, chatLabel, runs 
   }
 
   if (a.kind === "platform_write") {
+    const effect = approvalEffect(a)
+    // An irreversible call stands out in red while it waits, and its preview is shown in full.
+    const danger = pending && effect === "irreversible"
     return (
       <div
+        data-effect={effect}
         className={cn(
           "rounded-lg border p-3 text-sm",
-          pending ? "border-violet-400 bg-violet-50 shadow-sm ring-1 ring-violet-300" : "bg-muted/40",
+          danger
+            ? "border-red-500 bg-red-50 shadow-sm ring-1 ring-red-400"
+            : pending
+              ? "border-violet-400 bg-violet-50 shadow-sm ring-1 ring-violet-300"
+              : "bg-muted/40",
         )}
       >
         <div className="flex flex-wrap items-center gap-2">
-          <ServerIcon className={cn("size-4", pending ? "text-violet-600" : "text-muted-foreground")} />
+          <ServerIcon
+            className={cn("size-4", danger ? "text-red-600" : pending ? "text-violet-600" : "text-muted-foreground")}
+          />
           <span className="font-medium">{who} wants to write to the Agri-Gaia platform</span>
+          {effect && (
+            <span className={cn("rounded px-1.5 py-0.5 text-xs font-medium ring-1", EFFECT_BADGE[effect])}>
+              {EFFECT_LABEL[effect]}
+            </span>
+          )}
           <ApprovalStateBadge state={a.state} />
           {origin}
           {chatLabel}
         </div>
         <div className="mt-2 font-mono text-xs break-all">{a.name}</div>
+        {danger && (
+          <div className="mt-2 font-medium text-red-700">
+            This cannot be undone. Check every parameter before you execute it.
+          </div>
+        )}
         {!compact && a.preview && a.preview !== a.name && (
-          <pre className="mt-2 max-h-64 overflow-auto rounded border bg-background p-2 font-mono text-xs whitespace-pre-wrap">
+          <pre
+            className={cn(
+              "mt-2 overflow-auto rounded border bg-background p-2 font-mono text-xs whitespace-pre-wrap",
+              effect !== "irreversible" && "max-h-64",
+            )}
+          >
             {a.preview.slice(a.name.length).trim()}
           </pre>
         )}
