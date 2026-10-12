@@ -200,6 +200,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				c.Model = provID + "/" + model
 				c.StartedAt, c.Duration = started, time.Since(started)
 				c.DurationMs = c.Duration.Milliseconds()
+				c.RequestBytes = int64(len(body))
 				if cost, peak, ok := p.cat.Cost(c.Model, c.Usage, started); ok {
 					c.Cost, c.Peak = cost, peak
 				}

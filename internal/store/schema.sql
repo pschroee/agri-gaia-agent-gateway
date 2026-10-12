@@ -385,3 +385,7 @@ CREATE INDEX IF NOT EXISTS socket_calls_activity ON socket_calls (id) WHERE op I
 -- when sending ({page, object?: {kind, id, name?}}, checked by chat.ParsePageContext); NULL: none. Goes to the agent
 -- as an orchestrator note for the model only, never as user text, and grants no rights.
 ALTER TABLE chat_queue ADD COLUMN IF NOT EXISTS context jsonb;
+
+-- Size in bytes of the request body of a model call that the proxy forwarded unchanged (issue #69). Sizes only, never
+-- contents. NULL: not measured (older rows).
+ALTER TABLE llm_calls ADD COLUMN IF NOT EXISTS request_bytes bigint;

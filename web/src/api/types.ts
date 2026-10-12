@@ -449,6 +449,8 @@ export type LLMCall = {
   finish_reason?: string
   /** Response arrived completely (at the proxy with finish_reason); missing on older entries */
   complete?: boolean
+  /** Size of the request body sent to the provider in bytes (issue #69); missing on older entries */
+  request_bytes?: number
 }
 
 /**

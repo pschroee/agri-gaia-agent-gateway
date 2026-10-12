@@ -191,6 +191,13 @@ refer to this repository.
   Subscribe before reading the snapshot. A new kind there needs the owner filter and a case in
   `internal/api/events_test.go` (foreign events must not appear). Rules in `API.md`, *SSE `GET /api/events`*.
 
+## Request sizes at the LLM proxy
+
+- `llmproxy.Call.RequestBytes` (issue #69) is the length of the request body that `Proxy.ServeHTTP` read from the
+  sandbox and forwarded unchanged to the provider. It is stored in `llm_calls.request_bytes` (NULL for older rows and
+  for 0, see `chat.requestBytes`), returned as `request_bytes` by `GET /api/chats/{id}/llm_calls` and the SSE event
+  `llm_call`. Sizes only, never contents. The frontend shows it as "Sent to model" in the expanded activity row.
+
 ## Testing
 
 - `./dev.sh test` is the everyday check, before every commit and before every push: Go with Postgres (with Go's
