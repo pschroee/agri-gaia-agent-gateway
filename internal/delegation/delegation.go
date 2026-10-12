@@ -168,6 +168,8 @@ type Access struct {
 	ID       string   `json:"id,omitempty"`
 	Also     []Access `json:"also,omitempty"`
 	Problem  string   `json:"problem,omitempty"`
+	// Effect is the class of the call (effect.go); empty only if it could not be determined.
+	Effect Effect `json:"effect,omitempty"`
 }
 
 func (a Access) String() string {
@@ -189,11 +191,24 @@ type route struct {
 	re       *regexp.Regexp
 	action   string
 	resource string
-	idGroup  int // group holding the identifier, 0: without object
+	idGroup  int    // group holding the identifier, 0: without object
+	effect   Effect // class of the call; empty: the class of the action
 }
 
 func r(method, pattern, action, resource string, idGroup int) route {
-	return route{method, regexp.MustCompile("^" + pattern + "$"), action, resource, idGroup}
+	return route{
+		method:   method,
+		re:       regexp.MustCompile("^" + pattern + "$"),
+		action:   action,
+		resource: resource,
+		idGroup:  idGroup,
+	}
+}
+
+// as sets the effect class of a route whose class differs from its action.
+func (rt route) as(e Effect) route {
+	rt.effect = e
+	return rt
 }
 
 const seg = `([^/]+)`
@@ -212,7 +227,7 @@ var routes = []route{
 	// Writing GET: fetches the annotation from CVAT and writes it to MinIO (Review 5, W5).
 	r("GET", `/datasets/`+seg+`/download`, Update, Dataset, 1),
 	r("PATCH", `/datasets/`+seg, Update, Dataset, 1),
-	r("PATCH", `/datasets/`+seg+`/toggle-public`, Update, Dataset, 1),
+	r("PATCH", `/datasets/`+seg+`/toggle-public`, Update, Dataset, 1).as(EffectIrreversible), // publishes in the dataspace
 	r("POST", `/datasets/`+seg+`/annotate`, Update, Dataset, 1),
 	r("DELETE", `/datasets/`+seg, Delete, Dataset, 1),
 
@@ -222,15 +237,15 @@ var routes = []route{
 	r("GET", `/models/`+seg, Read, Model, 1),
 	r("GET", `/models/`+seg+`/download`, Read, Model, 1),
 	r("PATCH", `/models/`+seg, Update, Model, 1),
-	r("PATCH", `/models/`+seg+`/toggle-public`, Update, Model, 1),
+	r("PATCH", `/models/`+seg+`/toggle-public`, Update, Model, 1).as(EffectIrreversible), // publishes in the dataspace
 	r("DELETE", `/models/`+seg, Delete, Model, 1),
 
 	r("GET", `/train/providers`, Read, TrainTemplate, 0),
 	r("GET", `/train/architectures/`+seg, Read, TrainTemplate, 0),
 	r("GET", `/train/config/export`, Read, TrainTemplate, 0),
 	r("GET", `/train/config/`+seg+`/`+seg, Read, TrainTemplate, 0),
-	r("POST", `/train/config`, Create, Training, 0),
-	r("PUT", `/train/config`, Update, Training, 0), // identifier is in the body (container_id)
+	r("POST", `/train/config`, Create, Training, 0).as(EffectCompute), // builds the training image
+	r("PUT", `/train/config`, Update, Training, 0),                    // identifier is in the body (container_id)
 	r("GET", `/train/containers`, Read, Training, 0),
 	r("GET", `/train/containers/`+seg, Read, Training, 1),
 	r("GET", `/train/containers/`+seg+`/status`, Read, Training, 1),
@@ -239,7 +254,7 @@ var routes = []route{
 	// Writing GET: creates a model from the container (Review K1 of the platform binding).
 	r("GET", `/train/containers/`+seg+`/model`, Create, Model, 0),
 	r("POST", `/train/containers/`+seg+`/run`, Run, Training, 1),
-	r("POST", `/train/containers/`+seg+`/stop`, Run, Training, 1),
+	r("POST", `/train/containers/`+seg+`/stop`, Run, Training, 1).as(EffectWrite), // stops, frees compute time
 	r("PATCH", `/train/containers/`+seg, Update, Training, 1),
 	r("PATCH", `/train/containers/`+seg+`/score`, Update, Training, 1),
 	r("DELETE", `/train/containers/`+seg, Delete, Training, 1),
@@ -260,9 +275,9 @@ var routes = []route{
 	r("DELETE", `/container-images/([^/]+/[^/]+:[^/]+)`, Delete, ContainerImage, 1),
 }
 
-// Classify classifies a (normalized) call. Unknown paths are api: GET is read, anything else
-// update; allowed only with an explicit api rule.
-func Classify(req platform.Request) Access {
+// classify classifies a (normalized) call; Classify adds its effect class. Unknown paths are api:
+// GET is read, anything else update; allowed only with an explicit api rule.
+func classify(req platform.Request) Access {
 	for _, rt := range routes {
 		if rt.method != req.Method {
 			continue
@@ -271,7 +286,7 @@ func Classify(req platform.Request) Access {
 		if m == nil {
 			continue
 		}
-		a := Access{Action: rt.action, Resource: rt.resource}
+		a := Access{Action: rt.action, Resource: rt.resource, Effect: rt.effect}
 		if rt.idGroup > 0 {
 			a.ID = canonID(m[rt.idGroup])
 		}
