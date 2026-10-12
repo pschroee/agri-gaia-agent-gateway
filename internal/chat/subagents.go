@@ -281,8 +281,6 @@ func msTime(ms int64) *time.Time {
 }
 
 func (m *Manager) pollSubagents(chatID string, l *live, offsets map[string]int64, runs map[string]runInfo, agents map[string]string) {
-	l.pollMu.Lock()
-	defer l.pollMu.Unlock()
 	in, _ := json.Marshal(map[string]any{"offsets": offsets})
 	// The session files live in pi's container; since E9 the agent can no
 	// longer reach them. They are read with agw-exec (there is no Python there).
@@ -290,6 +288,10 @@ func (m *Manager) pollSubagents(chatID string, l *live, offsets map[string]int64
 	if err != nil || len(out) == 0 || len(out) > 4<<20 {
 		return
 	}
+	// Only the evaluation holds pollMu, not the read above (up to 10 s): the run lists of the UI (message_state) take
+	// pollMu per run and must not wait for the sandbox. The loop is the only caller, so polls never overlap.
+	l.pollMu.Lock()
+	defer l.pollMu.Unlock()
 	var res struct {
 		Files []struct {
 			Path   string `json:"path"`

@@ -137,11 +137,12 @@ func TestSubagentMessagePendingAndRate(t *testing.T) {
 	}
 }
 
-// A run that is running inside a tool call of the main agent (no own id at pi-subagents) cannot be written to.
+// A run that is running inside a tool call of the main agent (no status file, no own id at pi-subagents) cannot be
+// written to.
 func TestSubagentMessageForegroundRefused(t *testing.T) {
 	e := setup(t)
 	ctx := context.Background()
-	c := seedRun(t, e, "alice", "cli", "run-fg", "worker", "", "running")
+	c := seedRun(t, e, "alice", "cli", "run-fg", "worker", "", "")
 	startSeeded(t, e, c.ID)
 	l := e.m.liveOf(c.ID)
 	if l == nil {
@@ -674,4 +675,46 @@ func TestSubagentRunMessageState(t *testing.T) {
 	if _, err := e.m.SendSubagentMessage(ctx, c.ID, "run-start", "hint"); !errors.Is(err, ErrSubagentStarting) {
 		t.Fatalf("the endpoint and the list disagree (starting): %v", err)
 	}
+}
+
+// The run lists do not wait for a poll of the monitoring that is reading the sandbox (up to 10 s): the poll holds
+// pollMu only while it evaluates the answer, not while it waits for it.
+func TestMessageStatesDoNotWaitForPollRead(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	c := seedRun(t, e, "alice", "cli", "run-1", "worker", "pi-1", "running")
+	startSeeded(t, e, c.ID)
+	l := e.m.liveOf(c.ID)
+	a := e.agent(0)
+	gate := make(chan struct{})
+	a.mu.Lock()
+	a.pollOut = pollRuns()
+	a.pollGate = gate
+	a.mu.Unlock()
+	done := make(chan struct{})
+	go func() {
+		e.m.pollSubagents(c.ID, l, map[string]int64{}, map[string]runInfo{}, map[string]string{})
+		close(done)
+	}()
+	// wait until the poll sits in the sandbox read
+	waitFor(t, func() bool {
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		return strings.Contains(strings.Join(a.execs, "\n"), "poll-subagents")
+	})
+	listed := make(chan error, 1)
+	go func() {
+		_, err := e.m.SubagentRuns(ctx, c.ID)
+		listed <- err
+	}()
+	select {
+	case err := <-listed:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the run list waits for the poll's read of the sandbox")
+	}
+	close(gate)
+	<-done
 }
