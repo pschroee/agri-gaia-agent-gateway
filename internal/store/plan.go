@@ -53,6 +53,8 @@ type PlanStep struct {
 	CreatedResource string          `json:"created_resource,omitempty"`
 	CreatedID       string          `json:"created_id,omitempty"`
 	DoneAt          *time.Time      `json:"done_at,omitempty"`
+	// PlanID: the plan the step belongs to (not part of the JSON; the plan carries it).
+	PlanID string `json:"-"`
 }
 
 // PlanFile is an upload of a step, pinned by its SHA-256.
@@ -149,6 +151,7 @@ func (s *Store) planSteps(ctx context.Context, planID string) ([]PlanStep, error
 		if err != nil {
 			return nil, err
 		}
+		st.PlanID = planID
 		out = append(out, st)
 	}
 	return out, rows.Err()
