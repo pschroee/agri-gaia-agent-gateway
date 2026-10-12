@@ -351,6 +351,8 @@ type Env struct {
 	PlatformClientSecret string
 	PlatformExchange     bool
 	PlatformAudiences    []string
+	// PlatformTokenMaxAge: an exchanged token is used this long at most (AGW_PLATFORM_TOKEN_MAX_AGE, default 5m).
+	PlatformTokenMaxAge time.Duration
 	// Login to the API: AuthMode "token" (AGW_API_TOKEN, default) or "oidc" (login through the
 	// platform's Keycloak, authorization code with PKCE; chats then belong to the user).
 	AuthMode         string
@@ -457,6 +459,7 @@ func FromEnv() Env {
 		PlatformClientSecret: str("AGW_PLATFORM_CLIENT_SECRET", ""),
 		PlatformExchange:     str("AGW_PLATFORM_TOKEN_EXCHANGE", "false") == "true",
 		PlatformAudiences:    strings.Split(str("AGW_PLATFORM_AUDIENCES", "backend,minio"), ","),
+		PlatformTokenMaxAge:  dur("AGW_PLATFORM_TOKEN_MAX_AGE", 5*time.Minute),
 		AuthMode:             strings.ToLower(strings.TrimSpace(str("AGW_AUTH_MODE", AuthToken))),
 		OIDCIssuer:           strings.TrimRight(str("AGW_OIDC_ISSUER", ""), "/"),
 		OIDCClientID:         str("AGW_OIDC_CLIENT_ID", "agw-agent"),

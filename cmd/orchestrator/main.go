@@ -125,7 +125,8 @@ func run() error {
 	}
 	pcfg := platform.Config{APIURL: env.PlatformAPIURL, TokenURL: env.PlatformTokenURL,
 		ClientID: env.PlatformClientID, ClientSecret: env.PlatformClientSecret, User: env.PlatformUser, Password: env.PlatformPassword,
-		Exchange: env.PlatformExchange, Audiences: env.PlatformAudiences}
+		Exchange: env.PlatformExchange, Audiences: env.PlatformAudiences,
+		ChatTokenMaxAge: env.PlatformTokenMaxAge, CallKey: store.ToolCallFrom}
 	konto := env.PlatformUser
 	if auth != nil {
 		// Every chat acts for its owner: the owner's token from the session is the subject_token.
