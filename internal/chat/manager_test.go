@@ -38,6 +38,7 @@ type fakeAgent struct {
 	reason   string // teardown reason passed by the pool (issue #55)
 	events   chan rpc.Event
 	pollOut  string   // response to the subagents' read script
+	pollGate chan struct{} // when set, the read script waits for it to be closed (a poll that takes long)
 	execs    []string // executed commands
 	reply    string   // text of the response (otherwise "Answer from …")
 
@@ -239,6 +240,11 @@ func (a *fakeAgent) ExecPi(_ context.Context, cmd []string, stdin io.Reader) ([]
 		a.files[cmd[2]] = b
 		return nil, nil
 	case len(cmd) == 2 && cmd[0] == "agw-exec" && cmd[1] == "poll-subagents":
+		if gate := a.pollGate; gate != nil {
+			a.mu.Unlock()
+			<-gate
+			a.mu.Lock()
+		}
 		return []byte(a.pollOut), nil
 	case len(cmd) == 2 && cmd[0] == "agw-exec" && cmd[1] == "kill-node":
 		return []byte("0\n"), nil
