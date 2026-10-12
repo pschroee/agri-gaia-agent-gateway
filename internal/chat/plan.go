@@ -141,7 +141,21 @@ func (m *Manager) planMatch(ctx context.Context, chatID string, req platform.Req
 		ok, err := m.st.IsDelegationObject(ctx, chatID, ref.CreatedResource, ref.CreatedID)
 		return ref.CreatedID, err == nil && ok
 	}
-	if ok, why := plan.Matches(*next, req, resolve); !ok {
+	var ok bool
+	var why string
+	if plan.IsToolStep(*next) {
+		// A tool step matches the tool invocation, not the HTTP request: only the socket sets it, so a raw
+		// request with the same target is not covered (issue #70).
+		inv, has := platform.InvocationFrom(ctx)
+		if !has {
+			ok, why = false, "no tool invocation"
+		} else {
+			ok, why = plan.MatchesTool(*next, inv.Tool, inv.Args, req, resolve)
+		}
+	} else {
+		ok, why = plan.Matches(*next, req, resolve)
+	}
+	if !ok {
 		slog.Info("call is not the plan's next step", "chat", chatID, "plan", p.ID, "step", next.Idx, "differs_in", why)
 		return nil
 	}

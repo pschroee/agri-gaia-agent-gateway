@@ -35,9 +35,11 @@ type Plan struct {
 
 // PlanStep is one call of a plan. Query, Body and Form hold the canonical JSON as stored.
 type PlanStep struct {
-	Idx             int             `json:"idx"`
-	Description     string          `json:"description,omitempty"`
-	Tool            string          `json:"tool,omitempty"`
+	Idx         int    `json:"idx"`
+	Description string `json:"description,omitempty"`
+	Tool        string `json:"tool,omitempty"`
+	// Args: canonical arguments of a tool step with steps, scalars as text, placeholders as {{stepN.id}}.
+	Args            json.RawMessage `json:"args,omitempty"`
 	Method          string          `json:"method"`
 	Path            string          `json:"path"`
 	Query           json.RawMessage `json:"query,omitempty"`
@@ -66,7 +68,7 @@ type PlanFile struct {
 
 const planCols = `id::text, chat_id::text, approval_id, title, session, tool_call_id, via, state, created_at, decided_at, expires_at`
 
-const planStepCols = `idx, description, tool, method, path, query, body, body_sha256, form, form_sha256, files, effect, state, result, created_resource, created_id, done_at`
+const planStepCols = `idx, description, tool, args, method, path, query, body, body_sha256, form, form_sha256, files, effect, state, result, created_resource, created_id, done_at`
 
 func scanPlan(row interface{ Scan(...any) error }) (Plan, error) {
 	var p Plan
@@ -84,12 +86,13 @@ func rawOrNil(s string) json.RawMessage {
 
 func scanPlanStep(row interface{ Scan(...any) error }) (PlanStep, error) {
 	var st PlanStep
-	var query, body, form, files string
-	err := row.Scan(&st.Idx, &st.Description, &st.Tool, &st.Method, &st.Path, &query, &body, &st.BodySHA256, &form, &st.FormSHA256, &files,
+	var query, body, form, files, args string
+	err := row.Scan(&st.Idx, &st.Description, &st.Tool, &args, &st.Method, &st.Path, &query, &body, &st.BodySHA256, &form, &st.FormSHA256, &files,
 		&st.Effect, &st.State, &st.Result, &st.CreatedResource, &st.CreatedID, &st.DoneAt)
 	if err != nil {
 		return st, err
 	}
+	st.Args = rawOrNil(args)
 	st.Query = rawOrNil(query)
 	st.Body = rawOrNil(body)
 	st.Form = rawOrNil(form)
@@ -125,9 +128,9 @@ VALUES ($1,$2,$3,$4,$5,$6) RETURNING id::text`,
 			}
 			files = string(b)
 		}
-		_, err := tx.Exec(ctx, `INSERT INTO plan_steps (plan_id, idx, description, tool, method, path, query, body, body_sha256,
-form, form_sha256, files, effect) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
-			id, st.Idx, st.Description, st.Tool, st.Method, st.Path, string(st.Query), string(st.Body), st.BodySHA256,
+		_, err := tx.Exec(ctx, `INSERT INTO plan_steps (plan_id, idx, description, tool, args, method, path, query, body, body_sha256,
+form, form_sha256, files, effect) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+			id, st.Idx, st.Description, st.Tool, string(st.Args), st.Method, st.Path, string(st.Query), string(st.Body), st.BodySHA256,
 			string(st.Form), st.FormSHA256, files, st.Effect)
 		if err != nil {
 			return Plan{}, err
