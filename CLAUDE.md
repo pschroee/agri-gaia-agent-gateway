@@ -198,6 +198,19 @@ refer to this repository.
   for 0, see `chat.requestBytes`), returned as `request_bytes` by `GET /api/chats/{id}/llm_calls` and the SSE event
   `llm_call`. Sizes only, never contents. The frontend shows it as "Sent to model" in the expanded activity row.
 
+## Effect classes
+
+- Every platform call has one class (`read`, `write`, `compute`, `irreversible`, issue #63), decided only in
+  `delegation.Classify` for all three bindings. A new route gets its class through `.as(…)` where its action does not
+  say it (compute, irreversible, a writing GET), and a case in `TestClassifyEffect`; unknown paths fall back to the
+  class of their method. Rules and the table in `API.md`, *Effect classes*.
+- Who is asked: `chat.needsApproval` (`internal/chat/effect.go`). Irreversible always, with confirm `none` too; a
+  compute call is refused before the approval once the chat has used `AGW_COMPUTE_MAX_PER_CHAT` calls, and counts only
+  when the platform accepts it (`store.ReserveCompute` / `ReleaseCompute`). A call without a class is refused
+  (fail closed).
+- The gateway's own refusals start with `platform.RefusedPrefix`; the socket logs them as `refused` in the activity.
+  Columns `effect` in `approvals` and `socket_calls`, `chats.compute_calls`; see `API.md`.
+
 ## Testing
 
 - `./dev.sh test` is the everyday check, before every commit and before every push: Go with Postgres (with Go's

@@ -315,9 +315,11 @@ type Approval = {
   state: "pending" | "approved" | "rejected" | "expired";
   created_at: string; decided_at?: string;
   preview?: string;       // first 4 KiB, text only
+  effect?: "read" | "write" | "compute" | "irreversible"; // platform_write: class of the call (see "Effect classes")
 };
 type SocketCall = { id: number; chat_id?: string; slot_id: string; via: "cli" | "mcp" | "api" | "user" /* user: the user's internet switch */; op: string; detail: string; result: string; created_at: string; session?: string; tool_call_id?: string;
-  duration_ms?: number /* platform calls: round trip to the platform in ms (token exchange included, approval wait excluded); missing: not measured */ };
+  duration_ms?: number /* platform calls: round trip to the platform in ms (token exchange included, approval wait excluded); missing: not measured */;
+  effect?: "read" | "write" | "compute" | "irreversible" /* platform calls: class of the call (see "Effect classes") */ };
 // GET /api/activity (see "Activity across chats").
 type ActivityCall = SocketCall & { kind: "platform" | "internet";
   outcome?: "ok" | "error" | "blocked" | "logged" | "rejected" | "refused" /* platform calls only */;
@@ -417,6 +419,46 @@ returns platform calls without `kind`; clients treat a missing `kind` as `platfo
 `duration_ms` is measured around the request to the platform (`Platform.Do`, including the token exchange), after
 any approval, and stored with the log entry (column `socket_calls.duration_ms`). Calls that did not go out (blocked,
 rejected, refused, `/_agw/rights`) and entries from before 2026-10-06 have none.
+
+## Effect classes
+
+Every platform call has one effect class (issue #63). `delegation.Classify` decides it once for CLI, MCP and REST
+alike; the class decides whether the user is asked and is shown in approvals, the activity and the step details.
+
+| Class | Meaning | Approval |
+|---|---|---|
+| `read` | changes nothing | none, unless the call writes in the backend (see below) |
+| `write` | changes data on the platform | the user, unless the delegation says `confirm: "none"` |
+| `compute` | uses compute time (builds or starts a training) | as `write`; counted against the compute limit of the chat |
+| `irreversible` | cannot be undone (deleting, publishing in the dataspace) | always the user, also with `confirm: "none"` |
+
+- **Own classes of routes:** `POST /train/config` is `compute`, `POST /train/containers/{id}/run` is `compute`
+  (its action is `run`), `POST /train/containers/{id}/stop` is `write` (it frees compute time), and
+  `PATCH /datasets/{id}/toggle-public` and `PATCH /models/{id}/toggle-public` are `irreversible`.
+- **Other routes** take the class of their action: `read` is `read`, `create` and `update` are `write`, `run` is
+  `compute`, `delete` is `irreversible`.
+- **Writing GETs are `write`:** `GET /train/containers/{id}/model` (creates a model), `GET /datasets/{id}/download`
+  (writes the annotation to MinIO), `GET /edge-devices/{id}` (registers the device) and `GET /licenses/` with a query.
+  **Behaviour change:** `GET /datasets/{id}/download` and `GET /edge-devices/{id}` asked nothing before and ask now.
+- **Unknown paths:** `DELETE` is `irreversible`, any other non-GET is `write`, a GET that does not write is `read`.
+  `Writes` stays the floor: a call that writes is never `read`.
+- **Fail closed:** a call whose class cannot be determined is refused before the delegation check, without reaching the
+  platform: `error` with `refused: the gateway could not classify this call; nothing executed`.
+- **Compute limit per chat:** `AGW_COMPUTE_MAX_PER_CHAT` (default 3; below 1 counts as 1). Before the approval a compute
+  call is refused at once when the chat has used its calls, and nobody is asked. Right before the call the gateway
+  reserves one count (`chats.compute_calls`, atomically); a call the platform does not accept (HTTP status 400 or more,
+  or an error) gives it back. Refused, rejected and expired calls never count. Refusal:
+  `refused: compute limit reached: this chat has used N of N compute calls (AGW_COMPUTE_MAX_PER_CHAT); nothing executed.
+  A new chat has its own limit.` There is no runtime limit.
+- **Preview of a `platform_write` approval:** line 1 is `METHOD path[?query]`, line 2 is the class
+  (`Effect: write (changes data on the platform)`, `Effect: compute (uses compute time on the platform; at most N compute
+  calls per chat)`, `Effect: irreversible (cannot be undone; every parameter is shown in full below)`), then
+  `Classification: …`, the form and the body. For `irreversible` the body is shown in full and, if it carries the CVAT
+  login fields `key`, `csrftoken` or `sessionid`, a line `CVAT field <name> = "<value>"` follows for each; a value shorter
+  than four characters after trimming is marked `(placeholder)`.
+- **Stored class:** `effect` (`read`, `write`, `compute`, `irreversible`) on `Approval` (`platform_write`), on
+  `SocketCall` (platform calls) and so on `ActivityCall`. Entries from before issue #63 have none; clients fall back to
+  the method of the call. A refusal by the gateway is logged as `refused: …` and appears as `refused` in the activity.
 
 ## SSE `GET /api/chats/{id}/events`
 
@@ -945,7 +987,8 @@ goes through and appears in the log as `… · violation, logged only: …`. The
 
 The same tools are available at the MCP endpoint of both sockets as `platform_<name>` (in pi
 `mcp_platform_<name>`). The orchestrator builds the call from the table itself and checks it
-(`platform.Normalize`); GET goes directly, everything else creates a `platform_write` approval. Every call appears
+(`platform.Normalize`); every call has an effect class, and the class decides whether the user is asked (see *Effect
+classes*). Every call appears
 in `socket_calls` with `op: "platform"`, `detail` = method and path, `result` = `ok 200`, `error 404`, `rejected`
 or `refused: <reason>`.
 
