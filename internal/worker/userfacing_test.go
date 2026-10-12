@@ -5,6 +5,8 @@
 package worker
 
 import (
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -46,6 +48,25 @@ func TestFileSkillsNameFilesNotPaths(t *testing.T) {
 		}
 		if !strings.Contains(d, sentence) {
 			t.Errorf("%s: description without %q", name, sentence)
+		}
+	}
+}
+
+// Issue #75: the replies of subagents go to the user in the subagent view, and the main agent's system note does not
+// reach them. Every agent definition of the vendored copy therefore carries the same sentence in its body.
+func TestSubagentDefinitionsNameFilesNotPaths(t *testing.T) {
+	const sentence = "In replies name files by their file name, never by sandbox path."
+	files, err := filepath.Glob(filepath.Join("..", "..", "third_party", "pi-subagents", "agents", "*.md"))
+	if err != nil || len(files) == 0 {
+		t.Fatalf("no agent definitions found: %v", err)
+	}
+	for _, f := range files {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(b), "\n"+sentence+"\n") {
+			t.Errorf("%s: sentence missing", filepath.Base(f))
 		}
 	}
 }

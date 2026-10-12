@@ -120,6 +120,13 @@ did not fit. Without the variable the copy behaves like the original. The pi ima
 Test: `test-agw/output-inline.test.mjs` (`node --test`, no dependencies): without the variable the
 original instruction, with the variable the instruction to return the result in the response.
 
+### 5. `agents/*.md`: one sentence on file names in the body of every agent (issue #75, 2026-10-12)
+
+Each of the 13 agent definitions gets the sentence `In replies name files by their file name, never by sandbox path.`
+as its first body paragraph, after the front matter. Reason: the replies of a subagent go to the user in the subagent
+view, and the system note of the main agent does not reach them. Only the front matter and the body are touched; the
+other text is unchanged.
+
 ## Other places with `node:worker_threads` or `node:vm`
 
 As of 0.73.1, for classification within E9; **not changed**:

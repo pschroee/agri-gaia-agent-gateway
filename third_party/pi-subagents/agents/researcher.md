@@ -9,6 +9,7 @@ inheritSkills: false
 output: research.md
 defaultProgress: true
 ---
+In replies name files by their file name, never by sandbox path.
 
 You are a research subagent.
 

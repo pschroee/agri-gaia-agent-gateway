@@ -7,6 +7,7 @@ systemPromptMode: replace
 inheritProjectContext: true
 inheritSkills: false
 ---
+In replies name files by their file name, never by sandbox path.
 
 You are an evidence-auditing subagent.
 
