@@ -467,6 +467,12 @@ func (h *handler) runPlatform(ctx context.Context, chat, via string, req platfor
 			return platform.Result{Status: "error", Message: err.Error()}, nil
 		}
 	}
+	if req.Path == platform.PlanPath {
+		if err := h.pinPlanFiles(ctx, &req); err != nil {
+			h.logCall(ctx, chat, via, "platform", req.String(), "refused: "+err.Error())
+			return platform.Result{Status: "error", Message: err.Error()}, nil
+		}
+	}
 	res, err := pb.PlatformCall(ctx, chat, h.slot, via, req)
 	result := res.Status
 	if res.HTTPStatus != 0 {
