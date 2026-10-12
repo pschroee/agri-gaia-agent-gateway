@@ -155,6 +155,7 @@ func run() error {
 		WorkspaceMaxBytes:  env.WorkspaceMaxBytes,
 		MaxSubagents:       env.MaxSubagents,
 		ComputeMaxPerChat:  env.ComputeMaxPerChat,
+		TrashRetentionDays: env.TrashRetentionDays,
 		AutoCompactDefault: env.AutoCompactDefault, CompactReserveTokens: env.CompactReserveTokens, CompactKeepRecent: env.CompactKeepRecent,
 		BgWakesPerHour: env.BgWakesPerHour, BgKeepAlive: env.BgKeepAlive, AutoTurnsMax: env.AutoTurnsMax,
 		Titler: newTitler(cat, env.TitleModel), Platform: plat, Toolsets: toolsets,
@@ -166,6 +167,8 @@ func run() error {
 	}
 	poolCtx, poolCancel := context.WithCancel(context.Background())
 	p.Start(poolCtx)
+	// Chats in the trash past AGW_TRASH_RETENTION_DAYS are deleted for good (off by default; issue #76).
+	go m.RunTrashRetention(poolCtx)
 
 	var webFS fs.FS
 	if sub, err := fs.Sub(web.Dist, "dist"); err == nil {

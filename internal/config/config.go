@@ -344,6 +344,9 @@ type Env struct {
 	// AutoTurnsMax: at most this many consecutive turns without the user per chat
 	// (AGW_AUTO_TURNS_MAX, default 5, 0 = none; Review 3, H2).
 	AutoTurnsMax int
+	// TrashRetentionDays: chats in the trash are deleted permanently after this many whole days
+	// (AGW_TRASH_RETENTION_DAYS; default 0 = never, negative counts as 0).
+	TrashRetentionDays int
 	// Platform binding (direct, fixed account via password grant). Off without PlatformAPIURL.
 	PlatformAPIURL   string
 	PlatformTokenURL string
@@ -455,6 +458,7 @@ func FromEnv() Env {
 		BgWakesPerHour:       wakes(num("AGW_BG_WAKES_PER_HOUR", 10)),
 		BgKeepAlive:          keepAlive(dur("AGW_BG_KEEPALIVE", time.Hour)),
 		AutoTurnsMax:         wakes(num("AGW_AUTO_TURNS_MAX", 5)),
+		TrashRetentionDays:   max(0, num("AGW_TRASH_RETENTION_DAYS", 0)),
 		PlatformAPIURL:       str("AGW_PLATFORM_API_URL", ""),
 		PlatformTokenURL:     str("AGW_PLATFORM_TOKEN_URL", ""),
 		PlatformClientID:     str("AGW_PLATFORM_CLIENT_ID", "frontend"),
