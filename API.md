@@ -243,7 +243,8 @@ type MessageSource = { kind: "user" | "system"; type?: string; refs?: string[]; 
 type LLMCall = { id: number; slot_id: string; source_ip: string; model: string; response_id: string; status: number;
   input: number; output: number; cache_read: number; cache_write: number; cost: number; peak: boolean;
   tool_calls: { id?: string /* the provider's tool_calls[].id */; name: string; arguments: string }[]; started_at: string; duration_ms: number; main: boolean;
-  finish_reason: string; complete: boolean };
+  finish_reason: string; complete: boolean;
+  request_bytes?: number /* size of the request body the proxy forwarded unchanged to the provider, in bytes (issue #69); sizes only, no contents; missing on calls recorded before */ };
 
 // Operation the orchestrator executed for a tool in the execution sandbox (E9).
 // Proven, because it executed and recorded it itself. One tool call can have several
