@@ -73,6 +73,22 @@ type Backend interface {
 	LogCall(slotID, chatID, via, op, detail, result string)
 }
 
+// SubagentRelayResult is the reply of pi's extension to a relay command (issue #81): the message of the user to a
+// subagent went to pi-subagents and ended as stated.
+type SubagentRelayResult struct {
+	Ref     string `json:"ref"`
+	OK      bool   `json:"ok"`
+	Code    string `json:"code,omitempty"`
+	Message string `json:"message,omitempty"`
+	RunID   string `json:"run_id,omitempty"`
+}
+
+// SubagentRelayBackend takes the reply to a relay command; store.ErrNotFound for an unknown or closed ref.
+// A backend that does not implement it answers 404.
+type SubagentRelayBackend interface {
+	SubagentRelayResult(ctx context.Context, chatID string, res SubagentRelayResult) error
+}
+
 // PlatformBackend executes calls to the Agri-Gaia platform (manager): GET directly,
 // everything else only after confirmation by the user. If a backend does not
 // implement it, the tools report "not configured".
@@ -139,6 +155,7 @@ func NewHandlerRun(slotID string, b Backend, maxBytes int64, run ToolRunner) htt
 	mux.HandleFunc("POST /internet", h.internet)
 	mux.HandleFunc("POST /internet/off", h.internetOff)
 	mux.HandleFunc("POST /platform/{tool}", h.platform)
+	mux.HandleFunc("POST /subagent-relay/result", h.subagentRelayResult)
 	mux.Handle("/mcp", h.mcp)
 	return h.withPlatformAPI(mux)
 }
@@ -345,6 +362,32 @@ func (h *handler) internetOff(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, res)
+}
+
+// subagentRelayResult takes the reply of a relay command (issue #81). Nothing is logged: the reply only changes the
+// state of a message, and an unknown ref answers 404 without a trace.
+func (h *handler) subagentRelayResult(w http.ResponseWriter, r *http.Request) {
+	chat := h.b.ChatForSlot(h.slot)
+	rb, ok := h.b.(SubagentRelayBackend)
+	if chat == "" || !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "unknown"})
+		return
+	}
+	var res SubagentRelayResult
+	if err := json.NewDecoder(io.LimitReader(r.Body, 16<<10)).Decode(&res); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
+		return
+	}
+	res.Message = truncReason(res.Message)
+	if err := rb.SubagentRelayResult(callerCtx(r), chat, res); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "unknown"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
 // doInternetOff switches internet off and logs the call (op internet_off, result "off" or "already off").

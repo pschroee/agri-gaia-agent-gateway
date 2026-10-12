@@ -7,7 +7,7 @@ import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { bgStatus, bgTailLines, checkSubagentCall, checkWorkflowMessage, formatDuration, REMOTE_WORKER, workflowRuntimeRedirected } from "../ext/exec-bridge.ts";
+import { bgStatus, bgTailLines, checkSubagentCall, checkWorkflowMessage, formatDuration, REMOTE_WORKER, relayCommand, relayCall, relayRef, relayRequest, workflowRuntimeRedirected } from "../ext/exec-bridge.ts";
 
 test("single subagents and read-only actions pass", () => {
 	for (const input of [
@@ -150,4 +150,79 @@ test("bg_output: tail_lines is checked", () => {
 	]) {
 		assert.equal(bgTailLines(v), want, String(v));
 	}
+});
+
+// Issue #81: the relay of messages from the user to subagents. Only steer, resume and spawn, with fixed
+// parameters; the same agent list as for the model's subagent calls.
+const relayJSON = (v) => Buffer.from(JSON.stringify(v)).toString("base64url");
+const REF = "agw-0a1b2c3d";
+
+test("relay: steer and resume keep only id, index and message; steer gets mode steer", () => {
+	assert.deepEqual(
+		relayRequest(relayJSON({ ref: REF, method: "steer", params: { id: "pi-1", index: 2, message: "Nimm 10", workflowScript: "x", cwd: "/" } })),
+		{ ref: REF, method: "steer", params: { id: "pi-1", message: "Nimm 10", index: 2, mode: "steer" } },
+	);
+	assert.deepEqual(
+		relayRequest(relayJSON({ ref: REF, method: "resume", params: { id: "pi-1", message: "Folgefrage" } })),
+		{ ref: REF, method: "resume", params: { id: "pi-1", message: "Folgefrage" } },
+	);
+});
+
+test("relay: spawn keeps agent, task and async only; blocked agents and code are refused", () => {
+	assert.deepEqual(
+		relayRequest(relayJSON({ ref: REF, method: "spawn", params: { agent: "worker", task: "x", model: "m", async: false } })),
+		{ ref: REF, method: "spawn", params: { agent: "worker", task: "x", async: true } },
+	);
+	for (const params of [{ agent: "claude-code", task: "x" }, { agent: "worker", task: "" }, { agent: "worker", task: "x", context: "profile" }]) {
+		assert.equal(typeof relayRequest(relayJSON({ ref: REF, method: "spawn", params })), "string", JSON.stringify(params));
+	}
+});
+
+test("relay: other methods, bad refs, bad ids and broken requests are refused", () => {
+	for (const req of [
+		{ ref: REF, method: "stop", params: { id: "x" } },
+		{ ref: REF, method: "manage", params: { action: "schedule.run", id: "x" } },
+		{ ref: "agw-XYZ", method: "steer", params: { id: "x", message: "m" } },
+		{ ref: REF, method: "steer", params: { id: "a b", message: "m" } },
+		{ ref: REF, method: "steer", params: { id: "x", message: "  " } },
+		{ ref: REF, method: "resume", params: { id: "x", index: -1, message: "m" } },
+	]) {
+		assert.equal(typeof relayRequest(relayJSON(req)), "string", JSON.stringify(req));
+	}
+	assert.equal(typeof relayRequest("not base64 json !!"), "string");
+	assert.equal(relayRef(relayJSON({ ref: REF, method: "stop" })), REF);
+	assert.equal(relayRef("garbage"), "");
+});
+
+// A fake pi: the command handler is taken from registerCommand, the events bus records the RPC call.
+test("relay: a subagent session never relays; the main session reports the reply to the gateway", async () => {
+	const emitted = [];
+	const listeners = new Map();
+	const bus = {
+		on(event, fn) { listeners.set(event, fn); return () => listeners.delete(event); },
+		emit(event, data) { emitted.push([event, data]); if (event === "subagents:rpc:v1:request") listeners.get("subagents:rpc:v1:reply:" + data.requestId)?.({ success: true, data: { runId: "run-9" } }); },
+	};
+	const reports = [];
+	const child = { sessionManager: { getSessionFile: () => "/x/main/run-1/run-1/session.jsonl" } };
+	const main = { sessionManager: { getSessionFile: () => "/x/main/session.jsonl" } };
+	await relayCommand(relayJSON({ ref: REF, method: "steer", params: { id: "p", message: "m" } }), child, bus, async (r) => reports.push(r));
+	assert.equal(emitted.length, 0);
+	assert.equal(reports.length, 0);
+	await relayCommand(relayJSON({ ref: REF, method: "steer", params: { id: "p", message: "m" } }), main, bus, async (r) => reports.push(r));
+	assert.equal(emitted[0][0], "subagents:rpc:v1:request");
+	assert.deepEqual(emitted[0][1].params, { id: "p", message: "m", mode: "steer" });
+	assert.deepEqual(reports, [{ ref: REF, ok: true, run_id: "run-9" }]);
+	// a refused request is reported too, and nothing reaches pi-subagents
+	emitted.length = 0;
+	reports.length = 0;
+	await relayCommand(relayJSON({ ref: REF, method: "stop", params: {} }), main, bus, async (r) => reports.push(r));
+	assert.equal(emitted.length, 0);
+	assert.equal(reports[0].ok, false);
+	assert.equal(reports[0].code, "refused");
+});
+
+test("relay: no reply from pi-subagents within the time limit is a timeout", async () => {
+	const bus = { on: () => undefined, emit: () => undefined };
+	const r = await relayCall(bus, { ref: REF, method: "resume", params: { id: "p", message: "m" } }, 5);
+	assert.deepEqual(r, { ok: false, code: "timeout", message: "no reply from pi-subagents" });
 });

@@ -354,6 +354,7 @@ type ActivityPage = { calls: ActivityCall[]; chats: Record<string, { id: string;
 | `GET /api/chats/{id}/llm_calls` | `LLMCall[]` | all model calls of the chat according to the proxy |
 | `GET /api/chats/{id}/tool_executions` | `{calls: ReconciledCall[], summary: Record<ReconciledCall["state"], number>, executions: ToolExecution[], executed_tools: string[]}` | tool executions of the orchestrator and reconciliation with the calls requested at the proxy (E9), sorted by time |
 | `GET /api/chats/{id}/subagent-runs` | `SubagentRunSummary[]` | short list of the chat's subagent runs in the order they started, from the database alone: does not wake the chat and takes no slot; 404 for foreign and unknown chats. See *Subagent runs without opening a chat* |
+| `POST /api/chats/{id}/subagent-runs/{run}/messages` `{text}` | 202 `{message: SubagentMessage, mode: "steer"\|"resume"\|"restart"}` | a message of the user to a subagent (`{run}` URL-encoded, `#` as `%23`); the stored message goes on at once with status `sending`, then `sent` or `failed` (SSE `subagent_message`). Refusals: 400 empty, longer than 8000 characters or `/agw-…`, 404 foreign, unknown or unsafe run, 409 with `code` `chat_in_trash`, `foreground_run`, `message_pending`, `subagent_limit`, `not_resumable` or `subagents_unavailable`, 429 `rate_limited`. See *Messages to subagents* |
 | `GET /api/chats/{id}/plans` | `Plan[]` | plans of the chat, oldest first, with their steps; 404 for foreign and unknown chats. See *Plans with one approval* |
 | `POST /api/chats/{id}/subagents` | 410 | removed: the subagent limit is fixed for the service (see *Limit for subagents*); the answer says so |
 | `POST /api/chats/{id}/messages` `{text, attachments?: string[], context?: PageContext}` | `SendResult` | sends (`context`: see *Page context*; invalid: 400); a dormant chat is resumed in a fresh sandbox (response after resuming, steps beforehand via SSE `resume`). If pi is working, the chat is being resumed or another instruction is in flight, the message is queued (`queued: true`, see *Queue*). Held entries go along |
@@ -416,7 +417,7 @@ for a deleted chat's calls.
 - **Deleting for good** (`DELETE /api/chats/{id}`, `POST /api/trash/empty`) works only from the trash (409
   `not_in_trash` otherwise). In one transaction the call logs are kept and anonymised, then the chat is deleted; the
   objects in the object store (artifacts, display images, workspace archive, pending uploads) are removed afterwards.
-  Messages, runs, approvals, plans, subagents, queue, background tasks, session and title go with the chat; nothing
+  Messages, runs, approvals, plans, subagents, messages to subagents, queue, background tasks, session and title go with the chat; nothing
   of them stays.
 - **What stays for the evaluation** (the decision of the author, 12.10.2026): the entries in `socket_calls`,
   `tool_executions`, `llm_calls`, `aux_llm_calls` and `web_requests` get `chat_id` NULL and `deleted_chat`, a random
@@ -527,6 +528,7 @@ Each event is a `data:` line with JSON `{"kind": …, "data": …}`. Every 15 s 
 | `socket_call` | `SocketCall` (op also `agent_limit`, `subagent_limit`, `extension_ui`, `internet`, `internet_off`, `internet_set`) |
 | `llm_call` | `LLMCall` (every model call, including subagents) |
 | `subagent` | `SubagentEntry` (new entries from the subagent sessions, about every 2 s) |
+| `subagent_message` | `SubagentMessage` (a message of the user to a subagent: when it is stored and at every change of its status; chat stream only, not in *Events across chats*) |
 | `tool_execution` | `ToolExecution` (every operation executed by the orchestrator, as soon as it is finished) |
 | `resume` | `ResumeStep` (steps when resuming a dormant chat; arrive before the response to `POST …/messages` and before the first pi event of the instruction) |
 | `background` | `{change: "started" \| "output" \| "ended", task: BackgroundTask}`: `output` at most every 2 s per task with the new state (`tail`, counters); `ended` carries `notified_at` as soon as the note to the agent has been created (previously `ended` came before the note) |
@@ -784,6 +786,49 @@ appear as well; a status row without a start and without entries is left out.
 - The list is a separate route and not part of `GET /api/chats`: the list of chats is reloaded often and for every
   chat, while only the few chats the user expands need their runs, and task texts of every run would make each
   reload of the chat list larger for nothing.
+
+## Messages to subagents
+
+Issue #81. In the subagent view (panel and `/ai-agent`) the user writes to a subagent as in a chat: a running one gets
+the message as a hint after its current step, a finished one a follow-up question that continues with its history.
+
+- **Who may write:** the owner of the chat only (404 for others); a chat in the trash takes nothing (409
+  `chat_in_trash`). Text: 1 to 8 000 characters after trimming (400 otherwise). A text beginning with `/agw-` is
+  refused (400): the gateway's own extension commands are not for the user, and they are hidden from `GET …/commands`.
+- **Which run:** the run must belong to the chat (`subagent_runs` or its entries; 404 otherwise). Runs without an own
+  ID at pi-subagents (foreground runs, which run inside a step of the main agent) take no message while they run: 409
+  `foreground_run`; afterwards they count as finished.
+- **Modes:** `steer` for a run that the monitoring counts as running (pi-subagents gets the message through its
+  in-process RPC, the run's own ID and index); `resume` for a finished run of a live chat (pi-subagents revives the run
+  with its session); `restart` otherwise (a dormant chat, or pi-subagents cannot resume the run: no session file, stopped,
+  not known any more). `restart` starts a new run of the same agent whose task is an instruction, the transcript the
+  gateway recorded for the run and its continuations (from `subagent_entries` and the stored user messages) in a fence
+  with a fresh marker, and the message. The transcript is clipped (results 500 characters) and at most 24 KB; if longer,
+  the beginning and the end stay. A `resume` that falls back ends as `restart`: the stored message and its SSE events carry the new mode.
+  A restart needs the agent in the same list the model may start (`worker`, `scout`, `reviewer`, `oracle`, `researcher`,
+  `delegate`, `evidence-auditor`), else 409 `not_resumable`.
+- **Limits:** one message per run at a time (409 `message_pending` until the previous one is delivered or has failed);
+  at most 20 messages per chat and hour (429); a new run started by a message counts against `max_subagents` (409
+  `subagent_limit` while the chat is at its limit). A message grants no rights: tools, approvals, effect classes and the
+  limit on model calls and subagents stay as they are.
+- **Delivery:** the message is stored first (table `subagent_messages`, origin is always the user; it goes with the
+  chat), then relayed as an extension command of pi. The subagent gets the text under the header
+  `[Message from the user, sent directly to you · ref agw-xxxxxxxx]`. The reply of pi-subagents comes back over the
+  socket (`POST /subagent-relay/result`, only for an open ref of this chat, once). Status: `sending` → `sent` (the relay
+  was accepted) → `delivered` (its marker shows up in the subagent's session; a new run that continues the addressed run
+  gets `continues_run_id` set to it, by the gateway only). `failed` with `error`: the relay did not answer within 30 s
+  (`relay timed out`), a steer whose run ended before the marker arrived (`run ended before the message arrived`), or
+  the reason pi-subagents or the gateway gave. A late `sent` never downgrades `delivered`.
+- **The main agent:** the message is a passive note in the queue (`subagent_user`, summary "The user wrote directly to
+  subagent … ; it receives the message after its current step" or "… it continues with its history in a new run"),
+  with the user's text in a fence. It never wakes the agent and never starts a turn: it goes with the next message or
+  with the next tool step of a running turn. The note is visible in the chat (no audience `agent`).
+- **Records:** `subagent_messages` (`id`, `run_id`, `target_run_id`, `ref`, `mode`, `text`, `status`, `error`, `created_at`,
+  `delivered_at`) goes with the chat (trash, deletion); the call log gets a `subagent_message` entry (`detail`
+  `<mode> <run>`, `result` the status). `GET /api/chats/{id}` carries `subagent_messages`; `subagent_runs` and
+  `GET …/subagent-runs` carry `continues_run_id`; the platform UI shows a run and its continuations as one history.
+
+`SubagentMessage`: `{id, chat_id, run_id, target_run_id?, ref, mode, text, status, error?, created_at, delivered_at?}`.
 
 ## Bindings of new chats
 

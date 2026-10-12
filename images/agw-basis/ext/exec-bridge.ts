@@ -1012,6 +1012,12 @@ const BLOCKED_TOOLS: Record<string, string> = {
 	watchdog_diff: "watchdog_diff is blocked (it would run git in the pi container; execution sandbox, E9)",
 };
 
+// EventBus is pi.events: pi-subagents' RPC runs on it.
+interface EventBus {
+	on(event: string, handler: (data: unknown) => void): (() => void) | void;
+	emit(event: string, data: unknown): void;
+}
+
 // Child sessions of pi-subagents live under <main session>/<run>/run-N/session.jsonl.
 function isChildSession(ctx: any): boolean {
 	try {
@@ -1019,6 +1025,115 @@ function isChildSession(ctx: any): boolean {
 	} catch {
 		return false;
 	}
+}
+
+// --- relay of messages from the user to subagents (issue #81) ---
+//
+// The gateway sends `/agw-subagent-relay <base64url JSON>` to the main session as a prompt. pi runs the
+// command at once, without a model call, and it does not reach the conversation. The command passes the
+// request to the in-process RPC of pi-subagents (subagents:rpc:v1:request, reply on :reply:<ref>) and reports
+// the reply to the gateway over the socket (POST /subagent-relay/result). The gateway decides what is sent
+// (chat, run, text, limits); this side only lets through the three methods below with the fixed parameters,
+// because RPC requests over pi.events do not pass the tool_call hook.
+const RELAY_METHODS = ["steer", "resume", "spawn"] as const;
+type RelayMethod = (typeof RELAY_METHODS)[number];
+const RELAY_REF = /^agw-[0-9a-f]{8}$/;
+const RELAY_RUN = /^[A-Za-z0-9#._:-]{1,64}$/;
+const RELAY_MAX_BYTES = 64 << 10;
+const RELAY_REPLY_MS = 20_000;
+const RPC_REQUEST = "subagents:rpc:v1:request";
+const RPC_REPLY_PREFIX = "subagents:rpc:v1:reply:";
+
+export type RelayRequest = { ref: string; method: RelayMethod; params: Record<string, unknown> };
+export type RelayReply = { ok: boolean; code?: string; message?: string; run_id?: string };
+
+// relayDecode reads the JSON of the command; undefined when it is not a request at all.
+function relayDecode(raw: string): any {
+	if (!raw || raw.length > RELAY_MAX_BYTES) return undefined;
+	try {
+		const v = JSON.parse(Buffer.from(raw.trim(), "base64url").toString("utf8"));
+		return v && typeof v === "object" && !Array.isArray(v) ? v : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+// relayRef returns the ref of a request when it is well formed (for the reply), otherwise "".
+export function relayRef(raw: string): string {
+	const ref = relayDecode(raw)?.ref;
+	return typeof ref === "string" && RELAY_REF.test(ref) ? ref : "";
+}
+
+// relayRequest checks a request and builds the parameters of the RPC call from a fixed list. Unknown fields
+// are dropped, not passed on. The string is the reason for a refusal.
+export function relayRequest(raw: string): RelayRequest | string {
+	const req = relayDecode(raw);
+	if (!req) return "request is missing, too large or not JSON";
+	if (typeof req.ref !== "string" || !RELAY_REF.test(req.ref)) return "invalid ref";
+	if (typeof req.method !== "string" || !(RELAY_METHODS as readonly string[]).includes(req.method)) {
+		return `method ${String(req.method)} is not relayed`;
+	}
+	const p = req.params;
+	if (!p || typeof p !== "object" || Array.isArray(p)) return "params must be an object";
+	const method = req.method as RelayMethod;
+	if (method === "spawn") {
+		// a new run: the same checks as for a subagent call from the model (agent list, no code, no paths)
+		if (typeof p.task !== "string" || !p.task.trim()) return "task must be a non-empty string";
+		const reason = checkSubagentCall({ agent: p.agent, task: p.task, async: true });
+		if (reason) return reason;
+		return { ref: req.ref, method, params: { agent: p.agent, task: p.task, async: true } };
+	}
+	if (typeof p.id !== "string" || !RELAY_RUN.test(p.id)) return "invalid id";
+	if (typeof p.message !== "string" || !p.message.trim()) return "message must not be empty";
+	const params: Record<string, unknown> = { id: p.id, message: p.message };
+	if (p.index !== undefined) {
+		if (!Number.isInteger(p.index) || p.index < 0 || p.index > 1000) return "invalid index";
+		params.index = p.index;
+	}
+	if (method === "steer") params.mode = "steer";
+	return { ref: req.ref, method, params };
+}
+
+// runIdOf takes the ID of the run a reply names, if it names one.
+function runIdOf(data: any): string {
+	for (const k of ["runId", "asyncId", "id"]) {
+		if (typeof data?.[k] === "string") return data[k];
+	}
+	return "";
+}
+
+// relayCall sends the request to pi-subagents and waits for its reply (or RELAY_REPLY_MS).
+export function relayCall(events: EventBus, req: RelayRequest, timeoutMs = RELAY_REPLY_MS): Promise<RelayReply> {
+	return new Promise((resolve) => {
+		let off: (() => void) | void = undefined;
+		let timer: ReturnType<typeof setTimeout> | undefined = undefined;
+		let done = false;
+		const finish = (r: RelayReply) => {
+			if (done) return;
+			done = true;
+			if (timer) clearTimeout(timer);
+			if (typeof off === "function") off();
+			resolve(r);
+		};
+		timer = setTimeout(() => finish({ ok: false, code: "timeout", message: "no reply from pi-subagents" }), timeoutMs);
+		off = events.on(RPC_REPLY_PREFIX + req.ref, (raw: any) => {
+			if (raw?.success === true) finish({ ok: true, run_id: runIdOf(raw.data) });
+			else finish({ ok: false, code: String(raw?.error?.code ?? "error"), message: String(raw?.error?.message ?? "") });
+		});
+		events.emit(RPC_REQUEST, { version: 1, requestId: req.ref, method: req.method, params: req.params, source: { kind: "agw-user" } });
+	});
+}
+
+// relayCommand is the handler of /agw-subagent-relay: check, call, report to the gateway. It never throws.
+export async function relayCommand(args: string, ctx: any, events: EventBus | undefined, report: (r: { ref: string } & RelayReply) => Promise<unknown>) {
+	if (isChildSession(ctx)) return; // subagents never relay
+	const ref = relayRef(args);
+	const req = relayRequest(args);
+	let reply: RelayReply;
+	if (typeof req === "string") reply = { ok: false, code: "refused", message: req };
+	else if (!events) reply = { ok: false, code: "no_bus", message: "pi-subagents is not loaded" };
+	else reply = await relayCall(events, req);
+	if (ref) await report({ ref, ...reply }).catch(() => undefined);
 }
 
 export default function (pi: ExtensionAPI) {
@@ -1055,6 +1170,15 @@ export default function (pi: ExtensionAPI) {
 			reg.approved.set(script, l);
 		}
 	});
+
+	// Messages of the user to subagents (issue #81); the command is hidden from the user (gateway, Commands).
+	const bus = (pi as any).events as EventBus | undefined;
+	pi.registerCommand("agw-subagent-relay", {
+		description: "gateway: relays a message of the user to a subagent",
+		handler: async (args: string, ctx: any) => {
+			await relayCommand(args, ctx, bus, (r) => post("/subagent-relay/result", r));
+		},
+	} as any);
 
 	const localRead = createReadTool(CWD);
 	const localWrite = createWriteTool(CWD);

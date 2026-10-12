@@ -161,6 +161,12 @@ func clip(s string) string {
 
 // parseChildSession turns new lines of a subagent session into entries.
 func parseChildSession(chatID, run, agent, data string) []store.SubagentEntry {
+	return parseChildSessionKnown(chatID, run, agent, data, nil)
+}
+
+// parseChildSessionKnown is parseChildSession; a user message whose marker known reports as a message of the user
+// to this subagent (kind user_echo, issue #81) and not as a task.
+func parseChildSessionKnown(chatID, run, agent, data string, known func(ref string) bool) []store.SubagentEntry {
 	var out []store.SubagentEntry
 	add := func(id, kind, resp string, payload any) {
 		b, _ := json.Marshal(payload)
@@ -206,6 +212,11 @@ func parseChildSession(chatID, run, agent, data string) []store.SubagentEntry {
 			var b strings.Builder
 			for _, c := range msg.Content {
 				b.WriteString(c.Text)
+			}
+			// the marker is searched in the whole text: a long task (restart) has it at its end
+			if ms := relayRefRe.FindAllStringSubmatch(b.String(), -1); known != nil && len(ms) > 0 && known(ms[len(ms)-1][1]) {
+				add(e.ID, "user_echo", "", map[string]string{"text": clip(b.String()), "relay_ref": ms[len(ms)-1][1]})
+				continue
 			}
 			add(e.ID, "task", "", map[string]string{"text": clip(b.String())})
 		case "assistant":
@@ -308,6 +319,9 @@ func (m *Manager) pollSubagents(chatID string, l *live, offsets map[string]int64
 		runs[key] = ri
 		changed = true
 		m.publish(chatID, Event{Kind: "subagent_run", Data: r})
+		if ri.State != "" && !runningStates[strings.ToLower(ri.State)] {
+			m.failSteers(ctx, chatID, key) // a steer that did not arrive before the end (issue #81)
+		}
 	}
 	var fresh []store.SubagentEntry
 	for _, f := range res.Files {
@@ -324,13 +338,23 @@ func (m *Manager) pollSubagents(chatID string, l *live, offsets map[string]int64
 		if agent == "" {
 			agent = agents[run]
 		}
-		parsed := parseChildSession(chatID, run, short(agent), f.Data)
+		parsed := parseChildSessionKnown(chatID, run, short(agent), f.Data, m.knownRef(chatID))
 		if len(parsed) > 0 && parsed[0].Agent != "" {
 			agents[run] = parsed[0].Agent
 		}
 		added, err := m.st.AddSubagentEntries(ctx, parsed)
 		if err != nil {
 			slog.Warn("subagent entries not stored", "chat", chatID, "err", err)
+		}
+		for _, e := range added {
+			if e.Kind == "user_echo" {
+				var p struct {
+					Ref string `json:"relay_ref"`
+				}
+				if json.Unmarshal(e.Payload, &p) == nil && p.Ref != "" {
+					m.echoArrived(ctx, chatID, run, p.Ref) // the message has arrived (issue #81)
+				}
+			}
 		}
 		if len(added) > 0 {
 			l.track(run, now).LastKind = added[len(added)-1].Kind

@@ -63,6 +63,26 @@ refer to this repository.
   `internal/chat/subagents.go`), not runs started in total; do not reintroduce `maxSubagentSpawnsPerSession` in the
   pi-subagents config, it caps runs in total. Rules in `API.md`, *Limit for subagents*.
 
+## Messages to subagents
+
+- The user can write to a subagent (issue #81): a running one gets a steer, a finished one a resume, and when
+  pi-subagents cannot resume the run, a new run of the same agent with the transcript the gateway recorded
+  (`restart`). The relay is the extension command `/agw-subagent-relay` in `images/agw-basis/ext/exec-bridge.ts`, which
+  sends one request to pi-subagents' in-process RPC (`subagents:rpc:v1:request`, methods steer, resume, spawn) and
+  reports the reply over the socket (`POST /subagent-relay/result`). The gateway stores the message first
+  (`subagent_messages`) and is the authority for every check; the extension only lets through the three methods with
+  fixed parameters. Rules in `API.md`, *Messages to subagents*.
+- `/agw-…` commands are the gateway's own: `SendMessage` refuses them from the user and `Commands` hides them. Do not
+  send them as user text; the relay goes through `Worker.Call` (prompt), not through the queue.
+- Passive note `subagent_user`: it never wakes the agent and never starts a turn. `deliverQueue` skips queues that hold
+  only such notes; `steerQueue` takes them along at a tool step.
+- The continuation of a run is linked only by the marker `ref agw-xxxxxxxx` in the subagent's session (`user_echo` in
+  `parseChildSessionKnown`), and `continues_run_id` is only written by the gateway (`SetRunContinues`; upserts never
+  touch it). Open risk, to check on the live instance: whether pi-subagents' resume puts the message into the new
+  run's first user message (the link depends on it).
+- Relay tests: `images/agw-basis/test/guard.test.mjs` (node --test, agw-parity image); the Go tests are in
+  `internal/chat/subagent_messages_test.go`, `internal/api/subagent_messages_test.go`, `internal/store/subagent_messages_test.go`.
+
 ## Bindings (toolsets)
 
 - `AGW_TOOLSETS` (default `cli`) fixes the bindings of every new chat as any combination of `cli`, `mcp`, `api`
