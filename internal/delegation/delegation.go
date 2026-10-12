@@ -309,13 +309,16 @@ var fieldRules = []struct {
 	re     *regexp.Regexp
 	fields []string
 }{
-	{http.MethodPatch, regexp.MustCompile(`^/datasets/[^/]+$`), []string{"name", "description"}},
+	{http.MethodPatch, regexp.MustCompile(`^/datasets/[^/]+$`), []string{"name"}}, // description has no column (issue #65)
 	{http.MethodPatch, regexp.MustCompile(`^/train/containers/[^/]+$`), nil},
 	{http.MethodPatch, regexp.MustCompile(`^/train/containers/[^/]+/score$`), []string{"score"}},
 }
 
 // checkFields checks the fields of a JSON body against the route's allowlist.
 func checkFields(req platform.Request) string {
+	if p := checkRequired(req); p != "" {
+		return p
+	}
 	for _, fr := range fieldRules {
 		if fr.method != req.Method || !fr.re.MatchString(req.Path) {
 			continue
