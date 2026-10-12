@@ -46,3 +46,9 @@ CREATE TABLE IF NOT EXISTS plan_steps (
 -- Arguments of a step that is a platform tool with steps (issue #70, option b): the step is matched on the tool name
 -- and these arguments, not on the HTTP request the tool builds. Empty for a raw call or a tool without steps.
 ALTER TABLE plan_steps ADD COLUMN IF NOT EXISTS args text NOT NULL DEFAULT '';
+
+-- What the gateway says a step does (issue #72): written from the stored call and platform state read at proposal
+-- time, never from the agent's text. Empty for steps from before #72.
+ALTER TABLE plan_steps ADD COLUMN IF NOT EXISTS summary text NOT NULL DEFAULT '';
+-- The same for an approval (single platform calls and plans); empty for other kinds and older entries.
+ALTER TABLE approvals ADD COLUMN IF NOT EXISTS summary text;

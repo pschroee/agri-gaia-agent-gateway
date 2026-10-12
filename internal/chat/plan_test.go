@@ -138,7 +138,7 @@ func TestProposePlanApproveAndReject(t *testing.T) {
 	slot := e.m.live[c.ID].slot.ID
 
 	r, ap := proposeAndDecide(t, e, ctx, c.ID, slot, planTwo, true)
-	if !strings.Contains(ap.Preview, "1. WRITE · GET /train/containers/7/model") {
+	if !strings.Contains(ap.Preview, "1. WRITE · Create a new model from training container 7") {
 		t.Fatalf("preview lists no step: %s", ap.Preview)
 	}
 	if r.Status != "ok" || r.HTTPStatus != 200 || !strings.Contains(r.Body, `"plan_id"`) || !strings.Contains(r.Body, `"state":"approved"`) {

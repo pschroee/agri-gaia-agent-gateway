@@ -201,6 +201,10 @@ type Approval struct {
 	// Effect: class of a platform call (read, write, compute, irreversible); empty for other kinds and
 	// for entries from before issue #63.
 	Effect string `json:"effect,omitempty"`
+	// Summary: what the gateway says will happen (issue #72), written from the call and platform state the gateway
+	// read itself, never from the agent's text; first line the action, then one detail per line. Platform calls and
+	// plans only; empty for older entries.
+	Summary string `json:"summary,omitempty"`
 }
 
 type SocketCall struct {
@@ -747,11 +751,11 @@ func (s *Store) GetArtifact(ctx context.Context, chatID, kind, name string) (Art
 	return scanArtifact(s.pool.QueryRow(ctx, `SELECT `+artifactCols+` FROM artifacts WHERE chat_id=$1 AND kind=$2 AND name=$3`, chatID, kind, name))
 }
 
-const approvalCols = `id::text, chat_id::text, kind, via, name, size, sha256, content_type, pending_key, COALESCE(preview,''), state, created_at, decided_at, session, tool_call_id, COALESCE(effect,'')`
+const approvalCols = `id::text, chat_id::text, kind, via, name, size, sha256, content_type, pending_key, COALESCE(preview,''), state, created_at, decided_at, session, tool_call_id, COALESCE(effect,''), COALESCE(summary,'')`
 
 func scanApproval(row pgx.Row) (Approval, error) {
 	var a Approval
-	err := row.Scan(&a.ID, &a.ChatID, &a.Kind, &a.Via, &a.Name, &a.Size, &a.SHA256, &a.ContentType, &a.PendingKey, &a.Preview, &a.State, &a.CreatedAt, &a.DecidedAt, &a.Session, &a.ToolCallID, &a.Effect)
+	err := row.Scan(&a.ID, &a.ChatID, &a.Kind, &a.Via, &a.Name, &a.Size, &a.SHA256, &a.ContentType, &a.PendingKey, &a.Preview, &a.State, &a.CreatedAt, &a.DecidedAt, &a.Session, &a.ToolCallID, &a.Effect, &a.Summary)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return a, ErrNotFound
 	}
@@ -760,9 +764,9 @@ func scanApproval(row pgx.Row) (Approval, error) {
 
 func (s *Store) CreateApproval(ctx context.Context, a Approval) (Approval, error) {
 	return scanApproval(s.pool.QueryRow(ctx, `
-INSERT INTO approvals (chat_id, kind, via, name, size, sha256, content_type, pending_key, preview, session, tool_call_id, effect)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NULLIF($9,''),$10,$11,NULLIF($12,'')) RETURNING `+approvalCols,
-		a.ChatID, a.Kind, a.Via, a.Name, a.Size, a.SHA256, a.ContentType, a.PendingKey, a.Preview, a.Session, a.ToolCallID, a.Effect))
+INSERT INTO approvals (chat_id, kind, via, name, size, sha256, content_type, pending_key, preview, session, tool_call_id, effect, summary)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NULLIF($9,''),$10,$11,NULLIF($12,''),NULLIF($13,'')) RETURNING `+approvalCols,
+		a.ChatID, a.Kind, a.Via, a.Name, a.Size, a.SHA256, a.ContentType, a.PendingKey, a.Preview, a.Session, a.ToolCallID, a.Effect, a.Summary))
 }
 
 func (s *Store) GetApproval(ctx context.Context, id string) (Approval, error) {

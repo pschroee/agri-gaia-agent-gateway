@@ -2058,13 +2058,19 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 		if n := len([]rune(preview)); n > maxPlatformPreview {
 			return platform.Result{Status: "error", Message: fmt.Sprintf("call too large for an approval (%d characters, at most %d); shrink the body", n, maxPlatformPreview)}, nil
 		}
+		// What will happen, written by the gateway from this request and platform state it reads now (issue #72).
+		tool := ""
+		if inv, ok := platform.InvocationFrom(ctx); ok {
+			tool = inv.Tool
+		}
+		summary := visibleControls(platform.Summarize(ctx, m.summaryReader(chatID), platform.SummaryCallOf(tool, req)))
 		size := int64(len(req.Body))
 		for _, u := range req.Uploads {
 			size += int64(len(u.Data))
 		}
 		ap, err := m.st.CreateApproval(ctx, store.Approval{ChatID: chatID, Kind: "platform_write", Via: via, Name: req.String(), Size: size,
 			ContentType: "application/json", PendingKey: "-", Preview: preview, Session: store.SessionFrom(ctx), ToolCallID: store.ToolCallFrom(ctx),
-			Effect: string(access.Effect)})
+			Effect: string(access.Effect), Summary: summary})
 		if err != nil {
 			return platform.Result{}, err
 		}

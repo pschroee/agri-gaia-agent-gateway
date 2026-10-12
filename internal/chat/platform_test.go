@@ -19,8 +19,9 @@ import (
 
 var _ sock.PlatformBackend = (*Manager)(nil)
 
-// withPlatform attaches a fake platform to the manager and returns the calls
-// that arrived there.
+// withPlatform attaches a fake platform to the manager and returns the writing calls that arrived there. Reading GETs
+// are left out: the gateway reads before an approval to write its summary (issue #72), and these tests count what
+// was executed.
 func withPlatform(t *testing.T, e *env) func() []string {
 	t.Helper()
 	var mu sync.Mutex
@@ -30,9 +31,11 @@ func withPlatform(t *testing.T, e *env) func() []string {
 			fmt.Fprint(w, `{"access_token":"t","expires_in":3600}`)
 			return
 		}
-		mu.Lock()
-		got = append(got, r.Method+" "+r.URL.Path)
-		mu.Unlock()
+		if req := (platform.Request{Method: r.Method, Path: r.URL.Path}); req.Method != http.MethodGet || req.Writes() {
+			mu.Lock()
+			got = append(got, r.Method+" "+r.URL.Path)
+			mu.Unlock()
+		}
 		w.Header().Set("Location", "/tasks/5")
 		w.WriteHeader(http.StatusAccepted)
 	}))
@@ -56,7 +59,7 @@ func TestPlatformCallReadDirect(t *testing.T) {
 	c, _ := e.m.Create(ctx, NewChat{})
 	slot := e.m.live[c.ID].slot.ID
 	r, err := e.m.PlatformCall(ctx, c.ID, slot, "mcp", platform.Request{Method: "GET", Path: "/datasets"})
-	if err != nil || r.Status != "ok" || len(got()) != 1 {
+	if err != nil || r.Status != "ok" || r.HTTPStatus != http.StatusAccepted || len(got()) != 0 {
 		t.Fatalf("reading: %+v %v %v", r, err, got())
 	}
 	if aps, _ := e.st.ListApprovals(ctx, "", c.ID); len(aps) != 0 {
