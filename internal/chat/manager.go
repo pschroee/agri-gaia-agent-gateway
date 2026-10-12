@@ -2024,6 +2024,15 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 	if access.Effect != delegation.EffectRead || req.Writes() {
 		step = m.planMatch(ctx, chatID, req) // nil: no plan step applies
 	}
+	// A claimed step must end up finished: every return before the call to the platform fails it and the plan.
+	stepFinished := false
+	if step != nil && step.Covered {
+		defer func() {
+			if !stepFinished {
+				m.planFinish(ctx, chatID, step, access, platform.Result{Status: "error", Message: "not executed"}, errors.New("not executed"))
+			}
+		}()
+	}
 	if needsApproval(access.Effect, req.Writes(), del) && (step == nil || !step.Covered) {
 		if err := m.checkPendingLimit(ctx, chatID); err != nil {
 			return platform.Result{}, err
@@ -2112,6 +2121,7 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 	t0 := time.Now()
 	res, err := m.opt.Platform.Do(ctx, chatID, req)
 	took := time.Since(t0)
+	stepFinished = true
 	m.planFinish(ctx, chatID, step, access, res, err) // nil step: nothing to record
 	if reserved && (err != nil || res.Status != "ok") {
 		if rerr := m.st.ReleaseCompute(context.WithoutCancel(ctx), chatID); rerr != nil {

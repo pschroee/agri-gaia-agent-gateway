@@ -212,7 +212,7 @@ func TestDelegationAuditOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A deleting call would ask anyway (irreversible, issue #63, also with confirm none); a write runs at once.
-	res, _ := e.m.PlatformCall(ctx, c.ID, e.m.live[c.ID].slot.ID, "api", platform.Request{Method: "PATCH", Path: "/models/3", Body: json.RawMessage(`{}`)})
+	res, _ := e.m.PlatformCall(ctx, c.ID, e.m.live[c.ID].slot.ID, "api", platform.Request{Method: "PATCH", Path: "/models/3", Body: json.RawMessage(`{"name":"n","format":"onnx","input_name":"i","input_datatype":"float32","input_shape":[1,3],"input_semantics":"NCHW","output_name":"o","output_datatype":"float32","output_shape":[1,2],"output_labels":["0","1"]}`)})
 	if res.Status != "ok" || !strings.Contains(res.Violation, "update model 3") || len(f.reached()) != 1 {
 		t.Fatalf("log only: %+v %v", res, f.reached())
 	}

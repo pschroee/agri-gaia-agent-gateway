@@ -121,7 +121,7 @@ func TestPlatformCallPreviewTooLarge(t *testing.T) {
 	got := withPlatform(t, e)
 	ctx := context.Background()
 	c, _ := e.m.Create(ctx, NewChat{})
-	body, _ := json.Marshal(map[string]string{"description": strings.Repeat("x", maxPlatformPreview)})
+	body, _ := json.Marshal(map[string]string{"name": strings.Repeat("x", maxPlatformPreview)})
 	r, err := e.m.PlatformCall(ctx, c.ID, e.m.live[c.ID].slot.ID, "mcp", platform.Request{Method: "PATCH", Path: "/datasets/1", Body: body})
 	if err != nil || r.Status != "error" || !strings.Contains(r.Message, "too large") || len(got()) != 0 {
 		t.Fatalf("preview too large: %+v %v %v", r, err, got())
