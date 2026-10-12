@@ -1,6 +1,6 @@
 // Own view of a subagent run: full width of the chat area, in the style of the main history.
 import { useLayoutEffect, useMemo, useRef, useState } from "react"
-import { BotIcon, ChevronRightIcon, ChevronsDownUpIcon, ChevronsUpDownIcon, WrenchIcon } from "lucide-react"
+import { BookOpenIcon, BotIcon, ChevronRightIcon, ChevronsDownUpIcon, ChevronsUpDownIcon, WrenchIcon } from "lucide-react"
 import type { Artifact, LLMCall, SubagentEntry } from "@/api/types"
 import { ArtifactAttachments } from "@/components/ArtifactAttachments"
 import { Markdown } from "@/components/Markdown"
@@ -16,6 +16,7 @@ import { useNow } from "@/hooks/useNow"
 import { SubagentBar } from "@/components/SubagentOverview"
 import { useAgentTree } from "@/hooks/useAgentTree"
 import { artifactsOfCall } from "@/lib/artifactPreview"
+import { skillLabel, skillRead } from "@/lib/skills"
 import { formatTime, formatTokens, formatUsd } from "@/lib/format"
 import { formatSpan, runDuration, runMetrics, runTitle } from "@/lib/subagent-overview"
 import { taskCountLabel, taskCounts, tasksFromSubagentEntries } from "@/lib/tasks"
@@ -293,7 +294,11 @@ function RunToolCard({
 }) {
   const [open, setOpen] = useState(defaultOpen)
   const name = call?.payload?.name || result?.payload?.name || "tool"
-  const view = describeToolArgs(name, parseArguments(call?.payload?.arguments))
+  const args = parseArguments(call?.payload?.arguments)
+  const view = describeToolArgs(name, args)
+  // A read of a skill file shows as "Skill loaded" with the skill's name (issue #73); the path stays in the title.
+  const skill = skillRead(name, args)
+  const named = skill ? skillLabel(skill) : undefined
   const error = result?.payload?.is_error === true
   const callConfirmed = call ? isEntryConfirmed(call, proxyIds) : undefined
   const ev = call?.payload?.id ? evidence?.get(call.payload.id) : undefined
@@ -304,16 +309,29 @@ function RunToolCard({
       <Collapsible
         open={open}
         onOpenChange={setOpen}
+        data-testid={skill ? "tool-skill" : undefined}
         className={cn("min-w-0 rounded-md border bg-background text-sm", error && "border-red-300")}
       >
         <CollapsibleTrigger className="flex w-full min-w-0 items-center gap-2 px-3 py-1.5 text-left hover:bg-muted/50">
           <ChevronRightIcon className={cn("size-3.5 shrink-0 transition-transform", open && "rotate-90")} />
-          <WrenchIcon className="size-3.5 shrink-0 text-muted-foreground" />
-          <span className="shrink-0 font-mono font-medium">{name}</span>
-          {view.summary && (
-            <span className="min-w-0 truncate font-mono text-xs text-muted-foreground" title={view.summary}>
-              {view.summary}
-            </span>
+          {skill && named ? (
+            <>
+              <BookOpenIcon className="size-3.5 shrink-0 text-muted-foreground" />
+              <span className="shrink-0 font-medium">{named.label}</span>
+              <span className="min-w-0 truncate font-mono text-xs text-muted-foreground" title={skill.path}>
+                {named.text}
+              </span>
+            </>
+          ) : (
+            <>
+              <WrenchIcon className="size-3.5 shrink-0 text-muted-foreground" />
+              <span className="shrink-0 font-mono font-medium">{name}</span>
+              {view.summary && (
+                <span className="min-w-0 truncate font-mono text-xs text-muted-foreground" title={view.summary}>
+                  {view.summary}
+                </span>
+              )}
+            </>
           )}
           <span className="ml-auto flex shrink-0 items-center gap-2">
             {ev ? (

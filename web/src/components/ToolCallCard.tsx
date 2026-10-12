@@ -1,5 +1,5 @@
 import { useState } from "react"
-import { ArrowDownToLineIcon, ChevronRightIcon, CircleStopIcon, FileTextIcon, Loader2Icon, TerminalSquareIcon, WrenchIcon } from "lucide-react"
+import { ArrowDownToLineIcon, BookOpenIcon, ChevronRightIcon, CircleStopIcon, FileTextIcon, Loader2Icon, TerminalSquareIcon, WrenchIcon } from "lucide-react"
 import { toast } from "sonner"
 import { api } from "@/api/client"
 import type { BackgroundTask } from "@/api/types"
@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 import { useNow } from "@/hooks/useNow"
+import { skillLabel, skillRead } from "@/lib/skills"
 import {
   type BackgroundCall,
   backgroundCall,
@@ -68,6 +69,9 @@ function GenericToolCallCard({ block, exec, evidence, settled = true, chatId }: 
   const prep = preparing ? preparingInfo(name, block.argsText ?? "") : undefined
   const view = describeToolArgs(name, block.arguments ?? exec?.args, block.argsText)
   const summary = prep ? (prep.path ?? view.summary) : view.summary
+  // A read of a skill file shows as "Skill loaded" with the skill's name (issue #73); the path stays in the title.
+  const skill = skillRead(name, block.arguments ?? exec?.args)
+  const named = skill ? skillLabel(skill) : undefined
   // Expanded while being prepared, so you see what is emerging; afterwards as chosen.
   const isOpen = preparing || open
   // Duration: live while running, from start and end when finished; after a reload without timestamps
@@ -83,17 +87,30 @@ function GenericToolCallCard({ block, exec, evidence, settled = true, chatId }: 
     <Collapsible
       open={isOpen}
       onOpenChange={setOpen}
+      data-testid={skill ? "tool-skill" : undefined}
       className={cn("rounded-md border bg-background text-sm", error && "border-red-300")}
     >
       <div className="flex min-w-0 items-center hover:bg-muted/50">
         <CollapsibleTrigger className="flex w-full min-w-0 items-center gap-2 px-3 py-1.5 text-left">
           <ChevronRightIcon className={cn("size-3.5 shrink-0 transition-transform", isOpen && "rotate-90")} />
-          <WrenchIcon className="size-3.5 shrink-0 text-muted-foreground" />
-          <span className="font-mono font-medium">{name}</span>
-          {summary && (
-            <span className="min-w-0 truncate font-mono text-xs text-muted-foreground" title={summary}>
-              {summary}
-            </span>
+          {skill && named ? (
+            <>
+              <BookOpenIcon className="size-3.5 shrink-0 text-muted-foreground" />
+              <span className="font-medium">{named.label}</span>
+              <span className="min-w-0 truncate font-mono text-xs text-muted-foreground" title={skill.path}>
+                {named.text}
+              </span>
+            </>
+          ) : (
+            <>
+              <WrenchIcon className="size-3.5 shrink-0 text-muted-foreground" />
+              <span className="font-mono font-medium">{name}</span>
+              {summary && (
+                <span className="min-w-0 truncate font-mono text-xs text-muted-foreground" title={summary}>
+                  {summary}
+                </span>
+              )}
+            </>
           )}
           <span className="ml-auto flex shrink-0 items-center gap-1.5">
             <EvidenceBadge evidence={evidence} settled={settled} className="hidden sm:inline-flex" />
