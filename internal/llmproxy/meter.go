@@ -34,6 +34,9 @@ type Call struct {
 	StartedAt  time.Time     `json:"started_at"`
 	Duration   time.Duration `json:"-"`
 	DurationMs int64         `json:"duration_ms"`
+	// RequestBytes: size in bytes of the request body the proxy read from the sandbox and
+	// forwarded unchanged to the provider (issue #69). Sizes only, never contents.
+	RequestBytes int64 `json:"request_bytes"`
 }
 
 // ToolCall is a tool call requested by the model. ID is the
