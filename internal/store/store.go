@@ -885,6 +885,8 @@ type LLMCall struct {
 	// FinishReason and Complete: see llmproxy.Call (M1).
 	FinishReason string `json:"finish_reason"`
 	Complete     bool   `json:"complete"`
+	// RequestBytes: size of the request body sent to the provider (issue #69); nil for older rows.
+	RequestBytes *int64 `json:"request_bytes,omitempty"`
 }
 
 func (s *Store) AddLLMCall(ctx context.Context, c LLMCall) (LLMCall, error) {
@@ -896,9 +898,9 @@ func (s *Store) AddLLMCall(ctx context.Context, c LLMCall) (LLMCall, error) {
 		c.ToolCalls = json.RawMessage("[]")
 	}
 	err := s.pool.QueryRow(ctx, `
-INSERT INTO llm_calls (chat_id, slot_id, source_ip, model, response_id, status, input, output, cache_read, cache_write, cost, peak, tool_calls, started_at, duration_ms, finish_reason, complete)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) RETURNING id`,
-		chat, c.SlotID, c.SourceIP, c.Model, c.ResponseID, c.Status, c.Input, c.Output, c.CacheRead, c.CacheWrite, c.Cost, c.Peak, []byte(c.ToolCalls), c.StartedAt, c.DurationMs, noNUL(c.FinishReason), c.Complete).Scan(&c.ID)
+INSERT INTO llm_calls (chat_id, slot_id, source_ip, model, response_id, status, input, output, cache_read, cache_write, cost, peak, tool_calls, started_at, duration_ms, finish_reason, complete, request_bytes)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) RETURNING id`,
+		chat, c.SlotID, c.SourceIP, c.Model, c.ResponseID, c.Status, c.Input, c.Output, c.CacheRead, c.CacheWrite, c.Cost, c.Peak, []byte(c.ToolCalls), c.StartedAt, c.DurationMs, noNUL(c.FinishReason), c.Complete, c.RequestBytes).Scan(&c.ID)
 	return c, err
 }
 
@@ -906,7 +908,7 @@ func (s *Store) ListLLMCalls(ctx context.Context, chatID string) ([]LLMCall, err
 	rows, err := s.pool.Query(ctx, `
 SELECT x.id, x.slot_id, x.source_ip, x.model, x.response_id, x.status, x.input, x.output, x.cache_read, x.cache_write, x.cost, x.peak, x.tool_calls, x.started_at, x.duration_ms,
   (x.response_id <> '' AND EXISTS (SELECT 1 FROM chat_messages m WHERE m.chat_id = x.chat_id AND m.role = 'assistant' AND m.message->>'responseId' = x.response_id)),
-  x.finish_reason, x.complete
+  x.finish_reason, x.complete, x.request_bytes
 FROM llm_calls x WHERE x.chat_id = $1 ORDER BY x.id`, chatID)
 	if err != nil {
 		return nil, err
@@ -916,7 +918,7 @@ FROM llm_calls x WHERE x.chat_id = $1 ORDER BY x.id`, chatID)
 	for rows.Next() {
 		var c LLMCall
 		var tc []byte
-		if err := rows.Scan(&c.ID, &c.SlotID, &c.SourceIP, &c.Model, &c.ResponseID, &c.Status, &c.Input, &c.Output, &c.CacheRead, &c.CacheWrite, &c.Cost, &c.Peak, &tc, &c.StartedAt, &c.DurationMs, &c.Main, &c.FinishReason, &c.Complete); err != nil {
+		if err := rows.Scan(&c.ID, &c.SlotID, &c.SourceIP, &c.Model, &c.ResponseID, &c.Status, &c.Input, &c.Output, &c.CacheRead, &c.CacheWrite, &c.Cost, &c.Peak, &tc, &c.StartedAt, &c.DurationMs, &c.Main, &c.FinishReason, &c.Complete, &c.RequestBytes); err != nil {
 			return nil, err
 		}
 		c.ChatID, c.ToolCalls = chatID, tc

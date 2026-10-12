@@ -56,7 +56,7 @@ func (m *Manager) Record(c llmproxy.Call) {
 		ChatID: c.ChatID, SlotID: c.SlotID, SourceIP: c.SourceIP, Model: c.Model, ResponseID: c.ResponseID,
 		Status: c.Status, Input: c.Usage.Input, Output: c.Usage.Output, CacheRead: c.Usage.CacheRead, CacheWrite: c.Usage.CacheWrite,
 		Cost: c.Cost, Peak: c.Peak, ToolCalls: tc, StartedAt: c.StartedAt, DurationMs: c.DurationMs,
-		FinishReason: c.FinishReason, Complete: c.Complete,
+		FinishReason: c.FinishReason, Complete: c.Complete, RequestBytes: requestBytes(c.RequestBytes),
 	})
 	if err != nil {
 		slog.Error("model call not stored", "chat", c.ChatID, "err", err)
