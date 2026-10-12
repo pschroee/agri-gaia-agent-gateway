@@ -863,6 +863,12 @@ func (m *Manager) Abort(ctx context.Context, chatID string) (ChatView, error) {
 		if _, err := callT(l.slot.Worker, map[string]any{"type": "abort"}, 10*time.Second); err != nil {
 			return ChatView{}, err
 		}
+		// If no run is going on in pi (a command of an extension left the flag set), the abort
+		// has nothing to end; take the flag back.
+		go func() {
+			time.Sleep(time.Duration(settleDelay.Load()))
+			m.settleIfIdle(chatID, l)
+		}()
 	}
 	return m.View(ctx, chatID)
 }
