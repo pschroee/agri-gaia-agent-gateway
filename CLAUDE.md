@@ -167,6 +167,16 @@ refer to this repository.
   `-e /opt/agw/ext/web-tools.ts` against an image from two days before. `dev/go-hot.sh` warns when `images/` or
   `third_party/` change; then run `./dev.sh start`, which rebuilds both images.
 
+## Chat trash and deleted chats
+
+- **Every table with a `chat_id` is classified:** it goes with the chat (`ON DELETE CASCADE`), or its rows are
+  anonymised before the chat is deleted (`store.DeleteChatAnonymised`, issue #76). A new table with `chat_id` or a new
+  call log needs a line in one of the two; the call logs (`socket_calls`, `tool_executions`, `llm_calls`,
+  `aux_llm_calls`, `web_requests`) are measurement data and must keep their classes. Rules in `API.md`, *Chat trash*.
+- **Refusals in the trash are in two places:** the routes (`writable` in `internal/api/api.go`, 409 `chat_in_trash`) and
+  the manager (`ensureLive`, `Resume`, `send`, `PlatformCall`, `ProposePlan`, `Upload`, `RequestInternet`). Both stay.
+- **Tests:** `internal/store/trash_test.go`, `internal/chat/trash_test.go`, `internal/api/trash_test.go`.
+
 ## Activity across chats
 
 - `GET /api/activity` (issue #12) reads platform calls of the user's chats in one query (`internal/store/activity.go`):
