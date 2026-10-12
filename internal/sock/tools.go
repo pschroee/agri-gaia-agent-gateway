@@ -213,6 +213,9 @@ func NewPiHandlerFg(slotID string, b Backend, maxBytes int64, run ToolRunner, re
 	// The internet tools of the REST binding (api.ts): request and switch off, logged with via api.
 	mux.HandleFunc("POST /internet", h.internet)
 	mux.HandleFunc("POST /internet/off", h.internetOff)
+	// the reply of the extension command that relays a message of the user to a subagent (issue #81); it comes
+	// from pi's extension, not from the execution sandbox, which the agent controls
+	mux.HandleFunc("POST /subagent-relay/result", h.subagentRelayResult)
 	return h.withPlatformAPI(mux)
 }
 
