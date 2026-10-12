@@ -331,6 +331,9 @@ func Normalize(r Request) (Request, error) {
 			return r, fmt.Errorf("path %q is blocked for the agent", r.Path)
 		}
 	}
+	if why := blockedCall(r); why != "" { // inference container templates, issue #67
+		return r, errors.New(why)
+	}
 	if len(r.Body) > 0 {
 		if r.Method == http.MethodGet {
 			return r, errors.New("GET takes no body")
