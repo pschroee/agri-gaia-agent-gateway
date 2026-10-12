@@ -203,6 +203,7 @@ func (s *Server) Handler() http.Handler {
 	writes("POST /api/chats/{id}/autocompact", s.autocompact)
 	writes("POST /api/chats/{id}/subagents", s.subagentLimitGone)
 	chat("GET /api/chats/{id}/subagent-runs", s.subagentRuns)
+	writes("POST /api/chats/{id}/subagent-runs/{run}/messages", s.subagentMessage)
 	chat("GET /api/chats/{id}/plans", s.plans)
 	chat("GET /api/chats/{id}/llm_calls", s.llmCalls)
 	chat("GET /api/chats/{id}/tool_executions", s.toolExecutions)
@@ -648,13 +649,14 @@ func (s *Server) getChat(w http.ResponseWriter, r *http.Request) {
 	calls, err4 := s.M.SocketCalls(ctx, id)
 	subs, err5 := s.M.SubagentEntries(ctx, id)
 	subRuns, _ := s.M.SubagentRuns(ctx, id)
+	subMsgs, err8 := s.M.SubagentMessages(ctx, id)
 	queue, err6 := s.M.Queue(ctx, id)
 	bg, err7 := s.M.BackgroundTasks(ctx, id)
-	if err := errors.Join(err1, err2, err3, err4, err5, err6, err7); err != nil {
+	if err := errors.Join(err1, err2, err3, err4, err5, err6, err7, err8); err != nil {
 		fail(w, err)
 		return
 	}
-	writeJSON(w, 200, map[string]any{"chat": c, "messages": msgs, "artifacts": arts, "approvals": aps, "socket_calls": calls, "subagent_entries": subs, "subagent_runs": subRuns, "queue": queue, "queue_delivered": s.M.DeliveredQueue(id), "background": bg})
+	writeJSON(w, 200, map[string]any{"chat": c, "messages": msgs, "artifacts": arts, "approvals": aps, "socket_calls": calls, "subagent_entries": subs, "subagent_runs": subRuns, "subagent_messages": subMsgs, "queue": queue, "queue_delivered": s.M.DeliveredQueue(id), "background": bg})
 }
 
 // subagentRuns answers the short list of a chat's subagent runs (issue #60) from the database alone: it does not
@@ -672,6 +674,58 @@ func (s *Server) subagentRuns(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, runs)
+}
+
+// subagentMessage takes a message of the user to a subagent (issue #81) and answers 202 with the stored message;
+// its status follows over SSE (subagent_message). Refusals carry a code for the UI.
+func (s *Server) subagentMessage(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Text string `json:"text"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	msg, err := s.M.SendSubagentMessage(r.Context(), r.PathValue("id"), r.PathValue("run"), req.Text)
+	if err != nil {
+		subagentMessageFail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{"message": msg, "mode": msg.Mode})
+}
+
+// subagentMessageFail maps the refusals of a message to a subagent to status and code.
+func subagentMessageFail(w http.ResponseWriter, err error) {
+	code := ""
+	status := http.StatusInternalServerError
+	switch {
+	case errors.Is(err, chat.ErrMessageRate):
+		status, code = http.StatusTooManyRequests, "rate_limited"
+	case errors.Is(err, chat.ErrSubagentForeground):
+		status, code = http.StatusConflict, "foreground_run"
+	case errors.Is(err, chat.ErrMessagePending):
+		status, code = http.StatusConflict, "message_pending"
+	case errors.Is(err, chat.ErrSubagentLimit):
+		status, code = http.StatusConflict, "subagent_limit"
+	case errors.Is(err, chat.ErrNotResumable):
+		status, code = http.StatusConflict, "not_resumable"
+	case errors.Is(err, chat.ErrSubagentsUnavailable):
+		status, code = http.StatusConflict, "subagents_unavailable"
+	case errors.Is(err, chat.ErrTrashed):
+		status, code = http.StatusConflict, "chat_in_trash"
+	case errors.Is(err, store.ErrNotFound):
+		status = http.StatusNotFound
+	case errors.Is(err, chat.ErrInvalid):
+		status = http.StatusBadRequest
+	default:
+		fail(w, err)
+		return
+	}
+	body := map[string]string{"error": err.Error()}
+	if code != "" {
+		body["code"] = code
+	}
+	writeJSON(w, status, body)
 }
 
 func (s *Server) send(w http.ResponseWriter, r *http.Request) {

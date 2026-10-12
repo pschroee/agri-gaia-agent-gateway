@@ -247,6 +247,8 @@ type Manager struct {
 	blobs  Blobs
 	broker *artifacts.Broker
 	opt    Options
+	// relayWait: replies awaited for relay commands to subagents, by ref (under mu; issue #81).
+	relayWait map[string]chan relayReply
 
 	mu   sync.Mutex
 	live map[string]*live
@@ -1573,7 +1575,13 @@ func (m *Manager) Commands(ctx context.Context, chatID string) ([]Command, error
 	}
 	var pi []Command
 	_ = json.Unmarshal(raw, &pi)
-	return append(out, pi...), nil
+	for _, c := range pi {
+		// the gateway's own extension commands (agw-…, issue #81) are not for the user
+		if !strings.HasPrefix(c.Name, "agw-") {
+			out = append(out, c)
+		}
+	}
+	return out, nil
 }
 
 // RunCommand runs a slash command. Anything that is not a built-in command

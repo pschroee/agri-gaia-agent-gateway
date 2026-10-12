@@ -180,6 +180,10 @@ func (m *Manager) SendMessage(ctx context.Context, chatID, text string, names []
 	if text == "" && len(names) == 0 {
 		return SendResult{}, errors.New("empty message")
 	}
+	if strings.HasPrefix(text, "/agw-") {
+		// commands of the gateway's own extension are sent by the gateway only (issue #81)
+		return SendResult{}, fmt.Errorf("%w: this command is not available to the user", ErrInvalid)
+	}
 	clean, err := m.checkAttachments(ctx, chatID, names)
 	if err != nil {
 		return SendResult{}, err

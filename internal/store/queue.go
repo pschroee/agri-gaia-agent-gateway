@@ -77,6 +77,8 @@ const (
 	NoteSandbox    = "sandbox"      // tasks were ended with the previous sandbox
 	NoteLanguage   = "language"     // the user's preferred language according to the browser (first request of the chat)
 	NoteContext    = "page_context" // page of the platform UI the user sent the message from (issue #13)
+	// NoteSubagentUser: the user wrote directly to a subagent (issue #81). Passive: it never wakes the agent.
+	NoteSubagentUser = "subagent_user"
 )
 
 const queueCols = `id::text, chat_id::text, text, attachments, created_at, kind, note, refs, context`
