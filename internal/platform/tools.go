@@ -326,7 +326,7 @@ var Tools = []Tool{
 		Params: nil, build: get("/edge-devices")},
 	{Name: "list_container_images", CLI: "container-images", Desc: "Lists the container images in the platform's registry.",
 		Params: nil, build: get("/container-images")},
-	{Name: "create_training", CLI: "create-training", Desc: "Creates a training container (POST /train/config): the platform builds a training image from the installed template in the background. Writes; the user must approve. Response: Location with the task (/tasks/<id>). Get the values for train_config with platform_train_options first.",
+	{Name: "create_training", CLI: "create-training", Desc: "Creates a training container (POST /train/config): the platform builds a training image from the installed template in the background. Effect compute: uses compute time, the user must approve, and a chat has a limited number of compute calls (default 3). Response: Location with the task (/tasks/<id>). Get the values for train_config with platform_train_options first.",
 		Params: []Param{
 			{Name: "provider", Type: "string", Desc: "provider, e.g. Torchvision", Required: true},
 			{Name: "architecture", Type: "string", Desc: "architecture, e.g. EfficientNet", Required: true},
@@ -370,9 +370,9 @@ var Tools = []Tool{
 			b, err := json.Marshal(body)
 			return Request{Method: http.MethodPost, Path: "/train/config", Body: b}, err
 		}},
-	{Name: "start_training", CLI: "start-training", Desc: "Starts a built training container (POST /train/containers/<id>/run). Writes; the user must approve. Response: Location with the task (/tasks/<id>).",
+	{Name: "start_training", CLI: "start-training", Desc: "Starts a built training container (POST /train/containers/<id>/run). Effect compute: uses compute time, the user must approve, and a chat has a limited number of compute calls (default 3). Response: Location with the task (/tasks/<id>).",
 		Params: []Param{{Name: "train_container_id", Type: "integer", Desc: "id of the training container", Required: true}}, Write: true, build: byID(http.MethodPost, "/train/containers", "train_container_id", "/run")},
-	{Name: "upload_dataset", CLI: "upload-dataset", Desc: "Creates a dataset on the platform and uploads files from the sandbox (POST /datasets, multipart). Writes; the user must approve and sees the name, size and SHA-256 of every file. Give classes as annotation_labels; a CVAT annotation (annotations.xml) as annotation_file.",
+	{Name: "upload_dataset", CLI: "upload-dataset", Desc: "Creates a dataset on the platform and uploads files from the sandbox (POST /datasets, multipart). Effect write; the user must approve and sees the name, size and SHA-256 of every file. Give classes as annotation_labels; a CVAT annotation (annotations.xml) as annotation_file.",
 		Params: []Param{
 			{Name: "name", Type: "string", Desc: "name of the dataset (unique, preferably without spaces)", Required: true},
 			{Name: "description", Type: "string", Desc: "short description", Required: true},
@@ -449,7 +449,7 @@ var Tools = []Tool{
 			}
 			return Request{Method: http.MethodPost, Path: "/datasets", Form: form, Files: files}, nil
 		}},
-	{Name: "upload_model", CLI: "upload-model", Desc: "Uploads a model from the sandbox to the platform (POST /models, multipart). Writes; the user must approve and sees the name, size and SHA-256 of the file. For ONNX the platform reads the input and output shapes itself.",
+	{Name: "upload_model", CLI: "upload-model", Desc: "Uploads a model from the sandbox to the platform (POST /models, multipart). Effect write; the user must approve and sees the name, size and SHA-256 of the file. For ONNX the platform reads the input and output shapes itself.",
 		Params: []Param{
 			{Name: "name", Type: "string", Desc: "name of the model", Required: true},
 			{Name: "description", Type: "string", Desc: "short description", Required: true},
@@ -499,7 +499,7 @@ var Tools = []Tool{
 			}
 			return Request{Method: http.MethodGet, Path: "/openapi.json", Digest: func(b []byte) ([]byte, error) { return openAPIDigest(b, prefix) }}, nil
 		}},
-	{Name: "request", CLI: "request", Desc: "Any call to the platform's REST API for everything the other platform_ tools do not cover (paths: platform_api_paths). GET runs directly (except known GETs that write in the backend, e.g. /train/containers/<id>/model); POST, PUT, PATCH and DELETE must be approved by the user. The orchestrator redacts values containing passwords, keys and tokens. JSON bodies only, no file uploads.",
+	{Name: "request", CLI: "request", Desc: "Any call to the platform's REST API for everything the other platform_ tools do not cover (paths: platform_api_paths). Every call has an effect class: read runs directly; write, compute (building or starting a training) and irreversible (DELETE, publishing with toggle-public) must be approved by the user; irreversible ones always, also within a delegation; known GETs that write in the backend (e.g. /train/containers/<id>/model) count as write. The orchestrator redacts values containing passwords, keys and tokens. JSON bodies only, no file uploads.",
 		Params: []Param{
 			{Name: "method", Type: "string", Desc: "GET, POST, PUT, PATCH or DELETE", Required: true},
 			{Name: "path", Type: "string", Desc: "path relative to the API, e.g. /datasets/3 (without query)", Required: true},
