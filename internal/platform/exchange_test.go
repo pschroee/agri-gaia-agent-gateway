@@ -120,13 +120,13 @@ func TestExchangePerChat(t *testing.T) {
 			t.Fatalf("%s: %+v %v", chat, res, err)
 		}
 	}
-	if len(f.exchanges) != 2 || f.exchanges[0] != "backend,minio" {
-		t.Fatalf("exactly one exchange per chat with backend,minio: %v", f.exchanges)
+	if len(f.exchanges) != 2 || f.exchanges[0] != "backend" {
+		t.Fatalf("exactly one exchange per chat with backend (no minio for a GET): %v", f.exchanges)
 	}
 	if f.apiTokens[0] != f.apiTokens[1] || f.apiTokens[1] == f.apiTokens[2] {
 		t.Fatalf("chat a keeps using its token, chat b gets its own: %v", f.apiTokens)
 	}
-	if len(*logged) != 2 || !strings.Contains((*logged)[0], "chat-a: user test, azp=agw-agent, aud=backend,minio") || !strings.Contains((*logged)[0], "without act (impersonation)") {
+	if len(*logged) != 2 || !strings.Contains((*logged)[0], "chat-a: user test, azp=agw-agent, aud=backend,") || !strings.Contains((*logged)[0], "without act (impersonation)") {
 		t.Fatalf("exchange log: %v", *logged)
 	}
 	// Idling discards the token, resuming exchanges again.

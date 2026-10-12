@@ -50,6 +50,9 @@ type Config struct {
 	// ChatTokenMaxAge: a chat uses its exchanged token this long, then it is exchanged again
 	// (default DefaultChatTokenMaxAge). Every exchange is in the log.
 	ChatTokenMaxAge time.Duration
+	// CallKey names the tool call in the context (store.ToolCallFrom): the exchanged token is cached
+	// per chat, audience and tool call (issue #71). Nil: one entry per chat and audience.
+	CallKey func(ctx context.Context) string
 	// OnExchange reports every exchange with the details from the new token (for the log).
 	OnExchange func(chatID string, c Claims)
 	HTTP       *http.Client
@@ -58,7 +61,7 @@ type Config struct {
 }
 
 const (
-	DefaultChatTokenMaxAge = 30 * time.Minute
+	DefaultChatTokenMaxAge = 5 * time.Minute
 	DefaultMaxResult       = 64 << 10
 	maxBody                = 1 << 20 // JSON body from the agent
 	maxRead                = 8 << 20 // platform response, before truncation
@@ -555,7 +558,7 @@ func (c *Client) relLocation(loc string) string {
 }
 
 func (c *Client) send(ctx context.Context, chatID string, r Request, relogin bool) (*http.Response, error) {
-	tok, err := c.tokenFor(ctx, chatID, relogin)
+	tok, err := c.tokenFor(ctx, chatID, c.callAudiences(r), relogin)
 	if err != nil {
 		return nil, fmt.Errorf("login to the platform: %w", err)
 	}
@@ -650,7 +653,11 @@ func (c *Client) Forget(chatID string) {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	delete(c.chats, chatID)
+	for k := range c.chats {
+		if strings.HasPrefix(k, chatID+"\x00") {
+			delete(c.chats, k)
+		}
+	}
 }
 
 // SetOnExchange sets the per-exchange report (the manager is created after the client).
@@ -667,16 +674,18 @@ func (c *Client) SetOnExchange(f func(chatID string, cl Claims)) {
 func (c *Client) Exchanging() bool { return c != nil && c.cfg.Exchange }
 
 // tokenFor returns the token for a call: without token exchange the user's, otherwise the
-// chat's exchanged token (cached until ChatTokenMaxAge or shortly before expiry).
-func (c *Client) tokenFor(ctx context.Context, chatID string, force bool) (string, error) {
+// exchanged token of the chat for these audiences and this tool call (cached until ChatTokenMaxAge
+// or shortly before expiry).
+func (c *Client) tokenFor(ctx context.Context, chatID string, auds []string, force bool) (string, error) {
 	if !c.cfg.Exchange {
 		return c.userToken(ctx, chatID, force)
 	}
 	if chatID == "" {
 		return "", errors.New("token exchange needs a chat")
 	}
+	key := c.cacheKey(ctx, chatID, auds)
 	c.mu.Lock()
-	ct, ok := c.chats[chatID]
+	ct, ok := c.chats[key]
 	c.mu.Unlock()
 	if ok && !force && time.Until(ct.expires) > 30*time.Second {
 		return ct.access, nil
@@ -684,7 +693,7 @@ func (c *Client) tokenFor(ctx context.Context, chatID string, force bool) (strin
 	c.xmu.Lock()
 	defer c.xmu.Unlock()
 	c.mu.Lock()
-	ct2, ok := c.chats[chatID]
+	ct2, ok := c.chats[key]
 	c.mu.Unlock()
 	if ok && ct2.access != ct.access && time.Until(ct2.expires) > 30*time.Second {
 		return ct2.access, nil // exchanged by another call in the meantime
@@ -696,12 +705,12 @@ func (c *Client) tokenFor(ctx context.Context, chatID string, force bool) (strin
 		}
 		return "", err
 	}
-	tok, err := c.exchange(ctx, user)
+	tok, err := c.exchange(ctx, user, auds)
 	if err != nil && !force && c.cfg.Subject == nil {
 		// The user token may have expired on the server (session ended): log in again once.
 		// With Subject there is no password; the token comes fresh from the user's session.
 		if user, err = c.token(ctx, true); err == nil {
-			tok, err = c.exchange(ctx, user)
+			tok, err = c.exchange(ctx, user, auds)
 		}
 	}
 	if err != nil {
@@ -715,9 +724,13 @@ func (c *Client) tokenFor(ctx context.Context, chatID string, force bool) (strin
 		exp = until
 	}
 	c.mu.Lock()
-	c.chats[chatID] = chatToken{access: tok.Access, expires: exp}
-	c.mu.Unlock()
-	c.mu.Lock()
+	now := time.Now()
+	for k, old := range c.chats { // drop expired entries of other calls and chats
+		if !now.Before(old.expires) {
+			delete(c.chats, k)
+		}
+	}
+	c.chats[key] = chatToken{access: tok.Access, expires: exp}
 	notify := c.cfg.OnExchange
 	c.mu.Unlock()
 	if notify != nil && cerr == nil {
@@ -737,14 +750,24 @@ func (c *Client) userToken(ctx context.Context, chatID string, force bool) (stri
 	return c.cfg.Subject(ctx, chatID)
 }
 
-// exchange exchanges the user token under RFC 8693 for one with the configured audiences.
-func (c *Client) exchange(ctx context.Context, subject string) (tokenResp, error) {
+// cacheKey: the exchanged token is cached per chat, audiences and tool call (issue #71).
+func (c *Client) cacheKey(ctx context.Context, chatID string, auds []string) string {
+	call := ""
+	if c.cfg.CallKey != nil {
+		call = c.cfg.CallKey(ctx)
+	}
+	return chatID + "\x00" + strings.Join(auds, ",") + "\x00" + call
+}
+
+// exchange exchanges the user token under RFC 8693 for one with the given audiences. The
+// audience parameter only filters the audiences of the user's token; scope would add some, so it is not sent.
+func (c *Client) exchange(ctx context.Context, subject string, auds []string) (tokenResp, error) {
 	form := url.Values{
 		"grant_type":           {"urn:ietf:params:oauth:grant-type:token-exchange"},
 		"subject_token":        {subject},
 		"subject_token_type":   {"urn:ietf:params:oauth:token-type:access_token"},
 		"requested_token_type": {"urn:ietf:params:oauth:token-type:access_token"},
-		"audience":             c.cfg.Audiences,
+		"audience":             auds,
 	}
 	return c.post(ctx, form)
 }

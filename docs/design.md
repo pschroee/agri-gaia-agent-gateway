@@ -887,8 +887,8 @@ user in via its own confidential client (`agw-agent`, `AGW_PLATFORM_CLIENT_ID` a
 `AGW_PLATFORM_CLIENT_SECRET`) and exchanges that user's token **per chat** according to RFC 8693 for one of its own:
 `sub` remains the user, `azp` is `agw-agent`, the audience only `backend` and `minio` (MinIO checks it
 when the backend passes the token on for uploads). The user token itself never goes to the API; without a chat
-there is no call. A chat uses its token for at most 30 minutes, on idling the orchestrator discards
-it, and every exchange appears as `token_exchange` in the chat's socket log (user, `azp`, `aud`,
+there is no call. A token is used for at most `AGW_PLATFORM_TOKEN_MAX_AGE` (default 5 minutes; see below), on idling the
+orchestrator discards it, and every exchange appears as `token_exchange` in the chat's socket log (user, `azp`, `aud`,
 expiry, whether an `act` claim came). According to the experiment of 2026-09-28, Keycloak 26 issues **no** `act` claim;
 that is impersonation with a restricted audience, not delegation
 (`../docs/keycloak-token-austausch.md`). An exchanged token cannot be revoked, because the
@@ -901,6 +901,18 @@ The log contains exactly one exchange: "user test, azp=agw-agent, aud=minio,back
 the realm sets this lifetime for access tokens; the 30 minutes are enforced only by the orchestrator, by
 no longer using the token afterwards. Whoever wants to limit the lifetime on the token itself sets it on the
 client `agw-agent` (Keycloak: *Access Token Lifespan* per client); that would be a further change on the server.
+
+**Short-lived tokens per call (issue #71).** The exchange requests only the audiences the call needs. `minio` is
+added only for the routes that the backend passes the user's token on to MinIO with (`minioRoutes` in
+`internal/platform/audience.go`: uploads, downloads, deletion, `toggle-public`, the model of a container, `minio-proxy`,
+`triton`, integrated services); every other call gets `backend` alone. The audience parameter of the exchange only
+filters the audiences of the user's token; `scope` is not sent, because it adds scopes. The cache key is chat, audiences
+and tool call (`platform.Config.CallKey`, set to the tool call of the CLI; MCP and REST calls share one entry per chat
+and audience). The maximum age is `AGW_PLATFORM_TOKEN_MAX_AGE` (default 5 minutes, before 30 minutes); expired entries
+are dropped when a new one is stored. The client `agw-agent` gets the access token lifespan 300 s from
+`dev/keycloak-agw-agent.sh`. Whether Keycloak applies that lifespan to exchanged tokens shows the `exp` claim in the
+log (`token_exchange`); if it does not, the maximum age of the orchestrator remains the only limit, and that finding
+goes into the issue.
 
 **Tools.** One table (`internal/platform/tools.go`) describes each tool once; MCP schema,
 CLI subcommand and help text are generated from it, so that both bindings carry the same descriptions.
