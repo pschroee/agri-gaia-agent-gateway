@@ -133,6 +133,10 @@ type Artifact struct {
 	// artifacts). Serves solely to show it at the right place in the history; with the CLI the
 	// ID comes from the command's environment, so the agent could change it.
 	ToolCallID string `json:"tool_call_id,omitempty"`
+	// Preview: how the UI can show the file (image, pdf, table, text, none), decided by the orchestrator when the
+	// file is stored (artifacts.PreviewKind). Empty for artifacts from before this field. Only a hint for the UI:
+	// the inline download decides again from the bytes.
+	Preview string `json:"preview,omitempty"`
 }
 
 type toolCallKey struct{}
@@ -706,20 +710,20 @@ func (s *Store) PutArtifact(ctx context.Context, a Artifact) error {
 		a.ContentType = "application/octet-stream"
 	}
 	_, err := s.pool.Exec(ctx, `
-INSERT INTO artifacts (chat_id, kind, name, size, sha256, content_type, via, object_key, tool_call_id)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+INSERT INTO artifacts (chat_id, kind, name, size, sha256, content_type, via, object_key, tool_call_id, preview)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
 ON CONFLICT (chat_id, kind, name) DO UPDATE SET size=EXCLUDED.size, sha256=EXCLUDED.sha256,
   content_type=EXCLUDED.content_type, via=EXCLUDED.via, object_key=EXCLUDED.object_key,
-  tool_call_id=EXCLUDED.tool_call_id, created_at=now()`,
-		a.ChatID, a.Kind, a.Name, a.Size, a.SHA256, a.ContentType, a.Via, a.ObjectKey, a.ToolCallID)
+  tool_call_id=EXCLUDED.tool_call_id, preview=EXCLUDED.preview, created_at=now()`,
+		a.ChatID, a.Kind, a.Name, a.Size, a.SHA256, a.ContentType, a.Via, a.ObjectKey, a.ToolCallID, a.Preview)
 	return err
 }
 
-const artifactCols = `chat_id::text, kind, name, size, sha256, content_type, via, object_key, created_at, tool_call_id`
+const artifactCols = `chat_id::text, kind, name, size, sha256, content_type, via, object_key, created_at, tool_call_id, preview`
 
 func scanArtifact(row pgx.Row) (Artifact, error) {
 	var a Artifact
-	err := row.Scan(&a.ChatID, &a.Kind, &a.Name, &a.Size, &a.SHA256, &a.ContentType, &a.Via, &a.ObjectKey, &a.CreatedAt, &a.ToolCallID)
+	err := row.Scan(&a.ChatID, &a.Kind, &a.Name, &a.Size, &a.SHA256, &a.ContentType, &a.Via, &a.ObjectKey, &a.CreatedAt, &a.ToolCallID, &a.Preview)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return a, ErrNotFound
 	}

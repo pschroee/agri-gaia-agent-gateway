@@ -303,7 +303,7 @@ type SubagentRunSummary = { run_id: string; agent: string; label?: string; state
 
 type Command = { name: string /* without "/" */; description?: string; source: "builtin" | "extension" | "prompt" | "skill"; args?: string /* hint about arguments */ };
 
-type Artifact = { chat_id: string; kind: "input" | "output"; name: string; size: number; sha256: string; content_type: string; created_at: string; via: "cli" | "mcp" | "ui"; tool_call_id?: string /* tool call that uploaded the result (display only) */ };
+type Artifact = { chat_id: string; kind: "input" | "output"; name: string; size: number; sha256: string; content_type: string; created_at: string; via: "cli" | "mcp" | "ui"; tool_call_id?: string /* tool call that uploaded the result (display only) */; preview?: "image" | "pdf" | "table" | "text" | "none" /* kind for the file preview, decided from the bytes when stored (issue #74); absent for artifacts from before; a hint only, inline=1 decides again */ };
 type Approval = {
   // artifact_upload: name/size/sha256/preview describe the file. Only in chats from before issue #62; the gateway
   //   creates none any more (files the agent sends need no approval), stored ones stay readable.
@@ -369,7 +369,8 @@ type ActivityPage = { calls: ActivityCall[]; chats: Record<string, { id: string;
 | `POST /api/chats/{id}/resume` | `Chat` | resume an idle chat in the background, without a message (see *Resuming a chat when it is opened*); returns at once with `resuming: true`, steps via SSE `resume`. Idempotent: an active, running, starting or already resuming chat comes back unchanged |
 | `GET /api/chats/{id}/session` | JSONL | pi's session file |
 | `GET /api/chats/{id}/artifacts` | `Artifact[]` | inputs and outputs of the chat |
-| `GET /api/chats/{id}/artifacts/{name}?kind=input\|output` | file | download (default `output`) |
+| `GET /api/chats/{id}/artifacts/{name}?kind=input\|output` | file | download (default `output`), always `Content-Disposition: attachment` |
+| `GET /api/chats/{id}/artifacts/{name}?kind=input\|output&inline=1` | file | preview in the UI (issue #74). The kind comes from the first 512 bytes (`image`: PNG, JPEG, GIF, WebP signature; `pdf`: `%PDF-`; `table`: `.csv`/`.tsv` and UTF-8; `text`: `txt md json jsonl log yaml yml xml py ts js sh ipynb` and UTF-8; HTML, HTM and SVG are always `text`, never rendered). Responses: `Content-Disposition: inline`, `X-Content-Type-Options: nosniff`, `Cache-Control: private, no-store`; `image` and `table`/`text` with `Content-Security-Policy: sandbox; default-src 'none'`, `pdf` with `Content-Security-Policy: default-src 'none'; object-src 'self'; plugin-types application/pdf`; `table`/`text` as `text/plain; charset=utf-8`. Any other file answers `415` with the text `no preview for this file type` |
 | `GET /api/chats/{id}/images?path=<path>&msg=<id>` | image | display image of a response (see below); 400 for an invalid path or ID, 404 if not available |
 | `POST /api/chats/{id}/files` (multipart, field `file`, may repeat) | `Artifact[]` (201) | user uploads files for the agent; for an active chat mirrored to `/workspace/inputs/` immediately, for a dormant one on resume. Limit `AGW_ARTIFACT_MAX_MB` per file |
 | `GET /api/approvals?state=pending` | `Approval[]` | open approvals of all chats |

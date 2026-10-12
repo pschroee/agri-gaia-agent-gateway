@@ -1831,6 +1831,15 @@ func contentType(name string, head []byte) string {
 
 func objectKey(chatID, kind, name string) string { return path.Join(chatID, kind, name) }
 
+// previewOf is the preview kind stored with an artifact; it is decided from the first bytes of the file.
+func previewOf(name string, data []byte) string {
+	head := data
+	if len(head) > artifacts.PreviewHeadSize {
+		head = head[:artifacts.PreviewHeadSize]
+	}
+	return artifacts.PreviewKind(name, head)
+}
+
 // Upload stores a file the agent sends to the user (issue #62): no approval, the file is stored as an output
 // artifact of the chat right away and announced with the event "artifact", which the UI shows as a file message of
 // the agent. The socket has already checked size and name; the helpers in the sandbox check the path. A checksum
@@ -1853,7 +1862,7 @@ func (m *Manager) Upload(ctx context.Context, chatID, slotID, via, name string, 
 		return sock.UploadResult{}, fmt.Errorf("store: %w", err)
 	}
 	art := store.Artifact{ChatID: chatID, Kind: store.KindOutput, Name: name, Size: int64(len(data)), SHA256: got, ContentType: ct, Via: via, ObjectKey: key,
-		ToolCallID: store.ToolCallFrom(ctx)}
+		ToolCallID: store.ToolCallFrom(ctx), Preview: previewOf(name, data)}
 	if err := m.st.PutArtifact(context.WithoutCancel(ctx), art); err != nil {
 		return sock.UploadResult{}, err
 	}
@@ -2299,7 +2308,8 @@ func (m *Manager) AddInput(ctx context.Context, chatID, name string, data []byte
 	if err := m.blobs.Put(ctx, key, bytes.NewReader(data), int64(len(data)), ct); err != nil {
 		return store.Artifact{}, err
 	}
-	art := store.Artifact{ChatID: chatID, Kind: store.KindInput, Name: name, Size: int64(len(data)), SHA256: hex.EncodeToString(sum[:]), ContentType: ct, Via: "ui", ObjectKey: key}
+	art := store.Artifact{ChatID: chatID, Kind: store.KindInput, Name: name, Size: int64(len(data)), SHA256: hex.EncodeToString(sum[:]), ContentType: ct, Via: "ui", ObjectKey: key,
+		Preview: previewOf(name, data)}
 	if err := m.st.PutArtifact(ctx, art); err != nil {
 		return store.Artifact{}, err
 	}

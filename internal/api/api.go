@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"agw/internal/artifacts"
 	"agw/internal/bgtask"
 	"agw/internal/chat"
 	"agw/internal/config"
@@ -44,6 +45,8 @@ type Server struct {
 
 	// Images serves display images; nil means M (replaceable for tests).
 	Images ImageOpener
+	// Artifacts serves the files of a chat; nil means M (replaceable for tests).
+	Artifacts ArtifactOpener
 
 	// OIDC: login through the platform's Keycloak (AGW_AUTH_MODE=oidc); nil: token mode.
 	// Chats then belong to the logged-in user, and Token does not apply.
@@ -66,6 +69,11 @@ func UserFrom(ctx context.Context) (oidc.User, bool) {
 // ImageOpener serves a display image of a response (see chat.Manager.OpenImage).
 type ImageOpener interface {
 	OpenImage(ctx context.Context, chatID, msg, path string) (store.ChatImage, io.ReadCloser, error)
+}
+
+// ArtifactOpener serves a stored file of a chat (see chat.Manager.OpenArtifact).
+type ArtifactOpener interface {
+	OpenArtifact(ctx context.Context, chatID, kind, name string) (io.ReadCloser, int64, error)
 }
 
 // base is the UI's path for the browser ("" or e.g. "/agent", from AGW_PUBLIC_URL). A proxy
@@ -909,12 +917,20 @@ func (s *Server) download(w http.ResponseWriter, r *http.Request) {
 		kind = store.KindOutput
 	}
 	name := r.PathValue("name")
-	rc, size, err := s.M.OpenArtifact(r.Context(), r.PathValue("id"), kind, name)
+	var src ArtifactOpener = s.M
+	if s.Artifacts != nil {
+		src = s.Artifacts
+	}
+	rc, size, err := src.OpenArtifact(r.Context(), r.PathValue("id"), kind, name)
 	if err != nil {
 		fail(w, err)
 		return
 	}
 	defer rc.Close()
+	if r.URL.Query().Get("inline") == "1" {
+		serveInline(w, rc, size, name)
+		return
+	}
 	ct := mime.TypeByExtension(strings.ToLower(filepath.Ext(name)))
 	if ct == "" {
 		ct = "application/octet-stream"
@@ -922,6 +938,41 @@ func (s *Server) download(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", ct)
 	w.Header().Set("Content-Length", fmt.Sprint(size))
 	w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": name}))
+	_, _ = io.Copy(w, rc)
+}
+
+// serveInline shows a stored file in the file preview of the UI (inline=1). The kind comes from
+// artifacts.PreviewKind, decided from the bytes: images and PDFs under a strict policy, tables and text as text/plain.
+// HTML and SVG are never served as documents, only as text. Anything else answers 415.
+func serveInline(w http.ResponseWriter, rc io.Reader, size int64, name string) {
+	head := make([]byte, artifacts.PreviewHeadSize)
+	n, err := io.ReadFull(rc, head)
+	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+		http.Error(w, "could not read the file", http.StatusInternalServerError)
+		return
+	}
+	head = head[:n]
+	var ct, csp string
+	switch artifacts.PreviewKind(name, head) {
+	case artifacts.PreviewImage:
+		ct, csp = artifacts.ImageType(head), "sandbox; default-src 'none'"
+	case artifacts.PreviewPDF:
+		ct, csp = "application/pdf", "default-src 'none'; object-src 'self'; plugin-types application/pdf"
+	case artifacts.PreviewTable, artifacts.PreviewText:
+		ct, csp = "text/plain; charset=utf-8", "sandbox; default-src 'none'"
+	default:
+		http.Error(w, "no preview for this file type", http.StatusUnsupportedMediaType)
+		return
+	}
+	h := w.Header()
+	h.Set("Content-Type", ct)
+	h.Set("Content-Length", fmt.Sprint(size))
+	h.Set("Content-Disposition", mime.FormatMediaType("inline", map[string]string{"filename": name}))
+	h.Set("Content-Security-Policy", csp)
+	h.Set("X-Content-Type-Options", "nosniff")
+	h.Set("Cache-Control", "private, no-store")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(head)
 	_, _ = io.Copy(w, rc)
 }
 
