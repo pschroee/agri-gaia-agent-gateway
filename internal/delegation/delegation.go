@@ -286,6 +286,7 @@ func Classify(req platform.Request) Access {
 			// The new model contains the container's file and log (Review 5, K2).
 			a.Also = append(a.Also, Access{Action: Read, Resource: Training, ID: canonID(m[1])})
 		}
+		a.Also = append(a.Also, extraAlso(rt, req)...) // identifiers in the body, issue #67
 		if p := checkFields(req); p != "" {
 			a.Problem = p
 		}

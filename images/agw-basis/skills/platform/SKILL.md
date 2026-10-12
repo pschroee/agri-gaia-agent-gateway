@@ -82,6 +82,25 @@ POST, PUT, PATCH or DELETE, plus some GETs that create something on the platform
 with a generous timeout (at least 900 seconds) and not in the background. With exit code 3
 do not ask again unless the user wants it.
 
+## Inference containers
+
+An inference image is built from a model and an installed template, in this order:
+
+1. `agw-platform validate-model <model_id>` lists what keeps the model from becoming an inference container
+   (`problems`) and what to look at (`warnings`). Fix the problems first: a name with spaces or brackets
+   cannot be addressed by Triton, so rename it with `agw-platform update-model` (only letters, digits, `_ . -`).
+2. `agw-platform templates` lists the installed templates. If the official one (branch `triton`) is missing,
+   `agw-platform import-template triton-inference` imports it (approval needed).
+3. `agw-platform build-image <template_id> <model_id> <name> <tag> amd64` builds the image into the registry
+   (approval needed; several minutes, about 9 GB). The build refuses a tag that is in the registry already,
+   because the platform would overwrite it without asking, and a build that is still running.
+4. Follow the build with `agw-platform task <id>` (not in a tight loop, as with trainings), then check
+   `agw-platform image-status <repository> <tag>` until `present` is `true`.
+
+An image cannot be started without an edge device, and `/triton` checks the model on the Triton server,
+not the image: do not use it to test an image. Templates cannot be changed or deleted; the agent imports
+only the official one.
+
 ## Everything else
 
 `agw-platform request <METHOD> <path> [--query k=v …] [--body JSON|@file|-]` calls any path of the
