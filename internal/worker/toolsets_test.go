@@ -19,7 +19,7 @@ import (
 // web-tools.ts and cli and mcp load the skill web-research.
 func oldPiArgs(variant, provider, model, note string) []string {
 	args := []string{"--provider", provider, "--model", model, "--append-system-prompt", note, "-e", bridgeExt, "-e", todoExt, "-e", webToolsExt, "-e", webGateExt}
-	skills := []string{"--skill", artifactSkil, "--skill", internetSkil, "--skill", webSkill, "--skill", platformSkil, "--skill", typstSkill, "--skill", diagramSkill, "--skill", mermaidSkill, "--skill", documentSkil, "--skill", trainingAdviceSkill}
+	skills := []string{"--skill", artifactSkil, "--skill", internetSkil, "--skill", webSkill, "--skill", platformSkil, "--skill", typstSkill, "--skill", diagramSkill, "--skill", mermaidSkill, "--skill", documentSkil, "--skill", trainingAdviceSkill, "--skill", modelCardSkill}
 	switch variant {
 	case "cli":
 		args = append(append(args, "-e", subagentsExt, "-e", intercomExt, "--exclude-tools", noLazySubagent), skills...)

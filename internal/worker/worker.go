@@ -319,7 +319,7 @@ func piArgs(variant, provider, model, note string) ([]string, error) {
 		args = append(args, "-e", apiExt)
 	}
 	if ts.Has(toolset.CLI) {
-		args = append(args, "--skill", artifactSkil, "--skill", internetSkil, "--skill", webSkill, "--skill", platformSkil, "--skill", typstSkill, "--skill", diagramSkill, "--skill", mermaidSkill, "--skill", documentSkil, "--skill", trainingAdviceSkill)
+		args = append(args, "--skill", artifactSkil, "--skill", internetSkil, "--skill", webSkill, "--skill", platformSkil, "--skill", typstSkill, "--skill", diagramSkill, "--skill", mermaidSkill, "--skill", documentSkil, "--skill", trainingAdviceSkill, "--skill", modelCardSkill)
 	} else {
 		// The other skills describe commands; web-research names the tools of every binding, and
 		// MCP's read can load it (the skills are in both images).
