@@ -20,10 +20,11 @@ import (
 // planNow is the clock of plan validity; tests set it.
 var planNow = time.Now
 
-// planClassify gives the effect and delegation action of a call. Until #63 the effect comes from
-// plan.FallbackEffect.
+// planClassify gives the effect and delegation action of a call, the same classification that
+// PlatformCall uses (delegation.Classify, issue #63).
 func planClassify(r platform.Request) (effect, action string) {
-	return plan.FallbackEffect(r), delegation.Classify(r).Action
+	a := delegation.Classify(r)
+	return string(a.Effect), a.Action
 }
 
 // ProposePlan takes a plan proposal (POST /_agw/plan): one approval covers all steps. An approved

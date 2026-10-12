@@ -26,7 +26,10 @@ const planTwo = `{"title":"Model and rename","steps":[
  {"method":"PATCH","path":"/models/{{step1.id}}","body":{"name":"pigs v1"}}]}`
 
 // withPlanPlatform answers GET /train/containers/7/model with model 42 and every other call with {}.
-func withPlanPlatform(t *testing.T, e *env) {
+func withPlanPlatform(t *testing.T, e *env) { withPlanPlatformPatch(t, e, http.StatusOK) }
+
+// withPlanPlatformPatch answers like withPlanPlatform, but PATCH with the given status (a failing step).
+func withPlanPlatformPatch(t *testing.T, e *env, patch int) {
 	t.Helper()
 	var mu sync.Mutex
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -41,6 +44,11 @@ func withPlanPlatform(t *testing.T, e *env) {
 			fmt.Fprint(w, `{"id":42}`)
 			return
 		}
+		if r.Method == http.MethodPatch && patch != http.StatusOK {
+			w.WriteHeader(patch)
+			fmt.Fprint(w, `{"detail":"failed"}`)
+			return
+		}
 		fmt.Fprint(w, `{}`)
 	}))
 	t.Cleanup(srv.Close)
@@ -51,8 +59,14 @@ func withPlanPlatform(t *testing.T, e *env) {
 	e.m.opt.Platform = c
 }
 
-// proposeAndDecide sends a plan proposal, waits for its approval and decides it.
+// proposeAndDecide sends a plan proposal over the CLI, waits for its approval and decides it.
 func proposeAndDecide(t *testing.T, e *env, ctx context.Context, chatID, slot, body string, approve bool) (platform.Result, store.Approval) {
+	t.Helper()
+	return proposeAndDecideVia(t, e, ctx, chatID, slot, "cli", body, approve)
+}
+
+// proposeAndDecideVia is proposeAndDecide for a binding (cli, mcp or api).
+func proposeAndDecideVia(t *testing.T, e *env, ctx context.Context, chatID, slot, via, body string, approve bool) (platform.Result, store.Approval) {
 	t.Helper()
 	events, cancel := e.m.Subscribe(chatID)
 	defer cancel()
@@ -62,7 +76,7 @@ func proposeAndDecide(t *testing.T, e *env, ctx context.Context, chatID, slot, b
 	}
 	done := make(chan platform.Result, 1)
 	go func() {
-		r, _ := e.m.PlatformCall(ctx, chatID, slot, "cli", req)
+		r, _ := e.m.PlatformCall(ctx, chatID, slot, via, req)
 		done <- r
 	}()
 	ap := waitEvent(t, events, "approval", "").Data.(store.Approval)
@@ -263,5 +277,199 @@ func TestPlanRecover(t *testing.T) {
 	p, _ := e.st.GetPlan(ctx, running.ID)
 	if p.State != "failed" || p.Steps[0].State != plan.StepFailed {
 		t.Fatalf("running plan after restart: %+v", p)
+	}
+}
+
+// planCover: a GET that creates model 42, then a PATCH whose body has two keys (the call may order them differently).
+const planCover = `{"title":"Create and tag","steps":[
+ {"method":"GET","path":"/train/containers/7/model"},
+ {"method":"PATCH","path":"/models/{{step1.id}}","body":{"name":"pigs v1","tag":"a"}}]}`
+
+// planDelete: a GET that creates model 42, then an irreversible DELETE of it.
+const planDelete = `{"title":"Create and delete","steps":[
+ {"method":"GET","path":"/train/containers/7/model"},
+ {"method":"DELETE","path":"/models/{{step1.id}}"}]}`
+
+// planThree: a GET that creates model 42, then two renames; the second one follows a failed step.
+const planThree = `{"title":"Three steps","steps":[
+ {"method":"GET","path":"/train/containers/7/model"},
+ {"method":"PATCH","path":"/models/{{step1.id}}","body":{"name":"pigs v1"}},
+ {"method":"PATCH","path":"/models/{{step1.id}}","body":{"name":"pigs v2"}}]}`
+
+// onlyPlan returns the single plan of a chat.
+func onlyPlan(t *testing.T, e *env, ctx context.Context, chatID string) store.Plan {
+	t.Helper()
+	plans, err := e.m.Plans(ctx, chatID)
+	if err != nil || len(plans) != 1 {
+		t.Fatalf("plans: %+v %v", plans, err)
+	}
+	return plans[0]
+}
+
+// approvalKinds lists the kinds of all approvals of a chat.
+func approvalKinds(t *testing.T, e *env, ctx context.Context, chatID string) []string {
+	t.Helper()
+	aps, err := e.st.ListApprovals(ctx, "", chatID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var kinds []string
+	for _, a := range aps {
+		kinds = append(kinds, a.Kind)
+	}
+	return kinds
+}
+
+// Covered steps run without a new approval: one approval for the plan, then both calls go straight through.
+// The second call has its keys in another order and still matches its step.
+func TestPlanCoversSteps(t *testing.T) {
+	e := setup(t)
+	withPlanPlatform(t, e)
+	ctx := store.WithSession(context.Background(), "main")
+	c, _ := e.m.Create(ctx, NewChat{})
+	slot := e.m.live[c.ID].slot.ID
+	if r, _ := proposeAndDecide(t, e, ctx, c.ID, slot, planCover, true); r.Status != "ok" {
+		t.Fatalf("plan: %+v", r)
+	}
+	if r, err := e.m.PlatformCall(ctx, c.ID, slot, "cli", liveCall(t, "GET", "/train/containers/7/model", "")); err != nil || r.Status != "ok" {
+		t.Fatalf("step 1: %+v %v", r, err)
+	}
+	if r, err := e.m.PlatformCall(ctx, c.ID, slot, "cli", liveCall(t, "PATCH", "/models/42", `{"tag":"a","name":"pigs v1"}`)); err != nil || r.Status != "ok" {
+		t.Fatalf("step 2: %+v %v", r, err)
+	}
+	if kinds := approvalKinds(t, e, ctx, c.ID); len(kinds) != 1 || kinds[0] != "plan" {
+		t.Fatalf("approvals %v, want the plan only", kinds)
+	}
+	if p := onlyPlan(t, e, ctx, c.ID); p.State != "completed" {
+		t.Fatalf("plan state %s, want completed", p.State)
+	}
+}
+
+// A call that differs from the next step is not covered: it asks the user, and the step stays open.
+func TestPlanChangedCallNeedsApproval(t *testing.T) {
+	e := setup(t)
+	withPlanPlatform(t, e)
+	ctx := store.WithSession(context.Background(), "main")
+	c, _ := e.m.Create(ctx, NewChat{})
+	slot := e.m.live[c.ID].slot.ID
+	if r, _ := proposeAndDecide(t, e, ctx, c.ID, slot, planTwo, true); r.Status != "ok" {
+		t.Fatalf("plan: %+v", r)
+	}
+	if r, err := e.m.PlatformCall(ctx, c.ID, slot, "cli", liveCall(t, "GET", "/train/containers/7/model", "")); err != nil || r.Status != "ok" {
+		t.Fatalf("step 1: %+v %v", r, err)
+	}
+	changed := liveCall(t, "PATCH", "/models/42", `{"name":"other"}`)
+	done := make(chan platform.Result, 1)
+	go func() {
+		r, _ := e.m.PlatformCall(ctx, c.ID, slot, "cli", changed)
+		done <- r
+	}()
+	ap := pendingApproval(t, e, c.ID)
+	if ap.Kind != "platform_write" {
+		t.Fatalf("changed call asked as %q", ap.Kind)
+	}
+	if _, err := e.m.Decide(ctx, ap.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	if r := <-done; r.Status != "rejected" {
+		t.Fatalf("changed call: %+v", r)
+	}
+	if p := onlyPlan(t, e, ctx, c.ID); p.Steps[1].State != plan.StepOpen {
+		t.Fatalf("step 2 after a changed call: %+v", p.Steps[1])
+	}
+}
+
+// An irreversible step is shown in the plan but keeps its own approval, even inside an approved plan.
+func TestPlanIrreversibleStepOwnApproval(t *testing.T) {
+	e := setup(t)
+	withPlanPlatform(t, e)
+	ctx := store.WithSession(context.Background(), "main")
+	c, _ := e.m.Create(ctx, NewChat{})
+	slot := e.m.live[c.ID].slot.ID
+	if r, _ := proposeAndDecide(t, e, ctx, c.ID, slot, planDelete, true); r.Status != "ok" {
+		t.Fatalf("plan: %+v", r)
+	}
+	if r, err := e.m.PlatformCall(ctx, c.ID, slot, "cli", liveCall(t, "GET", "/train/containers/7/model", "")); err != nil || r.Status != "ok" {
+		t.Fatalf("step 1: %+v %v", r, err)
+	}
+	del := liveCall(t, "DELETE", "/models/42", "")
+	done := make(chan platform.Result, 1)
+	go func() {
+		r, _ := e.m.PlatformCall(ctx, c.ID, slot, "cli", del)
+		done <- r
+	}()
+	ap := pendingApproval(t, e, c.ID)
+	if ap.Kind != "platform_write" {
+		t.Fatalf("irreversible step asked as %q", ap.Kind)
+	}
+	if _, err := e.m.Decide(ctx, ap.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if r := <-done; r.Status != "ok" {
+		t.Fatalf("delete: %+v", r)
+	}
+	if p := onlyPlan(t, e, ctx, c.ID); p.Steps[1].State != plan.StepDone || p.State != "completed" {
+		t.Fatalf("after the approved delete: plan %s, step %+v", p.State, p.Steps[1])
+	}
+}
+
+// The same plan works over every binding: each proposal asks once, and the steps ask nothing more.
+func TestPlanSameOverCLIMCPREST(t *testing.T) {
+	e := setup(t)
+	withPlanPlatform(t, e)
+	for _, via := range []string{"cli", "mcp", "api"} {
+		ctx := store.WithSession(context.Background(), "main")
+		c, _ := e.m.Create(ctx, NewChat{})
+		slot := e.m.live[c.ID].slot.ID
+		if r, _ := proposeAndDecideVia(t, e, ctx, c.ID, slot, via, planCover, true); r.Status != "ok" {
+			t.Fatalf("%s: plan %+v", via, r)
+		}
+		if r, err := e.m.PlatformCall(ctx, c.ID, slot, via, liveCall(t, "GET", "/train/containers/7/model", "")); err != nil || r.Status != "ok" {
+			t.Fatalf("%s: step 1 %+v %v", via, r, err)
+		}
+		if r, err := e.m.PlatformCall(ctx, c.ID, slot, via, liveCall(t, "PATCH", "/models/42", `{"tag":"a","name":"pigs v1"}`)); err != nil || r.Status != "ok" {
+			t.Fatalf("%s: step 2 %+v %v", via, r, err)
+		}
+		if kinds := approvalKinds(t, e, ctx, c.ID); len(kinds) != 1 || kinds[0] != "plan" {
+			t.Fatalf("%s: approvals %v, want the plan only", via, kinds)
+		}
+	}
+}
+
+// A failed step ends the plan; the step after it is no longer covered and asks the user again.
+func TestPlanFailedStepEndsPlan(t *testing.T) {
+	e := setup(t)
+	withPlanPlatformPatch(t, e, http.StatusInternalServerError)
+	ctx := store.WithSession(context.Background(), "main")
+	c, _ := e.m.Create(ctx, NewChat{})
+	slot := e.m.live[c.ID].slot.ID
+	if r, _ := proposeAndDecide(t, e, ctx, c.ID, slot, planThree, true); r.Status != "ok" {
+		t.Fatalf("plan: %+v", r)
+	}
+	if r, err := e.m.PlatformCall(ctx, c.ID, slot, "cli", liveCall(t, "GET", "/train/containers/7/model", "")); err != nil || r.Status != "ok" {
+		t.Fatalf("step 1: %+v %v", r, err)
+	}
+	if r, err := e.m.PlatformCall(ctx, c.ID, slot, "cli", liveCall(t, "PATCH", "/models/42", `{"name":"pigs v1"}`)); err != nil || r.Status == "ok" {
+		t.Fatalf("step 2 should fail: %+v %v", r, err)
+	}
+	p := onlyPlan(t, e, ctx, c.ID)
+	if p.State != "failed" || p.Steps[1].State != plan.StepFailed || p.Steps[2].State != plan.StepOpen {
+		t.Fatalf("after the failed step: plan %s, steps %+v", p.State, p.Steps)
+	}
+	next := liveCall(t, "PATCH", "/models/42", `{"name":"pigs v2"}`)
+	done := make(chan platform.Result, 1)
+	go func() {
+		r, _ := e.m.PlatformCall(ctx, c.ID, slot, "cli", next)
+		done <- r
+	}()
+	ap := pendingApproval(t, e, c.ID)
+	if ap.Kind != "platform_write" {
+		t.Fatalf("step after a failed plan asked as %q", ap.Kind)
+	}
+	if _, err := e.m.Decide(ctx, ap.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	if r := <-done; r.Status != "rejected" {
+		t.Fatalf("next call: %+v", r)
 	}
 }

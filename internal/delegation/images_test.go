@@ -51,6 +51,22 @@ func TestImageBuildClassify(t *testing.T) {
 	}
 }
 
+// Building an image is compute (issue #67, step 6): it runs for minutes on the platform. Reading the
+// templates stays read, creating a template from git stays write.
+func TestImageBuildEffect(t *testing.T) {
+	build := platform.Request{Method: http.MethodPost, Path: "/container-images/build",
+		Body: json.RawMessage(`{"container_template_id":2,"model_id":5,"repository":"agent-test/x","tag":"v1","architecture":"amd64"}`)}
+	if a := Classify(build); a.Effect != EffectCompute {
+		t.Fatalf("build: effect %q, want compute", a.Effect)
+	}
+	if a := Classify(platform.Request{Method: http.MethodGet, Path: "/inference-container-templates"}); a.Effect != EffectRead {
+		t.Fatalf("list templates: effect %q, want read", a.Effect)
+	}
+	if a := Classify(platform.Request{Method: http.MethodPost, Path: "/inference-container-templates/create/git"}); a.Effect != EffectWrite {
+		t.Fatalf("create/git: effect %q, want write", a.Effect)
+	}
+}
+
 func TestImageBuildConformance(t *testing.T) {
 	noTemplate := `{"rules": [
 	  {"action": "create", "resource": "container_image"},

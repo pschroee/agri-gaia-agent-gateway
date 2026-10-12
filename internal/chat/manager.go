@@ -2018,7 +2018,13 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 			return res, nil
 		}
 	}
-	if needsApproval(access.Effect, req.Writes(), del) {
+	// A call that is exactly the next step of an approved plan (issue #70) needs no new approval when the
+	// step is covered by the plan; an irreversible step is returned unclaimed and still asks the user.
+	var step *store.PlanStep
+	if access.Effect != delegation.EffectRead || req.Writes() {
+		step = m.planMatch(ctx, chatID, req) // nil: no plan step applies
+	}
+	if needsApproval(access.Effect, req.Writes(), del) && (step == nil || !step.Covered) {
 		if err := m.checkPendingLimit(ctx, chatID); err != nil {
 			return platform.Result{}, err
 		}
@@ -2106,6 +2112,7 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 	t0 := time.Now()
 	res, err := m.opt.Platform.Do(ctx, chatID, req)
 	took := time.Since(t0)
+	m.planFinish(ctx, chatID, step, access, res, err) // nil step: nothing to record
 	if reserved && (err != nil || res.Status != "ok") {
 		if rerr := m.st.ReleaseCompute(context.WithoutCancel(ctx), chatID); rerr != nil {
 			slog.Error("compute call not given back", "chat", chatID, "error", rerr)

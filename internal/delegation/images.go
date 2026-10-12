@@ -18,8 +18,10 @@ const ContainerTemplate = "container_template"
 // routes can be added in parallel.
 func init() {
 	resources[ContainerTemplate] = true
+	build := r(http.MethodPost, `/container-images/build`, Create, ContainerImage, 0)
+	build.effect = EffectCompute // a build runs for minutes on the platform
 	routes = append(routes,
-		r(http.MethodPost, `/container-images/build`, Create, ContainerImage, 0),
+		build,
 		r(http.MethodGet, `/inference-container-templates`, Read, ContainerTemplate, 0),
 		r(http.MethodPost, `/inference-container-templates/create/git`, Create, ContainerTemplate, 0),
 	)
