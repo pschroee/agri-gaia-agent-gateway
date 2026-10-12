@@ -155,7 +155,6 @@ func NewHandlerRun(slotID string, b Backend, maxBytes int64, run ToolRunner) htt
 	mux.HandleFunc("POST /internet", h.internet)
 	mux.HandleFunc("POST /internet/off", h.internetOff)
 	mux.HandleFunc("POST /platform/{tool}", h.platform)
-	mux.HandleFunc("POST /subagent-relay/result", h.subagentRelayResult)
 	mux.Handle("/mcp", h.mcp)
 	return h.withPlatformAPI(mux)
 }
