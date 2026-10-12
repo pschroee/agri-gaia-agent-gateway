@@ -137,7 +137,10 @@ type Chat = {
 // tasks concerned; text is then the orchestrator's header line, below it the data from the sandbox
 // (command, output), which only go to pi fenced (see "Origin of instructions"). System entries can
 // be removed like messages as long as they are open.
-type QueueEntry = { id: string; chat_id: string; text: string; attachments: string[]; created_at: string; kind: "user" | "system"; note?: string; refs?: string[]; context?: PageContext /* user entries, see "Page context" */ };
+type QueueEntry = { id: string; chat_id: string; text: string; attachments: string[]; created_at: string; kind: "user" | "system"; note?: string; refs?: string[]; context?: PageContext /* user entries, see "Page context" */; subagent?: SubagentNote /* only note "subagent_user", see "Messages to subagents" */ };
+// Readable part of a passive note about a message to a subagent (note "subagent_user", issue #82). text_head: the first
+// 200 characters of the user's text, then " …" when cut; text of the entry keeps the whole note.
+type SubagentNote = { run_id: string; agent?: string /* from the note's first line */; text_head: string };
 // Platform page the user sent a message from, and the objects open or selected there (see "Page context").
 // Send either object (one) or objects (up to 50). Returned contexts carry objects whenever there is one or more,
 // and object as well when there is exactly one; rows stored before issue #45 carry only object.
@@ -292,14 +295,19 @@ type SubagentEntry = { chat_id: string; run_id: string; entry_id: string; agent:
 // Name and state of a subagent run according to pi-subagents' status files (sandbox, hence not tamper-proof).
 type SubagentRun = { chat_id: string; run_id: string; agent: string; label?: string /* name in the workflow */;
   state?: string /* pi-subagents' state, e.g. running, complete, failed */; pi_run_id?: string; parent_run_id?: string;
+  message_state?: MessageState /* set when served or published, never stored (issue #82) */;
   started_at?: string; ended_at?: string; updated_at: string };
+
+// What a message to a run would meet now (issue #82), in the run lists and the SSE event subagent_run. The same rule as
+// POST …/messages decides it; pending messages and the rate limit are not part of it.
+type MessageState = "ok" | "starting" | "foreground" | "ended" | "unavailable";
 
 // Short form of a run for lists of chats (GET /api/chats/{id}/subagent-runs, see "Subagent runs without opening a chat").
 type SubagentRunSummary = { run_id: string; agent: string; label?: string; state?: string /* missing: estimate from last_kind and last_at */;
   task_head?: string /* first lines of the first task: at most 8 lines and 500 bytes */;
   started_at?: string /* first activity */; ended_at?: string /* only from the status file */;
   last_at?: string /* newest entry or end */; last_kind?: SubagentEntry["kind"] /* kind of the newest entry */;
-  entries: number };
+  entries: number; message_state: MessageState /* issue #82, see "Messages to subagents" */ };
 
 type Command = { name: string /* without "/" */; description?: string; source: "builtin" | "extension" | "prompt" | "skill"; args?: string /* hint about arguments */ };
 
@@ -354,7 +362,7 @@ type ActivityPage = { calls: ActivityCall[]; chats: Record<string, { id: string;
 | `GET /api/chats/{id}/llm_calls` | `LLMCall[]` | all model calls of the chat according to the proxy |
 | `GET /api/chats/{id}/tool_executions` | `{calls: ReconciledCall[], summary: Record<ReconciledCall["state"], number>, executions: ToolExecution[], executed_tools: string[]}` | tool executions of the orchestrator and reconciliation with the calls requested at the proxy (E9), sorted by time |
 | `GET /api/chats/{id}/subagent-runs` | `SubagentRunSummary[]` | short list of the chat's subagent runs in the order they started, from the database alone: does not wake the chat and takes no slot; 404 for foreign and unknown chats. See *Subagent runs without opening a chat* |
-| `POST /api/chats/{id}/subagent-runs/{run}/messages` `{text}` | 202 `{message: SubagentMessage, mode: "steer"\|"resume"\|"restart"}` | a message of the user to a subagent (`{run}` URL-encoded, `#` as `%23`); the stored message goes on at once with status `sending`, then `sent` or `failed` (SSE `subagent_message`). Refusals: 400 empty, longer than 8000 characters or `/agw-…`, 404 foreign, unknown or unsafe run, 409 with `code` `chat_in_trash`, `foreground_run`, `message_pending`, `subagent_limit`, `not_resumable` or `subagents_unavailable`, 429 `rate_limited`. See *Messages to subagents* |
+| `POST /api/chats/{id}/subagent-runs/{run}/messages` `{text}` | 202 `{message: SubagentMessage, mode: "steer"\|"resume"\|"restart"}` | a message of the user to a subagent (`{run}` URL-encoded, `#` as `%23`); the stored message goes on at once with status `sending`, then `sent` or `failed` (SSE `subagent_message`). Refusals: 400 empty, longer than 8000 characters or `/agw-…`, 404 foreign, unknown or unsafe run, 409 with `code` `chat_in_trash`, `run_starting`, `foreground_run`, `message_pending`, `subagent_limit`, `not_resumable` or `subagents_unavailable`, 429 `rate_limited`. See *Messages to subagents* |
 | `GET /api/chats/{id}/plans` | `Plan[]` | plans of the chat, oldest first, with their steps; 404 for foreign and unknown chats. See *Plans with one approval* |
 | `POST /api/chats/{id}/subagents` | 410 | removed: the subagent limit is fixed for the service (see *Limit for subagents*); the answer says so |
 | `POST /api/chats/{id}/messages` `{text, attachments?: string[], context?: PageContext}` | `SendResult` | sends (`context`: see *Page context*; invalid: 400); a dormant chat is resumed in a fresh sandbox (response after resuming, steps beforehand via SSE `resume`). If pi is working, the chat is being resumed or another instruction is in flight, the message is queued (`queued: true`, see *Queue*). Held entries go along |
@@ -797,7 +805,9 @@ the message as a hint after its current step, a finished one a follow-up questio
   refused (400): the gateway's own extension commands are not for the user, and they are hidden from `GET …/commands`.
 - **Which run:** the run must belong to the chat (`subagent_runs` or its entries; 404 otherwise). Runs without an own
   ID at pi-subagents (foreground runs, which run inside a step of the main agent) take no message while they run: 409
-  `foreground_run`; afterwards they count as finished.
+  `foreground_run`; afterwards they count as finished. A background run that pi-subagents has started but not yet given
+  its ID (its status file is known, the first seconds) answers 409 `run_starting`; the message is not stored, and the
+  client may send it again once `message_state` is `ok`.
 - **Modes:** `steer` for a run that the monitoring counts as running (pi-subagents gets the message through its
   in-process RPC, the run's own ID and index); `resume` for a finished run of a live chat (pi-subagents revives the run
   with its session); `restart` otherwise (a dormant chat, or pi-subagents cannot resume the run: no session file, stopped,
@@ -827,6 +837,16 @@ the message as a hint after its current step, a finished one a follow-up questio
   `delivered_at`) goes with the chat (trash, deletion); the call log gets a `subagent_message` entry (`detail`
   `<mode> <run>`, `result` the status). `GET /api/chats/{id}` carries `subagent_messages`; `subagent_runs` and
   `GET …/subagent-runs` carry `continues_run_id`; the platform UI shows a run and its continuations as one history.
+- **Message state (issue #82):** every run in `subagent_runs` (chat view and SSE `subagent_run`) and in `GET …/subagent-runs`
+  carries `message_state`, which says what a message would meet now, decided by the same rule as the endpoint:
+  `ok` (a message goes through: steer, resume or restart), `starting` (running, its status file is known, but pi-subagents
+  has not reported its ID yet; the endpoint answers 409 `run_starting`), `foreground` (running inside a step of the main
+  agent; 409 `foreground_run`), `ended` (finished and its agent may not continue; 409 `not_resumable`), `unavailable` (the chat
+  is in the trash, the binding has no CLI, or the subagent limit is reached). The UI locks the input for `starting`
+  and unlocks it when a list or event shows `ok`; `message_pending` and the rate limit are not part of the state.
+- **Passive note (issue #82):** a queue entry with note `subagent_user` carries `subagent: {run_id, agent?, text_head}`
+  (see `SubagentNote`); the entry's `text` is unchanged. The UI shows the note as the user's own message to the subagent
+  and gives it no close button: removing it would hide from the main agent what it is told.
 
 `SubagentMessage`: `{id, chat_id, run_id, target_run_id?, ref, mode, text, status, error?, created_at, delivered_at?}`.
 

@@ -108,6 +108,7 @@ func TestSubagentMessageFailMapping(t *testing.T) {
 	}{
 		{chat.ErrMessageRate, 429, "rate_limited"},
 		{chat.ErrSubagentForeground, 409, "foreground_run"},
+		{chat.ErrSubagentStarting, 409, "run_starting"},
 		{chat.ErrMessagePending, 409, "message_pending"},
 		{chat.ErrSubagentLimit, 409, "subagent_limit"},
 		{chat.ErrNotResumable, 409, "not_resumable"},

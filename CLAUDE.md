@@ -87,8 +87,10 @@ refer to this repository.
 - pi's `prompt` of an extension command answers only **after the handler has finished** (`prompt()` awaits it before
   `preflightResult`), so the relay's `Worker.Call` takes as long as pi-subagents needs (limit 10 s, reply wait 20 s).
 - A steer reaches a subagent **after its current step**: a running `sleep 60` is not interrupted; tasks for tests need
-  several short steps. A run that pi-subagents has not reported a `pi_run_id` for yet (first seconds, workflow children)
-  answers 409 `foreground_run`; workflow children have their own `pi_run_id`, so no `#n` index is needed for them.
+  several short steps. A run that pi-subagents has not reported a `pi_run_id` for yet answers 409: `run_starting` when its
+  status file is known (a background run in its first seconds), `foreground_run` when it has none (a run inside a step of
+  the main agent). Both come from `relayRoute`, which also derives `message_state` of the run lists (issue #82); keep them
+  one rule. Workflow children have their own `pi_run_id`, so no `#n` index is needed for them.
 - The mock of `parity.mjs` must offer `registerCommand` (the bridge registers the relay command); `guard.test.mjs` runs
   only inside `TestBridgeParity`, so a failure there hides the guard tests.
 - Relay tests: `images/agw-basis/test/guard.test.mjs` (node --test, agw-parity image); the Go tests are in

@@ -1044,6 +1044,9 @@ type SubagentRun struct {
 	StartedAt      *time.Time `json:"started_at,omitempty"`
 	EndedAt        *time.Time `json:"ended_at,omitempty"`
 	UpdatedAt      time.Time  `json:"updated_at"`
+	// MessageState: what a message to the run would meet now (issue #82). Set by the chat layer when the run is
+	// served or published, never stored.
+	MessageState string `json:"message_state,omitempty"`
 }
 
 // UpsertSubagentRun stores name and state of a run; empty fields overwrite nothing.
@@ -1103,6 +1106,8 @@ type SubagentRunSummary struct {
 	Entries  int        `json:"entries"`
 	// ContinuesRunID: the run this one continues after a message of the user (issue #81).
 	ContinuesRunID string `json:"continues_run_id,omitempty"`
+	// MessageState: what a message to the run would meet now (ok, starting, foreground, ended, unavailable; issue #82).
+	MessageState string `json:"message_state,omitempty"`
 }
 
 // Limits of SubagentRunSummary.TaskHead.
