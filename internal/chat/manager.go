@@ -208,6 +208,9 @@ type Options struct {
 	MaxSubagents int
 	// ComputeMaxPerChat: compute calls per chat the platform may accept (AGW_COMPUTE_MAX_PER_CHAT, below 1: default).
 	ComputeMaxPerChat int
+	// TrashRetentionDays: chats in the trash are deleted for good after this many days (AGW_TRASH_RETENTION_DAYS,
+	// 0 = never; issue #76).
+	TrashRetentionDays int
 
 	// ImageMaxBytes limits display images (default DefaultImageMaxBytes).
 	ImageMaxBytes int64
@@ -747,6 +750,10 @@ func (m *Manager) ensureLive(ctx context.Context, chatID string) (*live, bool, e
 	if err != nil {
 		return nil, false, err
 	}
+	// A chat in the trash takes no sandbox (issue #76); checked under the chat lock, which Trash holds too.
+	if c.TrashedAt != nil {
+		return nil, false, ErrTrashed
+	}
 	m.mu.Lock()
 	l := m.live[chatID]
 	m.mu.Unlock()
@@ -790,6 +797,9 @@ func (m *Manager) Resume(ctx context.Context, chatID string) (ChatView, error) {
 	c, err := m.st.GetChat(ctx, chatID)
 	if err != nil {
 		return ChatView{}, err
+	}
+	if c.TrashedAt != nil {
+		return ChatView{}, ErrTrashed
 	}
 	m.mu.Lock()
 	busy := m.live[chatID] != nil || m.resuming[chatID] || m.starting[chatID]
@@ -1845,6 +1855,9 @@ func previewOf(name string, data []byte) string {
 // the agent. The socket has already checked size and name; the helpers in the sandbox check the path. A checksum
 // sent along (agw-artifact) must match, otherwise nothing is stored.
 func (m *Manager) Upload(ctx context.Context, chatID, slotID, via, name string, size int64, sha string, body io.Reader) (sock.UploadResult, error) {
+	if m.inTrash(ctx, chatID) {
+		return sock.UploadResult{Status: sock.UploadRejected, Name: name, Message: platform.RefusedPrefix + trashRefusal}, nil
+	}
 	data, err := io.ReadAll(body)
 	if err != nil {
 		return sock.UploadResult{}, err
@@ -1881,6 +1894,9 @@ func (m *Manager) RequestInternet(ctx context.Context, chatID, slotID, via, reas
 	c, err := m.st.GetChat(ctx, chatID)
 	if err != nil {
 		return sock.UploadResult{}, err
+	}
+	if c.TrashedAt != nil {
+		return sock.UploadResult{Status: "rejected", Name: "internet", Message: platform.RefusedPrefix + trashRefusal, Log: "rejected: " + trashRefusal}, nil
 	}
 	if c.Internet {
 		return sock.UploadResult{Status: "approved", Name: "internet", Message: "internet access is already granted", Log: "already on"}, nil
@@ -1978,6 +1994,9 @@ func (m *Manager) PlatformExchanged(chatID string, cl platform.Claims) {
 func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, req platform.Request) (platform.Result, error) {
 	if m.opt.Platform == nil {
 		return platform.Result{Status: "error", Message: platform.ErrNotConfigured.Error()}, nil
+	}
+	if m.inTrash(ctx, chatID) {
+		return platform.Result{Status: "error", Message: platform.RefusedPrefix + trashRefusal}, nil
 	}
 	// Check here too, not only at the caller: Writes() assumes a normalized method (Review W2).
 	req, err := platform.Normalize(req)

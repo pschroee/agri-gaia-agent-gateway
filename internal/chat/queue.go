@@ -213,10 +213,15 @@ func (m *Manager) Unqueue(ctx context.Context, chatID, id string) error {
 func (m *Manager) send(ctx context.Context, chatID string, msg *store.QueueEntry) (SendResult, error) {
 	m.userActive(chatID)
 	unlock := m.queueLock(chatID)
-	_, err := m.st.GetChat(ctx, chatID)
+	c, err := m.st.GetChat(ctx, chatID)
 	if err != nil {
 		unlock()
 		return SendResult{}, err
+	}
+	// Under the queue lock, like Trash's move: no message enters the queue of a chat in the trash (issue #76).
+	if c.TrashedAt != nil {
+		unlock()
+		return SendResult{}, ErrTrashed
 	}
 	m.mu.Lock()
 	l := m.live[chatID]

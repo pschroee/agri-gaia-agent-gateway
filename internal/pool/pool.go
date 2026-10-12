@@ -42,6 +42,7 @@ const (
 	ReasonSuspended    = "chat_suspended" // the chat went idle (timer, user, close)
 	ReasonAgentDied    = "agent_died"     // pi or the execution sandbox of the chat ended
 	ReasonAttachFailed = "attach_failed"  // the chat could not take the slot over
+	ReasonTrashed      = "chat_trashed"   // the chat was moved to the trash (issue #76)
 	ReasonUnspecified  = "unspecified"    // no reason in the context (tests, direct calls)
 )
 
