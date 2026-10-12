@@ -30,8 +30,8 @@ func (m *modelFromTrainingBackend) PlatformCall(_ context.Context, chatID, slotI
 	switch req.Method + " " + req.Path {
 	case "GET /train/containers/7/status":
 		return platform.Result{Status: "ok", HTTPStatus: 200, Body: `{"status":"` + m.status + `"}`}, nil
-	case "GET /train/containers/7":
-		return platform.Result{Status: "ok", HTTPStatus: 200, Body: `{"id":7,"dataset_id":3}`}, nil
+	case "GET /train/containers":
+		return platform.Result{Status: "ok", HTTPStatus: 200, Body: `[{"id":7,"dataset_id":3}]`}, nil
 	case "GET /datasets/3":
 		return platform.Result{Status: "ok", HTTPStatus: 200, Body: `{"id":3}`}, nil
 	case "GET /train/containers/7/model":
@@ -47,7 +47,7 @@ func TestModelFromTrainingViaCLI(t *testing.T) {
 	if code != 200 || r.Status != "ok" || !strings.Contains(r.Body, `"tensor_metadata":true`) {
 		t.Fatalf("take over: %d %+v", code, r)
 	}
-	want := []string{"GET /train/containers/7/status", "GET /train/containers/7", "GET /datasets/3", "GET /train/containers/7/model"}
+	want := []string{"GET /train/containers/7/status", "GET /train/containers?limit=1000", "GET /datasets/3", "GET /train/containers/7/model"}
 	if len(b.reqs) != len(want) {
 		t.Fatalf("to the backend: %v", b.reqs)
 	}

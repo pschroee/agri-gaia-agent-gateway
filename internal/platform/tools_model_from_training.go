@@ -23,7 +23,7 @@ var createModelFromTraining = Tool{
 		"writes the model although the call is a GET). It takes model.onnx, or model.pt when the training saved no ONNX " +
 		"export, plus the training log. Every call creates another model, also for the same container: take a model over " +
 		"once per training and only when the user wants it. Needs approval. Before the call it checks that the training is " +
-		"exited and reads the training and its dataset. The answer has id, name, format, tensor_metadata and warnings; a " +
+		"exited and reads the training (from the list of training containers) and its dataset. The answer has id, name, format, tensor_metadata and warnings; a " +
 		"model without tensor metadata cannot be built into an inference container.",
 	Params: []Param{{Name: "train_container_id", Type: "integer", Desc: "id of the finished training container (platform_list_trainings)", Required: true}},
 	Write:  true,
@@ -53,11 +53,15 @@ func modelFromTrainingSteps(ctx context.Context, a Args, final Request, do Doer)
 		return Refuse("training container %d is %q, not finished; take the model over once platform_training_status shows exited", id, st.Status)
 	}
 
+	entry, res, refused, stop, err := trainingEntry(ctx, do, id)
+	if stop {
+		return res, refused, err
+	}
 	var tc struct {
 		DatasetID json.Number `json:"dataset_id"`
 	}
-	if res, stop, err := ReadJSON(ctx, do, Request{Method: http.MethodGet, Path: base}, &tc); stop {
-		return res, "", err
+	if err := json.Unmarshal(entry, &tc); err != nil {
+		return Result{Status: "error", Message: "training container entry unreadable: " + err.Error()}, "", nil
 	}
 	if tc.DatasetID == "" {
 		return Refuse("training container %d names no dataset", id)
@@ -69,7 +73,7 @@ func modelFromTrainingSteps(ctx context.Context, a Args, final Request, do Doer)
 		return res, "", err
 	}
 
-	res, err := do(ctx, final)
+	res, err = do(ctx, final)
 	if err == nil && res.Status == "ok" && res.HTTPStatus >= 200 && res.HTTPStatus < 300 {
 		res = modelSummary(res)
 	}
@@ -119,4 +123,48 @@ func modelSummary(res Result) Result {
 	}
 	res.Body = string(out)
 	return res
+}
+
+// trainingEntry reads one training container from the platform's list. GET /train/containers/{id} answers
+// HTTP 500 on the platform (the response validation fails for a database object), so the list is used. stop is
+// true when res is what the agent gets instead (a failed read, or an id that is not in the list).
+func trainingEntry(ctx context.Context, do Doer, id int64) (entry json.RawMessage, res Result, refused string, stop bool, err error) {
+	var list []json.RawMessage
+	res, stop, err = ReadJSON(ctx, do, Request{Method: http.MethodGet, Path: "/train/containers", Query: map[string]string{"limit": "1000"}}, &list)
+	if stop {
+		return nil, res, "", true, err
+	}
+	want := strconv.FormatInt(id, 10)
+	for _, raw := range list {
+		var e struct {
+			ID json.Number `json:"id"`
+		}
+		if json.Unmarshal(raw, &e) == nil && e.ID.String() == want {
+			return raw, res, "", false, nil
+		}
+	}
+	res, refused, _ = Refuse("training container %d is not in the platform's list of training containers", id)
+	return nil, res, refused, true, nil
+}
+
+// getTrainingSteps answers platform_get_training from the list (see trainingEntry).
+func getTrainingSteps(ctx context.Context, a Args, final Request, do Doer) (Result, string, error) {
+	id, _, err := a.int("train_container_id")
+	if err != nil {
+		return Refuse("%s", err.Error())
+	}
+	entry, res, refused, stop, err := trainingEntry(ctx, do, id)
+	if stop {
+		return res, refused, err
+	}
+	return Result{Status: "ok", HTTPStatus: http.StatusOK, Body: string(entry)}, "", nil
+}
+
+func init() {
+	for i := range Tools {
+		if Tools[i].Name == "get_training" {
+			Tools[i].steps = getTrainingSteps
+			Tools[i].Desc = "Returns a training container (read from the list of training containers, because GET /train/containers/{id} fails on the platform)."
+		}
+	}
 }

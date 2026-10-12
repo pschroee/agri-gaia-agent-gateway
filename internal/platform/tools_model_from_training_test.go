@@ -64,7 +64,7 @@ func TestModelFromTrainingSteps(t *testing.T) {
 	tool, _ := Lookup("create_model_from_training")
 	s := &stepsDoer{answers: map[string]Result{
 		"GET /train/containers/7/status": {Status: "ok", HTTPStatus: 200, Body: `{"status":"exited"}`},
-		"GET /train/containers/7":        {Status: "ok", HTTPStatus: 200, Body: `{"id":7,"dataset_id":3}`},
+		"GET /train/containers":          {Status: "ok", HTTPStatus: 200, Body: `[{"id":6,"dataset_id":9},{"id":7,"dataset_id":3}]`},
 		"GET /datasets/3":                {Status: "ok", HTTPStatus: 200, Body: `{"id":3}`},
 		"GET /train/containers/7/model":  {Status: "ok", HTTPStatus: 200, Body: modelAnswer},
 	}}
@@ -72,7 +72,7 @@ func TestModelFromTrainingSteps(t *testing.T) {
 	if err != nil || refused != "" || res.Status != "ok" {
 		t.Fatalf("res=%+v refused=%q err=%v", res, refused, err)
 	}
-	want := []string{"GET /train/containers/7/status", "GET /train/containers/7|", "GET /datasets/3", "GET /train/containers/7/model"}
+	want := []string{"GET /train/containers/7/status", "GET /train/containers?limit=1000|", "GET /datasets/3", "GET /train/containers/7/model"}
 	if len(s.calls) != len(want) {
 		t.Fatalf("calls = %v", s.calls)
 	}
@@ -116,7 +116,7 @@ func TestModelFromTrainingRefusesUnfinished(t *testing.T) {
 
 	s = &stepsDoer{answers: map[string]Result{
 		"GET /train/containers/7/status": {Status: "ok", HTTPStatus: 200, Body: `{"status":"exited"}`},
-		"GET /train/containers/7":        {Status: "ok", HTTPStatus: 200, Body: `{"id":7,"dataset_id":null}`},
+		"GET /train/containers":          {Status: "ok", HTTPStatus: 200, Body: `[{"id":7,"dataset_id":null}]`},
 	}}
 	res, refused, _ = tool.Run(ctx, raw, s.do)
 	if res.Status != "error" || !strings.Contains(refused, "names no dataset") || len(s.calls) != 2 {
@@ -125,7 +125,16 @@ func TestModelFromTrainingRefusesUnfinished(t *testing.T) {
 
 	s = &stepsDoer{answers: map[string]Result{
 		"GET /train/containers/7/status": {Status: "ok", HTTPStatus: 200, Body: `{"status":"exited"}`},
-		"GET /train/containers/7":        {Status: "ok", HTTPStatus: 200, Body: `{"id":7,"dataset_id":3}`},
+		"GET /train/containers":          {Status: "ok", HTTPStatus: 200, Body: `[{"id":6,"dataset_id":9}]`},
+	}}
+	res, refused, _ = tool.Run(ctx, raw, s.do)
+	if res.Status != "error" || !strings.Contains(refused, "not in the platform's list") || len(s.calls) != 2 {
+		t.Errorf("not in the list: res=%+v refused=%q calls=%v", res, refused, s.calls)
+	}
+
+	s = &stepsDoer{answers: map[string]Result{
+		"GET /train/containers/7/status": {Status: "ok", HTTPStatus: 200, Body: `{"status":"exited"}`},
+		"GET /train/containers":          {Status: "ok", HTTPStatus: 200, Body: `[{"id":6,"dataset_id":9},{"id":7,"dataset_id":3}]`},
 		"GET /datasets/3":                {Status: "denied", Message: "no right to read dataset 3"},
 	}}
 	res, refused, _ = tool.Run(ctx, raw, s.do)
@@ -158,5 +167,23 @@ func TestCreateTrainingExportConfigDescription(t *testing.T) {
 		if !strings.Contains(desc, want) {
 			t.Errorf("description lacks %q", want)
 		}
+	}
+}
+
+func TestGetTrainingFromList(t *testing.T) {
+	tool, ok := Lookup("get_training")
+	if !ok || !tool.HasSteps() {
+		t.Fatalf("get_training missing or without steps: %v", ok)
+	}
+	s := &stepsDoer{answers: map[string]Result{
+		"GET /train/containers": {Status: "ok", HTTPStatus: 200, Body: `[{"id":6,"status":"exited"},{"id":7,"status":"running","dataset_id":3}]`},
+	}}
+	res, refused, err := tool.Run(context.Background(), json.RawMessage(`{"train_container_id":7}`), s.do)
+	if err != nil || refused != "" || res.Status != "ok" || !strings.Contains(res.Body, `"status":"running"`) || len(s.calls) != 1 {
+		t.Fatalf("res=%+v refused=%q err=%v calls=%v", res, refused, err, s.calls)
+	}
+	res, refused, _ = tool.Run(context.Background(), json.RawMessage(`{"train_container_id":8}`), s.do)
+	if res.Status != "error" || !strings.Contains(refused, "not in the platform's list") {
+		t.Fatalf("unknown id: res=%+v refused=%q", res, refused)
 	}
 }
