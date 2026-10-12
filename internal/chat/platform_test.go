@@ -219,7 +219,7 @@ func TestPlatformExchangeLogged(t *testing.T) {
 	calls, _ := e.st.ListSocketCalls(ctx, c.ID)
 	found := false
 	for _, sc := range calls {
-		if sc.Op == "token_exchange" && sc.Via == "orchestrator" && strings.Contains(sc.Detail, "azp=agw-agent, aud=backend,minio") && sc.SlotID == slot {
+		if sc.Op == "token_exchange" && sc.Via == "orchestrator" && strings.Contains(sc.Detail, "azp=agw-agent, aud=backend, valid until") && sc.SlotID == slot {
 			found = true
 		}
 	}
