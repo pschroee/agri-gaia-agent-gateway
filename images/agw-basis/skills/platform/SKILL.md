@@ -65,6 +65,20 @@ Keywords (`--keywords`) are **AGROVOC URIs** for both, not free words; search wi
 `agw-platform request GET /agrovoc/keywords --query keyword=pig`. The orchestrator never sets "Classification Dataset" (otherwise a bug in the platform discards the
 classes); the classes go via `--annotation-labels`.
 
+## Renaming and model metadata
+
+- `agw-platform rename-dataset <dataset_id> <name>` renames a dataset. The name may only contain letters,
+  digits, `_`, `.` and `-` (1 to 100 characters). Only the name is sent. The catalogue entry in the triplestore
+  keeps the old name. Keywords, description and licence of a dataset cannot be changed on the platform.
+- `agw-platform update-model <model_id> --name …` changes the name and the tensor metadata of a model, for example
+  `--input-shape '[1,3,64,64]'`, `--input-datatype float32`, `--input-semantics NCHW`, `--output-shape '[1,2]'`,
+  `--output-labels 0 --output-labels 1`. Give only the fields to change. The tool reads the model first, merges
+  the change and sends all fields, because the platform clears every field it does not get. The format stays as
+  it is and cannot be changed here. The approval shows the whole body. The catalogue entry keeps the old name.
+- Score in the name: if the model name shows `None Acc.`, the platform did not read the accuracy from the log.
+  Read it with `agw-platform training-logs <train_container_id> --tail 50`, then put it into the name with
+  `update-model`, for example `0.67 Acc.`.
+
 ## Delegated rights
 
 The user can delegate only certain rights to you for a chat (which actions on which
