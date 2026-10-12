@@ -203,7 +203,7 @@ func (s *Store) ListActivity(ctx context.Context, f ActivityFilter) (ActivityPag
 	// An internet request's approval: same chat and tool call, internet_access; a request answered "already on"
 	// asked nobody.
 	q := `SELECT sc.id, sc.chat_id::text, sc.slot_id, sc.via, sc.op, sc.detail, sc.result, sc.created_at, sc.session,
-		sc.tool_call_id, sc.duration_ms, ` + outcomeSQL + `, ` + internetSQL + `,
+		sc.tool_call_id, sc.duration_ms, COALESCE(sc.effect, ''), ` + outcomeSQL + `, ` + internetSQL + `,
 		ap.id::text, ap.state, ap.created_at, ap.decided_at
 	FROM socket_calls sc JOIN chats c ON c.id = sc.chat_id
 	LEFT JOIN LATERAL (
@@ -227,7 +227,7 @@ func (s *Store) ListActivity(ctx context.Context, f ActivityFilter) (ActivityPag
 		var apID, apState *string
 		var apCreated, apDecided *time.Time
 		if err := rows.Scan(&c.ID, &c.ChatID, &c.SlotID, &c.Via, &c.Op, &c.Detail, &c.Result, &c.CreatedAt, &c.Session,
-			&c.ToolCallID, &c.DurationMs, &c.Outcome, &in.Action, &in.Origin, &in.Result,
+			&c.ToolCallID, &c.DurationMs, &c.Effect, &c.Outcome, &in.Action, &in.Origin, &in.Result,
 			&apID, &apState, &apCreated, &apDecided); err != nil {
 			return page, err
 		}
