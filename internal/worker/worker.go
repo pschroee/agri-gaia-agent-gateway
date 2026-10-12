@@ -94,6 +94,11 @@ const mermaidRules = " The UI renders it strictly and without HTML: no HTML tags
 // chat does not show as proper links and which wrap over several lines in the panel.
 const linkRule = "- Links in the chat are always Markdown links with a meaningful title, [title](URL), never bare URLs; this also applies to links to the platform (for example to a dataset) and to files. In a list, one link per line."
 
+// userFacingRule: replies to the user name no sandbox internals, in every binding (issue #75). The agent named
+// /workspace paths and agw-* commands in its answers; the user cannot open them. The rule is a plain prohibition
+// with one wrong and one right example; the exception is an explicit question for technical details.
+const userFacingRule = `- Replies to the user: the user does not see your sandbox and does not know its paths or tools. In your replies never mention paths such as /workspace/…, /workspace/inputs/…, /opt/agw/… or /tmp/…, internal commands or tool names (agw-artifact, agw-platform, agw-internet, mcp_…, bash, read …), or infrastructure terms (sandbox, slot, orchestrator, socket, proxy). Name a file by its file name (e.g. report.pdf). A result file the user should get, you send (see above); for a source or intermediate file, offer to send it instead of giving its path. Wrong: "Source: /workspace/report.typ". Right: "I can also send you the Typst source (report.typ) if you want to edit it." Images in a reply with ![…](/workspace/…) are fine; the UI shows the image, not the path. Only if the user explicitly asks for technical details (a path, a command) may you give them.`
+
 // mmdcNote: checking with mermaid-check and Mermaid as a file, only for variants with bash (the MCP
 // variant does not run commands).
 const mmdcNote = " Before answering, check every diagram with mermaid-check (same settings as the UI); send only one that passed. If you need the diagram as a file as a fallback (for example for an artifact, a Typst document or a display with ![…](…)), render it with mmdc: mmdc -i diagram.mmd -o diagram.png (also .svg or .pdf; with -i file.md all mermaid blocks of a Markdown file are replaced)."
@@ -200,7 +205,7 @@ const systemNote = `You work in an isolated sandbox (Debian, Python 3, curl, jq,
 - Task list: for work with several steps, create a task list with the tool todo at the start; the user sees it live. Set a task to in_progress before you start on it, and to completed immediately once it is done, not all at once at the end; in_progress marks exactly what you are working on right now. If the plan changes, add or delete tasks. Before your final reply, no task is in_progress anymore.
 - You show images in your reply with ![description](/workspace/file.png): PNG, JPEG, GIF or WebP under /workspace, /tmp or /home/agent. URLs from the internet and SVG are not displayed. Save matplotlib charts as PNG (plt.savefig), not plt.show().
 - Flows, architectures, states, sequences, schedules and data models you show as a code block with the language mermaid; the web UI renders it (skill mermaid).` + mermaidRules + `{{mmdc}} For data with axes and numbers you use matplotlib.
-` + linkRule + `
+` + linkRule + "\n" + userFacingRule + `
 {{bg}}- Language: reply in the language of the user's latest message, not in the language of this note or of the skills. If the user switches language, switch with them. Only when their message shows no language (e.g. "ok", a file name or only code) does the preferred language from an orchestrator note apply (starts with ` + chat.SystemHeader + `). Tool calls, commands, code and identifiers stay as they are.`
 
 // bindingTools are the tools pi has per binding; a combination gets their union (issue #29).

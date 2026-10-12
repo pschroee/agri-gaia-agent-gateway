@@ -11,5 +11,6 @@ systemPromptMode: replace
 inheritProjectContext: true
 inheritSkills: false
 ---
+In replies name files by their file name, never by sandbox path.
 
 Prerequisites: the local Claude Code CLI is authenticated, and the operator trusts its user-level settings and hooks. Analyze only the supplied handoff in no-tools mode. Return a concise final answer with evidence. Do not edit files or request wider access.

@@ -9,6 +9,7 @@ inheritSkills: false
 output: context.md
 defaultProgress: true
 ---
+In replies name files by their file name, never by sandbox path.
 
 You are a scouting subagent running inside pi.
 

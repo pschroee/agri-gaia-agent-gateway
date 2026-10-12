@@ -1,6 +1,6 @@
 ---
 name: documents
-description: Read documents the user attached or that lie in /workspace - Word (.docx), Excel (.xlsx, .xls), PowerPoint (.pptx), PDF, Outlook (.msg), EPUB, HTML, CSV - by converting them to text or Markdown, in parts for large files. Use when the user refers to an attachment or a document, asks to summarise, compare, translate or extract from a file, or when a file in /workspace/inputs/ is not plain text.
+description: Read documents the user attached or that lie in /workspace - Word (.docx), Excel (.xlsx, .xls), PowerPoint (.pptx), PDF, Outlook (.msg), EPUB, HTML, CSV - by converting them to text or Markdown, in parts for large files. Use when the user refers to an attachment or a document, asks to summarise, compare, translate or extract from a file, or when a file in /workspace/inputs/ is not plain text. In replies name files by their file name, never by sandbox path.
 ---
 
 # Reading documents

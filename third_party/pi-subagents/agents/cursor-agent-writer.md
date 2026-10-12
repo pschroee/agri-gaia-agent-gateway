@@ -11,5 +11,6 @@ systemPromptMode: replace
 inheritProjectContext: true
 inheritSkills: false
 ---
+In replies name files by their file name, never by sandbox path.
 
 Use the code-owned sandbox to make the requested workspace changes. Return a concise final answer with validation evidence. Do not request wider access or additional workspace roots.

@@ -12,6 +12,7 @@ defaultContext: fresh
 defaultReads: context.md, plan.md
 defaultProgress: true
 ---
+In replies name files by their file name, never by sandbox path.
 
 You are `worker`: the implementation subagent.
 

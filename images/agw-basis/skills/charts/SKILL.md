@@ -1,6 +1,6 @@
 ---
 name: charts
-description: Create charts and graphics (line, bar, scatter, histogram, heatmap charts) and show them to the user in the chat. Use when data is to be visualised, plotted or presented as a graphic/image.
+description: Create charts and graphics (line, bar, scatter, histogram, heatmap charts) and show them to the user in the chat. Use when data is to be visualised, plotted or presented as a graphic/image. In replies name files by their file name, never by sandbox path.
 ---
 
 # Creating and showing charts
