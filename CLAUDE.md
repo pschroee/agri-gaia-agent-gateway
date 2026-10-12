@@ -78,8 +78,19 @@ refer to this repository.
   only such notes; `steerQueue` takes them along at a tool step.
 - The continuation of a run is linked only by the marker `ref agw-xxxxxxxx` in the subagent's session (`user_echo` in
   `parseChildSessionKnown`), and `continues_run_id` is only written by the gateway (`SetRunContinues`; upserts never
-  touch it). Open risk, to check on the live instance: whether pi-subagents' resume puts the message into the new
-  run's first user message (the link depends on it).
+  touch it). **Checked live (12.10.2026):** pi-subagents' `resume` revives the finished run **in the same session**, so the
+  run keeps its ID, the echo marks the message `delivered` and no `continues_run_id` is written; only `restart` (new run
+  with the recorded transcript) creates a new run and the link. A dormant chat always restarts.
+- **The reply route `POST /subagent-relay/result` belongs to pi's socket** (`NewPiHandlerFg`), where the extension runs;
+  at the execution sandbox's socket it answered 404 and every message ended as `relay timed out` (found live, fixed with
+  `TestSubagentRelayResultOnlyAtPiSocket`). The execution sandbox, which the agent controls, must not have it.
+- pi's `prompt` of an extension command answers only **after the handler has finished** (`prompt()` awaits it before
+  `preflightResult`), so the relay's `Worker.Call` takes as long as pi-subagents needs (limit 10 s, reply wait 20 s).
+- A steer reaches a subagent **after its current step**: a running `sleep 60` is not interrupted; tasks for tests need
+  several short steps. A run that pi-subagents has not reported a `pi_run_id` for yet (first seconds, workflow children)
+  answers 409 `foreground_run`; workflow children have their own `pi_run_id`, so no `#n` index is needed for them.
+- The mock of `parity.mjs` must offer `registerCommand` (the bridge registers the relay command); `guard.test.mjs` runs
+  only inside `TestBridgeParity`, so a failure there hides the guard tests.
 - Relay tests: `images/agw-basis/test/guard.test.mjs` (node --test, agw-parity image); the Go tests are in
   `internal/chat/subagent_messages_test.go`, `internal/api/subagent_messages_test.go`, `internal/store/subagent_messages_test.go`.
 
