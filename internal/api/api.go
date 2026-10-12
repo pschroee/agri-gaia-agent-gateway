@@ -193,6 +193,7 @@ func (s *Server) Handler() http.Handler {
 	chat("POST /api/chats/{id}/autocompact", s.autocompact)
 	chat("POST /api/chats/{id}/subagents", s.subagentLimitGone)
 	chat("GET /api/chats/{id}/subagent-runs", s.subagentRuns)
+	chat("GET /api/chats/{id}/plans", s.plans)
 	chat("GET /api/chats/{id}/llm_calls", s.llmCalls)
 	chat("GET /api/chats/{id}/tool_executions", s.toolExecutions)
 	chat("GET /api/chats/{id}/background", s.background)
