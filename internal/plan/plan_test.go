@@ -5,6 +5,7 @@
 package plan
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -207,5 +208,78 @@ func TestPreviewListsEverything(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Errorf("preview misses %q in:\n%s", want, text)
 		}
+	}
+}
+
+func TestNormalizeArgsTextScalars(t *testing.T) {
+	a, err := NormalizeArgs([]byte(`{"b":2,"a":"x","c":true}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := NormalizeArgs([]byte(`{"c":"true","a":"x","b":"2"}`))
+	if string(a) != string(b) || string(a) != `{"a":"x","b":"2","c":"true"}` {
+		t.Fatalf("%s vs %s", a, b)
+	}
+	if _, err := NormalizeArgs([]byte(`{"a":1,"a":2}`)); err == nil {
+		t.Fatal("duplicate keys accepted")
+	}
+	if e, _ := NormalizeArgs(nil); string(e) != "{}" {
+		t.Fatalf("empty: %s", e)
+	}
+}
+
+func TestMatchesTool(t *testing.T) {
+	st := store.PlanStep{Tool: "build_inference_image", Method: "POST", Path: "/container-images/build",
+		Args: json.RawMessage(`{"architecture":"amd64","model_id":"{{step1.id}}","name":"img","tag":"v1","template_id":"1"}`)}
+	resolve := func(n int) (string, bool) { return "5", n == 1 }
+	req := platform.Request{Method: "POST", Path: "/container-images/build", Body: json.RawMessage(`{"repository":"u/img"}`)}
+	good := json.RawMessage(`{"template_id":1,"model_id":"5","name":"img","tag":"v1","architecture":"amd64"}`)
+	if ok, why := MatchesTool(st, "build_inference_image", good, req, resolve); !ok {
+		t.Fatalf("exact tool call: %s", why)
+	}
+	cases := map[string]struct {
+		tool string
+		args string
+	}{
+		"other tool":     {"update_model", string(good)},
+		"changed tag":    {"build_inference_image", `{"template_id":1,"model_id":5,"name":"img","tag":"v2","architecture":"amd64"}`},
+		"other model":    {"build_inference_image", `{"template_id":1,"model_id":6,"name":"img","tag":"v1","architecture":"amd64"}`},
+		"extra argument": {"build_inference_image", `{"template_id":1,"model_id":5,"name":"img","tag":"v1","architecture":"amd64","x":1}`},
+	}
+	for name, c := range cases {
+		if ok, _ := MatchesTool(st, c.tool, json.RawMessage(c.args), req, resolve); ok {
+			t.Errorf("%s matched", name)
+		}
+	}
+	bad := req
+	bad.Path = "/container-images/other"
+	if ok, _ := MatchesTool(st, "build_inference_image", good, bad, resolve); ok {
+		t.Error("other path matched")
+	}
+	if ok, _ := MatchesTool(st, "build_inference_image", good, req, func(int) (string, bool) { return "", false }); ok {
+		t.Error("unresolved placeholder matched")
+	}
+	raw := store.PlanStep{Method: "POST", Path: "/container-images/build"}
+	if IsToolStep(raw) {
+		t.Error("raw step is a tool step")
+	}
+}
+
+func TestBuildStepStoresArgsOfToolWithSteps(t *testing.T) {
+	st, _, _, err := BuildStep(StepSpec{Tool: "build-image", Args: json.RawMessage(`{"template_id":1,"model_id":"{{step1.id}}","name":"img","tag":"v1","architecture":"amd64"}`)}, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Tool != "build_inference_image" || !IsToolStep(st) || !strings.Contains(string(st.Args), `"model_id":"{{step1.id}}"`) ||
+		!strings.Contains(string(st.Args), `"template_id":"1"`) {
+		t.Fatalf("step = %+v args %s", st, st.Args)
+	}
+	list, _, _, err := BuildStep(StepSpec{Tool: "list_templates"}, 1)
+	if err == nil && IsToolStep(list) {
+		t.Fatal("a tool without steps became a tool step")
+	}
+	up, _, _, err := BuildStep(StepSpec{Method: "PATCH", Path: "/datasets/5", Body: json.RawMessage(`{"name":"x"}`)}, 1)
+	if err != nil || IsToolStep(up) {
+		t.Fatalf("raw step: %+v %v", up, err)
 	}
 }

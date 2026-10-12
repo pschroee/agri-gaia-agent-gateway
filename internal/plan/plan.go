@@ -203,6 +203,20 @@ func BuildStep(spec StepSpec, idx int) (store.PlanStep, platform.Request, []int,
 		return fail(errPlaceholderText)
 	}
 	st := store.PlanStep{Idx: idx, Description: spec.Description, Tool: spec.Tool, Method: req.Method}
+	if spec.Tool != "" {
+		if tool, ok := platform.Lookup(spec.Tool); ok {
+			st.Tool = tool.Name
+			if tool.HasSteps() {
+				// A tool with steps builds its final call itself (it reads first and adds fields the agent never
+				// wrote), so the step is matched on the tool and its arguments (issue #70).
+				args, err := stepArgs(spec.Args)
+				if err != nil {
+					return fail(err)
+				}
+				st.Args = args
+			}
+		}
+	}
 	if st.Path, err = restorePath(req.Path); err != nil {
 		return fail(err)
 	}
@@ -362,7 +376,14 @@ func Preview(title string, steps []store.PlanStep) string {
 		if st.Description != "" {
 			fmt.Fprintf(&b, "   %s\n", st.Description)
 		}
-		if len(st.Body) > 0 {
+		if IsToolStep(st) {
+			var ind bytes.Buffer
+			_ = json.Indent(&ind, st.Args, "", "  ")
+			fmt.Fprintf(&b, "   tool %s with\n", st.Tool)
+			for _, line := range strings.Split(ind.String(), "\n") {
+				fmt.Fprintf(&b, "   %s\n", line)
+			}
+		} else if len(st.Body) > 0 {
 			var ind bytes.Buffer
 			_ = json.Indent(&ind, st.Body, "", "  ")
 			for _, line := range strings.Split(ind.String(), "\n") {
@@ -423,4 +444,97 @@ func ApprovedText(p store.Plan) string {
 	}
 	b, _ := json.Marshal(out)
 	return string(b)
+}
+
+// stepArgs gives the stored form of the arguments of a tool step: scalars as text, keys sorted, placeholders
+// restored. Absent arguments are an empty object.
+func stepArgs(raw json.RawMessage) (json.RawMessage, error) {
+	sent, _, err := sentinelJSON(raw)
+	if err != nil {
+		return nil, err
+	}
+	norm, err := NormalizeArgs(sent)
+	if err != nil {
+		return nil, err
+	}
+	restored, err := restoreJSON(string(norm))
+	if err != nil {
+		return nil, err
+	}
+	return json.RawMessage(restored), nil
+}
+
+// NormalizeArgs gives the canonical form of tool arguments: every scalar (number, boolean) as its text,
+// object keys sorted. The CLI passes numbers as text and the plan may write them as numbers; both must
+// compare equal. Duplicate keys are an error (Canonical). Empty input is the empty object.
+func NormalizeArgs(raw []byte) ([]byte, error) {
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return []byte("{}"), nil
+	}
+	if _, err := Canonical(raw); err != nil {
+		return nil, err
+	}
+	d := json.NewDecoder(bytes.NewReader(raw))
+	d.UseNumber()
+	var v any
+	if err := d.Decode(&v); err != nil {
+		return nil, err
+	}
+	out, err := json.Marshal(textScalars(v))
+	if err != nil {
+		return nil, err
+	}
+	return Canonical(out)
+}
+
+func textScalars(v any) any {
+	switch t := v.(type) {
+	case json.Number:
+		return t.String()
+	case bool:
+		if t {
+			return "true"
+		}
+		return "false"
+	case map[string]any:
+		for k, x := range t {
+			t[k] = textScalars(x)
+		}
+		return t
+	case []any:
+		for i, x := range t {
+			t[i] = textScalars(x)
+		}
+		return t
+	}
+	return v
+}
+
+// IsToolStep tells whether a step is matched on a tool and its arguments.
+func IsToolStep(st store.PlanStep) bool { return st.Tool != "" && len(st.Args) > 0 }
+
+// MatchesTool tells whether the call r, made by the platform tool tool with the arguments args, is the
+// tool step st: tool name and every argument (after placeholders are resolved), plus method and path of
+// the call as a sanity check. Query, body, form and uploads are not compared: the tool builds them. A
+// raw request has no invocation and never matches a tool step.
+func MatchesTool(st store.PlanStep, tool string, args json.RawMessage, r platform.Request, resolve Resolve) (bool, string) {
+	if !IsToolStep(st) || tool != st.Tool {
+		return false, "tool"
+	}
+	live, err := NormalizeArgs(args)
+	if err != nil {
+		return false, "args"
+	}
+	want, ok := substJSON(string(st.Args), resolve, false)
+	if !ok || want != string(live) {
+		return false, "args"
+	}
+	if r.Method != st.Method {
+		return false, "method"
+	}
+	p, ok := substPath(st.Path, resolve)
+	if !ok || p != r.Path {
+		return false, "path"
+	}
+	return true, ""
 }

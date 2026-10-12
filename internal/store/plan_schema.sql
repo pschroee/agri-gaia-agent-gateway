@@ -42,3 +42,7 @@ CREATE TABLE IF NOT EXISTS plan_steps (
     done_at          timestamptz,
     PRIMARY KEY (plan_id, idx)
 );
+
+-- Arguments of a step that is a platform tool with steps (issue #70, option b): the step is matched on the tool name
+-- and these arguments, not on the HTTP request the tool builds. Empty for a raw call or a tool without steps.
+ALTER TABLE plan_steps ADD COLUMN IF NOT EXISTS args text NOT NULL DEFAULT '';

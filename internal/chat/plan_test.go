@@ -538,3 +538,100 @@ func TestPlanClaimedStepFailsOnEarlyReturn(t *testing.T) {
 		t.Fatalf("after the early return: plan %s, step %+v", p.State, p.Steps[0])
 	}
 }
+
+// planBuild: one tool step that builds an image; the tool puts the owner into the repository itself.
+const planBuild = `{"title":"Build","steps":[
+ {"tool":"build_inference_image","args":{"template_id":1,"model_id":5,"name":"img","tag":"v1","architecture":"amd64"}}]}`
+
+// buildCall is the final call build_inference_image sends for planBuild (the CLI passes numbers as text).
+func buildCall(t *testing.T, tag string) platform.Request {
+	return liveCall(t, "POST", "/container-images/build",
+		`{"architecture":"amd64","container_template_id":1,"model_id":5,"repository":"agent-test/img","tag":"`+tag+`"}`)
+}
+
+func invCtx(ctx context.Context, tag string) context.Context {
+	return platform.WithInvocation(ctx, "build_inference_image",
+		json.RawMessage(`{"template_id":"1","model_id":"5","name":"img","tag":"`+tag+`","architecture":"amd64"}`))
+}
+
+// A tool step is matched on the tool and its arguments: the call the tool builds (owner in the repository)
+// runs without a new approval.
+func TestPlanToolStepCovered(t *testing.T) {
+	e := setup(t)
+	withPlanPlatform(t, e)
+	ctx := store.WithSession(context.Background(), "main")
+	c, _ := e.m.Create(ctx, NewChat{})
+	slot := e.m.live[c.ID].slot.ID
+	if r, _ := proposeAndDecide(t, e, ctx, c.ID, slot, planBuild, true); r.Status != "ok" {
+		t.Fatalf("plan: %+v", r)
+	}
+	if r, err := e.m.PlatformCall(invCtx(ctx, "v1"), c.ID, slot, "cli", buildCall(t, "v1")); err != nil || r.Status != "ok" {
+		t.Fatalf("covered tool step: %+v %v", r, err)
+	}
+	if kinds := approvalKinds(t, e, ctx, c.ID); len(kinds) != 1 || kinds[0] != "plan" {
+		t.Fatalf("approvals %v, want the plan only", kinds)
+	}
+	if p := onlyPlan(t, e, ctx, c.ID); p.State != "completed" || p.Steps[0].State != "done" {
+		t.Fatalf("plan %s, step %+v", p.State, p.Steps[0])
+	}
+}
+
+// A changed argument of the tool asks again.
+func TestPlanToolStepChangedArgumentAsks(t *testing.T) {
+	e := setup(t)
+	withPlanPlatform(t, e)
+	ctx := store.WithSession(context.Background(), "main")
+	c, _ := e.m.Create(ctx, NewChat{})
+	slot := e.m.live[c.ID].slot.ID
+	if r, _ := proposeAndDecide(t, e, ctx, c.ID, slot, planBuild, true); r.Status != "ok" {
+		t.Fatalf("plan: %+v", r)
+	}
+	done := make(chan platform.Result, 1)
+	go func() {
+		r, _ := e.m.PlatformCall(invCtx(ctx, "v2"), c.ID, slot, "cli", buildCall(t, "v2"))
+		done <- r
+	}()
+	ap := pendingApproval(t, e, c.ID)
+	if ap.Kind != "platform_write" {
+		t.Fatalf("changed argument asked as %q", ap.Kind)
+	}
+	if _, err := e.m.Decide(ctx, ap.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	if r := <-done; r.Status != "rejected" {
+		t.Fatalf("changed call: %+v", r)
+	}
+	if p := onlyPlan(t, e, ctx, c.ID); p.Steps[0].State != "open" {
+		t.Fatalf("step touched by a changed call: %+v", p.Steps[0])
+	}
+}
+
+// A raw request with the same target is not covered by a tool step.
+func TestPlanToolStepNotCoveredByRawRequest(t *testing.T) {
+	e := setup(t)
+	withPlanPlatform(t, e)
+	ctx := store.WithSession(context.Background(), "main")
+	c, _ := e.m.Create(ctx, NewChat{})
+	slot := e.m.live[c.ID].slot.ID
+	if r, _ := proposeAndDecide(t, e, ctx, c.ID, slot, planBuild, true); r.Status != "ok" {
+		t.Fatalf("plan: %+v", r)
+	}
+	done := make(chan platform.Result, 1)
+	go func() {
+		r, _ := e.m.PlatformCall(ctx, c.ID, slot, "api", buildCall(t, "v1")) // no invocation: a raw request
+		done <- r
+	}()
+	ap := pendingApproval(t, e, c.ID)
+	if ap.Kind != "platform_write" {
+		t.Fatalf("raw request asked as %q", ap.Kind)
+	}
+	if _, err := e.m.Decide(ctx, ap.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	if r := <-done; r.Status != "rejected" {
+		t.Fatalf("raw call: %+v", r)
+	}
+	if p := onlyPlan(t, e, ctx, c.ID); p.Steps[0].State != "open" {
+		t.Fatalf("step claimed by a raw request: %+v", p.Steps[0])
+	}
+}

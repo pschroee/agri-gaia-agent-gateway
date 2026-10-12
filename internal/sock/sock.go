@@ -426,6 +426,8 @@ func (h *handler) platform(w http.ResponseWriter, r *http.Request) {
 // (with confirmation if it writes) and logs it.
 func (h *handler) doPlatform(ctx context.Context, chat, via string, tool platform.Tool, raw json.RawMessage) (platform.Result, error) {
 	if tool.HasSteps() {
+		// The invocation lets an approved plan recognise the tool call (issue #70); a raw request has none.
+		ctx = platform.WithInvocation(ctx, tool.Name, raw)
 		// Every step goes through runPlatform like a single call: delegation, approval and log.
 		res, refused, err := tool.Run(ctx, raw, func(ctx context.Context, r platform.Request) (platform.Result, error) {
 			n, err := platform.Normalize(r)
