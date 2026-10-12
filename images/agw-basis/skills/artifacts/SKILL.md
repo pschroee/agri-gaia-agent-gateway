@@ -1,6 +1,6 @@
 ---
 name: artifacts
-description: Send files to the user with agw-artifact upload - the file appears in the chat at once as a file message from you, without approval - and list or fetch the files of this chat. Use for result files the user wants to keep or download (a CSV, a chart as PNG, a report as PDF), when the user asks you to send, give, export or upload a file; not for intermediate files. Only files inside /workspace.
+description: Send files to the user with agw-artifact upload - the file appears in the chat at once as a file message from you, without approval - and list or fetch the files of this chat. Use for result files the user wants to keep or download (a CSV, a chart as PNG, a report as PDF), when the user asks you to send, give, export or upload a file; not for intermediate files. Only files inside /workspace. In replies name files by their file name, never by sandbox path.
 ---
 
 # Sending files to the user

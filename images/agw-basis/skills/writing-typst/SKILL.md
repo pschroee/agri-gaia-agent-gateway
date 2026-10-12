@@ -1,6 +1,6 @@
 ---
 name: writing-typst
-description: Use whenever the user mentions Typst / .typ (e.g. "Typst document", "write Typst", "onepager", "Typst table", "typst compile"), or when writing/editing Typst documents, converting from LaTeX, or providing Typst syntax for headings, lists, math, tables, figures, citations, templates, or styling.
+description: Use whenever the user mentions Typst / .typ (e.g. "Typst document", "write Typst", "onepager", "Typst table", "typst compile"), or when writing/editing Typst documents, converting from LaTeX, or providing Typst syntax for headings, lists, math, tables, figures, citations, templates, or styling. In replies name files by their file name, never by sandbox path.
 compatibility: opencode, claude
 ---
 

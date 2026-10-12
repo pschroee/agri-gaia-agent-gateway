@@ -5,6 +5,7 @@
 package worker
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 
@@ -24,6 +25,27 @@ func TestSystemNoteUserFacingRule(t *testing.T) {
 			if !strings.Contains(note, w) {
 				t.Errorf("%s: system note without %q", ts.Key(), w)
 			}
+		}
+	}
+}
+
+// Issue #75: pi puts only a skill's description into the context, so the file skills say in their descriptions that
+// replies name files, not sandbox paths. The description stays a plain YAML scalar on one line (no ": ", no " #",
+// at most 1024 characters).
+func TestFileSkillsNameFilesNotPaths(t *testing.T) {
+	const sentence = "In replies name files by their file name, never by sandbox path."
+	for _, name := range []string{"artifacts", "writing-typst", "documents", "charts", "model-card"} {
+		s := repoFile(t, "images/agw-basis/skills/"+name+"/SKILL.md")
+		m := regexp.MustCompile(`(?m)^description: ([^\n]+)$`).FindStringSubmatch(s)
+		if m == nil {
+			t.Fatalf("%s: description missing", name)
+		}
+		d := m[1]
+		if len(d) > 1024 || strings.Contains(d, ": ") || strings.Contains(d, " #") {
+			t.Errorf("%s: description too long (%d) or not a plain scalar", name, len(d))
+		}
+		if !strings.Contains(d, sentence) {
+			t.Errorf("%s: description without %q", name, sentence)
 		}
 	}
 }
