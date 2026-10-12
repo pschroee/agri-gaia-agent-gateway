@@ -76,6 +76,8 @@ type Chat struct {
 	Owner string `json:"owner,omitempty"`
 	// Language: the user's preferred language according to the browser (BCP 47); empty: unknown.
 	Language string `json:"language,omitempty"`
+	// TrashedAt: moved to the trash at this time (issue #76); nil: not in the trash.
+	TrashedAt *time.Time `json:"trashed_at,omitempty"`
 }
 
 // Origin of the title: TitleDefault (placeholder title, replaced with the first question),
@@ -309,7 +311,7 @@ SELECT c.id::text, c.title, c.model, c.thinking_level, c.variant, c.state, c.int
    FROM chat_workspaces w WHERE w.chat_id = c.id),
   (SELECT count(*) FROM chat_queue q WHERE q.chat_id = c.id AND q.delivered_at IS NULL),
   (SELECT count(*) FROM background_tasks b WHERE b.chat_id = c.id AND b.state = 'running'),
-  c.delegation, COALESCE(c.owner, ''), COALESCE(c.language, '')
+  c.delegation, COALESCE(c.owner, ''), COALESCE(c.language, ''), c.trashed_at
 FROM chats c
 LEFT JOIN LATERAL (
   SELECT sum((m.message->'usage'->>'input')::bigint)       AS input,
@@ -333,7 +335,7 @@ func scanChat(row pgx.Row) (Chat, error) {
 	var ctxRaw, wsRaw, delRaw []byte
 	err := row.Scan(&c.ID, &c.Title, &c.Model, &c.ThinkingLevel, &c.Variant, &c.State, &c.Internet, &c.AutoCompact, &c.MaxSubagents, &c.Compactions, &ctxRaw, &c.CreatedAt, &c.UpdatedAt,
 		&c.Tokens.Input, &c.Tokens.Output, &c.Tokens.CacheRead, &c.Tokens.Total, &c.Cost, &c.ArtifactCount, &c.PendingApprovals,
-		&c.Subagents, &c.LLMCalls, &c.CostOther, &wsRaw, &c.Queued, &c.BackgroundRunning, &delRaw, &c.Owner, &c.Language)
+		&c.Subagents, &c.LLMCalls, &c.CostOther, &wsRaw, &c.Queued, &c.BackgroundRunning, &delRaw, &c.Owner, &c.Language, &c.TrashedAt)
 	if len(delRaw) > 0 {
 		c.Delegation = delRaw
 	}
@@ -398,8 +400,9 @@ func (s *Store) ChatOwner(ctx context.Context, id string) (string, error) {
 	return owner, err
 }
 
+// ListChats returns the chats that are not in the trash, newest first (the trash lists them: ListTrash).
 func (s *Store) ListChats(ctx context.Context) ([]Chat, error) {
-	rows, err := s.pool.Query(ctx, chatSelect+` ORDER BY c.updated_at DESC`)
+	rows, err := s.pool.Query(ctx, chatSelect+` WHERE c.trashed_at IS NULL ORDER BY c.updated_at DESC`)
 	if err != nil {
 		return nil, err
 	}

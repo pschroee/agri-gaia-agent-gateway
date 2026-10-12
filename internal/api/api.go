@@ -171,6 +171,8 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	// Routes of a chat and of an approval check centrally whether they belong to the user (oidc).
 	chat := func(pattern string, h http.HandlerFunc) { mux.Handle(pattern, s.ownChat(h)) }
+	// writes also refuses a chat in the trash with 409 chat_in_trash (issue #76); reads stay open.
+	writes := func(pattern string, h http.HandlerFunc) { mux.Handle(pattern, s.ownChat(s.writable(h))) }
 	mux.HandleFunc("GET /login", s.login)
 	if s.OIDC != nil {
 		mux.Handle("/oidc/", s.OIDC.Handler())
@@ -184,40 +186,45 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/chats", s.listChats)
 	mux.HandleFunc("POST /api/chats", s.createChat)
 	chat("GET /api/chats/{id}", s.getChat)
-	chat("POST /api/chats/{id}/messages", s.send)
+	writes("POST /api/chats/{id}/messages", s.send)
 	chat("GET /api/chats/{id}/queue", s.queue)
-	chat("POST /api/chats/{id}/queue/send", s.flushQueue)
-	chat("DELETE /api/chats/{id}/queue/{qid}", s.unqueue)
-	chat("POST /api/chats/{id}/abort", s.action(s.M.Abort))
-	chat("POST /api/chats/{id}/suspend", s.action(s.M.Suspend))
-	chat("POST /api/chats/{id}/resume", s.action(s.M.Resume))
-	chat("POST /api/chats/{id}/internet", s.internet)
-	chat("POST /api/chats/{id}/model", s.setModel)
+	writes("POST /api/chats/{id}/queue/send", s.flushQueue)
+	writes("DELETE /api/chats/{id}/queue/{qid}", s.unqueue)
+	writes("POST /api/chats/{id}/abort", s.action(s.M.Abort))
+	writes("POST /api/chats/{id}/suspend", s.action(s.M.Suspend))
+	writes("POST /api/chats/{id}/resume", s.action(s.M.Resume))
+	writes("POST /api/chats/{id}/internet", s.internet)
+	writes("POST /api/chats/{id}/model", s.setModel)
 	chat("GET /api/chats/{id}/tools/running", s.runningTools)
 	chat("GET /api/chats/{id}/web_requests", s.webRequests)
-	chat("POST /api/chats/{id}/tools/{call}/stop", s.stopTool)
-	chat("POST /api/chats/{id}/tools/{call}/background", s.backgroundTool)
-	chat("POST /api/chats/{id}/effort", s.setEffort)
-	chat("POST /api/chats/{id}/autocompact", s.autocompact)
-	chat("POST /api/chats/{id}/subagents", s.subagentLimitGone)
+	writes("POST /api/chats/{id}/tools/{call}/stop", s.stopTool)
+	writes("POST /api/chats/{id}/tools/{call}/background", s.backgroundTool)
+	writes("POST /api/chats/{id}/effort", s.setEffort)
+	writes("POST /api/chats/{id}/autocompact", s.autocompact)
+	writes("POST /api/chats/{id}/subagents", s.subagentLimitGone)
 	chat("GET /api/chats/{id}/subagent-runs", s.subagentRuns)
 	chat("GET /api/chats/{id}/plans", s.plans)
 	chat("GET /api/chats/{id}/llm_calls", s.llmCalls)
 	chat("GET /api/chats/{id}/tool_executions", s.toolExecutions)
 	chat("GET /api/chats/{id}/background", s.background)
-	chat("POST /api/chats/{id}/background/{bg}/stop", s.stopBackground)
+	writes("POST /api/chats/{id}/background/{bg}/stop", s.stopBackground)
 	chat("GET /api/chats/{id}/commands", s.commands)
-	chat("POST /api/chats/{id}/commands", s.runCommand)
+	writes("POST /api/chats/{id}/commands", s.runCommand)
 	chat("GET /api/chats/{id}/session", s.session)
 	chat("GET /api/chats/{id}/artifacts", s.artifacts)
 	chat("GET /api/chats/{id}/artifacts/{name}", s.download)
-	chat("POST /api/chats/{id}/files", s.upload)
+	writes("POST /api/chats/{id}/files", s.upload)
 	chat("GET /api/chats/{id}/images", s.image)
 	chat("GET /api/chats/{id}/events", s.events)
+	chat("POST /api/chats/{id}/trash", s.trashChat)
+	chat("POST /api/chats/{id}/restore", s.restoreChat)
+	chat("DELETE /api/chats/{id}", s.deleteChat)
+	mux.HandleFunc("GET /api/trash", s.listTrash)
+	mux.HandleFunc("POST /api/trash/empty", s.emptyTrash)
 	mux.HandleFunc("GET /api/approvals", s.approvals)
 	mux.HandleFunc("GET /api/events", s.allEvents)
 	mux.HandleFunc("GET /api/activity", s.activity)
-	mux.Handle("POST /api/approvals/{id}", s.ownApproval(s.decide))
+	mux.Handle("POST /api/approvals/{id}", s.ownApproval(s.approvalWritable(s.decide)))
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "unknown endpoint")
 	})
@@ -359,6 +366,43 @@ func writeErr(w http.ResponseWriter, code int, msg string) {
 	writeJSON(w, code, map[string]string{"error": msg})
 }
 
+// writable answers 409 chat_in_trash to a route that would change its chat while the chat is in the trash
+// (issue #76). The manager refuses the same work on its own paths; this is the one answer for the UI.
+func (s *Server) writable(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		trashed, err := s.M.Trashed(r.Context(), r.PathValue("id"))
+		if err != nil && !errors.Is(err, store.ErrNotFound) {
+			fail(w, err)
+			return
+		}
+		if trashed {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": chat.ErrTrashed.Error(), "code": "chat_in_trash"})
+			return
+		}
+		next(w, r)
+	}
+}
+
+// approvalWritable: an approval of a chat in the trash cannot be decided (409 chat_in_trash). It is rejected
+// when the chat goes into the trash, so this only answers a late click.
+func (s *Server) approvalWritable(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		chatID, err := s.owners().ApprovalChat(r.Context(), r.PathValue("id"))
+		if err == nil {
+			trashed, err := s.M.Trashed(r.Context(), chatID)
+			if err != nil && !errors.Is(err, store.ErrNotFound) {
+				fail(w, err)
+				return
+			}
+			if trashed {
+				writeJSON(w, http.StatusConflict, map[string]string{"error": chat.ErrTrashed.Error(), "code": "chat_in_trash"})
+				return
+			}
+		}
+		next(w, r)
+	}
+}
+
 func errCode(err error) int {
 	switch {
 	case errors.Is(err, store.ErrNotFound):
@@ -381,6 +425,15 @@ func errCode(err error) int {
 }
 
 func fail(w http.ResponseWriter, err error) {
+	// Trash (issue #76): the code tells the UI what to offer.
+	if errors.Is(err, chat.ErrTrashed) {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error(), "code": "chat_in_trash"})
+		return
+	}
+	if errors.Is(err, chat.ErrNotInTrash) {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error(), "code": "not_in_trash"})
+		return
+	}
 	// Model switch blocked: include the numbers so that the UI can ask whether to compact first.
 	var tooLarge *chat.ContextTooLargeError
 	if errors.As(err, &tooLarge) {
@@ -1290,4 +1343,79 @@ func ParseSubnets(s string) ([]*net.IPNet, error) {
 		out = append(out, n)
 	}
 	return out, nil
+}
+
+// trashOwner is the owner whose trash is listed or emptied: the user with OIDC, all chats in token mode.
+func (s *Server) trashOwner(r *http.Request) *string {
+	if s.OIDC == nil {
+		return nil
+	}
+	u, _ := UserFrom(r.Context())
+	sub := u.Sub
+	return &sub
+}
+
+// trashChat moves a chat into the trash (idempotent).
+func (s *Server) trashChat(w http.ResponseWriter, r *http.Request) {
+	c, err := s.M.Trash(r.Context(), r.PathValue("id"))
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, 200, c)
+}
+
+// restoreChat takes a chat out of the trash; it does not wake the chat.
+func (s *Server) restoreChat(w http.ResponseWriter, r *http.Request) {
+	c, err := s.M.Restore(r.Context(), r.PathValue("id"))
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, 200, c)
+}
+
+// deleteChat deletes a chat for good; only from the trash (409 not_in_trash otherwise).
+func (s *Server) deleteChat(w http.ResponseWriter, r *http.Request) {
+	if err := s.M.DeletePermanently(r.Context(), r.PathValue("id")); err != nil {
+		fail(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// listTrash lists the chats of the user in the trash, most recently moved first. purge_at is set only with a
+// retention (AGW_TRASH_RETENTION_DAYS above 0).
+func (s *Server) listTrash(w http.ResponseWriter, r *http.Request) {
+	items, err := s.M.TrashList(r.Context(), s.trashOwner(r))
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	days := s.M.Options().TrashRetentionDays
+	type entry struct {
+		store.TrashItem
+		PurgeAt *time.Time `json:"purge_at,omitempty"`
+	}
+	out := make([]entry, 0, len(items))
+	for _, it := range items {
+		e := entry{TrashItem: it}
+		if days > 0 {
+			p := it.TrashedAt.Add(time.Duration(days) * 24 * time.Hour)
+			e.PurgeAt = &p
+		}
+		out = append(out, e)
+	}
+	writeJSON(w, 200, map[string]any{"retention_days": days, "chats": out})
+}
+
+// emptyTrash deletes every chat of the user in the trash for good. A failing chat does not stop the others; then
+// the answer is 500 with the number that went.
+func (s *Server) emptyTrash(w http.ResponseWriter, r *http.Request) {
+	n, err := s.M.EmptyTrash(r.Context(), s.trashOwner(r))
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error(), "deleted": n})
+		return
+	}
+	writeJSON(w, 200, map[string]int{"deleted": n})
 }

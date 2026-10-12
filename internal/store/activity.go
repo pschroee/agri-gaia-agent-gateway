@@ -120,6 +120,8 @@ type ActivityChat struct {
 	Model      string          `json:"model"`
 	Variant    string          `json:"variant"`
 	Delegation json.RawMessage `json:"delegation,omitempty"`
+	// Deleted: the chat was deleted for good; its calls are kept anonymised (issue #76). Title is empty then.
+	Deleted bool `json:"deleted,omitempty"`
 }
 
 // ActivityDuration summarizes the measured durations (nil fields: nothing measured).
@@ -151,17 +153,26 @@ type ActivityPage struct {
 
 // activityWhere builds the conditions shared by the calls, the summary and the runs (t: table alias with
 // chat_id and created_at). The outcome is added by the caller where it applies.
-func activityWhere(f ActivityFilter, t string, args *[]any) []string {
+// activityOwner is the owner of a call's chat: the live chat, or the tombstone of a deleted one (issue #76).
+const activityOwner = "COALESCE(c.owner, d.owner)"
+
+// activityWhere builds the conditions for the table alias t; owner is the expression the owner filter compares
+// with (activityOwner where the query joins deleted_chats, else c.owner).
+func activityWhere(f ActivityFilter, t, owner string, args *[]any) []string {
 	add := func(v any) string {
 		*args = append(*args, v)
 		return fmt.Sprintf("$%d", len(*args))
 	}
 	var w []string
 	if f.Owner != nil {
-		w = append(w, "c.owner = "+add(*f.Owner))
+		w = append(w, owner+" = "+add(*f.Owner))
 	}
 	if f.ChatID != "" {
-		w = append(w, t+".chat_id::text = "+add(f.ChatID))
+		if t == "sc" {
+			w = append(w, "COALESCE(sc.chat_id, sc.deleted_chat)::text = "+add(f.ChatID))
+		} else {
+			w = append(w, t+".chat_id::text = "+add(f.ChatID))
+		}
 	}
 	if !f.Since.IsZero() {
 		w = append(w, t+".created_at >= "+add(f.Since))
@@ -187,7 +198,7 @@ func (s *Store) ListActivity(ctx context.Context, f ActivityFilter) (ActivityPag
 	case KindAll:
 		ops = "sc.op IN ('platform', 'internet', 'internet_off', 'internet_set')"
 	}
-	where := append([]string{ops}, activityWhere(f, "sc", &args)...)
+	where := append([]string{ops, "(sc.chat_id IS NOT NULL OR sc.deleted_chat IS NOT NULL)"}, activityWhere(f, "sc", activityOwner, &args)...)
 	if f.Outcome != "" {
 		// Outcomes belong to platform calls: the filter leaves out internet entries.
 		args = append(args, f.Outcome)
@@ -202,10 +213,10 @@ func (s *Store) ListActivity(ctx context.Context, f ActivityFilter) (ActivityPag
 	// several platform calls).
 	// An internet request's approval: same chat and tool call, internet_access; a request answered "already on"
 	// asked nobody.
-	q := `SELECT sc.id, sc.chat_id::text, sc.slot_id, sc.via, sc.op, sc.detail, sc.result, sc.created_at, sc.session,
+	q := `SELECT sc.id, COALESCE(sc.chat_id, sc.deleted_chat)::text, sc.slot_id, sc.via, sc.op, sc.detail, sc.result, sc.created_at, sc.session,
 		sc.tool_call_id, sc.duration_ms, COALESCE(sc.effect, ''), ` + outcomeSQL + `, ` + internetSQL + `,
 		ap.id::text, ap.state, ap.created_at, ap.decided_at
-	FROM socket_calls sc JOIN chats c ON c.id = sc.chat_id
+	FROM socket_calls sc LEFT JOIN chats c ON c.id = sc.chat_id LEFT JOIN deleted_chats d ON d.id = sc.deleted_chat
 	LEFT JOIN LATERAL (
 		SELECT a.id, a.state, a.created_at, a.decided_at FROM approvals a
 		WHERE a.chat_id = sc.chat_id AND sc.tool_call_id <> '' AND a.tool_call_id = sc.tool_call_id
@@ -273,6 +284,25 @@ func (s *Store) ListActivity(ctx context.Context, f ActivityFilter) (ActivityPag
 		if err := crow.Err(); err != nil {
 			return page, err
 		}
+		// Calls of deleted chats: the tombstone gives model and binding; the title is gone (issue #76).
+		drows, err := s.pool.Query(ctx, `SELECT id::text, model, variant FROM deleted_chats WHERE id::text = ANY($1)`, chatIDs)
+		if err != nil {
+			return page, err
+		}
+		defer drows.Close()
+		for drows.Next() {
+			var c ActivityChat
+			if err := drows.Scan(&c.ID, &c.Model, &c.Variant); err != nil {
+				return page, err
+			}
+			c.Deleted = true
+			if _, ok := page.Chats[c.ID]; !ok {
+				page.Chats[c.ID] = c
+			}
+		}
+		if err := drows.Err(); err != nil {
+			return page, err
+		}
 	}
 
 	sum, err := s.activitySummary(ctx, f)
@@ -289,11 +319,12 @@ func (s *Store) activitySummary(ctx context.Context, f ActivityFilter) (Activity
 		sum.Outcomes[o] = 0
 	}
 	args := []any{}
-	where := append([]string{"sc.op = 'platform'"}, activityWhere(f, "sc", &args)...)
+	where := append([]string{"sc.op = 'platform'", "(sc.chat_id IS NOT NULL OR sc.deleted_chat IS NOT NULL)"}, activityWhere(f, "sc", activityOwner, &args)...)
 	q := `SELECT o, count(*), count(DISTINCT chat_id), count(duration_ms), avg(duration_ms),
 		percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms), max(duration_ms)
-	FROM (SELECT sc.chat_id, sc.duration_ms, ` + outcomeSQL + ` AS o
-		FROM socket_calls sc JOIN chats c ON c.id = sc.chat_id WHERE ` + strings.Join(where, " AND ") + `) x
+	FROM (SELECT COALESCE(sc.chat_id, sc.deleted_chat) AS chat_id, sc.duration_ms, ` + outcomeSQL + ` AS o
+		FROM socket_calls sc LEFT JOIN chats c ON c.id = sc.chat_id LEFT JOIN deleted_chats d ON d.id = sc.deleted_chat
+		WHERE ` + strings.Join(where, " AND ") + `) x
 	GROUP BY ROLLUP (o)`
 	rows, err := s.pool.Query(ctx, q, args...)
 	if err != nil {
@@ -320,7 +351,7 @@ func (s *Store) activitySummary(ctx context.Context, f ActivityFilter) (Activity
 	}
 
 	args = []any{}
-	where = activityWhere(f, "t", &args)
+	where = activityWhere(f, "t", "c.owner", &args)
 	q = `SELECT count(*) FROM chat_turns t JOIN chats c ON c.id = t.chat_id`
 	if len(where) > 0 {
 		q += " WHERE " + strings.Join(where, " AND ")

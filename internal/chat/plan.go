@@ -31,6 +31,9 @@ func planClassify(r platform.Request) (effect, action string) {
 // ProposePlan takes a plan proposal (POST /_agw/plan): one approval covers all steps. An approved
 // plan answers with its steps; the steps then run through the next-step match (planMatch).
 func (m *Manager) ProposePlan(ctx context.Context, chatID, slotID, via string, req platform.Request) (platform.Result, error) {
+	if m.inTrash(ctx, chatID) {
+		return platform.Result{Status: "error", Message: platform.RefusedPrefix + trashRefusal}, nil
+	}
 	p, err := plan.ParseProposal(req.Body)
 	if err != nil {
 		return platform.Result{Status: "error", Message: err.Error()}, nil

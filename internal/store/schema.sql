@@ -398,3 +398,32 @@ ALTER TABLE approvals ADD COLUMN IF NOT EXISTS effect text;
 ALTER TABLE socket_calls ADD COLUMN IF NOT EXISTS effect text;
 -- Compute calls per chat that the platform accepted (issue #63), counted against AGW_COMPUTE_MAX_PER_CHAT.
 ALTER TABLE chats ADD COLUMN IF NOT EXISTS compute_calls integer NOT NULL DEFAULT 0;
+
+-- Chat trash (issue #76): NULL = not in the trash. Chats in the trash keep their data and stay dormant until
+-- restored; GET /api/chats does not list them.
+ALTER TABLE chats ADD COLUMN IF NOT EXISTS trashed_at timestamptz;
+CREATE INDEX IF NOT EXISTS chats_trashed ON chats (trashed_at) WHERE trashed_at IS NOT NULL;
+
+-- Tombstones of permanently deleted chats (issue #76): the call logs of a deleted chat keep a random ID here
+-- instead of the chat's ID, so that activity and evaluation still count them. Only owner, model and binding
+-- are kept: no title and no times of the chat itself.
+CREATE TABLE IF NOT EXISTS deleted_chats (
+    id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    owner      text,
+    model      text NOT NULL DEFAULT '',
+    variant    text NOT NULL DEFAULT '',
+    deleted_at timestamptz NOT NULL DEFAULT now()
+);
+
+-- Call logs that outlive their chat (issue #76): set together with chat_id NULL when the chat is deleted for good,
+-- after their content has been removed (see store.DeleteChatAnonymised).
+ALTER TABLE socket_calls ADD COLUMN IF NOT EXISTS deleted_chat uuid REFERENCES deleted_chats(id);
+ALTER TABLE tool_executions ADD COLUMN IF NOT EXISTS deleted_chat uuid REFERENCES deleted_chats(id);
+ALTER TABLE llm_calls ADD COLUMN IF NOT EXISTS deleted_chat uuid REFERENCES deleted_chats(id);
+ALTER TABLE aux_llm_calls ADD COLUMN IF NOT EXISTS deleted_chat uuid REFERENCES deleted_chats(id);
+ALTER TABLE web_requests ADD COLUMN IF NOT EXISTS deleted_chat uuid REFERENCES deleted_chats(id);
+CREATE INDEX IF NOT EXISTS socket_calls_deleted ON socket_calls (deleted_chat) WHERE deleted_chat IS NOT NULL;
+CREATE INDEX IF NOT EXISTS tool_executions_deleted ON tool_executions (deleted_chat) WHERE deleted_chat IS NOT NULL;
+CREATE INDEX IF NOT EXISTS llm_calls_deleted ON llm_calls (deleted_chat) WHERE deleted_chat IS NOT NULL;
+CREATE INDEX IF NOT EXISTS aux_llm_calls_deleted ON aux_llm_calls (deleted_chat) WHERE deleted_chat IS NOT NULL;
+CREATE INDEX IF NOT EXISTS web_requests_deleted ON web_requests (deleted_chat) WHERE deleted_chat IS NOT NULL;

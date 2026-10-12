@@ -380,6 +380,57 @@ type ActivityPage = { calls: ActivityCall[]; chats: Record<string, { id: string;
 | `GET /api/activity?kind=&since=&until=&outcome=&chat=&limit=&before=` | `ActivityPage` | platform calls (with `kind=internet\|all` also the internet switches) of the user's chats across all chats, newest first, with a summary of the period; see *Activity across chats* |
 | `POST /api/approvals/{id}` `{approve: boolean}` | `Approval` | approve or reject |
 | `GET /api/chats/{id}/events` | SSE | live events of the chat |
+| `POST /api/chats/{id}/trash` | `Chat` | moves the chat into the trash (see *Chat trash*): stops the work, rejects open approvals and expires open plans, returns the sandbox; idempotent; 404 for foreign and unknown chats |
+| `POST /api/chats/{id}/restore` | `Chat` | takes the chat out of the trash; does not wake it; 409 `not_in_trash` if it is not in the trash |
+| `DELETE /api/chats/{id}` | 204 | deletes the chat for good, only from the trash (409 `not_in_trash` otherwise); the call logs stay anonymised, see *Chat trash* |
+| `GET /api/trash` | `{retention_days: number, chats: TrashItem[]}` | the user's chats in the trash, most recently moved first; `TrashItem` has `id`, `title`, `model`, `variant`, `updated_at`, `trashed_at`, `messages` (user and assistant messages), `bytes` (artifacts, display images, workspace archive) and, with a retention, `purge_at` |
+| `POST /api/trash/empty` | `{deleted: number}` | deletes all of the user's chats in the trash for good; a failing chat does not stop the others, then 500 with `error` and `deleted` |
+
+## Chat trash
+
+Issue #76. A chat moves into the trash and stays there until it is restored or deleted for good. The trash is
+soft: its data stays, and it reads as before.
+
+The `Chat` type carries `trashed_at` (RFC 3339) while the chat is in the trash; `ActivityChat` carries `deleted: true`
+for a deleted chat's calls.
+
+- **Moving to the trash** (`POST …/trash`) stops everything that works for the chat, in this order: `trashed_at` is
+  set and the state is `dormant` (from then on every start is refused); unsent queue entries go; open approvals are
+  rejected (a waiting call ends with `rejected`); plans in `proposed` or `approved` become `expired`; a running turn
+  is aborted; running background tasks end as `stopped` with `stopped_by: "user"` and no notice to the agent; the
+  sandbox is torn down with its session and workspace saved (`ReasonTrashed`, `chat_trashed` in the log) so that a
+  restore has everything. Subagents go with the sandbox. A second call changes nothing.
+- **In the trash** the chat is read-only. `GET` routes answer as before, including the events stream and the
+  artifacts. Every route that changes the chat answers **409 `{"error":"chat is in the trash","code":"chat_in_trash"}`**:
+  messages, queue (send, remove), abort, suspend, resume, internet, model, effort, autocompact, commands (also
+  `/rename`), files, stop and background of a tool, background stop, and the approval decision of a chat in the
+  trash. The manager refuses the same work on its own paths, so a race cannot start a sandbox: the agent's platform
+  calls and plans answer `refused: chat is in the trash` (logged as `refused`), uploads answer `rejected`, and an
+  internet request is logged as `rejected`.
+- **Restore** (`POST …/restore`) takes the chat back into the history with its full conversation. It does not wake
+  it: the UI resumes it when it is opened (see *Resuming a chat when it is opened*). Rejected approvals stay rejected
+  and expired plans stay expired.
+- **Lists:** `GET /api/chats` does not list chats in the trash. `GET /api/trash` lists the user's own chats in the
+  trash (`retention_days` and, with a retention, `purge_at` per chat). Chats of other users are 404 on every route,
+  and their trash is not listed or emptied (as in *Activity*, the owner filter is part of the query).
+- **Deleting for good** (`DELETE /api/chats/{id}`, `POST /api/trash/empty`) works only from the trash (409
+  `not_in_trash` otherwise). In one transaction the call logs are kept and anonymised, then the chat is deleted; the
+  objects in the object store (artifacts, display images, workspace archive, pending uploads) are removed afterwards.
+  Messages, runs, approvals, plans, subagents, queue, background tasks, session and title go with the chat; nothing
+  of them stays.
+- **What stays for the evaluation** (the decision of the author, 12.10.2026): the entries in `socket_calls`,
+  `tool_executions`, `llm_calls`, `aux_llm_calls` and `web_requests` get `chat_id` NULL and `deleted_chat`, a random
+  tombstone ID in `deleted_chats` that holds only owner, model and binding (no title, no times of the chat). The
+  content goes: platform calls keep the method and the path without query (`GET /datasets`), the socket result keeps
+  its class (`ok`, `error`, `violation blocked`, `violation, logged only`, `rejected`, `refused`), tool executions lose
+  arguments, output and error text (`error` stays as a flag), model calls keep only the IDs and names of their tool
+  calls, web requests lose their path. Times, duration, tokens, cost, bytes, effect class and result class stay. An
+  internet request whose approval had expired is written down as `expired` before its approval goes.
+  `GET /api/activity` shows these entries with `chat.deleted: true` and an empty title, as "Deleted chat"; the user
+  sees only the entries of their own chats (`COALESCE(c.owner, d.owner)`).
+- **Retention** (`AGW_TRASH_RETENTION_DAYS`, whole days): **default off** (empty, 0, negative). With a value, the
+  gateway deletes for good the chats that stayed in the trash longer than that, once at start and then hourly. The
+  trash list then carries `purge_at` (`trashed_at` plus the days). The default never deletes.
 
 ## Activity across chats
 
