@@ -1805,7 +1805,8 @@ func (m *Manager) LogCall(slotID, chatID, via, op, detail, result string) {
 // (sock.CallerLogger): this way the log shows whether the main agent or a subagent asked.
 func (m *Manager) LogCallBy(ctx context.Context, slotID, chatID, via, op, detail, result string) {
 	sc, err := m.st.AddSocketCall(context.WithoutCancel(ctx), store.SocketCall{ChatID: chatID, SlotID: slotID, Via: via, Op: op, Detail: detail, Result: result,
-		Session: store.SessionFrom(ctx), ToolCallID: store.ToolCallFrom(ctx), DurationMs: store.DurationMsFrom(ctx)})
+		Session: store.SessionFrom(ctx), ToolCallID: store.ToolCallFrom(ctx), DurationMs: store.DurationMsFrom(ctx),
+		Effect: store.EffectFrom(ctx)})
 	if err != nil {
 		slog.Error("socket call not logged", "error", err)
 		return
