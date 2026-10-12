@@ -173,9 +173,14 @@ test("relay: spawn keeps agent, task and async only; blocked agents and code are
 		relayRequest(relayJSON({ ref: REF, method: "spawn", params: { agent: "worker", task: "x", model: "m", async: false } })),
 		{ ref: REF, method: "spawn", params: { agent: "worker", task: "x", async: true } },
 	);
-	for (const params of [{ agent: "claude-code", task: "x" }, { agent: "worker", task: "" }, { agent: "worker", task: "x", context: "profile" }]) {
+	for (const params of [{ agent: "claude-code", task: "x" }, { agent: "worker", task: "" }]) {
 		assert.equal(typeof relayRequest(relayJSON({ ref: REF, method: "spawn", params })), "string", JSON.stringify(params));
 	}
+	// parameters beyond agent, task and async are not refused but never passed on
+	assert.deepEqual(
+		relayRequest(relayJSON({ ref: REF, method: "spawn", params: { agent: "worker", task: "x", context: "profile", cwd: "/", output: "/etc/x", workflowScript: "x" } })),
+		{ ref: REF, method: "spawn", params: { agent: "worker", task: "x", async: true } },
+	);
 });
 
 test("relay: other methods, bad refs, bad ids and broken requests are refused", () => {

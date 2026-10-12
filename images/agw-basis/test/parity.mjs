@@ -28,6 +28,7 @@ bridge({
 		bridged[t.name] = t;
 	},
 	on: () => {},
+	registerCommand: () => {},
 	getActiveTools: () => [],
 	setActiveTools: () => {},
 });
