@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -361,21 +362,30 @@ func Matches(st store.PlanStep, r platform.Request, resolve Resolve) (bool, stri
 	return true, ""
 }
 
-// Preview lists every step with its effect and parameters, for the approval.
+// Preview lists every step with its effect, the gateway's summary and the technical parameters, for the approval.
+// The plan's title and the steps' notes are the agent's text and are marked as not verified (issue #72).
 func Preview(title string, steps []store.PlanStep) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "Plan: %s\n", title)
-	fmt.Fprintf(&b, "%d steps. Approving runs them in this order with exactly these parameters, for %d minutes, in this chat and this agent session only. Steps marked IRREVERSIBLE still ask for their own approval.\n\n",
-		len(steps), int(ValidFor/time.Minute))
+	fmt.Fprintf(&b, "%s\n", ApprovalName(len(steps)))
+	fmt.Fprintf(&b, "Title by the agent (not verified): %s\n", strconv.Quote(title))
+	fmt.Fprintf(&b, "Approving runs the steps in this order with exactly these parameters, for %d minutes, in this chat and this agent session only. Steps marked IRREVERSIBLE still ask for their own approval.\n\n",
+		int(ValidFor/time.Minute))
 	for _, st := range steps {
 		label := strings.ToUpper(st.Effect)
 		if st.Effect == EffectIrreversible {
 			label = "IRREVERSIBLE (own approval)"
 		}
-		fmt.Fprintf(&b, "%d. %s · %s %s\n", st.Idx, label, st.Method, st.Path+queryText(st.Query))
-		if st.Description != "" {
-			fmt.Fprintf(&b, "   %s\n", st.Description)
+		head, details, _ := strings.Cut(st.Summary, "\n")
+		if head == "" {
+			head = st.Method + " " + st.Path + queryText(st.Query)
 		}
+		fmt.Fprintf(&b, "%d. %s · %s\n", st.Idx, label, head)
+		if details != "" {
+			for _, line := range strings.Split(details, "\n") {
+				fmt.Fprintf(&b, "   %s\n", line)
+			}
+		}
+		fmt.Fprintf(&b, "   Call: %s %s\n", st.Method, st.Path+queryText(st.Query))
 		if IsToolStep(st) {
 			var ind bytes.Buffer
 			_ = json.Indent(&ind, st.Args, "", "  ")
@@ -396,8 +406,48 @@ func Preview(title string, steps []store.PlanStep) string {
 		for _, f := range st.Files {
 			fmt.Fprintf(&b, "   file %s: %s  sha256 %s\n", f.Field, f.Path, f.SHA256)
 		}
+		if st.Description != "" {
+			fmt.Fprintf(&b, "   Note by the agent (not verified): %s\n", strconv.Quote(st.Description))
+		}
 	}
 	return b.String()
+}
+
+// ApprovalName is the gateway's name of a plan approval; the agent's title is not part of it (issue #72).
+func ApprovalName(steps int) string {
+	if steps == 1 {
+		return "Plan with 1 step"
+	}
+	return fmt.Sprintf("Plan with %d steps", steps)
+}
+
+// ApprovalSummary is the summary of a plan approval: its name, then the first line of every step's summary.
+func ApprovalSummary(steps []store.PlanStep) string {
+	lines := []string{ApprovalName(len(steps))}
+	for _, st := range steps {
+		head := platform.SummaryHead(st.Summary)
+		if head == "" {
+			head = st.Method + " " + st.Path
+		}
+		lines = append(lines, fmt.Sprintf("%d. %s", st.Idx, head))
+	}
+	return strings.Join(lines, "\n")
+}
+
+// SummaryCall is the call a stored step stands for, as the summary describes it: tool, method, path, query, body,
+// form and files exactly as stored (placeholders included).
+func SummaryCall(st store.PlanStep) platform.SummaryCall {
+	c := platform.SummaryCall{Tool: st.Tool, Method: st.Method, Path: st.Path, Body: st.Body}
+	if len(st.Query) > 0 {
+		_ = json.Unmarshal(st.Query, &c.Query)
+	}
+	if len(st.Form) > 0 {
+		_ = json.Unmarshal(st.Form, &c.Form)
+	}
+	for _, f := range st.Files {
+		c.Files = append(c.Files, platform.SummaryFile{Field: f.Field, Name: f.Path, Size: -1, SHA256: f.SHA256})
+	}
+	return c
 }
 
 // queryText renders a stored query as ?k=v&… for the preview.

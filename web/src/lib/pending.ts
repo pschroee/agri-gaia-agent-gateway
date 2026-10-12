@@ -23,7 +23,9 @@ export function pendingMenuItems(approvals: Approval[], titles: Record<string, s
       const internet = a.kind === "internet_access"
       const plattform = a.kind === "platform_write"
       const plan = a.kind === "plan"
-      let detail = internet || plattform || plan ? a.name : `${a.name} · ${formatBytes(a.size)}`
+      // the gateway's summary (issue #72) names the action; older entries keep the name
+      const head = a.summary?.split("\n")[0]
+      let detail = plattform && head ? head : internet || plattform || plan ? a.name : `${a.name} · ${formatBytes(a.size)}`
       if (detail.length > MAX_DETAIL) detail = detail.slice(0, MAX_DETAIL - 1) + "…"
       return {
         id: a.id,

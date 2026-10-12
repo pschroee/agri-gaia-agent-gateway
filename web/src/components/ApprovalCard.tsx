@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button"
 import { approvalEffect, EFFECT_BADGE, EFFECT_LABEL } from "@/lib/effect"
 import { formatBytes, formatTime, shortHash } from "@/lib/format"
 import { isSubagentSession, type SubagentRun } from "@/lib/subagents"
+import { summaryParts, technicalPreview } from "@/lib/summary"
 import { cn } from "@/lib/utils"
 
 type Props = {
@@ -19,6 +20,43 @@ type Props = {
   chatLabel?: React.ReactNode
   /** Runs of the chat, to name an asking subagent. */
   runs?: SubagentRun[]
+}
+
+/** The gateway's summary (issue #72): what will happen, as the main text of a card. */
+function GatewaySummary({ summary, list }: { summary?: string; list?: boolean }) {
+  const parts = summaryParts(summary)
+  if (!parts) return null
+  return (
+    <div className="mt-2" data-testid="gateway-summary">
+      <div className="font-medium break-words">{parts.head}</div>
+      {parts.details.length > 0 && (
+        <ul className={cn("mt-1 space-y-0.5 text-xs break-words", list ? "list-none" : "list-disc pl-4")}>
+          {parts.details.map((d, i) => (
+            <li key={i}>{d}</li>
+          ))}
+        </ul>
+      )}
+      <div className="mt-1 text-[11px] text-muted-foreground">Written by the gateway from the call and the platform</div>
+    </div>
+  )
+}
+
+/** Technical details (method, path, body), collapsed below the summary; open when there is no summary. */
+function Technical({ text, open, danger }: { text?: string; open: boolean; danger?: boolean }) {
+  if (!text) return null
+  return (
+    <details className="mt-2" open={open}>
+      <summary className="cursor-pointer text-xs text-muted-foreground">Technical details</summary>
+      <pre
+        className={cn(
+          "mt-1 overflow-auto rounded border bg-background p-2 font-mono text-xs whitespace-pre-wrap",
+          !danger && "max-h-64",
+        )}
+      >
+        {text}
+      </pre>
+    </details>
+  )
 }
 
 export function ApprovalCard({ approval: a, onDecided, compact, chatLabel, runs }: Props) {
@@ -106,21 +144,15 @@ export function ApprovalCard({ approval: a, onDecided, compact, chatLabel, runs 
           {origin}
           {chatLabel}
         </div>
+        {!compact && <GatewaySummary summary={a.summary} />}
         <div className="mt-2 font-mono text-xs break-all">{a.name}</div>
         {danger && (
           <div className="mt-2 font-medium text-red-700">
             This cannot be undone. Check every parameter before you execute it.
           </div>
         )}
-        {!compact && a.preview && a.preview !== a.name && (
-          <pre
-            className={cn(
-              "mt-2 overflow-auto rounded border bg-background p-2 font-mono text-xs whitespace-pre-wrap",
-              effect !== "irreversible" && "max-h-64",
-            )}
-          >
-            {a.preview.slice(a.name.length).trim()}
-          </pre>
+        {!compact && (
+          <Technical text={technicalPreview(a)} open={!a.summary || effect === "irreversible"} danger={effect === "irreversible"} />
         )}
         <div className="mt-2 text-xs text-muted-foreground">
           <span className="font-mono uppercase">{a.via}</span> · {pending ? "requested" : "decided"}{" "}
@@ -155,12 +187,8 @@ export function ApprovalCard({ approval: a, onDecided, compact, chatLabel, runs 
           {origin}
           {chatLabel}
         </div>
-        <div className="mt-2 font-medium">{a.name}</div>
-        {!compact && a.preview && (
-          <pre className="mt-2 max-h-64 overflow-auto rounded border bg-background p-2 font-mono text-xs whitespace-pre-wrap">
-            {a.preview}
-          </pre>
-        )}
+        {a.summary ? <GatewaySummary summary={a.summary} list /> : <div className="mt-2 font-medium">{a.name}</div>}
+        {!compact && <Technical text={a.preview} open={!a.summary} />}
         <div className="mt-2 text-xs text-muted-foreground">
           <span className="font-mono uppercase">{a.via}</span> · {pending ? "requested" : "decided"}{" "}
           {formatTime(pending ? a.created_at : (a.decided_at ?? a.created_at))}

@@ -19,10 +19,11 @@ var planSchemaSQL string
 
 // Plan is a list of platform calls approved with one decision (issue #70).
 type Plan struct {
-	ID         string     `json:"id"`
-	ChatID     string     `json:"chat_id"`
-	ApprovalID string     `json:"approval_id,omitempty"`
-	Title      string     `json:"title"`
+	ID         string `json:"id"`
+	ChatID     string `json:"chat_id"`
+	ApprovalID string `json:"approval_id,omitempty"`
+	// Title is the agent's text, not checked by the gateway (issue #72): the API names it agent_title.
+	Title      string     `json:"agent_title"`
 	Session    string     `json:"session,omitempty"`
 	ToolCallID string     `json:"tool_call_id,omitempty"`
 	Via        string     `json:"via"`
@@ -35,8 +36,12 @@ type Plan struct {
 
 // PlanStep is one call of a plan. Query, Body and Form hold the canonical JSON as stored.
 type PlanStep struct {
-	Idx         int    `json:"idx"`
-	Description string `json:"description,omitempty"`
+	Idx int `json:"idx"`
+	// Summary is what the gateway says the step does (issue #72): written from the stored call and platform state
+	// read at proposal time. Empty for steps from before #72.
+	Summary string `json:"summary,omitempty"`
+	// Description is the agent's note on the step, not checked by the gateway: the API names it agent_note.
+	Description string `json:"agent_note,omitempty"`
 	Tool        string `json:"tool,omitempty"`
 	// Args: canonical arguments of a tool step with steps, scalars as text, placeholders as {{stepN.id}}.
 	Args            json.RawMessage `json:"args,omitempty"`
@@ -68,7 +73,7 @@ type PlanFile struct {
 
 const planCols = `id::text, chat_id::text, approval_id, title, session, tool_call_id, via, state, created_at, decided_at, expires_at`
 
-const planStepCols = `idx, description, tool, args, method, path, query, body, body_sha256, form, form_sha256, files, effect, state, result, created_resource, created_id, done_at`
+const planStepCols = `idx, summary, description, tool, args, method, path, query, body, body_sha256, form, form_sha256, files, effect, state, result, created_resource, created_id, done_at`
 
 func scanPlan(row interface{ Scan(...any) error }) (Plan, error) {
 	var p Plan
@@ -87,7 +92,7 @@ func rawOrNil(s string) json.RawMessage {
 func scanPlanStep(row interface{ Scan(...any) error }) (PlanStep, error) {
 	var st PlanStep
 	var query, body, form, files, args string
-	err := row.Scan(&st.Idx, &st.Description, &st.Tool, &args, &st.Method, &st.Path, &query, &body, &st.BodySHA256, &form, &st.FormSHA256, &files,
+	err := row.Scan(&st.Idx, &st.Summary, &st.Description, &st.Tool, &args, &st.Method, &st.Path, &query, &body, &st.BodySHA256, &form, &st.FormSHA256, &files,
 		&st.Effect, &st.State, &st.Result, &st.CreatedResource, &st.CreatedID, &st.DoneAt)
 	if err != nil {
 		return st, err
@@ -129,9 +134,9 @@ VALUES ($1,$2,$3,$4,$5,$6) RETURNING id::text`,
 			files = string(b)
 		}
 		_, err := tx.Exec(ctx, `INSERT INTO plan_steps (plan_id, idx, description, tool, args, method, path, query, body, body_sha256,
-form, form_sha256, files, effect) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+form, form_sha256, files, effect, summary) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
 			id, st.Idx, st.Description, st.Tool, string(st.Args), st.Method, st.Path, string(st.Query), string(st.Body), st.BodySHA256,
-			string(st.Form), st.FormSHA256, files, st.Effect)
+			string(st.Form), st.FormSHA256, files, st.Effect, st.Summary)
 		if err != nil {
 			return Plan{}, err
 		}

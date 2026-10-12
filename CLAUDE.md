@@ -211,6 +211,16 @@ refer to this repository.
 - The gateway's own refusals start with `platform.RefusedPrefix`; the socket logs them as `refused` in the activity.
   Columns `effect` in `approvals` and `socket_calls`, `chats.compute_calls`; see `API.md`.
 
+## Summaries by the gateway
+
+- What an approval says will happen (single platform calls and every plan step) is written by the gateway in
+  `platform.Summarize` / `SummarizePlan` (`internal/platform/summary.go`, issue #72) from the call that goes out and
+  platform state read right then; the agent's plan title and step descriptions are only `agent_title` / `agent_note`.
+  A new writing route gets a template there with a case in `summary_test.go`; whatever a template does not name is
+  listed as "Also sends …", so never drop that tail. The reads go through `Manager.summaryReader` (reading GETs only)
+  and are not logged; tests that count platform calls use `withPlatform`, which leaves reading GETs out. Rules in
+  `API.md`, *Summaries by the gateway*.
+
 ## Testing
 
 - `./dev.sh test` is the everyday check, before every commit and before every push: Go with Postgres (with Go's

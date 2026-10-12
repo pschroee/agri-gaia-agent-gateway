@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"time"
 
 	"agw/internal/delegation"
@@ -41,6 +42,15 @@ func (m *Manager) ProposePlan(ctx context.Context, chatID, slotID, via string, r
 	if err := m.checkPendingLimit(ctx, chatID); err != nil {
 		return platform.Result{}, err
 	}
+	// What each step does is written by the gateway from the stored step and platform state read now (issue #72);
+	// the agent's description stays a separate note.
+	calls := make([]platform.SummaryCall, len(steps))
+	for i := range steps {
+		calls[i] = plan.SummaryCall(steps[i])
+	}
+	for i, s := range platform.SummarizePlan(ctx, m.summaryReader(chatID), calls) {
+		steps[i].Summary = visibleControls(s)
+	}
 	preview := visibleControls(plan.Preview(p.Title, steps))
 	if n := len([]rune(preview)); n > maxPlatformPreview {
 		return platform.Result{Status: "error", Message: fmt.Sprintf("plan too large for an approval (%d characters, at most %d); split it", n, maxPlatformPreview)}, nil
@@ -50,8 +60,8 @@ func (m *Manager) ProposePlan(ctx context.Context, chatID, slotID, via string, r
 	if err != nil {
 		return platform.Result{}, err
 	}
-	ap, err := m.st.CreateApproval(ctx, store.Approval{ChatID: chatID, Kind: "plan", Via: via, Name: "Plan: " + p.Title, Size: int64(len(steps)),
-		ContentType: "application/json", PendingKey: "-", Preview: preview, Session: session, ToolCallID: store.ToolCallFrom(ctx)})
+	ap, err := m.st.CreateApproval(ctx, store.Approval{ChatID: chatID, Kind: "plan", Via: via, Name: plan.ApprovalName(len(steps)), Size: int64(len(steps)),
+		ContentType: "application/json", PendingKey: "-", Preview: preview, Summary: plan.ApprovalSummary(steps), Session: session, ToolCallID: store.ToolCallFrom(ctx)})
 	if err != nil {
 		return platform.Result{}, err
 	}
@@ -101,6 +111,20 @@ func (m *Manager) ProposePlan(ctx context.Context, chatID, slotID, via string, r
 		return platform.Result{}, err
 	}
 	return platform.Result{Status: "ok", HTTPStatus: 200, Body: plan.ApprovedText(stored)}, nil
+}
+
+// summaryReader reads the platform as the user for the summaries of approvals (issue #72): only reading GETs, straight
+// through the platform client. These reads belong to the gateway, not to the agent, so they are not in the activity.
+func (m *Manager) summaryReader(chatID string) platform.Doer {
+	if m.opt.Platform == nil {
+		return nil
+	}
+	return func(ctx context.Context, r platform.Request) (platform.Result, error) {
+		if r.Method != http.MethodGet || r.Writes() {
+			return platform.Result{Status: "error", Message: "not a reading call"}, nil
+		}
+		return m.opt.Platform.Do(ctx, chatID, r)
+	}
 }
 
 // planMatch returns the next step of the session's approved plan if the call is exactly that step.

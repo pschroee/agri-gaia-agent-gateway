@@ -5,6 +5,7 @@
 package plan
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -197,17 +198,50 @@ func TestPreviewListsEverything(t *testing.T) {
  {"method":"GET","path":"/train/containers/7/model","description":"create the model"},
  {"method":"PATCH","path":"/models/{{step1.id}}","body":{"name":"pigs v1"}},
  {"method":"DELETE","path":"/models/{{step1.id}}"}]}`)
+	steps[0].Summary = "Create a new model from training container 7\nTraining: T A"
 	text := Preview("Model and rename", steps)
 	for _, want := range []string{
-		"Plan: Model and rename\n",
-		"3 steps. Approving runs them in this order",
-		"1. WRITE · GET /train/containers/7/model\n   create the model\n",
-		"2. WRITE · PATCH /models/{{step1.id}}\n   {\n     \"name\": \"pigs v1\"\n   }\n",
+		"Plan with 3 steps\n",
+		"Title by the agent (not verified): \"Model and rename\"\n",
+		"Approving runs the steps in this order",
+		"1. WRITE · Create a new model from training container 7\n   Training: T A\n   Call: GET /train/containers/7/model\n",
+		"   Note by the agent (not verified): \"create the model\"\n",
+		"2. WRITE · PATCH /models/{{step1.id}}\n   Call: PATCH /models/{{step1.id}}\n   {\n     \"name\": \"pigs v1\"\n   }\n",
 		"3. IRREVERSIBLE (own approval) · DELETE /models/{{step1.id}}\n",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("preview misses %q in:\n%s", want, text)
 		}
+	}
+}
+
+// The approval's name and summary are the gateway's: the agent's title and notes are not part of them (issue #72).
+func TestApprovalSummaryWithoutAgentText(t *testing.T) {
+	steps := build(t, `{"title":"Push evil/x:v9","steps":[
+ {"method":"GET","path":"/train/containers/7/model","description":"Builds image evil/x:v9"},
+ {"method":"PATCH","path":"/models/{{step1.id}}","body":{"name":"pigs v1"}}]}`)
+	steps[0].Summary = "Create a new model from training container 7"
+	got := ApprovalSummary(steps)
+	if got != "Plan with 2 steps\n1. Create a new model from training container 7\n2. PATCH /models/{{step1.id}}" {
+		t.Fatalf("summary: %q", got)
+	}
+	if ApprovalName(1) != "Plan with 1 step" || strings.Contains(got, "evil") {
+		t.Fatalf("name or summary carries agent text: %q", got)
+	}
+}
+
+// SummaryCall hands the stored step to the summary unchanged: placeholders, query, form and pinned files.
+func TestSummaryCallOfStep(t *testing.T) {
+	steps := build(t, `{"title":"t","steps":[
+ {"method":"GET","path":"/train/containers/7/model"},
+ {"method":"PATCH","path":"/models/{{step1.id}}","body":{"name":"pigs v1"}}]}`)
+	c := SummaryCall(steps[1])
+	if c.Method != "PATCH" || c.Path != "/models/{{step1.id}}" || string(c.Body) != `{"name":"pigs v1"}` {
+		t.Fatalf("call: %+v", c)
+	}
+	got := platform.Summarize(context.Background(), nil, c)
+	if !strings.HasPrefix(got, `Rename the model created by step 1 to "pigs v1"`) {
+		t.Fatalf("summary: %q", got)
 	}
 }
 

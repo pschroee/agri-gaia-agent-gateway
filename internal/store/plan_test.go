@@ -6,6 +6,8 @@ package store
 
 import (
 	"context"
+	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
@@ -129,5 +131,50 @@ func TestRecoverPlans(t *testing.T) {
 	}
 	if st := r.Steps[0]; st.State != "failed" || st.Result != "orchestrator restarted" {
 		t.Fatalf("running step after restart: %+v", st)
+	}
+}
+
+// The gateway's summary is stored with a step and an approval; rows from before issue #72 have none and still read.
+func TestPlanAndApprovalSummary(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	c := newPlanChat(t, s)
+	p := twoStepPlan(c.ID, "main")
+	p.Steps[0].Summary = "Create a new model from training container 7"
+	p.Steps[0].Description = "the agent's note"
+	stored, err := s.CreatePlan(ctx, p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Steps[0].Summary != "Create a new model from training container 7" || stored.Steps[0].Description != "the agent's note" {
+		t.Fatalf("step 1: %+v", stored.Steps[0])
+	}
+	// an old row: the column is empty, the JSON leaves the summary out
+	if stored.Steps[1].Summary != "" {
+		t.Fatalf("step 2: %+v", stored.Steps[1])
+	}
+	raw, _ := json.Marshal(stored.Steps[1])
+	if strings.Contains(string(raw), "summary") {
+		t.Fatalf("empty summary in JSON: %s", raw)
+	}
+	if _, err := s.pool.Exec(ctx, `UPDATE plan_steps SET summary=DEFAULT WHERE plan_id=$1`, stored.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.GetPlan(ctx, stored.ID); err != nil || got.Steps[0].Summary != "" || got.Steps[0].Method != "GET" {
+		t.Fatalf("old plan: %+v %v", got, err)
+	}
+
+	a, err := s.CreateApproval(ctx, Approval{ChatID: c.ID, Kind: "platform_write", Via: "cli", Name: "PATCH /datasets/16",
+		ContentType: "application/json", PendingKey: "-", Summary: `Rename dataset 16 "a" → "b"`})
+	if err != nil || a.Summary != `Rename dataset 16 "a" → "b"` {
+		t.Fatalf("approval: %+v %v", a, err)
+	}
+	old, err := s.CreateApproval(ctx, Approval{ChatID: c.ID, Kind: "platform_write", Via: "cli", Name: "PATCH /datasets/17",
+		ContentType: "application/json", PendingKey: "-"})
+	if err != nil || old.Summary != "" {
+		t.Fatalf("approval without summary: %+v %v", old, err)
+	}
+	if raw, _ := json.Marshal(old); strings.Contains(string(raw), "summary") {
+		t.Fatalf("empty summary in JSON: %s", raw)
 	}
 }

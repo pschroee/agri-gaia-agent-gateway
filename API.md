@@ -310,12 +310,14 @@ type Approval = {
   // internet_access: the agent asks for internet access; name = the agent's reason, size 0.
   // platform_write: writing call to the Agri-Gaia platform; name = "METHOD path[?query]",
   //   size = length of the JSON body, preview = name plus indented body (up to 4,000 characters).
-  id: string; chat_id: string; kind: "artifact_upload" | "internet_access" | "platform_write"; via: "cli" | "mcp";
+  // plan: a plan of several calls (see "Plans with one approval"); name = "Plan with N steps", size = N.
+  id: string; chat_id: string; kind: "artifact_upload" | "internet_access" | "platform_write" | "plan"; via: "cli" | "mcp";
   name: string; size: number; sha256: string; content_type: string;
   state: "pending" | "approved" | "rejected" | "expired";
   created_at: string; decided_at?: string;
   preview?: string;       // first 4 KiB, text only
   effect?: "read" | "write" | "compute" | "irreversible"; // platform_write: class of the call (see "Effect classes")
+  summary?: string;       // platform_write and plan: what will happen, written by the gateway (see "Summaries by the gateway")
 };
 type SocketCall = { id: number; chat_id?: string; slot_id: string; via: "cli" | "mcp" | "api" | "user" /* user: the user's internet switch */; op: string; detail: string; result: string; created_at: string; session?: string; tool_call_id?: string;
   duration_ms?: number /* platform calls: round trip to the platform in ms (token exchange included, approval wait excluded); missing: not measured */;
@@ -932,11 +934,15 @@ merged (strand G-B), an approved plan does not yet change how the steps are appr
   step fails the plan; when all steps are done it is `completed`. A restart fails running steps and expires proposals.
 - **Uploads:** the orchestrator reads each uploaded file when the plan is proposed and writes its SHA-256 into the
   step; the approval covers that content. Hashes written by the agent are replaced.
-- **Approval:** `Approval.kind` is `plan`; the preview lists every step with its effect and parameters. Answer after
+- **Approval:** `Approval.kind` is `plan`, `name` is "Plan with N steps" (the agent's title is not part of it),
+  `summary` is that name followed by "N. <first line of the step's summary>" per step; the preview lists every step
+  with its effect, the gateway's summary, the call and its parameters, and marks the title and the notes as the
+  agent's, not verified. Answer after
   approval: `{"plan_id", "state": "approved", "expires_at", "steps": [{"step", "call", "effect", "covered"}], "note"}`
   with status `ok`. A rejected or expired plan answers `rejected` and executes nothing.
-- **Types:** `Plan = {id, chat_id, approval_id?, title, session?, tool_call_id?, via, state, created_at, decided_at?,
-  expires_at?, steps: PlanStep[]}`; `PlanStep = {idx, description?, tool?, method, path, query?, body?, body_sha256?,
+- **Types:** `Plan = {id, chat_id, approval_id?, agent_title, session?, tool_call_id?, via, state, created_at,
+  decided_at?, expires_at?, steps: PlanStep[]}`; `PlanStep = {idx, summary?, agent_note?, tool?, args?, method, path,
+  query?, body?, body_sha256?,
   form?, form_sha256?, files?: {field, path, sha256}[], effect, covered, state, result?, created_resource?, created_id?,
   done_at?}`. Plan states: `proposed | approved | rejected | expired | completed | failed | superseded`; step states:
   `open | running | done | failed`.
@@ -944,6 +950,37 @@ merged (strand G-B), an approved plan does not yet change how the steps are appr
   `GET /api/chats/{id}/events` sends `plan` with the `Plan` on every change of state. `plan` is not a cross-chat kind.
 - **Limits of the design:** the session is taken from a header in the CLI, which the agent can change; MCP and REST
   have no `tool_call_id`. In the activity a proposal appears as the platform call `POST /_agw/plan`.
+
+## Summaries by the gateway
+
+What an approval says will happen is written by the gateway (issue #72), never taken from the agent: the summary of a
+single platform call (`Approval.summary`, kind `platform_write`) and of every plan step (`PlanStep.summary`, stored in
+`plan_steps.summary` when the plan is proposed). `platform.Summarize` builds it from the call that will go out (method,
+path, query, body, form, files; for a plan step the stored step with its placeholders) and from platform state the
+gateway reads itself right then, as the user and only with reading GETs (these reads are not part of the agent's
+activity). The UI shows it as the main line; the stored data is shown as stored, nothing is rebuilt from the agent's
+input.
+
+- **Format:** plain text; the first line says what happens, each further line is one detail (`Label: value`). Names
+  and values are quoted with Go's `strconv.Quote` (control characters, quotes and newlines escaped), so a name on the
+  platform cannot pose as part of the summary.
+- **Templates:** rename of a dataset (`Rename dataset 16 "old" → "new"`); change of a model (`Rename model 3 "old" →
+  "new"`, every changed field `field: old → new`, the fields sent unchanged, and either "Kept as they are: …" for
+  `update_model`, which reads the model and sends their current values, or "Not sent, so the platform sets them to
+  null: …" for a raw PATCH); image build (image `repository:tag`, architecture, model id and name, template id and name
+  with its repository; for `build_inference_image` the repository is the one the gateway builds, owner of the model /
+  name); model from a training container; creating and starting a training (provider, architecture, category,
+  dataset, training parameters, ONNX export); uploads of datasets and models (name, every file with size and SHA-256
+  when read); importing a template; deleting datasets and models.
+- **Completeness:** every query parameter, body field, form field and file that a template does not describe follows
+  as `Also sends …`. A call without a template is described as `Send METHOD path to the platform` plus all its fields.
+- **Plans:** steps are summarised in order; a step that changes a dataset or model (PATCH) changes what later steps
+  of the same plan read for that object, and such a step ends with "Current values as they will be after step N of
+  this plan." Ids that are placeholders read as "the model created by step N" and are not read.
+- **The agent's text:** the plan's title and the steps' descriptions stay in the API as `agent_title` and `agent_note`
+  (the proposal still writes `title` and `description`); UIs show them apart and marked as not verified.
+- **Older entries:** approvals and steps from before #72 have no summary (`summary` missing); UIs then show method and
+  path.
 
 ## Tool executions (E9)
 
