@@ -303,3 +303,59 @@ func TestContainerImageStatus(t *testing.T) {
 		t.Error("repository without owner accepted")
 	}
 }
+
+// A shell value in train_config reached the privileged training container before issue #93.
+func TestCreateTrainingRefusesShellValue(t *testing.T) {
+	tool := mustLookup(t, "create_training")
+	ok := `{"provider":"Torchvision","architecture":"EfficientNet","category":"Classification","dataset_id":2,` +
+		`"train_config":{"epochs":1,"optimizer":"AdamW"}}`
+	if _, err := tool.Build(json.RawMessage(ok)); err != nil {
+		t.Fatalf("a normal training is refused: %v", err)
+	}
+	for _, raw := range []string{
+		`{"provider":"Torchvision","architecture":"EfficientNet","category":"Classification","dataset_id":2,"train_config":{"optimizer":"Adam; id"}}`,
+		`{"provider":"Torchvision","architecture":"EfficientNet","category":"Classification","dataset_id":2,"train_config":{"optimizer":"$(id)"}}`,
+	} {
+		if _, err := tool.Build(json.RawMessage(raw)); err == nil {
+			t.Errorf("%s: accepted", raw)
+		}
+	}
+}
+
+func TestRawPutTrainConfigRefused(t *testing.T) {
+	bad := Request{Method: http.MethodPut, Path: "/train/config",
+		Body: json.RawMessage(`{"container_id":7,"dataset_id":12,"train_config":{"optimizer":"Adam; id"},"export_config":null}`)}
+	if _, err := Normalize(bad); err == nil {
+		t.Error("PUT /train/config with a shell value: accepted")
+	}
+	good := Request{Method: http.MethodPut, Path: "/train/config",
+		Body: json.RawMessage(`{"container_id":7,"dataset_id":12,"train_config":{"epochs":1},"export_config":null}`)}
+	if _, err := Normalize(good); err != nil {
+		t.Errorf("PUT /train/config with a normal value: refused: %v", err)
+	}
+	// Reading the configuration stays allowed.
+	if _, err := Normalize(Request{Method: http.MethodGet, Path: "/train/config/Torchvision/EfficientNet"}); err != nil {
+		t.Errorf("GET /train/config/…: refused: %v", err)
+	}
+}
+
+func TestTrainTemplateBlocked(t *testing.T) {
+	blocked := map[string]Request{
+		"upload": {Method: http.MethodPost, Path: "/train/template/upload", Form: map[string][]string{"template_zip": {"x"}}, Files: []File{{Field: "template_zip", Path: "/workspace/t.zip"}}},
+		"delete": {Method: http.MethodDelete, Path: "/train/template", Body: json.RawMessage(`{"provider":"Torchvision","architecture":"EfficientNet"}`)},
+	}
+	for name, r := range blocked {
+		if _, err := Normalize(r); err == nil {
+			t.Errorf("%s: not refused", name)
+		}
+	}
+	// The routes around it stay open: reading providers and templates is a normal read.
+	for name, r := range map[string]Request{
+		"providers":     {Method: http.MethodGet, Path: "/train/providers"},
+		"template list": {Method: http.MethodGet, Path: "/train/template"},
+	} {
+		if _, err := Normalize(r); err != nil {
+			t.Errorf("%s: refused: %v", name, err)
+		}
+	}
+}
