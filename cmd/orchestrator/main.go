@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"agw/internal/annotation"
 	"agw/internal/api"
 	"agw/internal/artifacts"
 	"agw/internal/chat"
@@ -164,6 +165,23 @@ func run() error {
 	})
 	fac.Backend = m
 	plat.SetOnExchange(m.PlatformExchanged)
+
+	// V1 — pre-annotation with CVAT: the calls of the annotation_ tools are answered by this service
+	// instead of the platform (E4). Without both URLs the path stays unregistered and answers
+	// "not configured" (G1.13).
+	if env.CVATAPIURL != "" && plat != nil {
+		cvat, err := annotation.NewCVAT(env.CVATAPIURL, nil)
+		if err != nil {
+			return err
+		}
+		svc := annotation.New(plat, st, cvat, env.AnnotationFunctions, env.CVATPublicURL)
+		m.RegisterVirtual(platform.AnnotationPrefix, svc)
+		svc.RegisterWatch()
+		slog.Info("pre-annotation on", "cvat", env.CVATAPIURL, "functions", len(env.AnnotationFunctions))
+	} else {
+		slog.Info("pre-annotation off (AGW_CVAT_API_URL or the platform binding is empty)")
+	}
+
 	if err := m.Recover(ctx); err != nil {
 		return err
 	}

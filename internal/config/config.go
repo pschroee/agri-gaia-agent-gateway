@@ -378,6 +378,22 @@ type Env struct {
 	PlatformAudiences    []string
 	// PlatformTokenMaxAge: an exchanged token is used this long at most (AGW_PLATFORM_TOKEN_MAX_AGE, default 5m).
 	PlatformTokenMaxAge time.Duration
+
+	// V1 — pre-annotation with CVAT. The service is wired only when both URLs are set; without them
+	// the path /_agw/annotation answers "not configured" and the capability annotation says so.
+	CVATAPIURL string // AGW_CVAT_API_URL: the API of the CVAT server (https://cvat.<base>)
+	// CVATPublicURL: the address of CVAT for the user's browser (default: the API URL); the answers
+	// carry links to the tasks.
+	CVATPublicURL string
+	// AnnotationFunctions: function ids the operator installed (AGW_ANNOTATION_FUNCTIONS, comma
+	// separated, default none). Only these and the user's own functions can be run (E7).
+	AnnotationFunctions []string
+	// AnnotationMaxFunctions (AGW_ANNOTATION_MAX_FUNCTIONS, default 3) and AnnotationModelMaxMB
+	// (AGW_ANNOTATION_MODEL_MAX_MB, default 300) bound the functions a user may have built from their
+	// own models; V2 enforces them.
+	AnnotationMaxFunctions int
+	AnnotationModelMaxMB   int64
+
 	// Login to the API: AuthMode "token" (AGW_API_TOKEN, default) or "oidc" (login through the
 	// platform's Keycloak, authorization code with PKCE; chats then belong to the user).
 	AuthMode         string
@@ -521,13 +537,22 @@ func FromEnv() Env {
 		PlatformExchange:     str("AGW_PLATFORM_TOKEN_EXCHANGE", "false") == "true",
 		PlatformAudiences:    strings.Split(str("AGW_PLATFORM_AUDIENCES", "backend,minio"), ","),
 		PlatformTokenMaxAge:  dur("AGW_PLATFORM_TOKEN_MAX_AGE", 5*time.Minute),
-		AuthMode:             strings.ToLower(strings.TrimSpace(str("AGW_AUTH_MODE", AuthToken))),
-		OIDCIssuer:           strings.TrimRight(str("AGW_OIDC_ISSUER", ""), "/"),
-		OIDCClientID:         str("AGW_OIDC_CLIENT_ID", "agw-agent"),
-		OIDCClientSecret:     str("AGW_OIDC_CLIENT_SECRET", str("AGW_PLATFORM_CLIENT_SECRET", "")),
-		PublicURL:            strings.TrimRight(str("AGW_PUBLIC_URL", ""), "/"),
-		BasePath:             orEmpty(BasePath(strings.TrimRight(str("AGW_PUBLIC_URL", ""), "/"))),
-		FrameAncestors:       strings.Fields(str("AGW_FRAME_ANCESTORS", "")),
+
+		// V1 — pre-annotation with CVAT.
+		CVATAPIURL:          strings.TrimRight(str("AGW_CVAT_API_URL", ""), "/"),
+		CVATPublicURL:       strings.TrimRight(str("AGW_CVAT_PUBLIC_URL", str("AGW_CVAT_API_URL", "")), "/"),
+		AnnotationFunctions: commaList("AGW_ANNOTATION_FUNCTIONS"),
+		// V2 bounds the functions of one user; the values are read here so that the instance has them.
+		AnnotationMaxFunctions: max(0, num("AGW_ANNOTATION_MAX_FUNCTIONS", 3)),
+		AnnotationModelMaxMB:   int64(max(0, num("AGW_ANNOTATION_MODEL_MAX_MB", 300))),
+
+		AuthMode:         strings.ToLower(strings.TrimSpace(str("AGW_AUTH_MODE", AuthToken))),
+		OIDCIssuer:       strings.TrimRight(str("AGW_OIDC_ISSUER", ""), "/"),
+		OIDCClientID:     str("AGW_OIDC_CLIENT_ID", "agw-agent"),
+		OIDCClientSecret: str("AGW_OIDC_CLIENT_SECRET", str("AGW_PLATFORM_CLIENT_SECRET", "")),
+		PublicURL:        strings.TrimRight(str("AGW_PUBLIC_URL", ""), "/"),
+		BasePath:         orEmpty(BasePath(strings.TrimRight(str("AGW_PUBLIC_URL", ""), "/"))),
+		FrameAncestors:   strings.Fields(str("AGW_FRAME_ANCESTORS", "")),
 	}
 }
 
@@ -649,6 +674,18 @@ func num(k string, def int) int {
 		return v
 	}
 	return def
+}
+
+// commaList reads a comma-separated list (V1: the function ids of the operator); spaces are trimmed
+// and empty entries dropped, so a value that is only spaces gives an empty list.
+func commaList(k string) []string {
+	var out []string
+	for _, part := range strings.Split(os.Getenv(k), ",") {
+		if p := strings.TrimSpace(part); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func flt(k string, def float64) float64 {
