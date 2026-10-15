@@ -27,7 +27,7 @@ const ContainerDeployment = "container_deployment"
 // come from the free range of the instance, the container ports are Triton's HTTP, gRPC and metrics
 // ports.
 var (
-	deploymentNameRe = regexp.MustCompile(`^agw-[a-z0-9][a-z0-9_.-]{0,58}$`)
+	deploymentNameRe = regexp.MustCompile(`^agw-[a-z0-9][a-z0-9_.-]{0,57}$`)
 	containerPorts   = []string{"8000", "8001", "8002"}
 	deploymentBodyRe = regexp.MustCompile(`^/container-deployments$`)
 )
