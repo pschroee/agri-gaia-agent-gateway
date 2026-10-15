@@ -92,7 +92,13 @@ const mermaidRules = " The UI renders it strictly and without HTML: no HTML tags
 
 // linkRule: the form of links in every binding (issue #61). The agent cited sources as bare URLs, which the
 // chat does not show as proper links and which wrap over several lines in the panel.
-const linkRule = "- Links in the chat are always Markdown links with a meaningful title, [title](URL), never bare URLs; this also applies to links to the platform (for example to a dataset) and to files. In a list, one link per line."
+const linkRule = "- Links in the chat are always Markdown links with a meaningful title, [title](URL), never bare URLs; this also applies to links to the platform (for example to a dataset) and to files. In a list, one link per line." + " " + platformLinks
+
+// platformLinks: the fixed list of platform paths the agent may link, appended to linkRule in every binding
+// (issue #118). The panel and the platform share one origin, so a relative path opens the page in the same tab,
+// without a reload and without losing the chat panel; a host in the note would only invite guesses. Only paths
+// that exist are named: datasets, trainings, images and templates are list pages.
+const platformLinks = "Links to platform pages are relative paths without a host, built only from ids you have read from the platform: a dataset [name](/data?dataset=<id>), a model [name](/models/<id>), an edge device [name](/edge/<id>); trainings [Model Training](/train), images [Container Registry](/container-images), inference templates [Container Templates](/inference-container-templates), edge groups [Edge Groups](/edge-groups), applications [Applications](/applications). Other platform paths do not exist as pages; never link the agent's own pages."
 
 // userFacingRule: replies to the user name no sandbox internals, in every binding (issue #75). The agent named
 // /workspace paths and agw-* commands in its answers; the user cannot open them. The rule is a plain prohibition
