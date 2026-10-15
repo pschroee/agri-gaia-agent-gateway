@@ -6,10 +6,13 @@ package chat
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"agw/internal/delegation"
@@ -29,18 +32,47 @@ func planClassify(r platform.Request) (effect, action string, confirmEach bool) 
 }
 
 // ProposePlan takes a plan proposal (POST /_agw/plan): one approval covers all steps. An approved
-// plan answers with its steps; the steps then run through the next-step match (planMatch).
+// plan answers with its steps; the steps then run through the next-step match (planMatch). An autonomous
+// plan (A-E1) additionally carries a budget and a grant derived from its steps that bounds every call of
+// the chat while it runs.
 func (m *Manager) ProposePlan(ctx context.Context, chatID, slotID, via string, req platform.Request) (platform.Result, error) {
 	if m.inTrash(ctx, chatID) {
 		return platform.Result{Status: "error", Message: platform.RefusedPrefix + trashRefusal}, nil
 	}
-	p, err := plan.ParseProposal(req.Body)
+	lim := plan.Limits{MaxDuration: m.opt.PlanMaxDuration, MaxLLMCost: m.opt.PlanMaxLLMCost}
+	p, err := plan.ParseProposal(req.Body, lim)
 	if err != nil {
 		return platform.Result{Status: "error", Message: err.Error()}, nil
 	}
 	steps, err := plan.Build(p, planClassify)
 	if err != nil {
 		return platform.Result{Status: "error", Message: err.Error()}, nil
+	}
+	var (
+		mode   string
+		budget store.PlanBudget
+		grant  json.RawMessage
+		auto   *plan.Autonomy
+	)
+	if p.Autonomous() {
+		mode = plan.ModeAutonomous
+		del, gerr := plan.Grant(steps, plan.SampleStep)
+		if gerr != nil {
+			return platform.Result{Status: "error", Message: gerr.Error()}, nil
+		}
+		if err := m.checkAutonomous(ctx, chatID, steps, p); err != nil {
+			return platform.Result{Status: "error", Message: err.Error()}, nil
+		}
+		if grant, err = json.Marshal(del); err != nil {
+			return platform.Result{}, err
+		}
+		budget = store.PlanBudget{MaxDurationS: p.Budget.MaxDurationMinutes * 60,
+			MaxLLMCost: p.Budget.MaxLLMCostUSD, MaxAutoTurns: p.Budget.MaxAutoTurns}
+		need := plan.ComputeSteps(steps)
+		left := m.computeLeft(ctx, chatID)
+		cost, _ := m.replacedCost(ctx, chatID, p.Replaces)
+		auto = &plan.Autonomy{Budget: *p.Budget, Rights: del.SummaryLine(), ComputeNeeded: need,
+			ComputeLeft: max(0, left-need), Replaces: p.Replaces, ReplacedCostUSD: cost}
 	}
 	if err := m.checkPendingLimit(ctx, chatID); err != nil {
 		return platform.Result{}, err
@@ -55,12 +87,13 @@ func (m *Manager) ProposePlan(ctx context.Context, chatID, slotID, via string, r
 	for i, s := range platform.SummarizePlan(ctx, m.loggedSummaryReader(chatID, rl), calls) {
 		steps[i].Summary = visibleControls(s)
 	}
-	preview := visibleControls(plan.Preview(p.Title, steps))
+	preview := visibleControls(plan.Preview(p.Title, steps, auto))
 	if n := len([]rune(preview)); n > maxPlatformPreview {
 		return platform.Result{Status: "error", Message: fmt.Sprintf("plan too large for an approval (%d characters, at most %d); split it", n, maxPlatformPreview)}, nil
 	}
 	session := store.SessionFrom(ctx)
-	pl, err := m.st.CreatePlan(ctx, store.Plan{ChatID: chatID, Title: p.Title, Session: session, ToolCallID: store.ToolCallFrom(ctx), Via: via, Steps: steps})
+	pl, err := m.st.CreatePlan(ctx, store.Plan{ChatID: chatID, Title: p.Title, Session: session, ToolCallID: store.ToolCallFrom(ctx), Via: via, Steps: steps,
+		Mode: mode, Budget: budget, Grant: grant, Replaces: p.Replaces})
 	if err != nil {
 		return platform.Result{}, err
 	}
@@ -75,7 +108,7 @@ func (m *Manager) ProposePlan(ctx context.Context, chatID, slotID, via string, r
 	// The reads of the summaries are one activity entry of the system (issue L2/#119), and while the plan waits,
 	// approving re-reads them first (DL2.1).
 	m.logSummaryReads(ctx, chatID, ap.ID, "proposed", rl)
-	defer m.registerRecheck(ap.ID, m.planRecheck(chatID, ap.ID, p.Title, steps, calls))()
+	defer m.registerRecheck(ap.ID, m.planRecheck(chatID, ap.ID, p.Title, steps, calls, auto))()
 	w := m.broker.Register(ap.ID)
 	if s, ok := m.pool.Get(slotID); ok {
 		s.SetActivity("waiting_approval", "")
@@ -103,6 +136,10 @@ func (m *Manager) ProposePlan(ctx context.Context, chatID, slotID, via string, r
 		return platform.Result{Status: "rejected", Message: msg}, nil
 	}
 	expires := planNow().Add(plan.ValidFor)
+	if p.Autonomous() {
+		// The plan's own duration bounds it (A-E1, D1.8); the validity of an interactive plan does not apply.
+		expires = planNow().Add(time.Duration(p.Budget.MaxDurationMinutes) * time.Minute)
+	}
 	ok, err := m.st.DecidePlan(bg, pl.ID, plan.StateApproved, &expires)
 	if err != nil {
 		return platform.Result{}, err
@@ -112,6 +149,12 @@ func (m *Manager) ProposePlan(ctx context.Context, chatID, slotID, via string, r
 	}
 	if err := m.st.SupersedePlans(bg, chatID, session, pl.ID); err != nil {
 		slog.Error("older plans not superseded", "chat", chatID, "plan", pl.ID, "error", err)
+	}
+	if p.Autonomous() && p.Replaces != "" {
+		// A changed plan replaces the running one it names, independent of the session (A-E1, D1.12).
+		if _, err := m.st.SupersedePlan(bg, p.Replaces); err != nil {
+			slog.Error("replaced plan not superseded", "chat", chatID, "plan", p.Replaces, "error", err)
+		}
 	}
 	m.publishPlan(bg, pl.ID)
 	stored, err := m.st.GetPlan(bg, pl.ID)
@@ -201,6 +244,7 @@ func (m *Manager) planMatch(ctx context.Context, chatID string, req platform.Req
 		return nil
 	}
 	next.State = plan.StepRunning
+	next.Attempts++
 	return next
 }
 
@@ -234,11 +278,24 @@ func (m *Manager) planFinish(ctx context.Context, chatID string, st *store.PlanS
 		return
 	}
 	if to == plan.StepFailed {
-		if _, err := m.st.SetPlanState(bg, st.PlanID, plan.StateApproved, plan.StateFailed); err != nil {
-			slog.Error("plan not failed", "plan", st.PlanID, "error", err)
+		// An autonomous step that was claimed and has attempts left goes back to open and the plan stays
+		// approved (A-E1, D1.7); otherwise the plan fails. A step the plan does not cover (irreversible,
+		// confirm each) is never claimed, so it never retries — it asks for every call anyway.
+		retried := false
+		if st.Covered {
+			var rerr error
+			retried, rerr = m.st.RetryPlanStep(bg, st.PlanID, st.Idx)
+			if rerr != nil {
+				slog.Error("plan step not retried", "plan", st.PlanID, "step", st.Idx, "error", rerr)
+			}
+		}
+		if !retried {
+			if _, err := m.st.FinishPlan(bg, st.PlanID, plan.StateFailed); err != nil {
+				slog.Error("plan not failed", "plan", st.PlanID, "error", err)
+			}
 		}
 	} else if p, err := m.st.GetPlan(bg, st.PlanID); err == nil && allDone(p) {
-		if _, err := m.st.SetPlanState(bg, st.PlanID, plan.StateApproved, plan.StateCompleted); err != nil {
+		if _, err := m.st.FinishPlan(bg, st.PlanID, plan.StateCompleted); err != nil {
 			slog.Error("plan not completed", "plan", st.PlanID, "error", err)
 		}
 	}
@@ -261,10 +318,254 @@ func (m *Manager) publishPlan(ctx context.Context, planID string) {
 		slog.Error("plan event not published", "plan", planID, "error", err)
 		return
 	}
+	// Every state change goes through here, so the cached active plan of the chat is dropped (A-E1).
+	m.invalidatePlanCache(p.ChatID)
 	m.publish(p.ChatID, Event{Kind: "plan", Data: p})
 }
 
 // Plans lists the plans of a chat, oldest first.
 func (m *Manager) Plans(ctx context.Context, chatID string) ([]store.Plan, error) {
 	return m.st.ListPlans(ctx, chatID)
+}
+
+// --- Autonomous plans: proposal checks and the user's controls (A-E1) ---
+
+// computeLeft is how many compute calls the chat has left (AGW_COMPUTE_MAX_PER_CHAT, never negative).
+func (m *Manager) computeLeft(ctx context.Context, chatID string) int {
+	n, err := m.st.ComputeCalls(ctx, chatID)
+	if err != nil {
+		return 0
+	}
+	if left := m.computeMax() - n; left > 0 {
+		return left
+	}
+	return 0
+}
+
+// checkAutonomous validates an autonomous proposal before it is stored (A-E1): every step lies inside the
+// chat's delegated rights (S3), the compute quota suffices (D1.7) and "replaces" names a running plan of
+// this chat (D1.12).
+func (m *Manager) checkAutonomous(ctx context.Context, chatID string, steps []store.PlanStep, p plan.Proposal) error {
+	chatDel, err := m.delegationOf(ctx, chatID)
+	if err != nil {
+		return errors.New("the delegated rights of this chat are unreadable")
+	}
+	if chatDel != nil && chatDel.Enforcing() {
+		own := func(res, id string) bool {
+			// A placeholder stands for an object this plan creates, so a chat right on "own" objects covers
+			// it (A-E1); the provenance register cannot know it yet.
+			if plan.IsPlaceholderID(id) {
+				return true
+			}
+			ok, _ := m.st.IsDelegationObject(ctx, chatID, res, id)
+			return ok
+		}
+		for _, st := range steps {
+			sample, serr := plan.SampleStep(st)
+			if serr != nil {
+				return fmt.Errorf("step %d: %v", st.Idx, serr)
+			}
+			if dec := chatDel.Check(delegation.Classify(sample), time.Now(), own); !dec.Allowed {
+				return fmt.Errorf("step %d: outside the chat's delegated rights: %s", st.Idx, dec.Reason)
+			}
+		}
+	}
+	need := plan.ComputeSteps(steps)
+	if left := m.computeLeft(ctx, chatID); need > left {
+		return fmt.Errorf("plan needs %d compute calls, this chat has %d left (AGW_COMPUTE_MAX_PER_CHAT)", need, left)
+	}
+	if p.Replaces != "" {
+		rp, rerr := m.st.GetPlan(ctx, p.Replaces)
+		if rerr != nil || rp.ChatID != chatID {
+			return fmt.Errorf("replaces: no running plan %s in this chat", p.Replaces)
+		}
+		if rp.State != plan.StateApproved && rp.State != plan.StatePaused {
+			return fmt.Errorf("replaces: plan %s is %s, not running", p.Replaces, rp.State)
+		}
+	}
+	return nil
+}
+
+// replacedCost is what the model calls of a plan cost so far; zero without a plan or before its approval.
+func (m *Manager) replacedCost(ctx context.Context, chatID, planID string) (float64, error) {
+	if planID == "" {
+		return 0, nil
+	}
+	rp, err := m.st.GetPlan(ctx, planID)
+	if err != nil || rp.DecidedAt == nil {
+		return 0, nil
+	}
+	return m.st.PlanLLMCost(ctx, chatID, *rp.DecidedAt)
+}
+
+// autonomyOf rebuilds the preview's autonomy block from a stored plan (A-E1); nil for an interactive plan.
+// ComputeLeft is -1 (unknown) because the chat's remaining quota is not read here.
+func autonomyOf(p store.Plan) *plan.Autonomy {
+	if p.Mode != plan.ModeAutonomous {
+		return nil
+	}
+	a := &plan.Autonomy{
+		Budget:   plan.Budget{MaxDurationMinutes: p.Budget.MaxDurationS / 60, MaxLLMCostUSD: p.Budget.MaxLLMCost, MaxAutoTurns: p.Budget.MaxAutoTurns},
+		Replaces: p.Replaces, ComputeLeft: -1, ComputeNeeded: plan.ComputeSteps(p.Steps),
+	}
+	if g, err := delegation.Parse(p.Grant); err == nil {
+		a.Rights = g.SummaryLine()
+	}
+	return a
+}
+
+// PlanStateError reports an attempt to move a plan that is not in the required state; the API answers 409.
+type PlanStateError struct{ State string }
+
+func (e *PlanStateError) Error() string { return "plan is " + e.State }
+
+// planOf loads a plan and checks that it belongs to the chat; a foreign or unknown plan is ErrNotFound.
+func (m *Manager) planOf(ctx context.Context, chatID, planID string) (store.Plan, error) {
+	p, err := m.st.GetPlan(ctx, planID)
+	if err != nil {
+		return store.Plan{}, err
+	}
+	if p.ChatID != chatID {
+		return store.Plan{}, store.ErrNotFound
+	}
+	return p, nil
+}
+
+// chatRunning reports whether a turn is going on in the chat.
+func (m *Manager) chatRunning(chatID string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	l := m.live[chatID]
+	return l != nil && l.running
+}
+
+// pausePlan pauses an approved plan in the store and publishes it, without touching the chat (Abort uses
+// this too, so the two do not call each other).
+func (m *Manager) pausePlan(ctx context.Context, chatID, planID, reason string) (store.Plan, error) {
+	p, err := m.planOf(ctx, chatID, planID)
+	if err != nil {
+		return store.Plan{}, err
+	}
+	if p.State != plan.StateApproved {
+		return p, &PlanStateError{State: p.State}
+	}
+	ok, err := m.st.PausePlan(ctx, planID, reason)
+	if err != nil {
+		return p, err
+	}
+	if !ok {
+		fresh, gerr := m.st.GetPlan(ctx, planID)
+		if gerr != nil {
+			return p, gerr
+		}
+		return fresh, &PlanStateError{State: fresh.State}
+	}
+	m.publishPlan(ctx, planID)
+	return m.st.GetPlan(ctx, planID)
+}
+
+// PausePlan pauses an autonomous plan (POST …/pause) and stops a running chat, so the agent halts until
+// the user resumes it (A-E1, D1.10).
+func (m *Manager) PausePlan(ctx context.Context, chatID, planID, reason string) (store.Plan, error) {
+	p, err := m.pausePlan(ctx, chatID, planID, reason)
+	if err != nil {
+		return p, err
+	}
+	if m.chatRunning(chatID) {
+		if _, aerr := m.Abort(ctx, chatID); aerr != nil {
+			return p, aerr
+		}
+	}
+	return p, nil
+}
+
+// ResumePlan moves a paused plan back to approved (POST …/resume) and queues a note so the agent continues.
+// Only the user's API reaches this; there is no tool for it, so the agent cannot resume itself (A-E1).
+func (m *Manager) ResumePlan(ctx context.Context, chatID, planID string) (store.Plan, error) {
+	p, err := m.planOf(ctx, chatID, planID)
+	if err != nil {
+		return store.Plan{}, err
+	}
+	if p.State != plan.StatePaused {
+		return p, &PlanStateError{State: p.State}
+	}
+	ok, err := m.st.ResumePlan(ctx, planID)
+	if err != nil {
+		return p, err
+	}
+	if !ok {
+		fresh, gerr := m.st.GetPlan(ctx, planID)
+		if gerr != nil {
+			return p, gerr
+		}
+		return fresh, &PlanStateError{State: fresh.State}
+	}
+	m.publishPlan(ctx, planID)
+	note := fmt.Sprintf("The user resumed plan %q. Continue with step %d.", planID, nextStepIdx(p))
+	if _, err := m.st.EnqueueSystem(ctx, chatID, store.NotePlan, []string{planID}, note); err != nil {
+		slog.Error("resume note not queued", "chat", chatID, "plan", planID, "error", err)
+	} else {
+		m.publishQueue(ctx, chatID, "queued", nil, "")
+	}
+	return m.st.GetPlan(ctx, planID)
+}
+
+// CancelPlan ends an approved or paused plan (POST …/cancel), stops a running chat and queues a note; the
+// plan's open steps become skipped, its completed steps stay (A-E1).
+func (m *Manager) CancelPlan(ctx context.Context, chatID, planID string) (store.Plan, error) {
+	p, err := m.planOf(ctx, chatID, planID)
+	if err != nil {
+		return store.Plan{}, err
+	}
+	if p.State != plan.StateApproved && p.State != plan.StatePaused {
+		return p, &PlanStateError{State: p.State}
+	}
+	ok, err := m.st.CancelPlan(ctx, planID)
+	if err != nil {
+		return p, err
+	}
+	if !ok {
+		fresh, gerr := m.st.GetPlan(ctx, planID)
+		if gerr != nil {
+			return p, gerr
+		}
+		return fresh, &PlanStateError{State: fresh.State}
+	}
+	m.publishPlan(ctx, planID)
+	if m.chatRunning(chatID) {
+		if _, aerr := m.Abort(ctx, chatID); aerr != nil {
+			return p, aerr
+		}
+	}
+	note := fmt.Sprintf("The user cancelled plan %q. Steps %s were not run. Do not continue it.", planID, undoneSteps(p))
+	if _, err := m.st.EnqueueSystem(ctx, chatID, store.NotePlan, []string{planID}, note); err != nil {
+		slog.Error("cancel note not queued", "chat", chatID, "plan", planID, "error", err)
+	} else {
+		m.publishQueue(ctx, chatID, "queued", nil, "")
+	}
+	return m.st.GetPlan(ctx, planID)
+}
+
+// nextStepIdx is the first step of the plan that is not done (1 if none is open).
+func nextStepIdx(p store.Plan) int {
+	for _, st := range p.Steps {
+		if st.State != plan.StepDone {
+			return st.Idx
+		}
+	}
+	return 0
+}
+
+// undoneSteps lists the steps of a plan that are not done, as "2, 3".
+func undoneSteps(p store.Plan) string {
+	var idx []string
+	for _, st := range p.Steps {
+		if st.State != plan.StepDone {
+			idx = append(idx, strconv.Itoa(st.Idx))
+		}
+	}
+	if len(idx) == 0 {
+		return "none"
+	}
+	return strings.Join(idx, ", ")
 }

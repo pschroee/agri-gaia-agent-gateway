@@ -98,7 +98,7 @@ func proposeAndDecideVia(t *testing.T, e *env, ctx context.Context, chatID, slot
 // approvedPlan stores a plan of the session as approved for 30 minutes, without the approval flow.
 func approvedPlan(t *testing.T, e *env, ctx context.Context, chatID, body string) store.Plan {
 	t.Helper()
-	p, err := plan.ParseProposal([]byte(body))
+	p, err := plan.ParseProposal([]byte(body), plan.Limits{MaxDuration: 8 * time.Hour, MaxLLMCost: 5})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -57,3 +57,22 @@ ALTER TABLE approvals ADD COLUMN IF NOT EXISTS summary text;
 -- and this column keeps the first text so that the card can show "As proposed" next to the current one. NULL until
 -- the first change; then it holds the text the user saw when the approval was raised.
 ALTER TABLE plan_steps ADD COLUMN IF NOT EXISTS summary_proposed text;
+
+-- Autonomous plans with a budget and a delegation derived from their steps (A-E1). A plan keeps its mode
+-- 'interactive' unless the agent asks for "mode": "autonomous"; only then do the budget columns and the
+-- grant carry values. pause_reason names why a plan is paused (abort, budget_cost, user); replaces is the
+-- plan this one superseded. ended_at marks the end of an autonomous plan (completed, failed, cancelled).
+ALTER TABLE plans ADD COLUMN IF NOT EXISTS mode text NOT NULL DEFAULT 'interactive';
+ALTER TABLE plans ADD COLUMN IF NOT EXISTS max_duration_s integer NOT NULL DEFAULT 1800;
+ALTER TABLE plans ADD COLUMN IF NOT EXISTS max_llm_cost double precision NOT NULL DEFAULT 0;
+ALTER TABLE plans ADD COLUMN IF NOT EXISTS max_auto_turns integer NOT NULL DEFAULT 0;
+ALTER TABLE plans ADD COLUMN IF NOT EXISTS auto_turns integer NOT NULL DEFAULT 0;
+ALTER TABLE plans ADD COLUMN IF NOT EXISTS grant_json text NOT NULL DEFAULT '';
+ALTER TABLE plans ADD COLUMN IF NOT EXISTS pause_reason text NOT NULL DEFAULT '';
+ALTER TABLE plans ADD COLUMN IF NOT EXISTS replaces text NOT NULL DEFAULT '';
+ALTER TABLE plans ADD COLUMN IF NOT EXISTS ended_at timestamptz;
+
+-- max_attempts: how often an autonomous plan may repeat a failed step (1 to 3, D1.6); attempts counts the
+-- claims so far (incremented by ClaimPlanStep).
+ALTER TABLE plan_steps ADD COLUMN IF NOT EXISTS max_attempts integer NOT NULL DEFAULT 1;
+ALTER TABLE plan_steps ADD COLUMN IF NOT EXISTS attempts integer NOT NULL DEFAULT 0;

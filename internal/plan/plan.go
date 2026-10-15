@@ -29,16 +29,26 @@ import (
 const (
 	StateProposed   = "proposed"
 	StateApproved   = "approved"
+	StatePaused     = "paused"
 	StateRejected   = "rejected"
 	StateExpired    = "expired"
 	StateCompleted  = "completed"
 	StateFailed     = "failed"
+	StateCancelled  = "cancelled"
 	StateSuperseded = "superseded"
 
 	StepOpen    = "open"
 	StepRunning = "running"
 	StepDone    = "done"
 	StepFailed  = "failed"
+	StepSkipped = "skipped"
+)
+
+// Modes of a plan (A-E1). An interactive plan covers only its exact steps; an autonomous plan carries a
+// budget and a grant derived from its steps that bounds every call of the chat while it runs.
+const (
+	ModeInteractive = "interactive"
+	ModeAutonomous  = "autonomous"
 )
 
 // Effects of a step. EffectRead never becomes a step.
@@ -59,12 +69,44 @@ const (
 	planPath = "/_agw/plan"
 )
 
+// Defaults and hard bounds of an autonomous plan's budget (A-E1, D1.6). MaxAutoTurnsCap is a constant
+// because no environment variable raises it; the duration and the cost come from Limits.
+const (
+	DefaultPlanDurationMinutes = 30
+	DefaultPlanLLMCostUSD      = 1.00
+	DefaultPlanAutoTurns       = 20
+	MaxAutoTurnsCap            = 50
+	// MinPlanAttempts/MaxPlanAttempts bound "max_attempts" of a step (D1.6).
+	MinPlanAttempts = 1
+	MaxPlanAttempts = 3
+)
+
+// Limits bounds an autonomous plan's budget from the environment (A-E1, D1.6): the agent proposes, the
+// gateway refuses anything above these. MaxDuration never exceeds oidc.MaxSession − 1 h (set in config).
+type Limits struct {
+	MaxDuration time.Duration
+	MaxLLMCost  float64
+}
+
 var sha256Re = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 // Proposal is the body of propose_plan: {"title": …, "steps": [...]}.
 type Proposal struct {
 	Title string     `json:"title"`
 	Steps []StepSpec `json:"steps"`
+	// Mode: "" or "interactive" (default) or "autonomous" (A-E1).
+	Mode string `json:"mode,omitempty"`
+	// Budget is only read for an autonomous plan; missing fields take their defaults.
+	Budget *Budget `json:"budget,omitempty"`
+	// Replaces names a running plan of this chat that this one replaces (D1.12).
+	Replaces string `json:"replaces,omitempty"`
+}
+
+// Budget is the budget the agent proposes for an autonomous plan (A-E1).
+type Budget struct {
+	MaxDurationMinutes int     `json:"max_duration_minutes"`
+	MaxLLMCostUSD      float64 `json:"max_llm_cost_usd"`
+	MaxAutoTurns       int     `json:"max_auto_turns"`
 }
 
 // StepSpec is one step as the agent writes it: either a platform tool with its arguments, or a
@@ -78,6 +120,8 @@ type StepSpec struct {
 	Body        json.RawMessage   `json:"body,omitempty"`
 	Description string            `json:"description,omitempty"`
 	FileSHA256  []string          `json:"file_sha256,omitempty"`
+	// MaxAttempts: how often an autonomous plan may repeat this step after a failure (1 to 3, A-E1).
+	MaxAttempts int `json:"max_attempts,omitempty"`
 }
 
 // Classify gives the effect and the delegation action of a call and whether the call asks for every
@@ -87,9 +131,22 @@ type Classify func(r platform.Request) (effect, action string, confirmEach bool)
 // Resolve gives the id that placeholder {{stepN.id}} stands for at matching time.
 type Resolve func(n int) (string, bool)
 
-// ParseProposal checks the body of propose_plan. Duplicate keys are refused before the fields are
-// read; unknown fields are an error.
-func ParseProposal(raw []byte) (Proposal, error) {
+// ParseProposal checks the body of propose_plan against the budget limits (A-E1). Duplicate keys are
+// refused before the fields are read; unknown fields are an error.
+func ParseProposal(raw []byte, lim Limits) (Proposal, error) {
+	p, err := parseProposal(raw)
+	if err != nil {
+		return Proposal{}, err
+	}
+	if err := p.checkBudget(lim); err != nil {
+		return Proposal{}, err
+	}
+	return p, nil
+}
+
+// parseProposal reads and checks the shape of a proposal, without the budget (used where the limits do
+// not matter, e.g. reading the file references of a proposal before it is decided).
+func parseProposal(raw []byte) (Proposal, error) {
 	if _, err := Canonical(raw); err != nil {
 		return Proposal{}, fmt.Errorf("plan: %w", err)
 	}
@@ -113,6 +170,72 @@ func ParseProposal(raw []byte) (Proposal, error) {
 		}
 	}
 	return p, nil
+}
+
+// Autonomous reports whether the proposal asks for an autonomous plan.
+func (p Proposal) Autonomous() bool { return p.Mode == ModeAutonomous }
+
+// checkBudget fills in the defaults of an autonomous plan's budget and refuses values above the limits;
+// values are never silently shortened (D1.6). A budget or max_attempts without mode autonomous is refused.
+func (p *Proposal) checkBudget(lim Limits) error {
+	switch p.Mode {
+	case "", ModeInteractive:
+		if p.Budget != nil {
+			return errors.New("budget and max_attempts need \"mode\": \"autonomous\"")
+		}
+		for i, s := range p.Steps {
+			if s.MaxAttempts > 0 {
+				return fmt.Errorf("step %d: max_attempts needs \"mode\": \"autonomous\"", i+1)
+			}
+		}
+		return nil
+	case ModeAutonomous:
+	default:
+		return fmt.Errorf("mode must be %q or %q, not %q", ModeInteractive, ModeAutonomous, p.Mode)
+	}
+	if lim.MaxDuration <= 0 || lim.MaxLLMCost <= 0 {
+		return errors.New("autonomous plans are not configured on this instance")
+	}
+	if p.Budget == nil {
+		p.Budget = &Budget{}
+	}
+	b := p.Budget
+	maxMinutes := int(lim.MaxDuration / time.Minute)
+	switch {
+	case b.MaxDurationMinutes == 0:
+		b.MaxDurationMinutes = DefaultPlanDurationMinutes
+	case b.MaxDurationMinutes < 0:
+		return errors.New("budget: max_duration_minutes must not be negative")
+	case b.MaxDurationMinutes > maxMinutes:
+		return fmt.Errorf("budget: max_duration_minutes is %d, at most %d", b.MaxDurationMinutes, maxMinutes)
+	}
+	switch {
+	case b.MaxLLMCostUSD == 0:
+		b.MaxLLMCostUSD = DefaultPlanLLMCostUSD
+	case b.MaxLLMCostUSD < 0:
+		return errors.New("budget: max_llm_cost_usd must not be negative")
+	case b.MaxLLMCostUSD > lim.MaxLLMCost:
+		return fmt.Errorf("budget: max_llm_cost_usd is %.2f, at most %.2f", b.MaxLLMCostUSD, lim.MaxLLMCost)
+	}
+	switch {
+	case b.MaxAutoTurns == 0:
+		b.MaxAutoTurns = DefaultPlanAutoTurns
+	case b.MaxAutoTurns < 0:
+		return errors.New("budget: max_auto_turns must not be negative")
+	case b.MaxAutoTurns > MaxAutoTurnsCap:
+		return fmt.Errorf("budget: max_auto_turns is %d, at most %d", b.MaxAutoTurns, MaxAutoTurnsCap)
+	}
+	for i, s := range p.Steps {
+		switch {
+		case s.MaxAttempts == 0:
+			p.Steps[i].MaxAttempts = MinPlanAttempts
+		case s.MaxAttempts < MinPlanAttempts:
+			return fmt.Errorf("step %d: max_attempts must be %d to %d", i+1, MinPlanAttempts, MaxPlanAttempts)
+		case s.MaxAttempts > MaxPlanAttempts:
+			return fmt.Errorf("step %d: max_attempts is %d, at most %d", i+1, s.MaxAttempts, MaxPlanAttempts)
+		}
+	}
+	return nil
 }
 
 // FallbackEffect classifies a call until the delegation rules name the effect (#63): a GET that
@@ -286,6 +409,10 @@ func Build(p Proposal, classify Classify) ([]store.PlanStep, error) {
 		actions[idx] = action
 		st.Effect = effect
 		st.Covered = effect != EffectIrreversible && !confirmEach
+		st.MaxAttempts = spec.MaxAttempts
+		if st.MaxAttempts < MinPlanAttempts {
+			st.MaxAttempts = MinPlanAttempts
+		}
 		out = append(out, st)
 	}
 	return out, nil
@@ -294,7 +421,7 @@ func Build(p Proposal, classify Classify) ([]store.PlanStep, error) {
 // FileRefs returns the uploads of every step (by step number, from 1) so that the socket can
 // read them and pin their SHA-256.
 func FileRefs(raw []byte) (map[int][]platform.File, error) {
-	p, err := ParseProposal(raw)
+	p, err := parseProposal(raw)
 	if err != nil {
 		return nil, err
 	}
@@ -314,7 +441,7 @@ func FileRefs(raw []byte) (map[int][]platform.File, error) {
 // SetFileSums writes the pinned SHA-256 of each step's uploads into the proposal and drops every
 // hash the agent wrote itself.
 func SetFileSums(raw []byte, sums map[int][]string) ([]byte, error) {
-	p, err := ParseProposal(raw)
+	p, err := parseProposal(raw)
 	if err != nil {
 		return nil, err
 	}
@@ -364,24 +491,62 @@ func Matches(st store.PlanStep, r platform.Request, resolve Resolve) (bool, stri
 	return true, ""
 }
 
+// Autonomy carries what an autonomous plan adds to the preview (A-E1): its budget, the rights derived
+// from its steps and the compute calls the chat has left after this plan. nil for an interactive plan.
+type Autonomy struct {
+	Budget Budget
+	// Rights is the one-line summary of the grant derived from the steps (delegation.SummaryLine).
+	Rights string
+	// ComputeNeeded is what the plan may spend (Σ compute steps × max_attempts, D1.7).
+	ComputeNeeded int
+	// ComputeLeft is what the chat has left after this plan.
+	ComputeLeft int
+	// Replaces names the plan this one replaces; ReplacedCostUSD is what the model calls of that plan
+	// cost so far (D1.12).
+	Replaces        string
+	ReplacedCostUSD float64
+}
+
 // Preview lists every step with its effect, the gateway's summary and the technical parameters, for the approval.
-// The plan's title and the steps' notes are the agent's text and are marked as not verified (issue #72).
-func Preview(title string, steps []store.PlanStep) string {
+// The plan's title and the steps' notes are the agent's text and are marked as not verified (issue #72). An
+// autonomous plan (auto != nil) gets a block with its budget and its rights after the header (A-E1).
+func Preview(title string, steps []store.PlanStep, auto *Autonomy) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s\n", ApprovalName(len(steps)))
 	fmt.Fprintf(&b, "Title by the agent (not verified): %s\n", strconv.Quote(title))
-	fmt.Fprintf(&b, "Approving runs the steps in this order with exactly these parameters, for %d minutes, in this chat and this agent session only. Steps marked IRREVERSIBLE still ask for their own approval.\n\n",
-		int(ValidFor/time.Minute))
+	if auto == nil {
+		fmt.Fprintf(&b, "Approving runs the steps in this order with exactly these parameters, for %d minutes, in this chat and this agent session only. Steps marked IRREVERSIBLE still ask for their own approval.\n\n",
+			int(ValidFor/time.Minute))
+	} else {
+		fmt.Fprintf(&b, "Autonomous: runs without asking you for up to %s, or until you pause or cancel it.\n", DurationText(time.Duration(auto.Budget.MaxDurationMinutes)*time.Minute))
+		if auto.ComputeLeft >= 0 {
+			fmt.Fprintf(&b, "Budget: at most %d compute calls (%d left after this plan), model calls up to %.2f USD, up to %d turns without you.\n",
+				auto.ComputeNeeded, auto.ComputeLeft, auto.Budget.MaxLLMCostUSD, auto.Budget.MaxAutoTurns)
+		} else {
+			fmt.Fprintf(&b, "Budget: at most %d compute calls, model calls up to %.2f USD, up to %d turns without you.\n",
+				auto.ComputeNeeded, auto.Budget.MaxLLMCostUSD, auto.Budget.MaxAutoTurns)
+		}
+		fmt.Fprintf(&b, "Rights while it runs: %s; nothing else is allowed and is refused without asking.\n", auto.Rights)
+		if auto.Replaces != "" {
+			fmt.Fprintf(&b, "Replaces the running plan %s (its model calls cost %.2f USD so far).\n", auto.Replaces, auto.ReplacedCostUSD)
+		}
+		fmt.Fprintf(&b, "Approving runs the steps in this order with exactly these parameters, from any session of this chat. "+
+			"Steps marked IRREVERSIBLE and steps that run code still ask for their own approval.\n\n")
+	}
 	for _, st := range steps {
 		label := strings.ToUpper(st.Effect)
 		if st.Effect == EffectIrreversible {
 			label = "IRREVERSIBLE (own approval)"
 		}
+		attempts := ""
+		if st.MaxAttempts > 1 {
+			attempts = fmt.Sprintf(" · up to %d attempts", st.MaxAttempts)
+		}
 		head, details, _ := strings.Cut(st.Summary, "\n")
 		if head == "" {
 			head = st.Method + " " + st.Path + queryText(st.Query)
 		}
-		fmt.Fprintf(&b, "%d. %s · %s\n", st.Idx, label, head)
+		fmt.Fprintf(&b, "%d. %s · %s%s\n", st.Idx, label, head, attempts)
 		if details != "" {
 			for _, line := range strings.Split(details, "\n") {
 				fmt.Fprintf(&b, "   %s\n", line)
@@ -468,34 +633,75 @@ func queryText(raw json.RawMessage) string {
 	return "?" + v.Encode()
 }
 
+// approvedStep is one step of the answer after an approval; Attempts is set for an autonomous plan (A-E1).
 type approvedStep struct {
-	Step    int    `json:"step"`
-	Call    string `json:"call"`
-	Effect  string `json:"effect"`
-	Covered bool   `json:"covered"`
+	Step     int    `json:"step"`
+	Call     string `json:"call"`
+	Effect   string `json:"effect"`
+	Covered  bool   `json:"covered"`
+	Attempts int    `json:"max_attempts,omitempty"`
 }
 
-// ApprovedText is the answer to the agent after an approval.
+// ApprovedText is the answer to the agent after an approval. An autonomous plan (p.Mode) additionally
+// carries its mode, budget and grant, and its note points at the refusal outside the grant and at
+// "replaces" (A-E1).
 func ApprovedText(p store.Plan) string {
 	steps := make([]approvedStep, 0, len(p.Steps))
 	for _, st := range p.Steps {
-		steps = append(steps, approvedStep{Step: st.Idx, Call: st.Method + " " + st.Path, Effect: st.Effect, Covered: st.Covered})
+		a := approvedStep{Step: st.Idx, Call: st.Method + " " + st.Path, Effect: st.Effect, Covered: st.Covered}
+		if p.Mode == ModeAutonomous && st.MaxAttempts > 1 {
+			a.Attempts = st.MaxAttempts
+		}
+		steps = append(steps, a)
+	}
+	auto := p.Mode == ModeAutonomous
+	mode := ""
+	note := "Run the steps in this order with exactly these parameters; each covered step then runs without a new approval until expires_at. Steps with covered=false still ask the user. Use the ids the platform returns for {{stepN.id}}. Any other call needs its own approval."
+	grant := ""
+	var budget *Budget
+	if auto {
+		mode = p.Mode
+		budget = &Budget{MaxDurationMinutes: int(time.Duration(p.Budget.MaxDurationS) * time.Second / time.Minute),
+			MaxLLMCostUSD: p.Budget.MaxLLMCost, MaxAutoTurns: p.Budget.MaxAutoTurns}
+		if g, err := delegation.Parse(p.Grant); err == nil {
+			grant = g.Summary()
+		}
+		note = "Autonomous plan: run the steps in this order. Calls outside the rights listed in grant are refused without asking the user. If you need anything else, propose a changed plan with \"replaces\": \"" + p.ID + "\". A long step reports its end to you; end your turn while it runs."
 	}
 	out := struct {
 		PlanID    string         `json:"plan_id"`
 		State     string         `json:"state"`
+		Mode      string         `json:"mode,omitempty"`
+		Budget    *Budget        `json:"budget,omitempty"`
+		Grant     string         `json:"grant,omitempty"`
 		ExpiresAt *time.Time     `json:"expires_at,omitempty"`
 		Steps     []approvedStep `json:"steps"`
 		Note      string         `json:"note"`
 	}{
 		PlanID:    p.ID,
 		State:     StateApproved,
+		Mode:      mode,
+		Budget:    budget,
+		Grant:     grant,
 		ExpiresAt: p.ExpiresAt,
 		Steps:     steps,
-		Note:      "Run the steps in this order with exactly these parameters; each covered step then runs without a new approval until expires_at. Steps with covered=false still ask the user. Use the ids the platform returns for {{stepN.id}}. Any other call needs its own approval.",
+		Note:      note,
 	}
 	b, _ := json.Marshal(out)
 	return string(b)
+}
+
+// DurationText renders a plan budget's duration as "2h 0m" or "45m" for the preview (A-E1).
+func DurationText(d time.Duration) string {
+	if d < 0 {
+		d = 0
+	}
+	h := int(d / time.Hour)
+	m := int((d % time.Hour) / time.Minute)
+	if h > 0 {
+		return fmt.Sprintf("%dh %dm", h, m)
+	}
+	return fmt.Sprintf("%dm", m)
 }
 
 // stepArgs gives the stored form of the arguments of a tool step: scalars as text, keys sorted, placeholders

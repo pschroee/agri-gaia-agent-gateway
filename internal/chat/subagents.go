@@ -39,7 +39,8 @@ func (m *Manager) Attribute(ip string) llmproxy.Attribution {
 	defer m.mu.Unlock()
 	for chatID, l := range m.live {
 		if l.ip == ip {
-			return llmproxy.Attribution{ChatID: chatID, SlotID: l.slot.ID, MaxConcurrent: 1 + l.maxSub}
+			// Budget: the model-cost budget of an autonomous plan is enforced at the proxy (A-E1, D1.9).
+			return llmproxy.Attribution{ChatID: chatID, SlotID: l.slot.ID, MaxConcurrent: 1 + l.maxSub, Budget: m.planBudget}
 		}
 	}
 	return llmproxy.Attribution{}

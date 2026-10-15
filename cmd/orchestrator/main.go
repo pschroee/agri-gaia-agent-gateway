@@ -155,6 +155,8 @@ func run() error {
 		WorkspaceMaxBytes:  env.WorkspaceMaxBytes,
 		MaxSubagents:       env.MaxSubagents,
 		ComputeMaxPerChat:  env.ComputeMaxPerChat,
+		PlanMaxDuration:    env.PlanMaxDuration, // A-E1: budget limits of autonomous plans
+		PlanMaxLLMCost:     env.PlanMaxLLMCost,
 		TrashRetentionDays: env.TrashRetentionDays,
 		AutoCompactDefault: env.AutoCompactDefault, CompactReserveTokens: env.CompactReserveTokens, CompactKeepRecent: env.CompactKeepRecent,
 		BgWakesPerHour: env.BgWakesPerHour, BgKeepAlive: env.BgKeepAlive, AutoTurnsMax: env.AutoTurnsMax,

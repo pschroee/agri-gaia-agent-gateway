@@ -205,6 +205,16 @@ func (s *Server) Handler() http.Handler {
 	chat("GET /api/chats/{id}/subagent-runs", s.subagentRuns)
 	writes("POST /api/chats/{id}/subagent-runs/{run}/messages", s.subagentMessage)
 	chat("GET /api/chats/{id}/plans", s.plans)
+	// A-E1: the user's controls of an autonomous plan; the agent has no tool for them.
+	writes("POST /api/chats/{id}/plans/{plan}/pause", s.planControl(func(ctx context.Context, chatID, planID string) (store.Plan, error) {
+		return s.M.PausePlan(ctx, chatID, planID, "user")
+	}))
+	writes("POST /api/chats/{id}/plans/{plan}/resume", s.planControl(func(ctx context.Context, chatID, planID string) (store.Plan, error) {
+		return s.M.ResumePlan(ctx, chatID, planID)
+	}))
+	writes("POST /api/chats/{id}/plans/{plan}/cancel", s.planControl(func(ctx context.Context, chatID, planID string) (store.Plan, error) {
+		return s.M.CancelPlan(ctx, chatID, planID)
+	}))
 	chat("GET /api/chats/{id}/llm_calls", s.llmCalls)
 	chat("GET /api/chats/{id}/tool_executions", s.toolExecutions)
 	chat("GET /api/chats/{id}/background", s.background)

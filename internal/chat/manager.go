@@ -23,6 +23,7 @@ import (
 	"agw/internal/artifacts"
 	"agw/internal/config"
 	"agw/internal/delegation"
+	"agw/internal/plan"
 	"agw/internal/platform"
 	"agw/internal/pool"
 	"agw/internal/rpc"
@@ -208,6 +209,10 @@ type Options struct {
 	MaxSubagents int
 	// ComputeMaxPerChat: compute calls per chat the platform may accept (AGW_COMPUTE_MAX_PER_CHAT, below 1: default).
 	ComputeMaxPerChat int
+	// A-E1: upper bounds of an autonomous plan's budget (AGW_PLAN_MAX_DURATION, AGW_PLAN_MAX_LLM_COST);
+	// zero takes the config defaults.
+	PlanMaxDuration time.Duration
+	PlanMaxLLMCost  float64
 	// TrashRetentionDays: chats in the trash are deleted for good after this many days (AGW_TRASH_RETENTION_DAYS,
 	// 0 = never; issue #76).
 	TrashRetentionDays int
@@ -290,6 +295,9 @@ type Manager struct {
 	// capCache: capabilities that read platform state, held in memory for capabilityCacheTTL
 	// (G1.11), by chat and key.
 	capCache map[string]capabilityCacheEntry
+	// planCache: the active autonomous plan of a chat, held in memory for planCacheTTL so that the
+	// guard and the LLM proxy's budget do not put a query behind every call (A-E1).
+	planCache map[string]planCacheEntry
 }
 
 func NewManager(st *store.Store, p *pool.Pool[Agent], cat *config.Catalog, blobs Blobs, broker *artifacts.Broker, opt Options) *Manager {
@@ -317,11 +325,18 @@ func NewManager(st *store.Store, p *pool.Pool[Agent], cat *config.Catalog, blobs
 	if opt.Toolsets.Empty() {
 		opt.Toolsets, _ = toolset.Parse(toolset.Default)
 	}
+	// A-E1: the budget limits of autonomous plans fall back to the config defaults.
+	if opt.PlanMaxDuration <= 0 {
+		opt.PlanMaxDuration = config.DefaultPlanMaxDuration
+	}
+	if opt.PlanMaxLLMCost <= 0 {
+		opt.PlanMaxLLMCost = config.DefaultPlanMaxLLMCost
+	}
 	return &Manager{st: st, pool: p, cat: cat, blobs: blobs, broker: broker, opt: opt,
 		live: map[string]*live{}, subs: map[string]map[chan Event]struct{}{}, allSubs: map[chan ChatEvent]struct{}{}, chatMu: map[string]*sync.Mutex{},
 		imgMu: map[string]*sync.Mutex{}, wsMu: map[string]*sync.Mutex{}, qMu: map[string]*sync.Mutex{},
 		sending: map[string]bool{}, delivering: map[string][]*turnMeta{}, resuming: map[string]bool{}, starting: map[string]bool{}, pendingModel: map[string]string{}, levels: map[string][]string{}, userAt: map[string]time.Time{}, aborts: map[string]uint64{},
-		rechecks: map[string]recheck{}, apMu: map[string]*sync.Mutex{}}
+		rechecks: map[string]recheck{}, apMu: map[string]*sync.Mutex{}, planCache: map[string]planCacheEntry{}}
 }
 
 // userActive records an action of the user (postponement by background tasks, M1).
@@ -866,6 +881,13 @@ func (m *Manager) Abort(ctx context.Context, chatID string) (ChatView, error) {
 		l.holdQueue, l.holdReason = true, HoldAbort
 	}
 	m.mu.Unlock()
+	// Stop means "halt", not "throw away": a running autonomous plan is paused, not cancelled (A-E1, D1.10).
+	// Platform jobs (a training) keep running; stopping one is a separate action.
+	if ap, err := m.st.ActiveAutonomousPlan(ctx, chatID); err == nil && ap.State == plan.StateApproved {
+		if _, perr := m.pausePlan(ctx, chatID, ap.ID, "abort"); perr != nil {
+			slog.Error("plan not paused on abort", "chat", chatID, "plan", ap.ID, "error", perr)
+		}
+	}
 	if l != nil {
 		// After abort pi continues with what is queued; so reclaim steered messages beforehand
 		// (they stay enqueued and held back).

@@ -75,8 +75,9 @@ func (m *Manager) platformRecheck(chatID, approvalID, tool string, req platform.
 }
 
 // planRecheck reads the summary of every step of a plan again and rebuilds the preview from them (DL2.2). title and
-// steps come from the proposal: only ProposePlan has them.
-func (m *Manager) planRecheck(chatID, approvalID, title string, steps []store.PlanStep, calls []platform.SummaryCall) recheck {
+// steps come from the proposal: only ProposePlan has them. auto carries the budget block of an autonomous plan
+// (A-E1), so the rebuilt preview shows the same budget block as the first one.
+func (m *Manager) planRecheck(chatID, approvalID, title string, steps []store.PlanStep, calls []platform.SummaryCall, auto *plan.Autonomy) recheck {
 	base := append([]store.PlanStep(nil), steps...)
 	return func(ctx context.Context) ([]string, string, bool) {
 		rl := &readLog{}
@@ -92,7 +93,7 @@ func (m *Manager) planRecheck(chatID, approvalID, title string, steps []store.Pl
 			out[i] = fresh[i].Summary
 		}
 		m.logSummaryReads(ctx, chatID, approvalID, "approval", rl)
-		return out, visibleControls(plan.Preview(title, fresh)), rl.failedReads() > 0
+		return out, visibleControls(plan.Preview(title, fresh, auto)), rl.failedReads() > 0
 	}
 }
 
@@ -142,7 +143,7 @@ func (m *Manager) replaceChangedSummary(ctx context.Context, ap store.Approval, 
 			return ap, false, err
 		}
 		if preview == "" {
-			preview = visibleControls(plan.Preview(upd.Title, upd.Steps))
+			preview = visibleControls(plan.Preview(upd.Title, upd.Steps, autonomyOf(upd)))
 		}
 		a, _, err := m.st.ReplaceApprovalSummary(ctx, ap.ID, plan.ApprovalSummary(upd.Steps), preview)
 		if err != nil {

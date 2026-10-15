@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"agw/internal/delegation"
 	"agw/internal/platform"
@@ -21,9 +22,12 @@ func classify(r platform.Request) (string, string, bool) {
 	return FallbackEffect(r), a.Action, a.ConfirmEach
 }
 
+// testLimits bounds an autonomous plan's budget in these tests (A-E1).
+var testLimits = Limits{MaxDuration: 8 * time.Hour, MaxLLMCost: 5}
+
 func proposal(t *testing.T, raw string) Proposal {
 	t.Helper()
-	p, err := ParseProposal([]byte(raw))
+	p, err := ParseProposal([]byte(raw), testLimits)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +88,7 @@ func TestBuildRefuses(t *testing.T) {
 		"empty title":           `{"title":"  ","steps":[{"method":"DELETE","path":"/models/5"}]}`,
 	}
 	for name, raw := range cases {
-		p, err := ParseProposal([]byte(raw))
+		p, err := ParseProposal([]byte(raw), testLimits)
 		if err == nil {
 			_, err = Build(p, classify)
 		}
@@ -225,7 +229,7 @@ func TestPreviewListsEverything(t *testing.T) {
  {"method":"PATCH","path":"/models/{{step1.id}}","body":{"name":"pigs v1"}},
  {"method":"DELETE","path":"/models/{{step1.id}}"}]}`)
 	steps[0].Summary = "Create a new model from training container 7\nTraining: T A"
-	text := Preview("Model and rename", steps)
+	text := Preview("Model and rename", steps, nil)
 	for _, want := range []string{
 		"Plan with 3 steps\n",
 		"Title by the agent (not verified): \"Model and rename\"\n",
@@ -341,5 +345,83 @@ func TestBuildStepStoresArgsOfToolWithSteps(t *testing.T) {
 	up, _, _, err := BuildStep(StepSpec{Method: "PATCH", Path: "/datasets/5", Body: json.RawMessage(`{"name":"x"}`)}, 1)
 	if err != nil || IsToolStep(up) {
 		t.Fatalf("raw step: %+v %v", up, err)
+	}
+}
+
+// A-E1: an autonomous proposal carries mode, budget and per-step max_attempts; the defaults fill in.
+func TestParseProposalAutonomous(t *testing.T) {
+	p, err := ParseProposal([]byte(`{"title":"Autonom","mode":"autonomous","budget":{"max_duration_minutes":120,"max_llm_cost_usd":2.5,"max_auto_turns":5},
+ "steps":[{"method":"POST","path":"/datasets","max_attempts":2}]}`), testLimits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !p.Autonomous() || p.Budget == nil || p.Budget.MaxDurationMinutes != 120 || p.Budget.MaxLLMCostUSD != 2.5 || p.Budget.MaxAutoTurns != 5 {
+		t.Fatalf("budget: %+v", p)
+	}
+	if p.Steps[0].MaxAttempts != 2 {
+		t.Fatalf("max_attempts: %+v", p.Steps[0])
+	}
+	// The defaults fill in the fields the agent left out.
+	d, err := ParseProposal([]byte(`{"title":"Autonom","mode":"autonomous","steps":[{"method":"POST","path":"/datasets"}]}`), testLimits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Budget.MaxDurationMinutes != DefaultPlanDurationMinutes || d.Budget.MaxLLMCostUSD != DefaultPlanLLMCostUSD || d.Budget.MaxAutoTurns != DefaultPlanAutoTurns {
+		t.Fatalf("defaults: %+v", d.Budget)
+	}
+	if d.Steps[0].MaxAttempts != MinPlanAttempts {
+		t.Fatalf("default max_attempts: %d", d.Steps[0].MaxAttempts)
+	}
+	// A budget or max_attempts without mode autonomous is refused.
+	for _, raw := range []string{
+		`{"title":"t","budget":{"max_duration_minutes":30},"steps":[{"method":"POST","path":"/datasets"}]}`,
+		`{"title":"t","steps":[{"method":"POST","path":"/datasets","max_attempts":2}]}`,
+	} {
+		if _, err := ParseProposal([]byte(raw), testLimits); err == nil {
+			t.Errorf("accepted without mode autonomous: %s", raw)
+		}
+	}
+}
+
+// A-E1: a budget above the limits is refused with the value and the limit, never shortened silently.
+func TestParseProposalBudgetOverLimitRefused(t *testing.T) {
+	cases := map[string]string{
+		"duration": `{"title":"t","mode":"autonomous","budget":{"max_duration_minutes":600},"steps":[{"method":"POST","path":"/datasets"}]}`,
+		"cost":     `{"title":"t","mode":"autonomous","budget":{"max_llm_cost_usd":9},"steps":[{"method":"POST","path":"/datasets"}]}`,
+		"turns":    `{"title":"t","mode":"autonomous","budget":{"max_auto_turns":99},"steps":[{"method":"POST","path":"/datasets"}]}`,
+		"attempts": `{"title":"t","mode":"autonomous","steps":[{"method":"POST","path":"/datasets","max_attempts":9}]}`,
+		"nonmode":  `{"title":"t","mode":"whatever","steps":[{"method":"POST","path":"/datasets"}]}`,
+	}
+	for name, raw := range cases {
+		if _, err := ParseProposal([]byte(raw), testLimits); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+	// The message names the value and the limit.
+	_, err := ParseProposal([]byte(`{"title":"t","mode":"autonomous","budget":{"max_duration_minutes":600},"steps":[{"method":"POST","path":"/datasets"}]}`), testLimits)
+	if err == nil || !strings.Contains(err.Error(), "600") || !strings.Contains(err.Error(), "480") {
+		t.Fatalf("message: %v", err)
+	}
+}
+
+// A-E1: the preview of an autonomous plan carries budget and rights, and the steps' attempts.
+func TestPreviewAutonomousBlock(t *testing.T) {
+	steps := build(t, `{"title":"Autonom","mode":"autonomous","budget":{"max_duration_minutes":120,"max_llm_cost_usd":1.5,"max_auto_turns":20},
+ "steps":[{"method":"POST","path":"/datasets"},{"method":"PATCH","path":"/datasets/16","body":{"name":"x"},"max_attempts":2}]}`)
+	auto := &Autonomy{
+		Budget:        Budget{MaxDurationMinutes: 120, MaxLLMCostUSD: 1.5, MaxAutoTurns: 20},
+		Rights:        "create dataset; read all",
+		ComputeNeeded: 0, ComputeLeft: 3,
+	}
+	text := Preview("Autonom", steps, auto)
+	for _, want := range []string{
+		"Autonomous: runs without asking you for up to 2h 0m, or until you pause or cancel it.\n",
+		"Budget: at most 0 compute calls (3 left after this plan), model calls up to 1.50 USD, up to 20 turns without you.\n",
+		"Rights while it runs: create dataset; read all; nothing else is allowed and is refused without asking.\n",
+		"2. WRITE · PATCH /datasets/16 · up to 2 attempts\n",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("preview misses %q in:\n%s", want, text)
+		}
 	}
 }

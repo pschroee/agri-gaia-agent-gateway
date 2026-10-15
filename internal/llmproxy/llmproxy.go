@@ -158,6 +158,14 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		defer p.leave(chatID)
+		// The model-cost budget of an autonomous plan is checked before the call is forwarded (A-E1, D1.9).
+		if att.Budget != nil {
+			if err := att.Budget(chatID); err != nil {
+				slog.Warn("LLM proxy: plan budget used up", "chat", chatID, "reason", err)
+				deny(w, http.StatusTooManyRequests, err.Error())
+				return
+			}
+		}
 	}
 	select {
 	case p.sem <- struct{}{}:

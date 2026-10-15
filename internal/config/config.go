@@ -349,7 +349,11 @@ type Env struct {
 	// ComputeMaxPerChat: compute calls per chat that the platform may accept (AGW_COMPUTE_MAX_PER_CHAT,
 	// default 3; below 1 counts as 1). Enforced by the gateway, see internal/chat/effect.go.
 	ComputeMaxPerChat int
-	AllowedHosts      []string
+	// A-E1: upper bounds of an autonomous plan's budget. The agent proposes, the gateway refuses
+	// anything above these (plan.Limits). PlanMaxDuration never exceeds oidc.MaxSession - 1 h.
+	PlanMaxDuration time.Duration
+	PlanMaxLLMCost  float64
+	AllowedHosts    []string
 	// Background tasks: at most BgMax at a time per slot (AGW_BG_MAX), at most
 	// BgWakesPerHour wake-ups per chat and hour (AGW_BG_WAKES_PER_HOUR, 0 = never); running tasks
 	// keep the chat awake until BgKeepAlive after the last activity (AGW_BG_KEEPALIVE).
@@ -422,6 +426,38 @@ const (
 	AuthOIDC  = "oidc"
 )
 
+// A-E1: upper bounds of an autonomous plan's budget, clamped so that a plan cannot outlive the login
+// session (oidc.MaxSession is 12 h). DefaultPlanDuration/DefaultPlanLLMCost are the caps unless the
+// environment says otherwise; plan.DefaultPlanDurationMinutes and the other defaults live in internal/plan.
+const (
+	DefaultPlanMaxDuration = 8 * time.Hour
+	DefaultPlanMaxLLMCost  = 5.00
+	// PlanDurationCap never exceeds oidc.MaxSession (12 h) minus one hour of headroom.
+	PlanDurationCap = 11 * time.Hour
+)
+
+// planMaxDuration reads AGW_PLAN_MAX_DURATION and clamps it to PlanDurationCap; a value below one minute
+// counts as one minute.
+func planMaxDuration() time.Duration {
+	d := dur("AGW_PLAN_MAX_DURATION", DefaultPlanMaxDuration)
+	if d > PlanDurationCap {
+		d = PlanDurationCap
+	}
+	if d < time.Minute {
+		d = time.Minute
+	}
+	return d
+}
+
+// planMaxLLMCost reads AGW_PLAN_MAX_LLM_COST; a value below 0.01 counts as 0.01.
+func planMaxLLMCost() float64 {
+	c := flt("AGW_PLAN_MAX_LLM_COST", DefaultPlanMaxLLMCost)
+	if c < 0.01 {
+		c = 0.01
+	}
+	return c
+}
+
 func FromEnv() Env {
 	return Env{
 		HTTPAddr:             ":" + str("AGW_HTTP_PORT", "18480"),
@@ -468,6 +504,8 @@ func FromEnv() Env {
 		APIToken:             str("AGW_API_TOKEN", ""),
 		MaxSubagents:         max(0, num("AGW_MAX_SUBAGENTS", DefaultMaxSubagents)),
 		ComputeMaxPerChat:    max(1, num("AGW_COMPUTE_MAX_PER_CHAT", DefaultComputeMaxPerChat)),
+		PlanMaxDuration:      planMaxDuration(),
+		PlanMaxLLMCost:       planMaxLLMCost(),
 		AllowedHosts:         strings.Split(str("AGW_ALLOWED_HOSTS", "127.0.0.1:18480,localhost:18480"), ","),
 		BgMax:                max(1, num("AGW_BG_MAX", 5)),
 		BgWakesPerHour:       wakes(num("AGW_BG_WAKES_PER_HOUR", 10)),

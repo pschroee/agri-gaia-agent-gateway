@@ -159,6 +159,53 @@ func (d *Delegation) Summary() string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
+// SummaryLine names the delegated rights in one line for the plan preview (A-E1): "create dataset; run
+// training own; read all". Reading rules that cover every known resource are collapsed into "read all".
+func (d *Delegation) SummaryLine() string {
+	var other, readAll, readRest []string
+	for _, r := range d.Rules {
+		switch {
+		case r.Action == Read && len(r.IDs) == 1 && r.IDs[0] == All:
+			readAll = append(readAll, r.Resource)
+		case r.Action == Read:
+			readRest = append(readRest, "read "+r.Resource+idsSuffix(r.IDs))
+		default:
+			other = append(other, r.Action+" "+r.Resource+idsSuffix(r.IDs))
+		}
+	}
+	parts := append([]string{}, other...)
+	switch {
+	case len(readAll) >= len(resources):
+		parts = append(parts, "read all")
+	case len(readAll) > 0:
+		parts = append(parts, "read "+strings.Join(readAll, ", "))
+	}
+	parts = append(parts, readRest...)
+	if len(parts) == 0 {
+		return "no rights"
+	}
+	return strings.Join(parts, "; ")
+}
+
+// idsSuffix renders the identifiers of a rule for SummaryLine; empty without identifiers.
+func idsSuffix(ids []string) string {
+	if len(ids) == 0 {
+		return ""
+	}
+	names := make([]string, len(ids))
+	for i, id := range ids {
+		switch id {
+		case All:
+			names[i] = "all"
+		case Own:
+			names[i] = "own"
+		default:
+			names[i] = id
+		}
+	}
+	return " " + strings.Join(names, ", ")
+}
+
 // Access is the classification of a call. Some calls touch more than one object (Review 5,
 // K2 and W1): Also names the further accesses that must be allowed as well. Problem is set
 // when the call has to be refused regardless of the rules (e.g. a field outside the allowlist).

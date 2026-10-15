@@ -56,6 +56,9 @@ type Attribution struct {
 	// (main agent plus allowed subagents). A hard limit, because it applies at the proxy
 	// outside the sandbox. 0: no limit.
 	MaxConcurrent int
+	// Budget refuses a model call when the chat's autonomous plan has used up its model-cost budget
+	// (A-E1, D1.9); the returned error is the refusal the proxy answers with 429. nil: no budget.
+	Budget func(chatID string) error
 }
 
 // Recorder attributes calls to chats and stores them.
