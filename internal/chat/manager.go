@@ -2214,10 +2214,21 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 	}
 	res.Violation = violation
 	res.Duration = took
-	if del != nil {
-		if r, id, ok := delegation.Created(access, res); ok {
-			if err := m.st.AddDelegationObject(context.WithoutCancel(ctx), chatID, r, id); err != nil {
-				slog.Error("provenance not recorded", "chat", chatID, "object", r+" "+id, "error", err)
+	// Provenance (edge D1.7, D1.9): images, container deployments and the tasks of a deployment are
+	// recorded in every chat, also without a delegation, because the edge guard needs them live.
+	// Every other object keeps the old rule and is recorded only with a delegation.
+	if r, id, ok := delegation.Created(access, res); ok && (del != nil || alwaysAttributed(access)) {
+		m.recordDelegationObject(ctx, chatID, r, id)
+	}
+	if ref, ok := delegation.CreatedImage(access, req, res); ok {
+		m.recordDelegationObject(ctx, chatID, delegation.ContainerImage, ref)
+	}
+	// A read of an image this chat knows answers with the number the platform gave it; the number is
+	// what POST /container-deployments carries, while the build only knows repo:tag (D1.9).
+	if ref, ids, ok := delegation.ImageRead(access, res); ok {
+		if own, err := m.st.IsDelegationObject(ctx, chatID, delegation.ContainerImage, ref); err == nil && own {
+			for _, id := range ids {
+				m.recordDelegationObject(ctx, chatID, delegation.ContainerImage, id)
 			}
 		}
 	}
