@@ -79,7 +79,9 @@ func (m *Manager) virtualUnavailable(path string) (platform.Result, bool) {
 	if _, ok := m.virtualFor(path); ok {
 		return platform.Result{}, false
 	}
-	return platform.Result{Status: "unavailable", Message: prefix + " is not configured on this instance"}, true
+	return platform.Result{Status: platform.StatusUnavailable, Message: platform.UnavailableText(
+		strings.TrimPrefix(prefix, "/_agw/"), prefix+" is not configured on this instance",
+		"Ask the user how to proceed without it")}, true
 }
 
 // platformDo sends a call out: a registered virtual path goes to its doer, an unregistered /_agw/ path

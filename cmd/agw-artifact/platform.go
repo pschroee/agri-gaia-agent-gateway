@@ -20,6 +20,10 @@ import (
 // exitDenied: call outside the delegated rights, refused by the authorization service.
 const exitDenied = 4
 
+// exitUnavailable: the capability this call needs is not part of this setup (G1.13); the agent should
+// work around it instead of repeating the call.
+const exitUnavailable = 5
+
 func platformCmd(hc *http.Client, args []string) (int, error) {
 	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" || args[0] == "help" {
 		platformUsage(os.Stdout)
@@ -70,6 +74,8 @@ func platformCmd(hc *http.Client, args []string) (int, error) {
 		return exitRejected, nil
 	case "denied":
 		return exitDenied, nil
+	case platform.StatusUnavailable:
+		return exitUnavailable, nil
 	}
 	return 1, nil
 }

@@ -222,6 +222,10 @@ func (r Result) Text() string {
 	case "rejected":
 		fmt.Fprintf(&b, "rejected: %s", r.Message)
 		return b.String()
+	case StatusUnavailable:
+		// The capability is missing in this setup (G1.13): the agent should work around it, not retry.
+		fmt.Fprintf(&b, "unavailable: %s", r.Message)
+		return b.String()
 	case "denied":
 		fmt.Fprintf(&b, "denied by the authorization service: %s (platform_rights or agw-platform rights shows which rights apply)", r.Message)
 		return b.String()

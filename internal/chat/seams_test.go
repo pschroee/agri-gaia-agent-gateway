@@ -221,7 +221,8 @@ func TestVirtualDispatch(t *testing.T) {
 	}
 }
 
-// A /_agw/ path nobody answers is answered by the gateway, not sent to the platform (G1.5, G1.13).
+// A /_agw/ path nobody answers is answered by the gateway, not sent to the platform (G1.5, G1.13):
+// the answer names the capability, says what to do instead and points at capabilities.
 func TestUnregisteredVirtualPrefix(t *testing.T) {
 	e := setup(t)
 	got := countPlatform(t, e)
@@ -234,8 +235,17 @@ func TestUnregisteredVirtualPrefix(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Status != "unavailable" || !strings.Contains(res.Message, "is not configured on this instance") {
-		t.Fatalf("unregistered prefix: %+v", res)
+	if res.Status != platform.StatusUnavailable {
+		t.Fatalf("status: %+v", res)
+	}
+	for _, want := range []string{
+		"notebook is not available in this setup:",
+		"/_agw/notebook is not configured on this instance",
+		"capabilities shows what this setup offers.",
+	} {
+		if !strings.Contains(res.Message, want) {
+			t.Errorf("message without %q: %s", want, res.Message)
+		}
 	}
 	if n := got(); len(n) != 0 {
 		t.Fatalf("an unregistered /_agw/ path reached the platform: %v", n)
@@ -243,7 +253,37 @@ func TestUnregisteredVirtualPrefix(t *testing.T) {
 	if aps, _ := e.st.ListApprovals(ctx, store.ApprovalPending, c.ID); len(aps) != 0 {
 		t.Fatalf("an unavailable call asked the user: %+v", aps)
 	}
+}
+
+// An unavailable call costs no compute call (G1.13): the answer comes before anything is reserved, and
+// it is not an error the agent would repeat.
+func TestUnavailableUsesNoCompute(t *testing.T) {
+	e := setup(t)
+	got := countPlatform(t, e)
+	e.m.opt.ComputeMaxPerChat = 1
+	ctx := context.Background()
+	c, err := e.m.Create(ctx, NewChat{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	slot := e.m.live[c.ID].slot.ID
+	for _, path := range []string{"/_agw/notebook/runs", "/_agw/annotation/start", "/_agw/nothing"} {
+		res, err := e.m.PlatformCall(ctx, c.ID, slot, "cli", platform.Request{Method: "POST", Path: path, Body: json.RawMessage(`{}`)})
+		if err != nil || res.Status != platform.StatusUnavailable {
+			t.Fatalf("%s: %+v %v", path, res, err)
+		}
+	}
 	if n, _ := e.st.ComputeCalls(ctx, c.ID); n != 0 {
-		t.Fatalf("an unavailable call used a compute call: %d", n)
+		t.Fatalf("compute calls used: %d", n)
+	}
+	// The chat can still spend its one compute call afterwards.
+	if ok, err := e.st.ReserveCompute(ctx, c.ID, 1); err != nil || !ok {
+		t.Fatalf("the limit is still free: %v %v", ok, err)
+	}
+	if aps, _ := e.st.ListApprovals(ctx, store.ApprovalPending, c.ID); len(aps) != 0 {
+		t.Fatalf("somebody was asked: %+v", aps)
+	}
+	if n := got(); len(n) != 0 {
+		t.Fatalf("the platform was called: %v", n)
 	}
 }
