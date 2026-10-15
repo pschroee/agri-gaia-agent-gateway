@@ -450,6 +450,51 @@ func (h *handler) readFiles(ctx context.Context, req *platform.Request) error {
 	return nil
 }
 
+// workspaceNotebookDir is where a file of a notebook run lands in the sandbox (own code C-E3).
+const workspaceNotebookDir = "/workspace/notebook"
+
+// The destination of a fetched file: the run id is one plain segment, the name one file name. The
+// gateway builds both, so the path cannot leave the directory the agent is told about.
+var (
+	fileRunRe  = regexp.MustCompile(`^r[0-9]{14}-[0-9a-f]{4}$`)
+	fileNameRe = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,120}$`)
+)
+
+// saveFile writes a file a virtual tool handed over (platform.Result.File) into the workspace and
+// replaces the answer's body with where it lies and what it is (notebook_fetch, own code C-E3).
+func (h *handler) saveFile(ctx context.Context, res *platform.Result) error {
+	if h.run == nil {
+		return errors.New("fetch needs the command line sandbox")
+	}
+	f := res.File
+	if !fileRunRe.MatchString(f.Dir) || !fileNameRe.MatchString(f.Name) {
+		return errors.New("the file cannot be saved under this name")
+	}
+	dir := workspaceNotebookDir + "/" + f.Dir
+	mk := execproto.Request{Op: execproto.OpMkdir, Path: dir}
+	if err := mk.Validate(); err != nil {
+		return err
+	}
+	if _, err := h.run.Run(ctx, mk, nil); err != nil {
+		return err
+	}
+	w := execproto.Request{Op: execproto.OpWrite, Path: dir + "/" + f.Name, Data: f.Data}
+	if err := w.Validate(); err != nil {
+		return err
+	}
+	fr, err := h.run.Run(ctx, w, nil)
+	if err != nil {
+		return err
+	}
+	if fr.Error != "" {
+		return errors.New(fr.Error)
+	}
+	sum := sha256.Sum256(f.Data)
+	res.Body = fmt.Sprintf("saved as %s/%s (%d bytes, sha256 %s)", dir, f.Name, len(f.Data), hex.EncodeToString(sum[:]))
+	res.File = nil
+	return nil
+}
+
 // maxPlatformArgs limits the arguments of a platform tool (train_config, body).
 const maxPlatformArgs = 1 << 20
 
@@ -532,6 +577,14 @@ func (h *handler) runPlatform(ctx context.Context, chat, via string, req platfor
 		}
 	}
 	res, err := pb.PlatformCall(ctx, chat, h.slot, via, req)
+	if err == nil && res.File != nil {
+		// A virtual tool handed a file over instead of an answer (notebook_fetch, own code C-E3): it
+		// goes into the workspace, and the agent gets where it lies and what it is.
+		if serr := h.saveFile(ctx, &res); serr != nil {
+			h.logCall(ctx, chat, via, "platform", req.String(), "error: "+serr.Error())
+			return platform.Result{Status: "error", Message: serr.Error()}, nil
+		}
+	}
 	result := res.Status
 	if res.HTTPStatus != 0 {
 		result = fmt.Sprintf("%s %d", res.Status, res.HTTPStatus)
@@ -819,6 +872,13 @@ func (h *handler) platformAPI(w http.ResponseWriter, r *http.Request) {
 		}
 		if len(req.Body) == 0 {
 			req.Body = nil
+		}
+		// The notebook paths belong to the notebook tools (own code C-E3): the REST binding cannot
+		// name the sandbox files a run gets, so it is refused here too (not only in the tool).
+		if why := platform.NotebookCallRefusal(req); why != "" {
+			h.logCall(ctx, chat, via, "platform", r.Method+" "+path, "refused: "+why)
+			fail(http.StatusBadRequest, why)
+			return
 		}
 		norm, nerr := platform.Normalize(req)
 		if nerr != nil {
