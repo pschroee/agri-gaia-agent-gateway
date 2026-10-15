@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"agw/internal/plan"
 	"agw/internal/platform"
@@ -66,7 +67,7 @@ func TestPinPlanFiles(t *testing.T) {
 	if len(b.reqs) != 1 {
 		t.Fatalf("calls at the backend: %v", b.reqs)
 	}
-	got, err := plan.ParseProposal([]byte(strings.SplitN(b.reqs[0], "|", 4)[3]))
+	got, err := plan.ParseProposal([]byte(strings.SplitN(b.reqs[0], "|", 4)[3]), plan.Limits{MaxDuration: 8 * time.Hour, MaxLLMCost: 5})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -182,5 +183,42 @@ func TestPlanToolCallPerBinding(t *testing.T) {
 	want := []string{"call_cli", "call_mcp", "call_api"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("tool calls at the backend: %v, want %v", got, want)
+	}
+}
+
+// A-E1: an autonomous proposal reaches the manager unchanged over CLI, MCP and REST (the grant is derived
+// from it, so the three bindings must carry the same body). That the derived grant bounds every binding
+// alike is checked in internal/chat (the sock backend fakes PlatformCall and never runs the guard).
+func TestAutonomousPlanSameOverCLIMCPREST(t *testing.T) {
+	b := &platformBackend{fakeBackend: fakeBackend{chat: "chat-auto", decide: "approved"}}
+	c := start(t, b)
+	body := `{"title":"Autonom","mode":"autonomous","budget":{"max_duration_minutes":60,"max_llm_cost_usd":1,"max_auto_turns":5},"steps":[{"method":"POST","path":"/datasets"}]}`
+	if code, r := cliPlatform(t, c, "propose-plan", `{"plan":`+body+`}`); code != 200 || r.Status != "ok" {
+		t.Fatalf("CLI: %d %+v", code, r)
+	}
+	res := mcpCall(t, c, "tools/call", map[string]any{"name": "platform_propose_plan", "arguments": map[string]any{
+		"plan": map[string]any{"title": "Autonom", "mode": "autonomous",
+			"budget": map[string]any{"max_duration_minutes": 60, "max_llm_cost_usd": 1, "max_auto_turns": 5},
+			"steps":  []any{map[string]any{"method": "POST", "path": "/datasets"}}}}})
+	if res["isError"] == true {
+		t.Fatalf("MCP: %v", res)
+	}
+	if code, _, _ := apiCall(t, c, "POST", "/platform-api/_agw/plan", "application/json", body, nil); code != 200 {
+		t.Fatalf("REST: %d", code)
+	}
+	var canon []string
+	for _, rq := range b.reqs {
+		parts := strings.SplitN(rq, "|", 4)
+		if len(parts) != 4 || parts[2] != "POST /_agw/plan" {
+			t.Fatalf("not a plan proposal: %q", rq)
+		}
+		cb, err := plan.Canonical([]byte(parts[3]))
+		if err != nil {
+			t.Fatal(err)
+		}
+		canon = append(canon, string(cb))
+	}
+	if len(canon) != 3 || canon[0] != canon[1] || canon[1] != canon[2] {
+		t.Fatalf("bodies differ over the bindings: %v", canon)
 	}
 }
