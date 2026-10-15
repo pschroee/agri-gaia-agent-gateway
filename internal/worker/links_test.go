@@ -64,3 +64,27 @@ func TestSystemNoteLinkRule(t *testing.T) {
 		}
 	}
 }
+
+// Issue #118 (L1): the fixed list of platform paths reaches every binding exactly once through linkRule, and it
+// never hints at a host, the gateway or the agent's own pages.
+func TestPlatformLinksInEveryBinding(t *testing.T) {
+	for _, ts := range toolset.All() {
+		note := SystemNoteFor(ts.Key(), 4)
+		if strings.Count(note, platformLinks) != 1 {
+			t.Errorf("%s: platform links not exactly once", ts.Key())
+		}
+	}
+	for _, w := range []string{"/data?dataset=", "/models/<id>", "/edge/<id>", "without a host"} {
+		if !strings.Contains(platformLinks, w) {
+			t.Errorf("platform links without %q", w)
+		}
+	}
+	for _, w := range []string{"http", "agent.", "/agent"} {
+		if strings.Contains(platformLinks, w) {
+			t.Errorf("platform links contain %q", w)
+		}
+	}
+	if !strings.HasSuffix(linkRule, platformLinks) {
+		t.Error("link rule does not end with the platform links")
+	}
+}
