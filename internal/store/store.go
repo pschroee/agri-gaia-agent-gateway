@@ -211,6 +211,10 @@ type Approval struct {
 	// read itself, never from the agent's text; first line the action, then one detail per line. Platform calls and
 	// plans only; empty for older entries.
 	Summary string `json:"summary,omitempty"`
+	// SummaryProposed and SummaryChangedAt (issue L2/#119): the text the user saw when the approval was raised and
+	// the time a re-read at the moment of the approval found other values. Both empty/nil while nothing changed.
+	SummaryProposed  string     `json:"summary_proposed,omitempty"`
+	SummaryChangedAt *time.Time `json:"summary_changed_at,omitempty"`
 }
 
 type SocketCall struct {
@@ -758,11 +762,11 @@ func (s *Store) GetArtifact(ctx context.Context, chatID, kind, name string) (Art
 	return scanArtifact(s.pool.QueryRow(ctx, `SELECT `+artifactCols+` FROM artifacts WHERE chat_id=$1 AND kind=$2 AND name=$3`, chatID, kind, name))
 }
 
-const approvalCols = `id::text, chat_id::text, kind, via, name, size, sha256, content_type, pending_key, COALESCE(preview,''), state, created_at, decided_at, session, tool_call_id, COALESCE(effect,''), COALESCE(summary,'')`
+const approvalCols = `id::text, chat_id::text, kind, via, name, size, sha256, content_type, pending_key, COALESCE(preview,''), state, created_at, decided_at, session, tool_call_id, COALESCE(effect,''), COALESCE(summary,''), COALESCE(summary_proposed,''), summary_changed_at`
 
 func scanApproval(row pgx.Row) (Approval, error) {
 	var a Approval
-	err := row.Scan(&a.ID, &a.ChatID, &a.Kind, &a.Via, &a.Name, &a.Size, &a.SHA256, &a.ContentType, &a.PendingKey, &a.Preview, &a.State, &a.CreatedAt, &a.DecidedAt, &a.Session, &a.ToolCallID, &a.Effect, &a.Summary)
+	err := row.Scan(&a.ID, &a.ChatID, &a.Kind, &a.Via, &a.Name, &a.Size, &a.SHA256, &a.ContentType, &a.PendingKey, &a.Preview, &a.State, &a.CreatedAt, &a.DecidedAt, &a.Session, &a.ToolCallID, &a.Effect, &a.Summary, &a.SummaryProposed, &a.SummaryChangedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return a, ErrNotFound
 	}
@@ -787,6 +791,27 @@ func (s *Store) GetApproval(ctx context.Context, id string) (Approval, error) {
 // whether this decision took effect; otherwise the existing state is returned.
 func (s *Store) DecideApproval(ctx context.Context, id, state string) (Approval, bool, error) {
 	a, err := scanApproval(s.pool.QueryRow(ctx, `UPDATE approvals SET state=$2, decided_at=now() WHERE id=$1 AND state='pending' RETURNING `+approvalCols, id, state))
+	if err == nil {
+		return a, true, nil
+	}
+	if !errors.Is(err, ErrNotFound) {
+		return a, false, err
+	}
+	a, err = s.GetApproval(ctx, id)
+	return a, false, err
+}
+
+// ReplaceApprovalSummary overwrites the gateway's summary of a pending approval with what a re-read at the moment of
+// the approval found (issue L2/#119). The first proposal stays in summary_proposed (COALESCE), and
+// summary_changed_at marks when the change was seen; an empty preview keeps the stored one. ok reports whether it
+// took effect (the approval must still be pending); otherwise the existing approval is returned.
+func (s *Store) ReplaceApprovalSummary(ctx context.Context, id, summary, preview string) (Approval, bool, error) {
+	if !isUUID(id) {
+		return Approval{}, false, ErrNotFound
+	}
+	a, err := scanApproval(s.pool.QueryRow(ctx, `UPDATE approvals
+SET summary_proposed = COALESCE(summary_proposed, summary), summary = $2, preview = COALESCE(NULLIF($3,''), preview), summary_changed_at = now()
+WHERE id=$1 AND state='pending' RETURNING `+approvalCols, id, summary, preview))
 	if err == nil {
 		return a, true, nil
 	}

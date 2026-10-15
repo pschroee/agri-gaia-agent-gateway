@@ -52,3 +52,8 @@ ALTER TABLE plan_steps ADD COLUMN IF NOT EXISTS args text NOT NULL DEFAULT '';
 ALTER TABLE plan_steps ADD COLUMN IF NOT EXISTS summary text NOT NULL DEFAULT '';
 -- The same for an approval (single platform calls and plans); empty for other kinds and older entries.
 ALTER TABLE approvals ADD COLUMN IF NOT EXISTS summary text;
+
+-- The summary as it was first proposed (issue L2/#119): a re-read at the moment of the approval overwrites summary,
+-- and this column keeps the first text so that the card can show "As proposed" next to the current one. NULL until
+-- the first change; then it holds the text the user saw when the approval was raised.
+ALTER TABLE plan_steps ADD COLUMN IF NOT EXISTS summary_proposed text;
