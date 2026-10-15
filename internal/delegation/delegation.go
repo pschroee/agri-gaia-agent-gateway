@@ -491,23 +491,25 @@ func contains(l []string, s string) bool {
 }
 
 // Created determines the new object after a successful create call (provenance rule): the
-// identifier from the body for datasets and models, the task from Location for training.
-// Training containers are created asynchronously and cannot be attributed this way (limitation).
+// identifier from the body for datasets, models and container deployments, the task from Location
+// for training and for container deployments. Training containers are created asynchronously and
+// cannot be attributed this way (limitation).
 func Created(a Access, res platform.Result) (resource, id string, ok bool) {
 	if res.Status != "ok" || res.HTTPStatus < 200 || res.HTTPStatus >= 300 {
 		return "", "", false
 	}
-	if a.Action == Run && a.Resource == Training { // start and stop report their task (Review 5, M1)
+	switch {
+	case a.Action == Run && a.Resource == Training, // start and stop report their task (Review 5, M1)
+		a.Action == Run && a.Resource == ContainerDeployment: // deploy and undeploy do too (edge D1.4)
 		if m := taskLoc.FindStringSubmatch(res.Location); m != nil {
 			return Task, canonID(m[1]), true
 		}
 		return "", "", false
-	}
-	if a.Action != Create {
+	case a.Action != Create:
 		return "", "", false
 	}
 	switch a.Resource {
-	case Dataset, Model:
+	case Dataset, Model, ContainerDeployment:
 		if id := bodyID([]byte(res.Body), "id"); id != "" {
 			return a.Resource, id, true
 		}
@@ -517,6 +519,52 @@ func Created(a Access, res platform.Result) (resource, id string, ok bool) {
 		}
 	}
 	return "", "", false
+}
+
+// CreatedImage determines the image a successful build created (edge D1.9): the reference is built
+// from the body the gateway sent, never from the answer and never from what the agent claims. The
+// numeric identifier of the image is created by the registry webhook afterwards; ImageRead adds it.
+func CreatedImage(a Access, req platform.Request, res platform.Result) (ref string, ok bool) {
+	if a.Action != Create || a.Resource != ContainerImage {
+		return "", false
+	}
+	if res.Status != "ok" || res.HTTPStatus < 200 || res.HTTPStatus >= 300 {
+		return "", false
+	}
+	repository := bodyID([]byte(req.Body), "repository")
+	tag := bodyID([]byte(req.Body), "tag")
+	if repository == "" || tag == "" {
+		return "", false
+	}
+	return repository + ":" + tag, true
+}
+
+// ImageRead reads the reference of an image and the identifiers of its answer (edge D1.9): a read of
+// the image under the reference the chat knows carries the number the platform gave it, which only
+// the registry webhook created. The caller records those numbers as further identifiers of the same
+// image. It is provenance from the gateway's own call, not from a claim of the agent.
+func ImageRead(a Access, res platform.Result) (ref string, ids []string, ok bool) {
+	if a.Action != Read || a.Resource != ContainerImage || !strings.Contains(a.ID, "/") || !strings.Contains(a.ID, ":") {
+		return "", nil, false
+	}
+	if res.Status != "ok" || res.HTTPStatus < 200 || res.HTTPStatus >= 300 {
+		return "", nil, false
+	}
+	var entries []struct {
+		ID json.Number `json:"id"`
+	}
+	if json.Unmarshal([]byte(res.Body), &entries) != nil {
+		return "", nil, false
+	}
+	for _, e := range entries {
+		if e.ID != "" {
+			ids = append(ids, e.ID.String())
+		}
+	}
+	if len(ids) == 0 {
+		return "", nil, false
+	}
+	return a.ID, ids, true
 }
 
 var taskLoc = regexp.MustCompile(`^/tasks/([0-9]+)(?:$|\?)`)
