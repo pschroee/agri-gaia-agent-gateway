@@ -2289,8 +2289,14 @@ func (m *Manager) settle(ctx context.Context, chatID, id string, approved bool, 
 	return a.State
 }
 
-// Decide is the user's decision from the API.
+// Decide is the user's decision from the API. Approving re-reads the platform first when the approval belongs to a
+// waiting call (issue L2/#119): the user only approves what they saw, see decideChecked.
 func (m *Manager) Decide(ctx context.Context, approvalID string, approve bool) (store.Approval, error) {
+	if approve {
+		if f := m.recheckFor(approvalID); f != nil {
+			return m.decideChecked(ctx, approvalID, f)
+		}
+	}
 	return m.decide(ctx, approvalID, approve)
 }
 

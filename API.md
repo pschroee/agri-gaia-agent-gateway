@@ -326,6 +326,8 @@ type Approval = {
   preview?: string;       // first 4 KiB, text only
   effect?: "read" | "write" | "compute" | "irreversible"; // platform_write: class of the call (see "Effect classes")
   summary?: string;       // platform_write and plan: what will happen, written by the gateway (see "Summaries by the gateway")
+  summary_proposed?: string;   // the summary as it was proposed: set when a click on "Approve" found another platform state
+  summary_changed_at?: string; // when that change was seen (see "Summaries by the gateway")
 };
 type SocketCall = { id: number; chat_id?: string; slot_id: string; via: "cli" | "mcp" | "api" | "user" /* user: the user's internet switch */; op: string; detail: string; result: string; created_at: string; session?: string; tool_call_id?: string;
   duration_ms?: number /* platform calls: round trip to the platform in ms (token exchange included, approval wait excluded); missing: not measured */;
@@ -387,7 +389,7 @@ type ActivityPage = { calls: ActivityCall[]; chats: Record<string, { id: string;
 | `GET /api/approvals?state=pending` | `Approval[]` | open approvals of all chats |
 | `GET /api/events` | SSE | approvals across all the user's chats, see *SSE `GET /api/events`* |
 | `GET /api/activity?kind=&since=&until=&outcome=&chat=&limit=&before=` | `ActivityPage` | platform calls (with `kind=internet\|all` also the internet switches) of the user's chats across all chats, newest first, with a summary of the period; see *Activity across chats* |
-| `POST /api/approvals/{id}` `{approve: boolean}` | `Approval` | approve or reject |
+| `POST /api/approvals/{id}` `{approve: boolean}` | `Approval` | approve or reject; approving re-reads the platform first (see *Summaries by the gateway*): on a change **409** with `{error, code: "summary_changed", approval}` and the approval stays open |
 | `GET /api/chats/{id}/events` | SSE | live events of the chat |
 | `POST /api/chats/{id}/trash` | `Chat` | moves the chat into the trash (see *Chat trash*): stops the work, rejects open approvals and expires open plans, returns the sandbox; idempotent; 404 for foreign and unknown chats |
 | `POST /api/chats/{id}/restore` | `Chat` | takes the chat out of the trash; does not wake it; 409 `not_in_trash` if it is not in the trash |
@@ -450,7 +452,7 @@ count. The per-chat log in `GET /api/chats/{id}` (`socket_calls`) and the SSE ev
 
 | Parameter | Meaning |
 |---|---|
-| `kind` | `platform` (default, as before issue #37), `internet` (only the internet switches) or `all` (both in one list, by id); 400 otherwise. Every entry carries `kind` |
+| `kind` | `platform` (default, as before issue #37), `internet` (only the internet switches) or `all` (both in one list, by id); 400 otherwise. Every entry carries `kind`. Since issue L2/#119 the platform kind also holds the gateway's own summary reads (`op: "summary_read"`, `via: "orchestrator"`); they never count in `summary` |
 | `since`, `until` | period as RFC 3339 times (`2026-10-06T00:00:00+02:00`); `since` inclusive, `until` exclusive; 400 otherwise |
 | `outcome` | `ok`, `error`, `blocked` (violation blocked by the delegation), `logged` (violation let through and logged), `rejected` (by the user or no decision in time), `refused` (by the gateway before it went out); filters `calls` only, not `summary`; it belongs to platform calls, so with `kind=all` it leaves out the internet entries |
 | `chat` | one chat of the user |
@@ -465,6 +467,14 @@ variant and delegation of the chats on the page. `summary` covers the whole peri
 `before` or `limit`): number of calls in total and per outcome, chats with platform calls, `runs` (requests to the
 agent, `chat_turns`, in the same chats and period) and the measured durations (`count`, average, 95th percentile,
 maximum in ms, rounded to 0.1 ms).
+
+**Summary reads of the gateway** (issue L2/#119) are the `socket_calls` entries with `op: "summary_read"` and
+`via: "orchestrator"`. The gateway reads platform state to write what an approval says will happen (see *Summaries by
+the gateway*); those reads belong to the system, not to the agent, and appear as **one entry per summary**: `detail` =
+`for approval <first 8 characters of the id> (proposed|approval): GET /datasets/16, GET /models/3` (at most 20 paths,
+then `… and N more`), `result` = `ok` or `error: <n> of <m> not readable`. `proposed` is the read that wrote the
+summary at proposal time, `approval` the re-read at the moment of the decision. They carry no `outcome` and no
+`approval`, and **never count in `summary`** — the figures stay those of the agent's platform calls.
 
 **Internet entries** (issue #37) are the `socket_calls` entries with `op` `internet` (the agent's request, `detail` =
 its reason), `internet_off` (the agent switched off) and `internet_set` (the user's switch through
@@ -1057,7 +1067,7 @@ merged (strand G-B), an approved plan does not yet change how the steps are appr
   approval: `{"plan_id", "state": "approved", "expires_at", "steps": [{"step", "call", "effect", "covered"}], "note"}`
   with status `ok`. A rejected or expired plan answers `rejected` and executes nothing.
 - **Types:** `Plan = {id, chat_id, approval_id?, agent_title, session?, tool_call_id?, via, state, created_at,
-  decided_at?, expires_at?, steps: PlanStep[]}`; `PlanStep = {idx, summary?, agent_note?, tool?, args?, method, path,
+  decided_at?, expires_at?, steps: PlanStep[]}`; `PlanStep = {idx, summary?, summary_proposed?, agent_note?, tool?, args?, method, path,
   query?, body?, body_sha256?,
   form?, form_sha256?, files?: {field, path, sha256}[], effect, covered, state, result?, created_resource?, created_id?,
   done_at?}`. Plan states: `proposed | approved | rejected | expired | completed | failed | superseded`; step states:
@@ -1073,9 +1083,10 @@ What an approval says will happen is written by the gateway (issue #72), never t
 single platform call (`Approval.summary`, kind `platform_write`) and of every plan step (`PlanStep.summary`, stored in
 `plan_steps.summary` when the plan is proposed). `platform.Summarize` builds it from the call that will go out (method,
 path, query, body, form, files; for a plan step the stored step with its placeholders) and from platform state the
-gateway reads itself right then, as the user and only with reading GETs (these reads are not part of the agent's
-activity). The UI shows it as the main line; the stored data is shown as stored, nothing is rebuilt from the agent's
-input.
+gateway reads itself right then, as the user and only with reading GETs. These reads belong to the system, not to the
+agent: every summary's reads appear as **one** activity entry `op: "summary_read"`, `via: "orchestrator"`, and they
+never count in the figures of the activity (see *Activity across chats*). The UI shows the summary as the main line;
+the stored data is shown as stored, nothing is rebuilt from the agent's input.
 
 - **Format:** plain text; the first line says what happens, each further line is one detail (`Label: value`). Names
   and values are quoted with Go's `strconv.Quote` (control characters, quotes and newlines escaped), so a name on the
@@ -1097,6 +1108,25 @@ input.
   (the proposal still writes `title` and `description`); UIs show them apart and marked as not verified.
 - **Older entries:** approvals and steps from before #72 have no summary (`summary` missing); UIs then show method and
   path.
+
+### The moment of the approval (issue L2/#119)
+
+The user approves what they saw: a click on `POST /api/approvals/{id}` with `approve: true` re-reads the platform
+first, with the **same** function and the same inputs that wrote the summary (`platform.Summarize` for a single call,
+`platform.SummarizePlan` for a plan, every step).
+
+- **Nothing changed:** the decision goes through as before.
+- **Something changed:** the approval is **not** decided. Its summary is replaced by the newly read text
+  (`Approval.summary`, `PlanStep.summary`), the first proposal stays in `summary_proposed`, the time of the change in
+  `summary_changed_at`, and the preview of a plan is rebuilt from the new step texts. The API answers **409** with
+  `{"error": …, "code": "summary_changed", "approval": Approval}`; the waiting call keeps waiting, and the next click
+  approves when nothing changed again.
+- **A read fails** (error, `status: "error"` or 4xx/5xx from the platform): the stored summary is approved, because a
+  platform that is briefly unreachable must not block the user. The `summary_read` entry of the re-read carries
+  `error: <n> of <m> not readable`.
+- **A rejection** never re-reads.
+- The re-read belongs to a waiting call: once the approval expired or the call is gone, a decision behaves as before
+  (the stored text). A plan is re-read step by step and every step's summary is replaced.
 
 ## Tool executions (E9)
 

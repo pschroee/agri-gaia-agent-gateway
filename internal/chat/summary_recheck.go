@@ -7,6 +7,7 @@ package chat
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"sync"
 
 	"agw/internal/plan"
@@ -93,4 +94,83 @@ func (m *Manager) planRecheck(chatID, approvalID, title string, steps []store.Pl
 		m.logSummaryReads(ctx, chatID, approvalID, "approval", rl)
 		return out, visibleControls(plan.Preview(title, fresh)), rl.failedReads() > 0
 	}
+}
+
+// decideChecked approves an approval whose summary is re-read first (DL2.1). The lock per approval keeps a second
+// simultaneous click waiting. Reads that fail approve the stored summary (DL2.3); a changed summary replaces the
+// approval's text, keeps the first proposal and returns ErrSummaryChanged without resolving the waiting call.
+func (m *Manager) decideChecked(ctx context.Context, approvalID string, f recheck) (store.Approval, error) {
+	unlock := m.approvalLock(approvalID)
+	defer unlock()
+	ap, err := m.st.GetApproval(ctx, approvalID)
+	if err != nil || ap.State != store.ApprovalPending {
+		return ap, err
+	}
+	sums, preview, failed := f(ctx)
+	if failed {
+		return m.decide(ctx, approvalID, true)
+	}
+	ap, changed, err := m.replaceChangedSummary(ctx, ap, sums, preview)
+	if err != nil {
+		return ap, err
+	}
+	if !changed {
+		return m.decide(ctx, approvalID, true)
+	}
+	m.publish(ap.ChatID, Event{Kind: "approval", Data: ap})
+	m.publishChat(ctx, ap.ChatID)
+	slog.Info("approval summary changed since it was proposed", "approval", approvalID)
+	return ap, ErrSummaryChanged
+}
+
+// replaceChangedSummary compares the freshly read summaries with the stored ones and replaces them when they differ;
+// changed false means: the decision may go through, the approval still says what the user saw.
+func (m *Manager) replaceChangedSummary(ctx context.Context, ap store.Approval, sums []string, preview string) (store.Approval, bool, error) {
+	if ap.Kind == "plan" {
+		pl, err := m.st.PlanByApproval(ctx, ap.ID)
+		if err != nil {
+			return ap, false, err
+		}
+		if len(pl.Steps) == len(sums) && sameStepSummaries(pl.Steps, sums) {
+			return ap, false, nil
+		}
+		if err := m.st.ReplacePlanStepSummaries(ctx, pl.ID, sums); err != nil {
+			return ap, false, err
+		}
+		upd, err := m.st.GetPlan(ctx, pl.ID)
+		if err != nil {
+			return ap, false, err
+		}
+		if preview == "" {
+			preview = visibleControls(plan.Preview(upd.Title, upd.Steps))
+		}
+		a, _, err := m.st.ReplaceApprovalSummary(ctx, ap.ID, plan.ApprovalSummary(upd.Steps), preview)
+		if err != nil {
+			return ap, false, err
+		}
+		m.publishPlan(ctx, pl.ID)
+		return a, true, nil
+	}
+	if len(sums) == 0 || sums[0] == ap.Summary {
+		return ap, false, nil
+	}
+	// The preview of a single call is not rebuilt: it shows the call and its parameters, which did not change.
+	a, _, err := m.st.ReplaceApprovalSummary(ctx, ap.ID, sums[0], preview)
+	if err != nil {
+		return ap, false, err
+	}
+	return a, true, nil
+}
+
+// sameStepSummaries reports whether every step still carries the summary that was read again.
+func sameStepSummaries(steps []store.PlanStep, sums []string) bool {
+	if len(steps) != len(sums) {
+		return false
+	}
+	for i := range steps {
+		if steps[i].Summary != sums[i] {
+			return false
+		}
+	}
+	return true
 }
