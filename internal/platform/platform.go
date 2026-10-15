@@ -58,6 +58,9 @@ type Config struct {
 	HTTP       *http.Client
 	// MaxResult limits the response body the agent sees (default DefaultMaxResult).
 	MaxResult int
+	// MaxStream limits what Stream hands out in one piece (default DefaultMaxStream). The gateway
+	// keeps no copy of it, so this guards against a surprise, it is not a buffer size.
+	MaxStream int64
 }
 
 const (
@@ -209,6 +212,9 @@ type Result struct {
 	// Duration: round trip to the platform (token exchange included, approval wait excluded); zero if the call
 	// did not go out. Logged with the call, not shown to the agent.
 	Duration time.Duration `json:"-"`
+	// File: a file that goes into the execution sandbox instead of into the answer (notebook_fetch, own
+	// code C-E3). The socket writes it and replaces Body with a note; never part of the agent's answer.
+	File *FileData `json:"-"`
 }
 
 // RightsPath is the path under which the orchestrator itself answers the chat's delegated

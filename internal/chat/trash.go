@@ -63,6 +63,14 @@ func (m *Manager) Trash(ctx context.Context, chatID string) (ChatView, error) {
 	if !moved {
 		return m.View(ctx, chatID)
 	}
+	// The notebook server of the chat goes with it (own code C-E3). Its volume stays, so the files of
+	// earlier runs are there again when the chat comes back; a server nothing touches would also be
+	// stopped by the reaper. Only the error is logged: the chat is in the trash either way.
+	if m.opt.Notebook != nil {
+		if err := m.opt.Notebook.StopChat(ctx, chatID); err != nil {
+			slog.Warn("notebook server not stopped with the trash", "chat", chatID, "error", err)
+		}
+	}
 	// Open approvals (also of plans) are rejected: the waiting calls end with "rejected".
 	m.rejectPending(ctx, chatID, trashRefusal)
 	if n, err := m.st.ExpireOpenPlans(ctx, chatID); err != nil {

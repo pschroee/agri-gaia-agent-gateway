@@ -365,8 +365,15 @@ func (w *hijackStdin) Close() error {
 // Exec runs a command as the agent user in the container. The session
 // files live in tmpfs; `docker cp` does not see tmpfs contents, exec does.
 func (r *Runtime) Exec(ctx context.Context, id string, cmd []string, stdin io.Reader) ([]byte, int, error) {
+	return r.ExecAs(ctx, id, agentUID+":"+agentUID, cmd, stdin)
+}
+
+// ExecAs runs a command in the container as the given user (uid:gid), e.g. "1000:100" for the
+// agent's notebook server (own code C-E3, whose image runs as jovyan). The session files live in
+// tmpfs; `docker cp` does not see tmpfs contents, exec does.
+func (r *Runtime) ExecAs(ctx context.Context, id, user string, cmd []string, stdin io.Reader) ([]byte, int, error) {
 	ex, err := r.cli.ExecCreate(ctx, id, client.ExecCreateOptions{
-		User: agentUID + ":" + agentUID, Cmd: cmd,
+		User: user, Cmd: cmd,
 		AttachStdin: stdin != nil, AttachStdout: true, AttachStderr: true,
 	})
 	if err != nil {
@@ -597,6 +604,25 @@ func (r *Runtime) RemoveManaged(ctx context.Context) (int, error) {
 		}
 	}
 	return n, nil
+}
+
+// FindByLabels returns the ids of the running containers that carry all these labels (own code
+// C-E3 finds a chat's notebook server this way; the gateway sets the name, the agent never does).
+// A label nobody matches gives no error and no id.
+func (r *Runtime) FindByLabels(ctx context.Context, labels map[string]string) ([]string, error) {
+	f := make(client.Filters)
+	for k, v := range labels {
+		f = f.Add("label", k+"="+v)
+	}
+	res, err := r.cli.ContainerList(ctx, client.ContainerListOptions{Filters: f})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(res.Items))
+	for _, c := range res.Items {
+		out = append(out, c.ID)
+	}
+	return out, nil
 }
 
 // TailBuffer keeps the last n bytes (pi's stderr, for error messages).

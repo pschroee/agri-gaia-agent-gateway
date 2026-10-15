@@ -540,6 +540,11 @@ var Tools = []Tool{
 				}
 				r.Body = raw
 			}
+			// The notebook paths belong to the notebook tools alone (own code C-E3): a raw call has
+			// no way to hand a run its files from the sandbox.
+			if why := NotebookCallRefusal(r); why != "" {
+				return r, errors.New(why)
+			}
 			return r, nil
 		}},
 }
