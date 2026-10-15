@@ -360,6 +360,12 @@ func blockedCall(r Request) string {
 	if p == "/train/config" && (r.Method == http.MethodPost || r.Method == http.MethodPut) {
 		return CheckTrainConfig(r.Body)
 	}
+	if p == "/train/template" || strings.HasPrefix(p, "/train/template/") {
+		if r.Method != http.MethodGet {
+			return "changing training templates is not allowed for the agent"
+		}
+		return ""
+	}
 	if p != templatesPath && !strings.HasPrefix(p, templatesPath+"/") {
 		return ""
 	}

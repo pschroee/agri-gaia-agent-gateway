@@ -547,7 +547,9 @@ whose keys match `[a-z][a-z0-9_-]{0,40}` and whose values are a number, `true`/`
 `A-Za-z0-9_.,:/+-` (at most 100 characters, so `"0,1"` and `cpu` for `device` pass) or a list of at most 32 such values.
 Duplicate keys and nested objects are refused; the refusal names the place, for example
 `refused: train_config.optimizer: value not allowed (…)`. A body without a `train_config` member is passed on — there is
-no value for the shell, and the platform refuses such a call on its own.
+no value for the shell, and the platform refuses such a call on its own. Only `GET` is allowed under `/train/template`;
+every other method (`POST /train/template/upload`, `DELETE /train/template`) is refused with
+`refused: changing training templates is not allowed for the agent`.
 
 ## SSE `GET /api/chats/{id}/events`
 

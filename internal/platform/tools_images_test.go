@@ -338,3 +338,24 @@ func TestRawPutTrainConfigRefused(t *testing.T) {
 		t.Errorf("GET /train/config/…: refused: %v", err)
 	}
 }
+
+func TestTrainTemplateBlocked(t *testing.T) {
+	blocked := map[string]Request{
+		"upload": {Method: http.MethodPost, Path: "/train/template/upload", Form: map[string][]string{"template_zip": {"x"}}, Files: []File{{Field: "template_zip", Path: "/workspace/t.zip"}}},
+		"delete": {Method: http.MethodDelete, Path: "/train/template", Body: json.RawMessage(`{"provider":"Torchvision","architecture":"EfficientNet"}`)},
+	}
+	for name, r := range blocked {
+		if _, err := Normalize(r); err == nil {
+			t.Errorf("%s: not refused", name)
+		}
+	}
+	// The routes around it stay open: reading providers and templates is a normal read.
+	for name, r := range map[string]Request{
+		"providers":     {Method: http.MethodGet, Path: "/train/providers"},
+		"template list": {Method: http.MethodGet, Path: "/train/template"},
+	} {
+		if _, err := Normalize(r); err != nil {
+			t.Errorf("%s: refused: %v", name, err)
+		}
+	}
+}
