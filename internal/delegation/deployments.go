@@ -67,6 +67,8 @@ func init() {
 		re     *regexp.Regexp
 		fields []string
 	}{http.MethodPost, deploymentBodyRe, fields})
+
+	registerConformance(deploymentConformanceCases()...)
 }
 
 // refineDeployment adds what a new deployment touches and checks name and ports (edge D1.3, D1.5,
@@ -254,3 +256,71 @@ func portNumber(v any) (int, bool) {
 	}
 	return 0, false
 }
+
+func deploymentConformanceCases() []Case {
+	device := func(body string) platform.Request {
+		return platform.Request{Method: http.MethodPost, Path: "/container-deployments", Body: json.RawMessage(body)}
+	}
+	valid := `{"edge_device_id":1,"container_image_id":5,"name":"agw-mnist","port_bindings":[{"host_port":"18190","container_port":"8000","protocol":"tcp"}]}`
+	return []Case{
+		// Allowed control calls: reading deployments and the edge groups. A check that refuses
+		// everything must not pass as correct.
+		{Name: "list container deployments", Req: platform.Request{Method: http.MethodGet, Path: "/container-deployments"}, Allowed: true, Group: "control", Rules: edgeReadRules},
+		{Name: "read the edge groups (only reading)", Req: platform.Request{Method: http.MethodGet, Path: "/edge-groups"}, Allowed: true, Group: "control", Rules: edgeReadRules},
+
+		// Blocked for the agent whatever the delegation says (edge D1.1)
+		{Name: "create an application (compose stack)", Req: platform.Request{Method: http.MethodPost, Path: "/applications",
+			Body: json.RawMessage(`{"name":"x","edge_group_id":1,"stack_file_content":"services: {}"}`)}, Group: "blocked"},
+		{Name: "read applications", Req: platform.Request{Method: http.MethodGet, Path: "/applications"}, Group: "blocked"},
+		{Name: "create a model deployment", Req: platform.Request{Method: http.MethodPost, Path: "/model-deployments",
+			Body: json.RawMessage(`{"model_id":5,"edge_device_id":1}`)}, Group: "blocked"},
+		{Name: "create an edge group", Req: platform.Request{Method: http.MethodPost, Path: "/edge-groups",
+			Body: json.RawMessage(`{"name":"x","tag_ids":[1]}`)}, Group: "blocked"},
+		{Name: "create an edge device", Req: platform.Request{Method: http.MethodPost, Path: "/edge-devices",
+			Body: json.RawMessage(`{"name":"x","tags":["t"]}`)}, Group: "blocked"},
+		{Name: "create a tag", Req: platform.Request{Method: http.MethodPost, Path: "/tags", Form: map[string][]string{"name": {"x"}}}, Group: "blocked"},
+
+		// Name and ports (edge D1.5, D1.6); the problem holds with and without a delegation
+		{Name: "deployment with container port 22", Req: device(`{"edge_device_id":1,"container_image_id":5,"name":"agw-mnist","port_bindings":[{"host_port":"18190","container_port":"22","protocol":"tcp"}]}`), Group: "field", Rules: deploymentRules},
+		{Name: "deployment with host port 18200", Req: device(`{"edge_device_id":1,"container_image_id":5,"name":"agw-mnist","port_bindings":[{"host_port":"18200","container_port":"8000","protocol":"tcp"}]}`), Group: "field", Rules: deploymentRules},
+		{Name: "deployment with a name of its own", Req: device(`{"edge_device_id":1,"container_image_id":5,"name":"mnist-triton","port_bindings":[{"host_port":"18190","container_port":"8000","protocol":"tcp"}]}`), Group: "field", Rules: deploymentRules},
+		{Name: "deployment with a field of its own", Req: device(`{"edge_device_id":1,"container_image_id":5,"name":"agw-mnist","port_bindings":[],"env":{"A":"1"}}`), Group: "field", Rules: deploymentRules},
+
+		// What the call touches (edge D1.3)
+		{Name: "deployment on a device without the right to run it", Req: device(valid), Group: "resource", Rules: deploymentNoDeviceRules},
+		{Name: "undeploy a foreign deployment", Req: platform.Request{Method: http.MethodPut, Path: "/container-deployments/9/undeploy"}, Group: "object", Rules: deploymentRules},
+		{Name: "delete a foreign deployment", Req: platform.Request{Method: http.MethodDelete, Path: "/container-deployments/9"}, Group: "object", Rules: deploymentRules},
+	}
+}
+
+// The delegations of the edge cases (edge D1.2, D1.3). They bring their own rules instead of
+// changing ConformanceDelegation, whose rules have nothing to do with deployments.
+const (
+	deploymentRules = `{
+  "rules": [
+    {"action": "read",   "resource": "container_deployment", "ids": ["*"]},
+    {"action": "create", "resource": "container_deployment"},
+    {"action": "run",    "resource": "container_deployment", "ids": ["own"]},
+    {"action": "delete", "resource": "container_deployment", "ids": ["own"]},
+    {"action": "read",   "resource": "container_image", "ids": ["5"]},
+    {"action": "run",    "resource": "edge_device", "ids": ["1"]}
+  ],
+  "confirm": "none"
+}`
+	deploymentNoDeviceRules = `{
+  "rules": [
+    {"action": "create", "resource": "container_deployment"},
+    {"action": "read",   "resource": "container_image", "ids": ["5"]}
+  ],
+  "confirm": "none"
+}`
+	// edgeReadRules: reading deployments, plus the api path of the edge groups (a path without a
+	// route of its own is `api`, so a rule has to name it).
+	edgeReadRules = `{
+  "rules": [
+    {"action": "read", "resource": "container_deployment", "ids": ["*"]},
+    {"action": "read", "resource": "api", "ids": ["/edge-groups"]}
+  ],
+  "confirm": "none"
+}`
+)
