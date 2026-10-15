@@ -366,6 +366,9 @@ type ActivityPage = { calls: ActivityCall[]; chats: Record<string, { id: string;
 | `GET /api/chats/{id}/subagent-runs` | `SubagentRunSummary[]` | short list of the chat's subagent runs in the order they started, from the database alone: does not wake the chat and takes no slot; 404 for foreign and unknown chats. See *Subagent runs without opening a chat* |
 | `POST /api/chats/{id}/subagent-runs/{run}/messages` `{text}` | 202 `{message: SubagentMessage, mode: "steer"\|"resume"\|"restart"}` | a message of the user to a subagent (`{run}` URL-encoded, `#` as `%23`); the stored message goes on at once with status `sending`, then `sent` or `failed` (SSE `subagent_message`). Refusals: 400 empty, longer than 8000 characters or `/agw-…`, 404 foreign, unknown or unsafe run, 409 with `code` `chat_in_trash`, `run_starting`, `foreground_run`, `message_pending`, `subagent_limit`, `not_resumable` or `subagents_unavailable`, 429 `rate_limited`. See *Messages to subagents* |
 | `GET /api/chats/{id}/plans` | `Plan[]` | plans of the chat, oldest first, with their steps; 404 for foreign and unknown chats. See *Plans with one approval* |
+| `POST /api/chats/{id}/plans/{plan}/pause` | `Plan` | pauses a running autonomous plan (`pause_reason` `user`); a running chat is stopped. 404 for a foreign or unknown plan, 409 `{"error":"plan is <state>","state":…}` when it is not `approved`. See *Autonomous plans* |
+| `POST /api/chats/{id}/plans/{plan}/resume` | `Plan` | resumes a `paused` plan and queues a note for the agent (`NotePlan`). 409 when it is not `paused`. Only this route resumes a plan; the agent has no tool for it |
+| `POST /api/chats/{id}/plans/{plan}/cancel` | `Plan` | ends an `approved` or `paused` plan: `cancelled`, its open steps `skipped`, a note queued. 409 otherwise |
 | `POST /api/chats/{id}/subagents` | 410 | removed: the subagent limit is fixed for the service (see *Limit for subagents*); the answer says so |
 | `POST /api/chats/{id}/messages` `{text, attachments?: string[], context?: PageContext}` | `SendResult` | sends (`context`: see *Page context*; invalid: 400); a dormant chat is resumed in a fresh sandbox (response after resuming, steps beforehand via SSE `resume`). If pi is working, the chat is being resumed or another instruction is in flight, the message is queued (`queued: true`, see *Queue*). Held entries go along |
 | `GET /api/chats/{id}/queue` | `QueueEntry[]` | open entries of the queue |
@@ -1062,8 +1065,10 @@ merged (strand G-B), an approved plan does not yet change how the steps are appr
 
 - **Proposal:** `{"title": string (1 to 120 characters), "steps": [step]}`, at most 10 steps. A step is either
   `{"tool": "<platform tool>", "args": {...}}` or `{"method", "path", "query", "body"}`, each with an optional
-  `description` (at most 200 characters). Unknown fields, duplicate keys and reading calls are refused. Plans cannot
-  contain `propose_plan`, `rights` or `/_agw/…`.
+  `description` (at most 200 characters) and, for an autonomous plan, `"max_attempts"` (1 to 3). Unknown fields,
+  duplicate keys and reading calls are refused. Plans cannot
+  contain `propose_plan`, `rights` or `/_agw/…`. Optional `"mode": "autonomous"`, `"budget"` and `"replaces"`: see
+  *Autonomous plans*.
 - **Placeholders:** the id of an object an earlier step created is written `"{{stepN.id}}"`, as a whole argument, body
   value, path segment or query value. It resolves only to an object that this plan created in this chat (the
   provenance register `delegation_objects`), and only once that step is `done`. A placeholder may point only backwards,
@@ -1084,16 +1089,53 @@ merged (strand G-B), an approved plan does not yet change how the steps are appr
   agent's, not verified. Answer after
   approval: `{"plan_id", "state": "approved", "expires_at", "steps": [{"step", "call", "effect", "covered"}], "note"}`
   with status `ok`. A rejected or expired plan answers `rejected` and executes nothing.
-- **Types:** `Plan = {id, chat_id, approval_id?, agent_title, session?, tool_call_id?, via, state, created_at,
-  decided_at?, expires_at?, steps: PlanStep[]}`; `PlanStep = {idx, summary?, summary_proposed?, agent_note?, tool?, args?, method, path,
+- **Types:** `Plan = {id, chat_id, approval_id?, agent_title, session?, tool_call_id?, via, state, mode?, budget,
+  auto_turns?, grant?, pause_reason?, replaces?, created_at,
+  decided_at?, expires_at?, ended_at?, steps: PlanStep[]}`; `PlanStep = {idx, summary?, summary_proposed?, agent_note?, tool?, args?, method, path,
   query?, body?, body_sha256?,
   form?, form_sha256?, files?: {field, path, sha256}[], effect, covered, state, result?, created_resource?, created_id?,
-  done_at?}`. Plan states: `proposed | approved | rejected | expired | completed | failed | superseded`; step states:
-  `open | running | done | failed`.
+  done_at?, max_attempts?, attempts?}`; `budget = {max_duration_s, max_llm_cost, max_auto_turns}`. Plan states: `proposed | approved |
+  paused | rejected | expired | completed | failed | cancelled | superseded`; step states:
+  `open | running | done | failed | skipped`.
 - **Endpoint:** `GET /api/chats/{id}/plans` → `Plan[]`, oldest first; 404 for foreign and unknown chats. SSE
   `GET /api/chats/{id}/events` sends `plan` with the `Plan` on every change of state. `plan` is not a cross-chat kind.
 - **Limits of the design:** the session is taken from a header in the CLI, which the agent can change; MCP and REST
   have no `tool_call_id`. In the activity a proposal appears as the platform call `POST /_agw/plan`.
+
+### Autonomous plans (A-E1)
+
+A plan proposed with `"mode": "autonomous"` carries a **budget** and a **grant** derived from its steps. While it runs,
+the grant bounds **every** platform call of the chat, from any session and binding (main agent and subagents, CLI, MCP
+and REST): a call outside it is refused without asking, and the answer points at `replaces`. One approval by the user
+covers the whole run instead of one question per writing call.
+
+- **Grant (D1.2/D1.3):** the gateway derives one rule per step from the classification of the step's call
+  (`delegation.Classify`): `{action, resource, ids}`, with the id from the step, `"own"` for a `{{stepN.id}}` placeholder
+  and no id for a `create`; every `Access.Also` becomes a rule as well. Reading stays open (a `read` rule per resource
+  with `*`; writing GETs are classified as writes and are not covered). The agent never writes these rules. The grant
+  lives in `plans.grant_json`; it does not expire by itself — the plan's lifetime bounds it.
+- **Budget (D1.5–D1.9):** `max_duration_minutes` (default 30, at most `AGW_PLAN_MAX_DURATION`, default 8 h, never above
+  11 h), `max_llm_cost_usd` (default 1.00, at most `AGW_PLAN_MAX_LLM_COST`, default 5.00) and `max_auto_turns` (default
+  20, at most 50). The agent proposes, the gateway clamps the bounds and refuses anything above them (it never shortens
+  silently). The compute quota is not a plan figure: `Σ compute steps × max_attempts` must fit the chat's remaining
+  `AGW_COMPUTE_MAX_PER_CHAT` calls (D1.7). The duration counts wall-clock from the approval, also while paused (D1.8).
+  The model cost is summed from `llm_calls` since `decided_at` and checked at the LLM proxy before every call; over
+  budget the plan is paused (`pause_reason` `budget_cost`) and the proxy answers 429.
+- **Retries (D1.7):** a step may set `max_attempts` (1 to 3, default 1). `plan_steps.attempts` counts the claims; a
+  failed step with attempts left goes back to `open` and the plan stays `approved`, otherwise the plan fails.
+- **Confirm each (D1.15):** a step on a route the gateway cannot check (`delegation.Access.ConfirmEach`: notebook runs,
+  edge deployments) is never covered by the plan (`covered: false`) and asks for every single call, also with
+  `confirm: none`; irreversible steps ask as well.
+- **Controls (D1.10):** `POST …/plans/{plan}/pause|resume|cancel`. `Abort` (the stop button) pauses a running autonomous
+  plan (`pause_reason` `abort`); `cancel` ends it (`cancelled`) and marks its open steps `skipped`. Platform jobs (a
+  training) keep running in every case. Only the user's API moves `paused → approved`; there is no tool for it.
+- **Plan change (D1.12):** `propose_plan` with `"replaces": "<plan_id>"` proposes a changed plan; the approval supersedes
+  the named plan (`superseded`, `ended_at` set) and the new plan gets a fresh budget. The preview names what the old plan
+  used so far.
+- **Preview and approval:** the preview lists the budget block (`Autonomous: …`, `Budget: …`, `Rights while it runs: …`)
+  and every step (steps with `max_attempts > 1` show "up to N attempts"). The answer after the approval carries `mode`,
+  `budget` and `grant` (the full `delegation.Summary`), and its note points at the refusal outside the grant and at
+  `replaces`. Which state a plan is in is visible in `GET …/plans` and the SSE `plan` event.
 
 ## Summaries by the gateway
 

@@ -6,6 +6,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"strings"
@@ -56,5 +57,66 @@ func TestPlansEndpoint(t *testing.T) {
 	}
 	if code, body := call(t, a, "GET", srv.URL+"/api/chats/00000000-0000-0000-0000-000000000000/plans", ""); code != 404 {
 		t.Errorf("unknown chat: %d %s", code, body)
+	}
+}
+
+// A-E1: the plan controls check the owner; a foreign or unknown plan is 404 and a wrong state is 409.
+func TestPlanControlsOwnerOnly(t *testing.T) {
+	url := os.Getenv("AGW_TEST_DATABASE_URL")
+	if url == "" {
+		t.Skip("AGW_TEST_DATABASE_URL not set")
+	}
+	ctx := context.Background()
+	st, err := store.OpenSchema(ctx, url, "apitest_planctl_"+strings.ReplaceAll(time.Now().Format("150405.000000"), ".", "_"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.DropSchema(context.Background()); st.Close() })
+	cat, err := config.ParseCatalog([]byte(`{"default":"p/m","providers":[{"id":"p","upstream":"http://x","api":"openai-completions","models":[{"id":"m"}]}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := pool.New[chat.Agent](func(context.Context, string, string) (chat.Agent, error) {
+		return nil, errors.New("no slot in the test")
+	}, func(context.Context, chat.Agent) {}, map[string]int{"cli": 0})
+	m := chat.NewManager(st, p, cat, nil, artifacts.NewBroker(), chat.Options{AcquireTimeout: 100 * time.Millisecond, MaxSubagents: 5})
+	srv, is := oidcServer(t, m, p, cat, nil)
+	a := loggedIn(t, srv, is, anna)
+	b := loggedIn(t, srv, is, bert)
+
+	c, err := st.CreateChat(ctx, store.NewChat{Title: "plan", Model: "p/m", Variant: "cli", Owner: anna.Sub})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = st.SetState(ctx, c.ID, store.StateDormant)
+	pl, err := st.CreatePlan(ctx, store.Plan{ChatID: c.ID, Title: "Auto", Session: "main", Via: "cli", Mode: "autonomous",
+		Budget: store.PlanBudget{MaxDurationS: 3600, MaxLLMCost: 1, MaxAutoTurns: 5},
+		Grant:  json.RawMessage(`{"rules":[{"action":"create","resource":"dataset"}],"enforce":true}`),
+		Steps:  []store.PlanStep{{Idx: 1, Method: "POST", Path: "/datasets", Effect: "write", MaxAttempts: 1}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	exp := time.Now().Add(time.Hour)
+	if ok, err := st.DecidePlan(ctx, pl.ID, "approved", &exp); err != nil || !ok {
+		t.Fatalf("decide: %v %v", ok, err)
+	}
+	if code, body := call(t, b, "POST", srv.URL+"/api/chats/"+c.ID+"/plans/"+pl.ID+"/pause", ""); code != 404 {
+		t.Errorf("Bert on Anna's plan: %d %s", code, body)
+	}
+	if code, body := call(t, a, "POST", srv.URL+"/api/chats/"+c.ID+"/plans/"+pl.ID+"/pause", ""); code != 200 || !strings.Contains(body, `"state":"paused"`) {
+		t.Errorf("Anna pauses: %d %s", code, body)
+	}
+	// Wrong state: resuming an approved plan is fine, a second pause is not.
+	if code, body := call(t, a, "POST", srv.URL+"/api/chats/"+c.ID+"/plans/"+pl.ID+"/pause", ""); code != 409 || !strings.Contains(body, "plan is paused") {
+		t.Errorf("second pause: %d %s", code, body)
+	}
+	if code, body := call(t, a, "POST", srv.URL+"/api/chats/"+c.ID+"/plans/"+pl.ID+"/resume", ""); code != 200 || !strings.Contains(body, `"state":"approved"`) {
+		t.Errorf("resume: %d %s", code, body)
+	}
+	if code, body := call(t, a, "POST", srv.URL+"/api/chats/"+c.ID+"/plans/"+pl.ID+"/cancel", ""); code != 200 || !strings.Contains(body, `"state":"cancelled"`) {
+		t.Errorf("cancel: %d %s", code, body)
+	}
+	if code, body := call(t, a, "POST", srv.URL+"/api/chats/"+c.ID+"/plans/00000000-0000-0000-0000-000000000009/pause", ""); code != 404 {
+		t.Errorf("unknown plan: %d %s", code, body)
 	}
 }
