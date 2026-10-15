@@ -259,8 +259,9 @@ func TestDecidePlanRechecksEverySteps(t *testing.T) {
 	if stored.Steps[0].Summary != `Rename dataset 16 "other" → "eins"` || stored.Steps[0].SummaryProposed != `Rename dataset 16 "alt" → "eins"` {
 		t.Fatalf("step 1: %+v", stored.Steps[0])
 	}
-	// The second step renames what the first one creates; the platform state it sees did not change.
-	if stored.Steps[1].Summary != `Rename dataset 16 "eins" → "zwei"` {
+	// The second step renames what the first one creates; the platform state it sees did not change, and the step
+	// carries the note that its values are the ones after step 1 (#72, summary.go: SummarizePlan).
+	if stored.Steps[1].Summary != `Rename dataset 16 "eins" → "zwei"`+"\nCurrent values as they will be after step 1 of this plan." {
 		t.Fatalf("step 2: %+v", stored.Steps[1])
 	}
 	got, err := e.st.GetApproval(ctx, ap.ID)
