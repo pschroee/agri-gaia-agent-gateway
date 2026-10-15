@@ -264,6 +264,35 @@ refer to this repository.
   and are not logged; tests that count platform calls use `withPlatform`, which leaves reading GETs out. Rules in
   `API.md`, *Summaries by the gateway*.
 
+## Notebook runs (own code, C-E3)
+
+- The agent's own code runs in the chat's notebook server in JupyterHub, one server per chat under the user's account
+  (`<AGW_NOTEBOOK_PREFIX>-<first 8 hex digits of the chat id>`); server and runs belong to the chat, and the agent
+  never names them. `internal/notebook` starts and stops the server through the hub API, finds its container **by the
+  labels the instance's spawner sets** (`agw.notebook=1`, `agw.user=<user>`, `agw.server=<name>`) and runs everything
+  in it with `sandbox.Runtime.ExecAs` as **1000:100** (the notebook image's user, not the sandboxes' 10001).
+- **No kernel API on purpose** (plan decision): docker exec gives an exit code and a log that do not hang on a
+  connection, needs no websocket library, and the gateway holds the docker socket anyway (E9). The price is that the
+  code runs with the same uid as the marker files `.agw/` in its run directory, so it can fake exit code and log —
+  that reaches only what the agent is told, never a decision of the gateway (plan 1.5).
+- The code of a run is what the user approved (`sock.readFiles` put the SHA-256 into `Uploads`); it goes in as one tar
+  over stdin and starts detached with `setsid --fork`. State, log and results come back out of the run directory
+  (`runs/<run-id>/.agw/`, `run.log`). `notebook_fetch` reads a result with `realpath` and a prefix check (no symlink
+  out of the run directory) and hands it to the socket as `platform.Result.File`, which writes it into
+  `/workspace/notebook/<run-id>/`.
+- The paths are **virtual** (`/_agw/notebook…`, `RegisterVirtual` G1.5): delegation, class (`compute`), the compute
+  limit, the plan and the log run unchanged in `PlatformCall`. `POST /_agw/notebook/runs` carries **confirm each**
+  (G1.1), so it always asks and no plan covers it; its approval shows the code instead of the form fields and is
+  limited to 48 000 characters (`maxNotebookPreview`) instead of 16 000.
+- `platform_request` and the REST binding refuse the paths (`platform.NotebookCallRefusal`): only the notebook tools
+  read the files of a run from the sandbox. Without `AGW_JUPYTERHUB_API_URL` no doer is registered and the tools answer
+  `unavailable` (G1.13), never an error.
+- The reaper (`go nb.RunReaper`) stops a server whose last run ended more than `AGW_NOTEBOOK_IDLE_MIN` ago and that has
+  no run going; the trash stops it too (`chat/trash.go`). Both leave the volume, and neither rewrites a run: the end of
+  a run is recorded where its exit code is read (`Status`, the watcher), never by the reaper.
+- One run at a time per chat; every run counts against `AGW_COMPUTE_MAX_PER_CHAT`. Rules, limits and paths in `API.md`,
+  *Notebook tools*.
+
 ## Testing
 
 - `./dev.sh test` is the everyday check, before every commit and before every push: Go with Postgres (with Go's

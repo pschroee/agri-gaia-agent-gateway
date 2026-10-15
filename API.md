@@ -505,8 +505,11 @@ alike; the class decides whether the user is asked and is shown in approvals, th
 |---|---|---|
 | `read` | changes nothing | none, unless the call writes in the backend (see below) |
 | `write` | changes data on the platform | the user, unless the delegation says `confirm: "none"` |
-| `compute` | uses compute time (builds or starts a training) | as `write`; counted against the compute limit of the chat |
+| `compute` | uses compute time (builds or starts a training, runs the agent's own code) | as `write`; counted against the compute limit of the chat |
 | `irreversible` | cannot be undone (deleting, publishing in the dataspace) | always the user, also with `confirm: "none"` |
+
+A call on a route marked **confirm each** asks the user on its own, also with `confirm: "none"`, and no plan covers it
+(G1.1): `POST /_agw/notebook/runs` (own code in the notebook server, C-E3).
 
 - **Own classes of routes:** `POST /train/config` is `compute`, `POST /train/containers/{id}/run` is `compute`
   (its action is `run`), `POST /train/containers/{id}/stop` is `write` (it frees compute time), and
@@ -1250,6 +1253,72 @@ first, with the **same** function and the same inputs that wrote the summary (`p
 - **A rejection** never re-reads.
 - The re-read belongs to a waiting call: once the approval expired or the call is gone, a decision behaves as before
   (the stored text). A plan is re-read step by step and every step's summary is replaced.
+
+## Notebook tools (own code, C-E3)
+
+The agent writes Python code (or a notebook) in its execution sandbox, tests it there and has it run in the chat's
+own notebook server in JupyterHub. The server belongs to the user of the chat (their JupyterHub account, their
+files); the gateway starts it through the hub API, copies the approved files in with `docker exec` as the notebook
+user (uid 1000) and reads state, log and results back the same way. The server has 2 CPUs, 8 GB, **no internet** and
+**no access to the platform**; the packages are fixed in the image (`torch` CPU, `torchvision`, `scikit-learn`,
+`numpy`, `pandas`, `matplotlib`, `onnx`, `onnxruntime`, `skl2onnx`).
+
+| Tool (CLI) | Path (virtual) | Action / resource | Class | Approval |
+|---|---|---|---|---|
+| `notebook_status` (`notebook-status`) | `GET /_agw/notebook` | read notebook | `read` | no |
+| `notebook_run` (`notebook-run`) | `POST /_agw/notebook/runs` | run notebook, `also` update dataset per `dataset_ids` | `compute` | **always** (confirm each), also with `confirm: "none"`; never covered by a plan |
+| `notebook_runs` (`notebook-runs`) | `GET /_agw/notebook/runs` | read notebook | `read` | no |
+| `notebook_run_status` (`notebook-run-status`) | `GET /_agw/notebook/runs/{id}` | read notebook | `read` | no |
+| `notebook_log` (`notebook-log`) | `GET /_agw/notebook/runs/{id}/log` | read notebook | `read` | no |
+| `notebook_fetch` (`notebook-fetch`) | `GET /_agw/notebook/runs/{id}/file?path=…` | read notebook | `read` | no (it only writes into the sandbox) |
+| `notebook_stop` (`notebook-stop`) | `POST /_agw/notebook/stop` | update notebook | `write` | yes |
+
+- **Virtual paths.** The gateway answers them itself (`RegisterVirtual`, G1.5): delegation, class, approval, plan and
+  log apply as for every other call. Without `AGW_JUPYTERHUB_API_URL` no doer is registered and every one of them
+  answers `unavailable: notebook is not available in this setup: it is not configured on this instance. …`.
+- **Delegation.** `notebook` is a resource of its own; a delegation without a rule for it forbids everything of it.
+  The datasets of a run (`dataset_ids`) need `update dataset` for each of them, because reading them copies the CVAT
+  annotation (`GET /datasets/{id}/download`).
+- **Approval of a run.** The preview is not truncated to 16 000 characters like other calls but to 48 000
+  (`maxNotebookPreview`); above that the call is refused with `the code is too long for one approval (N characters, at
+  most 48000); shorten it or split it into runs`. The preview shows the launcher line, the arguments, the datasets and
+  every file with size and SHA-256: the whole text of a `.py` file, the code cells of an `.ipynb`, the text of other
+  files while it is valid UTF-8 and at most 20 KB, otherwise a note instead of the text. **What the user approves is
+  what runs:** the files come from `readFiles` (SHA-256 in the approval), not from the sandbox at start time.
+- **Limits of a run.** At most 50 files, 1 MB each, 4 MB together, endings `.py .ipynb .txt .json .yaml .yml .csv .md
+  .cfg .toml`, at most 20 arguments of `A-Za-z0-9_.,=:/+-`, at most 3 datasets. `timeout_minutes` defaults to 120 and
+  is capped by `AGW_NOTEBOOK_TIMEOUT_MAX_MIN` (default 480 = the longest an autonomous plan may run). One run at a
+  time per chat; a second one is refused. A run counts against `AGW_COMPUTE_MAX_PER_CHAT` like a training.
+- **Files in the container.** The code runs in a fresh directory `/home/jovyan/work/runs/<run-id>/` (`r<YYYYMMDDhhmmss>`
+  plus four hex digits), a `.py` entry with `python -u <entry> [args]`, an `.ipynb` with `jupyter nbconvert --execute`
+  (its result is `executed-<entry>`). A run's output goes to `run.log` in that directory, the exit code to
+  `.agw/exit_code`. Datasets are unpacked to `/home/jovyan/work/datasets/<id>/` once and reused (marker
+  `.agw-complete`).
+- **`notebook_fetch`** copies a result file (at most 64 MiB) into the sandbox under
+  `/workspace/notebook/<run-id>/<name>`; the answer names that place, the size and the SHA-256. The path inside the
+  run directory is checked twice: the tool refuses anything that is not up to five plain segments, and the script
+  resolves it with `realpath` and refuses a file outside the run directory (a symbolic link included). Only the
+  command line sandbox has a place for such a file: at pi's socket the answer is
+  `fetch needs the command line sandbox`.
+- **Raw calls are refused.** `platform_request` and the REST binding (`/platform-api/_agw/notebook…`) answer
+  `notebook calls go through the notebook tools (…)`: only the tools read the files of a run from the sandbox. A
+  GET of the paths is refused the same way.
+- **Reaper and trash.** The gateway stops a chat's server after `AGW_NOTEBOOK_IDLE_MIN` (default 60) minutes without a
+  run and when the chat goes into the trash; the volume with the files of the runs stays. `AGW_NOTEBOOK_IDLE_MIN=0`
+  stops nothing.
+- **Capability.** The entry `notebook` of the tool `capabilities` says whether a server is available, with the reason
+  when it is not (`not configured on this instance`, `JupyterHub not reachable`, `open JupyterHub once in the
+  browser`). Every notebook tool answers `unavailable` in those cases instead of an error, so the agent works around
+  it instead of retrying (G1.13).
+- **The observer kind `notebook_run`** (`internal/watch`, G1.7) follows a run: state, a line with `exit <n> after
+  <duration>`, the last 20 lines of the log and the files of the run directory as its outputs. It records the end of a
+  run in `notebook_runs` like a status call does.
+- **Configuration:** `AGW_JUPYTERHUB_API_URL` (`…/hub/api`), `AGW_JUPYTERHUB_TOKEN`, `AGW_JUPYTERHUB_PUBLIC_URL` (for
+  the links), `AGW_NOTEBOOK_PREFIX` (server name, `agri_gaia-jupyter` by default), `AGW_NOTEBOOK_TIMEOUT_MAX_MIN`,
+  `AGW_NOTEBOOK_DATASET_MAX_MB`, `AGW_NOTEBOOK_IDLE_MIN`. Table `notebook_runs` (one row per run: chat, hub user,
+  server, entry, files with size and SHA-256, dataset ids, timeout, start, end, exit code).
+- **Boundary of the observation:** the code runs in the container with the same uid as the status files `.agw/`; it can
+  fake its exit code and its log. That only affects what the agent is told, never a decision of the gateway.
 
 ## Tool executions (E9)
 
