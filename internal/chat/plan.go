@@ -51,7 +51,8 @@ func (m *Manager) ProposePlan(ctx context.Context, chatID, slotID, via string, r
 	for i := range steps {
 		calls[i] = plan.SummaryCall(steps[i])
 	}
-	for i, s := range platform.SummarizePlan(ctx, m.summaryReader(chatID), calls) {
+	rl := &readLog{}
+	for i, s := range platform.SummarizePlan(ctx, m.loggedSummaryReader(chatID, rl), calls) {
 		steps[i].Summary = visibleControls(s)
 	}
 	preview := visibleControls(plan.Preview(p.Title, steps))
@@ -71,6 +72,10 @@ func (m *Manager) ProposePlan(ctx context.Context, chatID, slotID, via string, r
 	if err := m.st.SetPlanApproval(ctx, pl.ID, ap.ID); err != nil {
 		return platform.Result{}, err
 	}
+	// The reads of the summaries are one activity entry of the system (issue L2/#119), and while the plan waits,
+	// approving re-reads them first (DL2.1).
+	m.logSummaryReads(ctx, chatID, ap.ID, "proposed", rl)
+	defer m.registerRecheck(ap.ID, m.planRecheck(chatID, ap.ID, p.Title, steps, calls))()
 	w := m.broker.Register(ap.ID)
 	if s, ok := m.pool.Get(slotID); ok {
 		s.SetActivity("waiting_approval", "")
@@ -117,7 +122,9 @@ func (m *Manager) ProposePlan(ctx context.Context, chatID, slotID, via string, r
 }
 
 // summaryReader reads the platform as the user for the summaries of approvals (issue #72): only reading GETs, straight
-// through the platform client. These reads belong to the gateway, not to the agent, so they are not in the activity.
+// through the platform client. These reads belong to the gateway, not to the agent; they are logged as one
+// summary_read entry of the orchestrator (issue L2/#119), never as a call of the agent. Use loggedSummaryReader
+// wherever a summary is written or re-read.
 func (m *Manager) summaryReader(chatID string) platform.Doer {
 	if m.opt.Platform == nil {
 		return nil

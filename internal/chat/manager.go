@@ -281,6 +281,10 @@ type Manager struct {
 	userAt map[string]time.Time
 	// aborts counts the aborts per chat; a request during which an abort happened does not go to pi.
 	aborts map[string]uint64
+	// rechecks: how to re-read the summary of a pending approval at the moment of the decision (issue L2/#119).
+	rechecks map[string]recheck
+	// apMu serializes the decisions on one approval (two clicks at the same time).
+	apMu map[string]*sync.Mutex
 }
 
 func NewManager(st *store.Store, p *pool.Pool[Agent], cat *config.Catalog, blobs Blobs, broker *artifacts.Broker, opt Options) *Manager {
@@ -311,7 +315,8 @@ func NewManager(st *store.Store, p *pool.Pool[Agent], cat *config.Catalog, blobs
 	return &Manager{st: st, pool: p, cat: cat, blobs: blobs, broker: broker, opt: opt,
 		live: map[string]*live{}, subs: map[string]map[chan Event]struct{}{}, allSubs: map[chan ChatEvent]struct{}{}, chatMu: map[string]*sync.Mutex{},
 		imgMu: map[string]*sync.Mutex{}, wsMu: map[string]*sync.Mutex{}, qMu: map[string]*sync.Mutex{},
-		sending: map[string]bool{}, delivering: map[string][]*turnMeta{}, resuming: map[string]bool{}, starting: map[string]bool{}, pendingModel: map[string]string{}, levels: map[string][]string{}, userAt: map[string]time.Time{}, aborts: map[string]uint64{}}
+		sending: map[string]bool{}, delivering: map[string][]*turnMeta{}, resuming: map[string]bool{}, starting: map[string]bool{}, pendingModel: map[string]string{}, levels: map[string][]string{}, userAt: map[string]time.Time{}, aborts: map[string]uint64{},
+		rechecks: map[string]recheck{}, apMu: map[string]*sync.Mutex{}}
 }
 
 // userActive records an action of the user (postponement by background tasks, M1).
@@ -2105,7 +2110,9 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 		if inv, ok := platform.InvocationFrom(ctx); ok {
 			tool = inv.Tool
 		}
-		summary := visibleControls(platform.Summarize(ctx, m.summaryReader(chatID), platform.SummaryCallOf(tool, req)))
+		summaryCall := platform.SummaryCallOf(tool, req)
+		rl := &readLog{}
+		summary := visibleControls(platform.Summarize(ctx, m.loggedSummaryReader(chatID, rl), summaryCall))
 		size := int64(len(req.Body))
 		for _, u := range req.Uploads {
 			size += int64(len(u.Data))
@@ -2116,6 +2123,10 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 		if err != nil {
 			return platform.Result{}, err
 		}
+		// The reads of the summary are one activity entry of the system (issue L2/#119), and while the call waits,
+		// approving re-reads them first (DL2.1).
+		m.logSummaryReads(ctx, chatID, ap.ID, "proposed", rl)
+		defer m.registerRecheck(ap.ID, m.platformRecheck(chatID, ap.ID, tool, req))()
 		w := m.broker.Register(ap.ID)
 		if s, ok := m.pool.Get(slotID); ok {
 			s.SetActivity("waiting_approval", "")
@@ -2280,6 +2291,11 @@ func (m *Manager) settle(ctx context.Context, chatID, id string, approved bool, 
 
 // Decide is the user's decision from the API.
 func (m *Manager) Decide(ctx context.Context, approvalID string, approve bool) (store.Approval, error) {
+	return m.decide(ctx, approvalID, approve)
+}
+
+// decide writes the decision and wakes the waiting call.
+func (m *Manager) decide(ctx context.Context, approvalID string, approve bool) (store.Approval, error) {
 	state := store.ApprovalRejected
 	if approve {
 		state = store.ApprovalApproved
