@@ -71,6 +71,48 @@ const (
 	webSkill = "/opt/agw/skills/web-research"
 )
 
+// cliSkills are the skill directories features registered (registerCLISkill, G1.6); they are loaded
+// for the cli binding after the fixed skills.
+var (
+	cliSkillMu sync.Mutex
+	cliSkills  []string
+)
+
+// registerCLISkill registers a skill directory of a feature (G1.6). It is loaded for the cli binding
+// after the fixed skills (also in combinations that contain cli) and is invisible for the other
+// bindings. Register from an init() of the feature's own file; the skill must be in the images (pi
+// image and execution image) before a slot starts with it.
+func registerCLISkill(path string) {
+	cliSkillMu.Lock()
+	defer cliSkillMu.Unlock()
+	cliSkills = append(cliSkills, path)
+}
+
+// fixedCLISkills are the skills every cli chat loads, in this order.
+var fixedCLISkills = []string{artifactSkil, internetSkil, webSkill, platformSkil, typstSkill, diagramSkill, mermaidSkill, documentSkil, trainingAdviceSkill, modelCardSkill}
+
+// registeredSkillArgs lists the --skill arguments features registered; a test that freezes the old
+// arguments takes its expectation from here instead of repeating the paths.
+func registeredSkillArgs() []string {
+	cliSkillMu.Lock()
+	defer cliSkillMu.Unlock()
+	out := make([]string, 0, 2*len(cliSkills))
+	for _, s := range cliSkills {
+		out = append(out, "--skill", s)
+	}
+	return out
+}
+
+// cliSkillArgs lists the --skill arguments of the cli binding: the fixed skills first, then the
+// registered ones.
+func cliSkillArgs() []string {
+	out := make([]string, 0, 2*(len(fixedCLISkills)+len(cliSkills)))
+	for _, s := range fixedCLISkills {
+		out = append(out, "--skill", s)
+	}
+	return append(out, registeredSkillArgs()...)
+}
+
 // noLazySubagent turns off pi-subagents' switch subagents_enable; the tool subagent is then
 // active from the start. Otherwise the tool list would change in the middle of the chat: one more
 // model call and an invalidated prefix cache (measured 2026-09-29: 8 607 uncached tokens in the call
@@ -330,7 +372,7 @@ func piArgs(variant, provider, model, note string) ([]string, error) {
 		args = append(args, "-e", apiExt)
 	}
 	if ts.Has(toolset.CLI) {
-		args = append(args, "--skill", artifactSkil, "--skill", internetSkil, "--skill", webSkill, "--skill", platformSkil, "--skill", typstSkill, "--skill", diagramSkill, "--skill", mermaidSkill, "--skill", documentSkil, "--skill", trainingAdviceSkill, "--skill", modelCardSkill)
+		args = append(args, cliSkillArgs()...)
 	} else {
 		// The other skills describe commands; web-research names the tools of every binding, and
 		// MCP's read can load it (the skills are in both images).

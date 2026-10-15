@@ -16,10 +16,12 @@ import (
 // single bindings and cli,mcp (formerly both) start pi exactly as before. Since issue #34 the MCP and REST
 // bindings also have the tools to switch internet off (and REST to request it); since issue #42 the
 // command line also loads the skill documents. Since issue #44 the web search is loaded through
-// web-tools.ts and cli and mcp load the skill web-research.
+// web-tools.ts and cli and mcp load the skill web-research. The fixed skills stay as they were;
+// skills features registered come after them, so this expectation follows the registration instead of
+// repeating their paths (G1.6).
 func oldPiArgs(variant, provider, model, note string) []string {
 	args := []string{"--provider", provider, "--model", model, "--append-system-prompt", note, "-e", bridgeExt, "-e", todoExt, "-e", webToolsExt, "-e", webGateExt}
-	skills := []string{"--skill", artifactSkil, "--skill", internetSkil, "--skill", webSkill, "--skill", platformSkil, "--skill", typstSkill, "--skill", diagramSkill, "--skill", mermaidSkill, "--skill", documentSkil, "--skill", trainingAdviceSkill, "--skill", modelCardSkill}
+	skills := append([]string{"--skill", artifactSkil, "--skill", internetSkil, "--skill", webSkill, "--skill", platformSkil, "--skill", typstSkill, "--skill", diagramSkill, "--skill", mermaidSkill, "--skill", documentSkil, "--skill", trainingAdviceSkill, "--skill", modelCardSkill}, registeredSkillArgs()...)
 	switch variant {
 	case "cli":
 		args = append(append(args, "-e", subagentsExt, "-e", intercomExt, "--exclude-tools", noLazySubagent), skills...)

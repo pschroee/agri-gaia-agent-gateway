@@ -11,6 +11,7 @@ import (
 	"math"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -19,6 +20,32 @@ import (
 
 //go:embed schema.sql
 var schemaSQL string
+
+// registeredSchemas holds schema files that features register (registerSchema, G1.6). They are
+// applied after the built-in schema, in the order they were registered.
+var (
+	schemaMu          sync.Mutex
+	registeredSchemas []string
+)
+
+// registerSchema adds a schema file (SQL, written idempotently with IF NOT EXISTS, e.g. a table of the
+// feature) that is applied whenever a schema is created. Register from an init() of the feature's own
+// file, before the first Open or OpenSchema.
+func registerSchema(sql string) {
+	schemaMu.Lock()
+	defer schemaMu.Unlock()
+	registeredSchemas = append(registeredSchemas, sql)
+}
+
+// SchemaSQL is the whole schema of this package plus everything features registered.
+func SchemaSQL() string {
+	schemaMu.Lock()
+	defer schemaMu.Unlock()
+	parts := make([]string, 0, 2+len(registeredSchemas))
+	parts = append(parts, schemaSQL, planSchemaSQL)
+	parts = append(parts, registeredSchemas...)
+	return strings.Join(parts, "\n")
+}
 
 var ErrNotFound = errors.New("not found")
 
@@ -280,7 +307,7 @@ func OpenSchema(ctx context.Context, url, schema string) (*Store, error) {
 			return nil, err
 		}
 	}
-	if _, err := p.Exec(ctx, schemaSQL+"\n"+planSchemaSQL); err != nil {
+	if _, err := p.Exec(ctx, SchemaSQL()); err != nil {
 		p.Close()
 		return nil, fmt.Errorf("creating schema: %w", err)
 	}
