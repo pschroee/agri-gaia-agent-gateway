@@ -53,25 +53,56 @@ func TestNeedsApproval(t *testing.T) {
 	cases := []struct {
 		name   string
 		eff    delegation.Effect
+		each   bool
 		writes bool
 		del    *delegation.Delegation
 		want   bool
 	}{
-		{"read without writes", delegation.EffectRead, false, nil, false},
-		{"read that writes", delegation.EffectRead, true, nil, true},
-		{"write without delegation", delegation.EffectWrite, true, nil, true},
-		{"write, confirm writes", delegation.EffectWrite, true, writes, true},
-		{"write, confirm none", delegation.EffectWrite, true, none, false},
-		{"compute without delegation", delegation.EffectCompute, true, nil, true},
-		{"compute, confirm none", delegation.EffectCompute, true, none, false},
-		{"irreversible without delegation", delegation.EffectIrreversible, true, nil, true},
-		{"irreversible, confirm none", delegation.EffectIrreversible, true, none, true},
-		{"irreversible, no write flag", delegation.EffectIrreversible, false, none, true},
+		{"read without writes", delegation.EffectRead, false, false, nil, false},
+		{"read that writes", delegation.EffectRead, false, true, nil, true},
+		{"write without delegation", delegation.EffectWrite, false, true, nil, true},
+		{"write, confirm writes", delegation.EffectWrite, false, true, writes, true},
+		{"write, confirm none", delegation.EffectWrite, false, true, none, false},
+		{"compute without delegation", delegation.EffectCompute, false, true, nil, true},
+		{"compute, confirm none", delegation.EffectCompute, false, true, none, false},
+		{"irreversible without delegation", delegation.EffectIrreversible, false, true, nil, true},
+		{"irreversible, confirm none", delegation.EffectIrreversible, false, true, none, true},
+		{"irreversible, no write flag", delegation.EffectIrreversible, false, false, none, true},
+		// Confirm each (G1.1): a route the gateway cannot check asks every single call.
+		{"confirm each, confirm none", delegation.EffectWrite, true, true, none, true},
+		{"confirm each, confirm writes", delegation.EffectWrite, true, true, writes, true},
+		{"confirm each without delegation", delegation.EffectWrite, true, true, nil, true},
+		{"confirm each, compute, confirm none", delegation.EffectCompute, true, true, none, true},
+		{"confirm each, irreversible", delegation.EffectIrreversible, true, true, none, true},
 	}
 	for _, c := range cases {
-		if got := needsApproval(c.eff, c.writes, c.del); got != c.want {
+		a := delegation.Access{Effect: c.eff, ConfirmEach: c.each}
+		if got := needsApproval(a, c.writes, c.del); got != c.want {
 			t.Errorf("%s: needsApproval = %v, want %v", c.name, got, c.want)
 		}
+	}
+}
+
+// A call whose route asks for every single approval asks also when the delegation says confirm none
+// (G1.1) — and asks while the same call without the trait would run through. G1 marks no route, so
+// this checks the decision of PlatformCall on the classified access itself.
+func TestConfirmEachAsksEvenWithConfirmNone(t *testing.T) {
+	none := &delegation.Delegation{Confirm: "none"}
+	for _, eff := range []delegation.Effect{delegation.EffectRead, delegation.EffectWrite, delegation.EffectCompute, delegation.EffectIrreversible} {
+		plain := delegation.Access{Effect: eff}
+		each := delegation.Access{Effect: eff, ConfirmEach: true}
+		writes := eff != delegation.EffectRead
+		if got, want := needsApproval(each, writes, none), true; got != want {
+			t.Errorf("%s with confirm each: needsApproval = %v, want %v", eff, got, want)
+		}
+		wantPlain := eff == delegation.EffectRead || eff == delegation.EffectIrreversible
+		if got := needsApproval(plain, writes, none); got != wantPlain {
+			t.Errorf("%s without confirm each: needsApproval = %v, want %v", eff, got, wantPlain)
+		}
+	}
+	// Without a delegation every writing call asks anyway; the trait then changes nothing.
+	if !needsApproval(delegation.Access{Effect: delegation.EffectWrite, ConfirmEach: true}, true, nil) {
+		t.Error("confirm each without delegation must ask")
 	}
 }
 

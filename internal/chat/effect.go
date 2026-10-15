@@ -15,14 +15,15 @@ import (
 	"agw/internal/platform"
 )
 
-// needsApproval decides whether a platform call waits for the user (issue #63). Irreversible calls
-// always wait, also with confirm "none"; reading calls never do; every other call waits unless the
-// delegation says confirm "none" (no delegation: it waits).
-func needsApproval(eff delegation.Effect, writes bool, del *delegation.Delegation) bool {
-	if eff == delegation.EffectIrreversible {
+// needsApproval decides whether a platform call waits for the user (issue #63, G1.1). Irreversible calls
+// always wait, also with confirm "none", and so do calls on a route marked confirm each (the gateway cannot
+// check what they run); reading calls never do; every other call waits unless the delegation says confirm
+// "none" (no delegation: it waits).
+func needsApproval(a delegation.Access, writes bool, del *delegation.Delegation) bool {
+	if a.Effect == delegation.EffectIrreversible || a.ConfirmEach {
 		return true
 	}
-	if eff == delegation.EffectRead && !writes {
+	if a.Effect == delegation.EffectRead && !writes {
 		return false
 	}
 	return del == nil || del.ConfirmWrites()

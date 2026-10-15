@@ -16,8 +16,9 @@ import (
 )
 
 // classify is the classification of the gateway until #63 delivers the effects.
-func classify(r platform.Request) (string, string) {
-	return FallbackEffect(r), delegation.Classify(r).Action
+func classify(r platform.Request) (string, string, bool) {
+	a := delegation.Classify(r)
+	return FallbackEffect(r), a.Action, a.ConfirmEach
 }
 
 func proposal(t *testing.T, raw string) Proposal {
@@ -96,6 +97,30 @@ func TestBuildIrreversibleNotCovered(t *testing.T) {
 	steps := build(t, `{"title":"t","steps":[{"method":"DELETE","path":"/models/5"}]}`)
 	if steps[0].Effect != EffectIrreversible || steps[0].Covered {
 		t.Fatalf("delete step: %+v", steps[0])
+	}
+}
+
+// A step whose call asks for every single approval is never covered (G1.1): the plan's approval does
+// not replace the question, even though the class would allow coverage.
+func TestConfirmEachStepNeverCovered(t *testing.T) {
+	each := func(r platform.Request) (string, string, bool) {
+		a := delegation.Classify(r)
+		return FallbackEffect(r), a.Action, a.ConfirmEach || strings.HasPrefix(r.Path, "/deploy")
+	}
+	steps, err := Build(proposal(t, `{"title":"t","steps":[{"method":"PUT","path":"/deploy/4"}]}`), each)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if steps[0].Covered || steps[0].Effect != EffectWrite {
+		t.Fatalf("confirm-each step: %+v", steps[0])
+	}
+	// The same class without the trait stays covered.
+	plain, err := Build(proposal(t, `{"title":"t","steps":[{"method":"PATCH","path":"/models/5","body":{"name":"x"}}]}`), each)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !plain[0].Covered || plain[0].Effect != EffectWrite {
+		t.Fatalf("plain step: %+v", plain[0])
 	}
 }
 

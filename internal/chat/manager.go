@@ -2080,7 +2080,7 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 			}
 		}()
 	}
-	if needsApproval(access.Effect, req.Writes(), del) && (step == nil || !step.Covered) {
+	if needsApproval(access, req.Writes(), del) && (step == nil || !step.Covered) {
 		if err := m.checkPendingLimit(ctx, chatID); err != nil {
 			return platform.Result{}, err
 		}
