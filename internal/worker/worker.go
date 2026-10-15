@@ -201,7 +201,7 @@ func capabilityNote(ts toolset.Set, caps []string) string {
 			how = append(how, h)
 		}
 	}
-	n := "- This setup offers " + strings.Join(caps, "; ") + ". This is fixed for this chat; the current state (internet, compute calls left, devices online) you ask with the capabilities (" +
+	n := "- This setup offers " + strings.Join(caps, "; ") + ". This is fixed for this chat; the current state (internet, compute calls, devices online) you ask with the capabilities (" +
 		strings.Join(how, " or ") + ") before you plan work that needs one of them; every entry says what to do without that capability.\n"
 	return n
 }
