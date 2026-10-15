@@ -77,6 +77,7 @@ func TestBuildRefuses(t *testing.T) {
 		"placeholder in text":   `{"title":"t","steps":[{"method":"GET","path":"/train/containers/7/model"},{"method":"PATCH","path":"/models/x{{step1.id}}","body":{"name":"b"}}]}`,
 		"duplicate key":         `{"title":"t","steps":[{"method":"POST","path":"/train/config","body":{"a":1,"a":2}}]}`,
 		"plan inside plan":      `{"title":"t","steps":[{"tool":"propose_plan","args":{"plan":{}}}]}`,
+		"capabilities in plan":  `{"title":"t","steps":[{"tool":"capabilities"}]}`,
 		"tool and method":       `{"title":"t","steps":[{"tool":"start_training","method":"POST","args":{"train_container_id":7}}]}`,
 		"upload without sha256": `{"title":"t","steps":[{"tool":"upload_model","args":{"name":"m","description":"d","format":"onnx","model_file":"/workspace/m.onnx"}}]}`,
 		"unknown field":         `{"title":"t","steps":[{"method":"DELETE","path":"/models/5","bogus":1}]}`,

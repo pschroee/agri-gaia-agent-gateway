@@ -287,6 +287,9 @@ type Manager struct {
 	apMu map[string]*sync.Mutex
 	// virtuals: doers for /_agw/ paths that the gateway answers itself (G1.5), by path prefix.
 	virtuals map[string]VirtualDoer
+	// capCache: capabilities that read platform state, held in memory for capabilityCacheTTL
+	// (G1.11), by chat and key.
+	capCache map[string]capabilityCacheEntry
 }
 
 func NewManager(st *store.Store, p *pool.Pool[Agent], cat *config.Catalog, blobs Blobs, broker *artifacts.Broker, opt Options) *Manager {
@@ -2034,6 +2037,11 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 	}
 	if req.Path == platform.PlanPath {
 		return m.ProposePlan(ctx, chatID, slotID, via, req)
+	}
+	if req.Path == platform.CapabilitiesPath {
+		// The overview of this chat's setup (G1.10): reading, without approval, like the rights.
+		res, _ := m.capabilitiesResult(ctx, chatID)
+		return res, nil
 	}
 	// A /_agw/ path that no doer answers belongs to the gateway and is answered here (G1.5): no
 	// delegation check, no approval, no compute call — there is no platform route behind it (G1.13).

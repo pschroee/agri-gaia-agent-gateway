@@ -136,7 +136,7 @@ func StepRequest(spec StepSpec) (platform.Request, []int, error) {
 			return platform.Request{}, nil, errors.New("give either a tool or a method with path, not both")
 		}
 		switch spec.Tool {
-		case "propose_plan", "rights", "api_paths":
+		case "propose_plan", "rights", "api_paths", "capabilities":
 			return platform.Request{}, nil, fmt.Errorf("tool %s cannot be a plan step", spec.Tool)
 		}
 		tool, ok := platform.Lookup(spec.Tool)
