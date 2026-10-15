@@ -53,17 +53,17 @@ func sorted(s []string) []string {
 // hidden tools; "both" and "cli,mcp" are the same combination.
 func TestOldVariantsUnchanged(t *testing.T) {
 	for old, key := range map[string]string{"cli": "cli", "mcp": "mcp", "api": "api", "both": "cli,mcp"} {
-		note := SystemNoteFor(old, 4)
+		note := SystemNoteFor(old, 4, nil)
 		want := oldPiArgs(old, "p", "m", note)
 		for _, v := range []string{old, key} {
-			got, err := piArgs(v, "p", "m", SystemNoteFor(v, 4))
+			got, err := piArgs(v, "p", "m", SystemNoteFor(v, 4, nil))
 			if err != nil {
 				t.Fatalf("%s: %v", v, err)
 			}
 			if !slices.Equal(got, want) {
 				t.Errorf("%s: pi arguments changed\n got  %q\n want %q", v, got, want)
 			}
-			if SystemNoteFor(v, 4) != note {
+			if SystemNoteFor(v, 4, nil) != note {
 				t.Errorf("%s: system note differs from %s", v, old)
 			}
 		}
@@ -129,7 +129,7 @@ func TestPiArgsCombinations(t *testing.T) {
 	if count(a, apiExt) != 1 || count(a, subagentsExt) != 1 || count(a, mcpExt) != 0 || strings.Contains(s, "--tools") || !strings.Contains(s, "--skill "+platformSkil) {
 		t.Errorf("cli,api: %s", s)
 	}
-	if BridgeHide("cli,api") != "grep,find,ls" || !strings.Contains(SystemNoteFor("cli,api", 3), "At most 3 run") {
+	if BridgeHide("cli,api") != "grep,find,ls" || !strings.Contains(SystemNoteFor("cli,api", 3, nil), "At most 3 run") {
 		t.Error("cli,api: hidden tools or system note")
 	}
 	// mcp,api: strict list with the tools of both, ls visible, no bash, no subagents.
@@ -147,7 +147,7 @@ func TestPiArgsCombinations(t *testing.T) {
 	if count(list, "todo") != 1 || count(list, "web_search") != 1 {
 		t.Errorf("mcp,api: duplicates in %v", list)
 	}
-	if BridgeHide("mcp,api") != "" || strings.Contains(SystemNoteFor("mcp,api", 3), "Background tasks") {
+	if BridgeHide("mcp,api") != "" || strings.Contains(SystemNoteFor("mcp,api", 3, nil), "Background tasks") {
 		t.Error("mcp,api: hidden tools or system note")
 	}
 	// all three: everything once.
