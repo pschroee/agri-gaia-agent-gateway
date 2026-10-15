@@ -14,6 +14,7 @@ import (
 	"io"
 	"log/slog"
 	"mime"
+	"net/http"
 	"path"
 	"path/filepath"
 	"strings"
@@ -239,6 +240,10 @@ type Options struct {
 
 	// Platform talks to the Agri-Gaia platform (nil: binding off).
 	Platform *platform.Client
+
+	// Notebook runs the chat's own code in its notebook server in JupyterHub (own code C-E3); nil
+	// when AGW_JUPYTERHUB_API_URL is not set. main.go registers it as the doer of the notebook paths.
+	Notebook Notebooker
 
 	// Toolsets: the bindings every new chat gets (AGW_TOOLSETS, issue #29); empty = toolset.Default.
 	// Stored chats keep the combination they were created with.
@@ -1855,6 +1860,11 @@ func (m *Manager) setRunning(l *live, v bool) {
 
 func (m *Manager) ChatForSlot(slotID string) string { return m.SlotChat(slotID) }
 
+// SlotOf names the slot of a running chat (empty when the chat is idle). Features that act for a
+// chat outside a socket call log their calls this way (the notebook service logs the dataset
+// archives it streams, own code C-E3).
+func (m *Manager) SlotOf(chatID string) string { return m.slotOf(chatID) }
+
 func (m *Manager) LogCall(slotID, chatID, via, op, detail, result string) {
 	m.LogCallBy(context.Background(), slotID, chatID, via, op, detail, result)
 }
@@ -2027,6 +2037,17 @@ func visibleControls(s string) string {
 // maxPlatformPreview limits method, path and indented body of a writing platform call.
 const maxPlatformPreview = 16000
 
+// maxNotebookPreview limits the approval of a run in the chat's notebook server (own code C-E3). The
+// user must see the code that runs, so a run gets more room than other calls; code that does not fit
+// is refused instead of cut (Review W1).
+const maxNotebookPreview = 48000
+
+// notebookRun reports whether a call starts a run in the chat's notebook server. Its approval shows
+// the code of the run in full instead of the form fields.
+func notebookRun(req platform.Request) bool {
+	return req.Method == http.MethodPost && req.Path == platform.NotebookPrefix+"/runs"
+}
+
 // PlatformExchanged logs a token exchange for a chat (platform.Client.OnExchange):
 // who is in the token (sub, azp, aud), until when it is valid and that no act claim comes.
 func (m *Manager) PlatformExchanged(chatID string, cl platform.Claims) {
@@ -2132,7 +2153,17 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 		if del != nil && violation == "" {
 			preview += " (within the delegated rights)"
 		}
-		if d := req.Describe(); d != "" {
+		limit := maxPlatformPreview
+		if notebookRun(req) {
+			// A run in the notebook server shows its code, not its form fields: the user approves
+			// what will run (own code C-E3).
+			code, err := platform.NotebookPreview(req)
+			if err != nil {
+				return platform.Result{Status: "error", Message: platform.RefusedPrefix + err.Error()}, nil
+			}
+			preview += "\n\n" + code
+			limit = maxNotebookPreview
+		} else if d := req.Describe(); d != "" {
 			preview += "\n\n" + d
 		}
 		if len(req.Body) > 0 {
@@ -2146,8 +2177,12 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 		preview += irreversibleNote(access.Effect, req.Body)
 		preview = visibleControls(preview)
 		// The user only approves what they see in full: better refuse than truncate (Review W1).
-		if n := len([]rune(preview)); n > maxPlatformPreview {
-			return platform.Result{Status: "error", Message: fmt.Sprintf("call too large for an approval (%d characters, at most %d); shrink the body", n, maxPlatformPreview)}, nil
+		if n := len([]rune(preview)); n > limit {
+			if limit == maxNotebookPreview {
+				return platform.Result{Status: "error", Message: fmt.Sprintf(
+					"the code is too long for one approval (%d characters, at most %d); shorten it or split it into runs", n, limit)}, nil
+			}
+			return platform.Result{Status: "error", Message: fmt.Sprintf("call too large for an approval (%d characters, at most %d); shrink the body", n, limit)}, nil
 		}
 		// What will happen, written by the gateway from this request and platform state it reads now (issue #72).
 		tool := ""
