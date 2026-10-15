@@ -667,6 +667,12 @@ func (c *Client) send(ctx context.Context, chatID string, r Request, relogin boo
 	if ctype != "" {
 		req.Header.Set("Content-Type", ctype)
 	}
+	// A call of a feature (DoTrusted) brings a client of its own into the context: such an operation
+	// takes minutes (V1: POST /cvat/tasks/{id} waits for CVAT to import the images), the agent's calls
+	// keep their 60 s.
+	if hc := trustedHTTPFrom(ctx); hc != nil {
+		return hc.Do(req)
+	}
 	return c.cfg.HTTP.Do(req)
 }
 
