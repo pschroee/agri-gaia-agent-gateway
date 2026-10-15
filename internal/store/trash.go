@@ -205,7 +205,7 @@ WHERE chat_id = $1`,
 		}
 	}
 	// The cascade removes messages, runs, artifacts, approvals, subagents, images, workspace, background tasks,
-	// queue, turns, delegation objects, plans and the session.
+	// queue, turns, delegation objects, plans, annotation runs (V1) and the session.
 	if _, err := tx.Exec(ctx, `DELETE FROM chats WHERE id = $1`, chatID); err != nil {
 		return "", err
 	}
