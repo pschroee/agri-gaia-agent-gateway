@@ -41,7 +41,7 @@ func (m *Manager) visionModel(id string) (name string, readsImages, ok bool) {
 	}
 	name = model.Name
 	if name == "" {
-		name = id
+		name = model.ID
 	}
 	return name, model.ReadsImages(), true
 }
@@ -86,7 +86,7 @@ func setupVision(s Setup) Capability {
 	}
 	name := model.Name
 	if name == "" {
-		name = s.Catalog.Default
+		name = model.ID
 	}
 	c.Available = model.ReadsImages()
 	if c.Available {
