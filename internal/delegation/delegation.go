@@ -170,6 +170,9 @@ type Access struct {
 	Problem  string   `json:"problem,omitempty"`
 	// Effect is the class of the call (effect.go); empty only if it could not be determined.
 	Effect Effect `json:"effect,omitempty"`
+	// ConfirmEach: the route asks for every single call, also with confirm "none" (G1.1). The class
+	// stays what it is; the duty to ask is a trait of its own. Such a call is never covered by a plan.
+	ConfirmEach bool `json:"confirm_each,omitempty"`
 }
 
 func (a Access) String() string {
@@ -193,6 +196,10 @@ type route struct {
 	resource string
 	idGroup  int    // group holding the identifier, 0: without object
 	effect   Effect // class of the call; empty: the class of the action
+	// each: every call of this route needs its own approval, also with confirm "none" (G1.1).
+	each bool
+	// refines run after the classification of this route (G1.6); each may set Also, ID, Effect and Problem.
+	refines []func(a *Access, req platform.Request)
 }
 
 func r(method, pattern, action, resource string, idGroup int) route {
@@ -208,6 +215,22 @@ func r(method, pattern, action, resource string, idGroup int) route {
 // as sets the effect class of a route whose class differs from its action.
 func (rt route) as(e Effect) route {
 	rt.effect = e
+	return rt
+}
+
+// confirmEach marks a route whose calls the user approves one by one, also with confirm "none"
+// (G1.1). Use it for code the gateway cannot check before it runs (G1.2).
+func (rt route) confirmEach() route {
+	rt.each = true
+	return rt
+}
+
+// refine adds a refinement of this route's classification (G1.6). It runs right after the route has
+// classified the call and may set Also, ID, Effect and Problem; several refinements run in the order
+// they were added. Routes are refined where they are declared, so that no two features change the
+// same table.
+func (rt route) refine(f func(a *Access, req platform.Request)) route {
+	rt.refines = append(rt.refines, f)
 	return rt
 }
 
@@ -304,6 +327,10 @@ func classify(req platform.Request) Access {
 		a.Also = append(a.Also, extraAlso(rt, req)...) // identifiers in the body, issue #67
 		if p := checkFields(req); p != "" {
 			a.Problem = p
+		}
+		a.ConfirmEach = rt.each
+		for _, refine := range rt.refines {
+			refine(&a, req)
 		}
 		return a
 	}
