@@ -148,7 +148,6 @@ func TestConformanceEffects(t *testing.T) {
 		"GET creates model from container 7":      EffectWrite,
 		"GET starts license analysis":             EffectWrite,
 		"GET download writes annotation to MinIO": EffectWrite,
-		"GET registers edge device":               EffectWrite,
 		"start container 7":                       EffectCompute,
 		"training on own dataset (control)":       EffectCompute,
 		"delete another user's dataset":           EffectIrreversible,

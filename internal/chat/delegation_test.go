@@ -14,7 +14,16 @@ import (
 
 	"agw/internal/delegation"
 	"agw/internal/platform"
+	"agw/internal/store"
 )
+
+// conformanceVirtual answers a registered virtual path with an empty ok, so that the conformance
+// check reaches its delegation decision instead of the "not configured" answer.
+type conformanceVirtual struct{}
+
+func (conformanceVirtual) Do(context.Context, string, platform.Request) (platform.Result, error) {
+	return platform.Result{Status: "ok", HTTPStatus: http.StatusOK, Body: "{}"}, nil
+}
 
 // fakePlatformRecorder records every request that reaches the platform.
 type fakePlatformRecorder struct {
@@ -66,6 +75,13 @@ func withRecordingPlatform(t *testing.T, e *env) *fakePlatformRecorder {
 func TestConformanceThroughManager(t *testing.T) {
 	e := setup(t)
 	f := withRecordingPlatform(t, e)
+	// The virtual features a registered case belongs to answer through their doer. The check registers
+	// stubs, so that it exercises the delegated rights and not whether this setup wired the feature
+	// (in production the gateway wires notebook and annotation when the instance offers them). The
+	// delegation check runs before the doer, so a forbidden call is still refused before it is reached.
+	for _, prefix := range []string{platform.NotebookPrefix, platform.AnnotationPrefix} {
+		e.m.RegisterVirtual(prefix, conformanceVirtual{})
+	}
 	ctx := context.Background()
 	mk := func(raw string) (string, string) {
 		c, err := e.m.Create(ctx, NewChat{Delegation: json.RawMessage(raw)})
@@ -108,11 +124,20 @@ func TestConformanceThroughManager(t *testing.T) {
 		req, err := c.Build()
 		allowed := false
 		if err == nil {
-			res, err := e.m.PlatformCall(ctx, id, s, "cli", req)
-			if err != nil {
-				t.Fatalf("%s: %v", c.Name, err)
+			beforeExpired, _ := e.st.ListApprovals(ctx, store.ApprovalExpired, id)
+			res, cerr := e.m.PlatformCall(ctx, id, s, "cli", req)
+			if cerr != nil {
+				t.Fatalf("%s: %v", c.Name, cerr)
 			}
 			allowed = res.Status == "ok"
+			// A route that asks for every single call (ConfirmEach) is let through by the delegated
+			// rights but stops at the approval. The approval that then expires undecided proves the
+			// rights let the call through: it is only created after the delegation check.
+			if !allowed && res.Status == "rejected" {
+				if after, _ := e.st.ListApprovals(ctx, store.ApprovalExpired, id); len(after) > len(beforeExpired) {
+					allowed = true
+				}
+			}
 		}
 		reached := len(f.reached()) > before
 		results[c.Name] = allowed
@@ -122,8 +147,9 @@ func TestConformanceThroughManager(t *testing.T) {
 		if !c.Allowed && reached {
 			t.Errorf("%s: forbidden call reached the platform: %v", c.Name, f.reached()[before:])
 		}
-		// Exception: API description, own paths (/_agw) do not reach the platform.
-		if c.Allowed && !reached && c.Tool != "rights" {
+		// Exception: calls the gateway answers itself (the API description and the paths under /_agw)
+		// never reach the platform.
+		if c.Allowed && !reached && err == nil && c.Tool != "rights" && !strings.HasPrefix(req.Path, "/_agw/") {
 			t.Errorf("%s: allowed call did not reach the platform", c.Name)
 		}
 	}

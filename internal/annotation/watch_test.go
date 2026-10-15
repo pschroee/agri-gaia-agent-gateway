@@ -74,14 +74,23 @@ func TestPollRun(t *testing.T) {
 		t.Errorf("row: %+v", row)
 	}
 
-	// A failed run carries the first line of the traceback, shortened.
-	e.fc.setRun("run-1", `{"id":"run-1","status":"failed","progress":100,"exc_info":"Traceback (most recent call last):\nboom"}`)
-	got, err = e.svc.poll(ctx, job, nil)
+	// A failed run carries the first line of the traceback, shortened. It runs in its own row: a failed
+	// run is final (store.AnnotationRunFinal), so it would keep a later poll of the same run from ever
+	// reaching CVAT again.
+	if _, err := e.st.AddAnnotationRun(ctx, store.AnnotationRun{
+		ID: "run-fail", ChatID: chatID, DatasetID: 5, TaskID: 7, Function: "f", MinConfidence: 50, Existing: "keep"}); err != nil {
+		t.Fatal(err)
+	}
+	e.fc.setRun("run-fail", `{"id":"run-fail","status":"failed","progress":100,"exc_info":"Traceback (most recent call last):\nboom"}`)
+	got, err = e.svc.poll(ctx, watch.Job{ChatID: chatID, Kind: WatchKindName, Ref: "run-fail"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got.State != "failed" || got.Message != "failed: Traceback (most recent call last):" {
 		t.Errorf("failed: %+v", got)
+	}
+	if row, _ := e.st.AnnotationRun(ctx, chatID, "run-fail"); row.State != store.AnnotationFailed {
+		t.Errorf("row of the failed run: %+v", row)
 	}
 
 	// A finished run is done; the row is final, so further polls answer from it without CVAT.

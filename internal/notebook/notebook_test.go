@@ -343,8 +343,9 @@ func TestNotebookCapability(t *testing.T) {
 	if avail, detail := n.NotebookState(ctx, chatID); !avail || !strings.Contains(detail, "not started") {
 		t.Errorf("available: %v %q", avail, detail)
 	}
+	// A running server: the hub lists it in the user's servers (ServerState reads it from there).
 	hub.mu.Lock()
-	hub.ready = true
+	hub.ready, hub.server = true, n.Server(chatID)
 	hub.mu.Unlock()
 	avail, detail := n.NotebookState(ctx, chatID)
 	if !avail || !strings.Contains(detail, n.Server(chatID)) || !strings.Contains(detail, "no internet") || !strings.Contains(detail, "running") {

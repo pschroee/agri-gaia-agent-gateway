@@ -50,9 +50,14 @@ func countedPlatform(t *testing.T, e *env) func() []string {
 	}
 }
 
+// modelBody is a complete body for PATCH /models/{id} (issue #65): the platform clears every field it
+// does not find in the body, so the gateway requires all of platform.ModelPatchFields. A step of a plan
+// is validated like the call it will execute, so it has to carry the full body as well.
+const modelBody = `{"name":"x","format":"onnx","input_name":"i","input_datatype":"float32","input_shape":[1,3],"input_semantics":"NCHW","output_name":"o","output_datatype":"float32","output_shape":[1,2],"output_labels":["0","1"]}`
+
 // autoPlanBody is an autonomous proposal with a create step and a covered rename step.
 const autoPlanBody = `{"title":"Autonom","mode":"autonomous","budget":{"max_duration_minutes":60,"max_llm_cost_usd":1,"max_auto_turns":5},
- "steps":[{"method":"POST","path":"/datasets"},{"method":"PATCH","path":"/models/5","body":{"name":"x"}}]}`
+ "steps":[{"method":"POST","path":"/datasets"},{"method":"PATCH","path":"/models/5","body":` + modelBody + `}]}`
 
 // autonomousChat creates a chat and approves the given autonomous body over the CLI.
 func autonomousChat(t *testing.T, e *env, ctx context.Context, body string) (ChatView, string, store.Plan) {
@@ -155,7 +160,7 @@ func TestProposeAutonomousRefusesStepOutsideChatDelegation(t *testing.T) {
 		t.Fatal(err)
 	}
 	slot := e.m.live[c.ID].slot.ID
-	body := `{"title":"Autonom","mode":"autonomous","steps":[{"method":"PATCH","path":"/models/5","body":{"name":"x"}}]}`
+	body := `{"title":"Autonom","mode":"autonomous","steps":[{"method":"PATCH","path":"/models/5","body":` + modelBody + `}]}`
 	r, err := e.m.PlatformCall(ctx, c.ID, slot, "cli", liveCall(t, "POST", platform.PlanPath, body))
 	if err != nil || r.Status != "error" || !strings.Contains(r.Message, "outside the chat's delegated rights") {
 		t.Fatalf("step outside the chat delegation: %+v %v", r, err)
@@ -192,6 +197,7 @@ func TestAutonomousGrantRefusesOutsideWithoutApproval(t *testing.T) {
 	for _, via := range []string{"cli", "mcp", "api"} {
 		t.Run(via, func(t *testing.T) {
 			e := setup(t)
+			withPlanPlatform(t, e)
 			ctx := store.WithSession(context.Background(), "main")
 			c, slot, _ := autonomousChat(t, e, ctx, autoPlanBody)
 			got := countedPlatform(t, e)
@@ -217,6 +223,7 @@ func TestAutonomousGrantRefusesOutsideWithoutApproval(t *testing.T) {
 // A-E1 (D1.10): a paused plan refuses writes inside the grant, but reads stay open.
 func TestPausedPlanRefusesWritesAllowsReads(t *testing.T) {
 	e := setup(t)
+	withPlanPlatform(t, e)
 	ctx := store.WithSession(context.Background(), "main")
 	c, slot, p := autonomousChat(t, e, ctx, autoPlanBody)
 	got := countedPlatform(t, e)
@@ -224,7 +231,7 @@ func TestPausedPlanRefusesWritesAllowsReads(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A write that is the plan's own step is inside the grant, but the plan is paused.
-	r, err := e.m.PlatformCall(ctx, c.ID, slot, "cli", liveCall(t, "PATCH", "/models/5", `{"name":"x"}`))
+	r, err := e.m.PlatformCall(ctx, c.ID, slot, "cli", liveCall(t, "PATCH", "/models/5", modelBody))
 	if err != nil || r.Status != "denied" || !strings.Contains(r.Message, "paused") {
 		t.Fatalf("paused write: %+v %v", r, err)
 	}
@@ -246,10 +253,10 @@ func TestRetryUpToMaxAttempts(t *testing.T) {
 	e := setup(t)
 	withPlanPlatformPatch(t, e, http.StatusInternalServerError)
 	ctx := store.WithSession(context.Background(), "main")
-	body := `{"title":"Autonom","mode":"autonomous","steps":[{"method":"PATCH","path":"/models/5","body":{"name":"x"},"max_attempts":2}]}`
+	body := `{"title":"Autonom","mode":"autonomous","steps":[{"method":"PATCH","path":"/models/5","body":` + modelBody + `,"max_attempts":2}]}`
 	c, slot, p := autonomousChat(t, e, ctx, body)
 	call := func() platform.Result {
-		r, err := e.m.PlatformCall(ctx, c.ID, slot, "cli", liveCall(t, "PATCH", "/models/5", `{"name":"x"}`))
+		r, err := e.m.PlatformCall(ctx, c.ID, slot, "cli", liveCall(t, "PATCH", "/models/5", modelBody))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -307,7 +314,7 @@ func TestInteractivePlansUnchanged(t *testing.T) {
 		t.Fatal(err)
 	}
 	slot := e.m.live[c.ID].slot.ID
-	body := `{"title":"Interaktiv","steps":[{"method":"PATCH","path":"/models/5","body":{"name":"x"}}]}`
+	body := `{"title":"Interaktiv","steps":[{"method":"PATCH","path":"/models/5","body":` + modelBody + `}]}`
 	proposeAndDecide(t, e, ctx, c.ID, slot, body, true)
 	p, err := e.st.ActiveAutonomousPlan(ctx, c.ID)
 	if err == nil && p.ID != "" {
@@ -345,7 +352,7 @@ func TestAutonomousPlanConfirmEachStepAsks(t *testing.T) {
 	}
 	exp := time.Now().Add(time.Hour)
 	e.st.DecidePlan(ctx, p.ID, plan.StateApproved, &exp)
-	done := startCall(e, c.ID, slot, liveCall(t, "PATCH", "/models/5", `{"name":"x"}`))
+	done := startCall(e, c.ID, slot, liveCall(t, "PATCH", "/models/5", modelBody))
 	ap := pendingApproval(t, e, c.ID)
 	if ap.Kind != "platform_write" {
 		t.Fatalf("a single approval is expected: %+v", ap)

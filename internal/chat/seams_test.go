@@ -70,7 +70,9 @@ func TestGuardRefusesBeforeApproval(t *testing.T) {
 		}
 		return "", nil
 	})
-	c, err := e.m.Create(ctx, NewChat{Delegation: json.RawMessage(`{"rules":[{"action":"delete","resource":"dataset","ids":["*"]}],"confirm":"none"}`)})
+	// The delegation allows the call, so that the guard is the one deciding it: a guard adds a
+	// restriction on top of the delegated rights, it does not replace them.
+	c, err := e.m.Create(ctx, NewChat{Delegation: json.RawMessage(`{"rules":[{"action":"delete","resource":"dataset","ids":["*"]},{"action":"delete","resource":"api","ids":["/edge-x/1"]}],"confirm":"none"}`)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +116,8 @@ func TestGuardErrorFailsClosed(t *testing.T) {
 		}
 		return "", nil
 	})
-	c, err := e.m.Create(ctx, NewChat{Delegation: json.RawMessage(`{"rules":[{"action":"read","resource":"dataset","ids":["*"]}],"confirm":"none"}`)})
+	// The delegation allows the read, so that the guard is the one deciding it.
+	c, err := e.m.Create(ctx, NewChat{Delegation: json.RawMessage(`{"rules":[{"action":"read","resource":"dataset","ids":["*"]},{"action":"read","resource":"api","ids":["/edge-x/1"]}],"confirm":"none"}`)})
 	if err != nil {
 		t.Fatal(err)
 	}

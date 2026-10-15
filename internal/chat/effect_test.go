@@ -95,7 +95,9 @@ func TestConfirmEachAsksEvenWithConfirmNone(t *testing.T) {
 		if got, want := needsApproval(each, writes, none), true; got != want {
 			t.Errorf("%s with confirm each: needsApproval = %v, want %v", eff, got, want)
 		}
-		wantPlain := eff == delegation.EffectRead || eff == delegation.EffectIrreversible
+		// Without the trait only an irreversible call asks on its own: a read runs through, and so does a
+		// write or compute call when the delegation confirms nothing.
+		wantPlain := eff == delegation.EffectIrreversible
 		if got := needsApproval(plain, writes, none); got != wantPlain {
 			t.Errorf("%s without confirm each: needsApproval = %v, want %v", eff, got, wantPlain)
 		}

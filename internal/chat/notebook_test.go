@@ -171,7 +171,8 @@ func TestNotebookPreviewShowsCode(t *testing.T) {
 	code := "import torch\nprint('hello')\n"
 	done := startCall(e, chatID, slot, notebookRunReq(t, code))
 	ap := pendingApproval(t, e, chatID)
-	for _, w := range []string{code, "sha256 aa11", "Runs train.py in your notebook server", "no internet",
+	// The preview closes with the shown file, so its trailing newline is trimmed.
+	for _, w := range []string{strings.TrimRight(code, "\n"), "sha256 aa11", "Runs train.py in your notebook server", "no internet",
 		"Datasets unpacked before the run: 17", "at most 120 minutes"} {
 		if !strings.Contains(ap.Preview, w) {
 			t.Errorf("preview without %q:\n%s", w, ap.Preview)
@@ -183,7 +184,14 @@ func TestNotebookPreviewShowsCode(t *testing.T) {
 	<-done
 
 	// A run whose code does not fit into one approval is refused: the user only approves what they see.
-	long := notebookRunReq(t, strings.Repeat("# a long line\n", 4000))
+	// A single file above the display cap (platform.notebookTextMax) is noted rather than shown, so the
+	// limit is reached with several files of printable size.
+	long := notebookRunReq(t, "x")
+	long.Uploads = nil
+	for _, name := range []string{"a.py", "b.py", "c.py", "d.py"} {
+		long.Uploads = append(long.Uploads, platform.Upload{Field: "file", Name: name,
+			Data: []byte(strings.Repeat("# line\n", 2000)), SHA256: "aa11"})
+	}
 	res, err := e.m.PlatformCall(ctx, chatID, slot, "cli", long)
 	if err != nil {
 		t.Fatal(err)

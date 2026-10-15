@@ -59,10 +59,11 @@ func TestGrantFromSteps(t *testing.T) {
 		store.PlanStep{Method: "POST", Path: "/train/containers/{{step2.id}}/run", Effect: EffectCompute},
 		store.PlanStep{Method: "GET", Path: "/train/containers/{{step2.id}}/model", Effect: EffectWrite},
 	)
+	// Creating names no object, so the create rules carry no id; the run on a placeholder step is "own"
+	// (the step's container comes from an earlier step) and is checked below.
 	for _, want := range []struct{ action, resource string }{
 		{delegation.Create, delegation.Dataset},
 		{delegation.Create, delegation.Training},
-		{delegation.Run, delegation.Training},
 		{delegation.Create, delegation.Model},
 	} {
 		if !hasRule(g, want.action, want.resource) {

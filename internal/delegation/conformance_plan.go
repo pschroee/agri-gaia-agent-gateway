@@ -35,12 +35,14 @@ func init() {
 }
 
 // planGrantConformance is a plan's grant as internal/plan derives it: create datasets, change own ones,
-// read everything (D1.2, D1.3).
+// read everything (D1.2, D1.3). confirm "none" keeps the allowed controls free of an approval: the
+// conformance check tests the delegated rights, not the separate question whether a write asks.
 const planGrantConformance = `{
   "rules": [
     {"action": "create", "resource": "dataset"},
     {"action": "update", "resource": "dataset", "ids": ["own"]},
     {"action": "read", "resource": "dataset", "ids": ["*"]}
   ],
+  "confirm": "none",
   "enforce": true
 }`

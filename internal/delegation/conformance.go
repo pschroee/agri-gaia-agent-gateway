@@ -136,9 +136,10 @@ func baseCases() []Case {
 		{Name: "container_id as list", Req: body("PUT", "/train/config", `{"container_id":[7],"dataset_id":12}`), Group: "identifier in body"},
 		{Name: "identifier 012 of an own dataset (control)", Req: body("PATCH", "/datasets/012", `{"name":"x"}`), Allowed: true, Group: "parser"},
 
-		// More writing GETs and resources (Review 5: W5, M2)
+		// More writing GETs and resources (Review 5: W5, M2). GET /edge-devices/{id} registers the device
+		// with Portainer, so the edge guards block it outright (edge D-E1) and it is never classified.
 		{Name: "GET download writes annotation to MinIO", Req: req("GET", "/datasets/5/download"), Group: "writing GET"},
-		{Name: "GET registers edge device", Req: req("GET", "/edge-devices/3"), Group: "writing GET"},
+		{Name: "GET registers edge device", Req: req("GET", "/edge-devices/3"), Group: "blocked"},
 		{Name: "delete edge device", Req: req("DELETE", "/edge-devices/3"), Group: "resource"},
 		{Name: "delete unknown path", Req: req("DELETE", "/integrated-services/3"), Group: "resource"},
 		{Name: "method HEAD", Req: req("HEAD", "/datasets"), Group: "parser"},

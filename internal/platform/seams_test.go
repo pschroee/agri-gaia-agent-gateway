@@ -12,13 +12,20 @@ import (
 // A registered blocker refuses calls of the agent; a call of the gateway itself (normalize with
 // agent false) passes it (G1.6).
 func TestRegisteredBlockerAgentOnly(t *testing.T) {
-	registerBlocker(func(r Request) string {
+	refuser := func(r Request) string {
 		if strings.HasPrefix(r.Path, "/seam/") {
 			return "the path " + r.Path + " is blocked for the agent"
 		}
 		return ""
+	}
+	registerBlocker(refuser)
+	// The cleanup pops whatever is last, so it also covers the case that the refusing blocker was
+	// already dropped below; a guard keeps it from popping past the end.
+	t.Cleanup(func() {
+		if len(blockers) > 0 {
+			blockers = blockers[:len(blockers)-1]
+		}
 	})
-	t.Cleanup(func() { blockers = blockers[:len(blockers)-1] })
 
 	req := Request{Method: "POST", Path: "/seam/build", Body: []byte(`{"a":1}`)}
 	if _, err := Normalize(req); err == nil || !strings.Contains(err.Error(), "blocked for the agent") {
@@ -34,7 +41,9 @@ func TestRegisteredBlockerAgentOnly(t *testing.T) {
 	if _, err := normalize(Request{Method: "GET", Path: "/urls/basic-auth"}, false); err == nil {
 		t.Error("the fixed list must apply to the gateway's own calls too")
 	}
-	// A blocker sees the canonical request.
+	// A blocker sees the canonical request. The refusing blocker is dropped first, so that it does not
+	// stop the call before the observing one runs.
+	blockers = blockers[:len(blockers)-1]
 	var seen Request
 	registerBlocker(func(r Request) string { seen = r; return "" })
 	t.Cleanup(func() { blockers = blockers[:len(blockers)-1] })

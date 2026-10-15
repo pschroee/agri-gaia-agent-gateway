@@ -151,8 +151,8 @@ func TestRequestToolRefusesNotebookPaths(t *testing.T) {
 	if code != 200 || r.Status != "ok" {
 		t.Errorf("a normal call: %d %+v", code, r)
 	}
-	var raw map[string]any
-	if json.Unmarshal([]byte(r.Body), &raw) != nil {
+	var raw any // the list of datasets is an array, so any JSON value is accepted here
+	if json.Unmarshal([]byte(r.Body), &raw) != nil || raw == nil {
 		t.Errorf("answer: %s", r.Body)
 	}
 }

@@ -78,12 +78,14 @@ func TestCapabilitiesBuiltIn(t *testing.T) {
 	if b := got["bindings"]; !b.Available || !strings.Contains(b.Detail, "cli") {
 		t.Errorf("bindings: %+v", b)
 	}
-	// The features' names are not part of this gateway version; annotation is registered since V1 and
-	// reports that this setup has no service for it (its own test is in capability_annotation_test.go).
-	for _, name := range []string{"notebook", "edge"} {
-		if f := got[name]; f.Available || f.Detail != missingCapability {
-			t.Errorf("%s: %+v", name, f)
-		}
+	// edge names no feature yet, so it is reported as not part of this gateway version. notebook (own code
+	// C-E3) and annotation (V1) are registered and report that this setup has no service for them (their
+	// own tests are in capability_test.go and capability_annotation_test.go).
+	if f := got["edge"]; f.Available || f.Detail != missingCapability {
+		t.Errorf("edge: %+v", f)
+	}
+	if f := got["notebook"]; f.Available || !strings.Contains(f.Detail, "not configured on this instance") {
+		t.Errorf("notebook: %+v", f)
 	}
 	if f := got["annotation"]; f.Available || !strings.Contains(f.Detail, "not part of this setup") {
 		t.Errorf("annotation: %+v", f)
@@ -111,12 +113,27 @@ func TestCapabilitiesBuiltIn(t *testing.T) {
 func TestCapabilitiesRegistered(t *testing.T) {
 	e := setup(t)
 	ctx := context.Background()
+	// notebook is registered by the feature itself (own code C-E3), so the fake entry has to be restored,
+	// not just deleted: otherwise the feature's registration would be gone for the rest of the package.
+	prevFunc, hadFunc := capabilityFuncs["notebook"]
+	prevSetup, hadSetup := capabilitySetups["notebook"]
 	registerCapability("notebook", func(_ context.Context, _ *Manager, chatID string) Capability {
 		return Capability{Available: true, Detail: "the notebook server of this instance is reachable", Without: "run the code in your own sandbox"}
 	}, func(s Setup) Capability {
 		return Capability{Available: true, Detail: "a notebook server is configured"}
 	})
-	t.Cleanup(func() { delete(capabilityFuncs, "notebook"); delete(capabilitySetups, "notebook") })
+	t.Cleanup(func() {
+		if hadFunc {
+			capabilityFuncs["notebook"] = prevFunc
+		} else {
+			delete(capabilityFuncs, "notebook")
+		}
+		if hadSetup {
+			capabilitySetups["notebook"] = prevSetup
+		} else {
+			delete(capabilitySetups, "notebook")
+		}
+	})
 	c, err := e.m.Create(ctx, NewChat{})
 	if err != nil {
 		t.Fatal(err)
