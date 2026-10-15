@@ -352,11 +352,14 @@ func containerImageStatusSteps(ctx context.Context, a Args, final Request, do Do
 	return res, "", nil
 }
 
-// blockedCall refuses the template calls the agent may never make, whatever the delegation says
-// (issue #67): changing, deleting and uploading templates, and importing from another repository or
-// with credentials. It returns the reason, or "" when the call may go on.
+// blockedCall refuses the calls the agent may never make, whatever the delegation says: template
+// changes (issue #67) and a training configuration that would reach a shell in the privileged
+// training container (issue #93). It returns the reason, or "" when the call may go on.
 func blockedCall(r Request) string {
 	p := strings.ToLower(r.Path)
+	if p == "/train/config" && (r.Method == http.MethodPost || r.Method == http.MethodPut) {
+		return CheckTrainConfig(r.Body)
+	}
 	if p != templatesPath && !strings.HasPrefix(p, templatesPath+"/") {
 		return ""
 	}

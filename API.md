@@ -533,6 +533,22 @@ alike; the class decides whether the user is asked and is shown in approvals, th
   `SocketCall` (platform calls) and so on `ActivityCall`. Entries from before issue #63 have none; clients fall back to
   the method of the call. A refusal by the gateway is logged as `refused: …` and appears as `refused` in the activity.
 
+### Calls the agent may never make
+
+Some paths and values are refused before the delegation check, also with a delegation that would allow them; they are
+logged as `refused: …`. `GET /urls`, `/service`, `/users` and `/network` are blocked entirely (they return credentials
+or are internal callbacks). The inference container templates (issue #67) may only be read, and importing is limited to
+`AllowedTemplateGitURL` without credentials.
+
+**Training (issue #93).** The keys and values of `train_config` reach a shell in the privileged training container
+without being checked (`config_to_args.py` builds `--key value` pairs, `docker-entrypoint.sh` evaluates them with `eval`).
+The gateway therefore checks `train_config` of `POST /train/config` and `PUT /train/config`: it must be a JSON object
+whose keys match `[a-z][a-z0-9_-]{0,40}` and whose values are a number, `true`/`false`, `null`, a string of
+`A-Za-z0-9_.,:/+-` (at most 100 characters, so `"0,1"` and `cpu` for `device` pass) or a list of at most 32 such values.
+Duplicate keys and nested objects are refused; the refusal names the place, for example
+`refused: train_config.optimizer: value not allowed (…)`. A body without a `train_config` member is passed on — there is
+no value for the shell, and the platform refuses such a call on its own.
+
 ## SSE `GET /api/chats/{id}/events`
 
 Each event is a `data:` line with JSON `{"kind": …, "data": …}`. Every 15 s a comment `: ping` is sent.
