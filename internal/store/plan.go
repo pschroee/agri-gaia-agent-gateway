@@ -40,6 +40,9 @@ type PlanStep struct {
 	// Summary is what the gateway says the step does (issue #72): written from the stored call and platform state
 	// read at proposal time. Empty for steps from before #72.
 	Summary string `json:"summary,omitempty"`
+	// SummaryProposed (issue L2/#119): the summary as it was proposed, kept when a re-read at the moment of the
+	// approval found other values. Empty while nothing changed.
+	SummaryProposed string `json:"summary_proposed,omitempty"`
 	// Description is the agent's note on the step, not checked by the gateway: the API names it agent_note.
 	Description string `json:"agent_note,omitempty"`
 	Tool        string `json:"tool,omitempty"`
@@ -73,7 +76,7 @@ type PlanFile struct {
 
 const planCols = `id::text, chat_id::text, approval_id, title, session, tool_call_id, via, state, created_at, decided_at, expires_at`
 
-const planStepCols = `idx, summary, description, tool, args, method, path, query, body, body_sha256, form, form_sha256, files, effect, state, result, created_resource, created_id, done_at`
+const planStepCols = `idx, summary, COALESCE(summary_proposed,''), description, tool, args, method, path, query, body, body_sha256, form, form_sha256, files, effect, state, result, created_resource, created_id, done_at`
 
 func scanPlan(row interface{ Scan(...any) error }) (Plan, error) {
 	var p Plan
@@ -92,7 +95,7 @@ func rawOrNil(s string) json.RawMessage {
 func scanPlanStep(row interface{ Scan(...any) error }) (PlanStep, error) {
 	var st PlanStep
 	var query, body, form, files, args string
-	err := row.Scan(&st.Idx, &st.Summary, &st.Description, &st.Tool, &args, &st.Method, &st.Path, &query, &body, &st.BodySHA256, &form, &st.FormSHA256, &files,
+	err := row.Scan(&st.Idx, &st.Summary, &st.SummaryProposed, &st.Description, &st.Tool, &args, &st.Method, &st.Path, &query, &body, &st.BodySHA256, &form, &st.FormSHA256, &files,
 		&st.Effect, &st.State, &st.Result, &st.CreatedResource, &st.CreatedID, &st.DoneAt)
 	if err != nil {
 		return st, err
@@ -212,6 +215,40 @@ func (s *Store) ListPlans(ctx context.Context, chatID string) ([]Plan, error) {
 func (s *Store) SetPlanApproval(ctx context.Context, planID, approvalID string) error {
 	_, err := s.pool.Exec(ctx, `UPDATE plans SET approval_id=$2 WHERE id=$1`, planID, approvalID)
 	return err
+}
+
+// PlanByApproval returns the plan behind an approval request; ErrNotFound if the ID belongs to no plan.
+func (s *Store) PlanByApproval(ctx context.Context, approvalID string) (Plan, error) {
+	var id string
+	err := s.pool.QueryRow(ctx, `SELECT id::text FROM plans WHERE approval_id=$1 ORDER BY created_at DESC, id LIMIT 1`, approvalID).Scan(&id)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Plan{}, ErrNotFound
+		}
+		return Plan{}, err
+	}
+	return s.GetPlan(ctx, id)
+}
+
+// ReplacePlanStepSummaries overwrites the gateway's summaries of a plan's steps with what a re-read at the moment of
+// the approval found (issue L2/#119). The first proposal of every step stays in summary_proposed (COALESCE). One
+// transaction: either every step is updated or none. Steps the plan does not have are ignored.
+func (s *Store) ReplacePlanStepSummaries(ctx context.Context, planID string, summaries []string) error {
+	if !isUUID(planID) {
+		return ErrNotFound
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	for i, sum := range summaries {
+		if _, err := tx.Exec(ctx, `UPDATE plan_steps SET summary_proposed = COALESCE(summary_proposed, summary), summary=$3
+WHERE plan_id=$1 AND idx=$2`, planID, i+1, sum); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
 }
 
 // DecidePlan sets the decision of a plan that is still "proposed"; ok reports whether it took effect.

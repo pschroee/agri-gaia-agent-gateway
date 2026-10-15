@@ -5,9 +5,13 @@
 package sock
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
+	"io"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -113,5 +117,70 @@ func TestInvocationOnlyForTools(t *testing.T) {
 	// raw REST request is the only call without one and it is the PATCH.
 	if viaTool != 6 || none != 1 || !strings.HasSuffix(b.invs[len(b.invs)-1], "PATCH /models/5 none") {
 		t.Fatalf("invocations: %v", b.invs)
+	}
+}
+
+// mcpCallHeader is mcpCall with extra headers: the pi extension names the tool call of the session in
+// X-Agw-Tool-Call when it posts to /mcp (issue L2/#119).
+func mcpCallHeader(t *testing.T, c *http.Client, method string, params any, hdr map[string]string) {
+	t.Helper()
+	body, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": method, "params": params})
+	req, _ := http.NewRequest(http.MethodPost, "http://agw/mcp", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	req.Header.Set("Mcp-Protocol-Version", "2025-06-18")
+	for k, v := range hdr {
+		req.Header.Set(k, v)
+	}
+	resp, err := c.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	var msg map[string]any
+	if err := json.Unmarshal(raw, &msg); err != nil {
+		t.Fatalf("MCP response not JSON (%d): %s", resp.StatusCode, raw)
+	}
+	if msg["error"] != nil {
+		t.Fatalf("MCP error: %v", msg["error"])
+	}
+}
+
+// F28 (issue L2/#119): a plan proposed over any binding reaches the store with the tool call of the session, so the
+// card can place it in the chat and the activity can point back at it. CLI and REST take it from the header
+// X-Agw-Tool-Call (agw-platform and the REST extension set it), MCP from the header the pi extension sends on
+// POST /mcp. The manager stores what arrives here as plans.tool_call_id.
+func TestPlanToolCallPerBinding(t *testing.T) {
+	b := &platformBackend{fakeBackend: fakeBackend{chat: "chat-tc", decide: "approved"}}
+	c := start(t, b)
+
+	// CLI.
+	req, _ := http.NewRequest(http.MethodPost, "http://agw/platform/propose-plan", strings.NewReader(`{"plan":`+planBody+`}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Agw-Tool-Call", "call_cli")
+	resp, err := c.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("CLI: %d", resp.StatusCode)
+	}
+	// MCP.
+	mcpCallHeader(t, c, "tools/call", map[string]any{"name": "platform_propose_plan", "arguments": map[string]any{
+		"plan": map[string]any{"title": "t", "steps": []any{map[string]any{"method": "DELETE", "path": "/models/5"}}}}},
+		map[string]string{"X-Agw-Tool-Call": "call_mcp"})
+	// REST.
+	if code, _, _ := apiCall(t, c, "POST", "/platform-api/_agw/plan", "application/json", planBody, map[string]string{"X-Agw-Tool-Call": "call_api"}); code != http.StatusOK {
+		t.Fatalf("REST: %d", code)
+	}
+
+	b.mu.Lock()
+	got := append([]string(nil), b.toolCalls...)
+	b.mu.Unlock()
+	want := []string{"call_cli", "call_mcp", "call_api"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("tool calls at the backend: %v, want %v", got, want)
 	}
 }

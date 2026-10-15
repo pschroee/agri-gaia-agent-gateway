@@ -26,12 +26,20 @@ const description = `Calls the REST API of the Agri-Gaia platform (datasets, mod
 - Every call has an effect class: read runs directly; write, compute (building or starting a training; a chat has a limited number) and irreversible (deleting, publishing) wait until the user decides, irreversible ones always.
 - Two or more writing calls in a row: propose them once with POST /_agw/plan (body {"title": …, "steps": [{"method","path","query","body","description"}]}); the user approves the plan once, and each call that matches the next step exactly then runs without a new approval. An id from an earlier step is written as "{{stepN.id}}".`;
 
-function call(method: string, path: string, query: Record<string, string> | undefined, body: unknown, signal?: AbortSignal): Promise<{ status: number; headers: any; text: string }> {
+function call(method: string, path: string, query: Record<string, string> | undefined, body: unknown, signal?: AbortSignal, toolCallId?: string): Promise<{ status: number; headers: any; text: string }> {
 	let full = PREFIX + (path.startsWith("/") ? path : "/" + path);
 	if (query && Object.keys(query).length > 0) {
 		full += "?" + new URLSearchParams(Object.entries(query).map(([k, v]) => [k, String(v)])).toString();
 	}
 	const payload = body === undefined || body === null ? "" : typeof body === "string" ? body : JSON.stringify(body);
+	// X-Agw-Tool-Call names the tool call of the session; the orchestrator stores it with the approval, so that a
+	// plan proposed here carries its tool_call_id like the CLI and MCP bindings do (issue L2/#119).
+	const headers: Record<string, string> = {};
+	if (payload) {
+		headers["content-type"] = "application/json";
+		headers["content-length"] = String(Buffer.byteLength(payload));
+	}
+	if (toolCallId) headers["X-Agw-Tool-Call"] = toolCallId;
 	return new Promise((resolve, reject) => {
 		const req = request(
 			{
@@ -40,7 +48,7 @@ function call(method: string, path: string, query: Record<string, string> | unde
 				method: method.toUpperCase(),
 				signal,
 				timeout: 0, // writing calls wait for the user
-				headers: payload ? { "content-type": "application/json", "content-length": Buffer.byteLength(payload) } : {},
+				headers,
 			},
 			(res) => {
 				let data = "";
@@ -136,10 +144,10 @@ export default function (pi: ExtensionAPI) {
 			},
 			required: ["method", "path"],
 		},
-		async execute(_toolCallId: string, params: any, signal: AbortSignal) {
+		async execute(toolCallId: string, params: any, signal: AbortSignal) {
 			const p = params ?? {};
 			if (typeof p.method !== "string" || typeof p.path !== "string") throw new Error("method and path are missing");
-			const r = await call(p.method, p.path, p.query, p.body, signal);
+			const r = await call(p.method, p.path, p.query, p.body, signal, toolCallId);
 			let text = r.text;
 			if (text.length > MAX_SHOWN) text = text.slice(0, MAX_SHOWN) + "\n[… truncated; ask again with skip/limit or a narrower call]";
 			const loc = r.headers?.location ? ` · Location: ${r.headers.location}` : "";

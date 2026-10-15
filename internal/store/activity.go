@@ -191,12 +191,15 @@ func (s *Store) ListActivity(ctx context.Context, f ActivityFilter) (ActivityPag
 	}
 
 	args := []any{}
-	ops := "sc.op = 'platform'"
+	// The gateway's own reads for approval summaries (op summary_read, issue L2/#119) belong to the platform kind
+	// (they are platform calls the gateway made), but never to the figures: activitySummary counts op = 'platform'
+	// only, so the key numbers of the evaluation stay about the agent.
+	ops := "sc.op IN ('platform', 'summary_read')"
 	switch f.Kind {
 	case KindInternet:
 		ops = "sc.op IN ('internet', 'internet_off', 'internet_set')"
 	case KindAll:
-		ops = "sc.op IN ('platform', 'internet', 'internet_off', 'internet_set')"
+		ops = "sc.op IN ('platform', 'summary_read', 'internet', 'internet_off', 'internet_set')"
 	}
 	where := append([]string{ops, "(sc.chat_id IS NOT NULL OR sc.deleted_chat IS NOT NULL)"}, activityWhere(f, "sc", activityOwner, &args)...)
 	if f.Outcome != "" {
@@ -242,9 +245,12 @@ func (s *Store) ListActivity(ctx context.Context, f ActivityFilter) (ActivityPag
 			&apID, &apState, &apCreated, &apDecided); err != nil {
 			return page, err
 		}
-		if c.Op == "platform" {
+		switch c.Op {
+		case "platform", "summary_read":
+			// summary_read: the gateway's own reads for a summary (issue L2/#119) are platform calls of the system,
+			// not of the agent; the frontend tells them apart by the op.
 			c.Kind = KindPlatform
-		} else {
+		default:
 			c.Kind, c.Outcome, c.Internet = KindInternet, "", &in
 		}
 		if apID != nil {

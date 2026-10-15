@@ -1378,6 +1378,12 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request) {
 	}
 	a, err := s.M.Decide(r.Context(), r.PathValue("id"), *req.Approve)
 	if err != nil {
+		// The platform changed since the approval was proposed (issue L2/#119): the approval stays open and carries
+		// the newly read summary next to the one as proposed, so the card shows both and the next click decides.
+		if errors.Is(err, chat.ErrSummaryChanged) {
+			writeJSON(w, http.StatusConflict, map[string]any{"error": err.Error(), "code": "summary_changed", "approval": a})
+			return
+		}
 		fail(w, err)
 		return
 	}

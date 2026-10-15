@@ -403,6 +403,10 @@ CREATE INDEX IF NOT EXISTS socket_calls_platform ON socket_calls (id) WHERE op =
 -- With kind=internet|all it also reads the internet switches (issue #37): the agent's request and switch-off and the
 -- user's switch (via 'user', op 'internet_set').
 CREATE INDEX IF NOT EXISTS socket_calls_activity ON socket_calls (id) WHERE op IN ('platform', 'internet', 'internet_off', 'internet_set');
+-- The gateway's reads for approval summaries (op summary_read, issue L2/#119) show up in the platform kind next to
+-- the platform calls; they need an index of their own, because the predicate of socket_calls_activity above does not
+-- cover them. The figures (activitySummary) count op = 'platform' only, so socket_calls_platform stays as it is.
+CREATE INDEX IF NOT EXISTS socket_calls_summary_read ON socket_calls (id) WHERE op = 'summary_read';
 
 -- Page context of a queued message from the user (issue #13): the platform page and the object the user had open
 -- when sending ({page, object?: {kind, id, name?}}, checked by chat.ParsePageContext); NULL: none. Goes to the agent
@@ -448,3 +452,9 @@ CREATE INDEX IF NOT EXISTS tool_executions_deleted ON tool_executions (deleted_c
 CREATE INDEX IF NOT EXISTS llm_calls_deleted ON llm_calls (deleted_chat) WHERE deleted_chat IS NOT NULL;
 CREATE INDEX IF NOT EXISTS aux_llm_calls_deleted ON aux_llm_calls (deleted_chat) WHERE deleted_chat IS NOT NULL;
 CREATE INDEX IF NOT EXISTS web_requests_deleted ON web_requests (deleted_chat) WHERE deleted_chat IS NOT NULL;
+
+-- The summary as it was first proposed (issue L2/#119): a re-read at the moment of the approval overwrites summary,
+-- and these columns keep the first text and the time of the change, so the card can show "As proposed" next to the
+-- current text. summary_proposed is NULL until the first change; summary_changed_at marks when it happened.
+ALTER TABLE approvals ADD COLUMN IF NOT EXISTS summary_proposed text;
+ALTER TABLE approvals ADD COLUMN IF NOT EXISTS summary_changed_at timestamptz;

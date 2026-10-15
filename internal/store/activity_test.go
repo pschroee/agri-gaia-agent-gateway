@@ -306,3 +306,43 @@ func TestListActivityInternet(t *testing.T) {
 		t.Fatalf("token mode: %d", len(p.Calls))
 	}
 }
+
+// The gateway's own reads for approval summaries (op summary_read) appear in the activity next to the platform
+// calls, as entries of the system, and stay out of the figures that measure the agent (issue L2/#119, DL2.5).
+func TestActivityListsSummaryReadsOutsideFigures(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	c, err := s.CreateChat(ctx, NewChat{Title: "reads", Model: "p/m", Variant: "cli", Owner: "sub-anna"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	call := func(op, detail, result string) {
+		t.Helper()
+		if _, err := s.AddSocketCall(ctx, SocketCall{ChatID: c.ID, SlotID: "p", Via: "orchestrator", Op: op, Detail: detail, Result: result}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	call("platform", "POST /datasets", "ok 201")
+	call("summary_read", "for approval 12345678 (proposed): GET /datasets/16", "ok")
+	call("summary_read", "for approval 12345678 (approval): GET /datasets/16", "error: 1 of 1 not readable")
+	anna := "sub-anna"
+
+	p, err := s.ListActivity(ctx, ActivityFilter{Owner: &anna})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p.Calls) != 3 || p.Calls[0].Op != "summary_read" || p.Calls[0].Kind != KindPlatform || p.Calls[0].Internet != nil {
+		t.Fatalf("platform kind: %+v", p.Calls)
+	}
+	if p.Summary.Total != 1 || p.Summary.Outcomes["ok"] != 1 {
+		t.Fatalf("the figures count the system's reads: %+v", p.Summary)
+	}
+	all, err := s.ListActivity(ctx, ActivityFilter{Owner: &anna, Kind: KindAll})
+	if err != nil || len(all.Calls) != 3 {
+		t.Fatalf("all kind: %d calls, %v", len(all.Calls), err)
+	}
+	inet, err := s.ListActivity(ctx, ActivityFilter{Owner: &anna, Kind: KindInternet})
+	if err != nil || len(inet.Calls) != 0 {
+		t.Fatalf("internet kind: %d calls, %v", len(inet.Calls), err)
+	}
+}

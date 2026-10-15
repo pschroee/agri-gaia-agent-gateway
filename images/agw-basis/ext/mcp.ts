@@ -41,20 +41,25 @@ function postJSON(path: string, body: unknown, signal?: AbortSignal): Promise<an
 	});
 }
 
-function rpc(method: string, params: unknown, signal?: AbortSignal): Promise<any> {
+// rpc sends one JSON-RPC request to the MCP endpoint. callTool names the tool call of the session; it travels as
+// X-Agw-Tool-Call, so that the orchestrator stores it with an approval and a plan proposed over MCP carries its
+// tool_call_id like the CLI and REST bindings do (issue L2/#119).
+function rpc(method: string, params: unknown, signal?: AbortSignal, callTool?: string): Promise<any> {
 	const body = JSON.stringify({ jsonrpc: "2.0", id: nextId++, method, params });
+	const headers: Record<string, string> = {
+		"content-type": "application/json",
+		accept: "application/json, text/event-stream",
+		"content-length": String(Buffer.byteLength(body)),
+		"mcp-protocol-version": "2025-06-18",
+	};
+	if (callTool) headers["X-Agw-Tool-Call"] = callTool;
 	return new Promise((resolvePromise, reject) => {
 		const req = request(
 			{
 				socketPath: SOCKET,
 				path: "/mcp",
 				method: "POST",
-				headers: {
-					"content-type": "application/json",
-					accept: "application/json, text/event-stream",
-					"content-length": Buffer.byteLength(body),
-					"mcp-protocol-version": "2025-06-18",
-				},
+				headers,
 				signal,
 				timeout: 0,
 			},
@@ -143,7 +148,7 @@ export default async function (pi: ExtensionAPI) {
 					if (r.status !== "stored") throw new Error(text);
 					return { content: [{ type: "text", text }], details: { structured: null } };
 				}
-				const result = await rpc("tools/call", { name: tool.name, arguments: args }, signal);
+				const result = await rpc("tools/call", { name: tool.name, arguments: args }, signal, toolCallId);
 				const content = (result?.content ?? []).map((c: any) =>
 					c.type === "text" ? { type: "text", text: c.text } : { type: "text", text: JSON.stringify(c) },
 				);
