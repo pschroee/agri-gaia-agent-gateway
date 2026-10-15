@@ -253,16 +253,58 @@ var (
 	// Blocked areas: /urls returns credentials of integrated services (Fuseki admin,
 	// rechtemodell.md in the thesis repo), /service are internal callbacks of Keycloak and the registry,
 	// /users reveals the token profile of the orchestrator account, /network returns the password and
-	// API key of the dataspace connector (Review K2). The list is a denylist and
-	// not complete; redact additionally redacts keys holding secrets in every response.
-	blocked = []string{"/urls", "/service", "/users", "/network"}
+	// API key of the dataspace connector (Review K2), /integrated-services/uploadservice reads a URL the
+	// caller chooses in the backend with requests.get (SSRF, docs/plattformluecken.md; the list compares
+	// lower case and as a prefix, so exactly this path and its subpaths are blocked and reading
+	// /integrated-services stays allowed). The list is a denylist and
+	// not complete; redact additionally redacts keys holding secrets in every response. Checks of
+	// features (registerBlocker) apply to the agent's calls only, this list to every call.
+	blocked = []string{"/urls", "/service", "/users", "/network", "/integrated-services/uploadservice"}
 	// Query limits, so that the approval and the log show the call in full (Review W1).
 	maxQueryValue = 1 << 10
 	maxQueryTotal = 4 << 10
 )
 
+// registered blockers (G1.6): checks that features add in their own file, e.g. for a path the agent
+// must not reach at all. They run for calls of the agent; the gateway's own calls (normalize with
+// agent false) pass them.
+var (
+	blockerMu sync.Mutex
+	blockers  []func(Request) string
+)
+
+// registerBlocker registers a check for calls of the agent (G1.6). It returns the reason for a
+// refusal, or "" when the call may go on; the reason reaches the agent as the refusal message.
+// Register from an init() of the feature's own file, before the call.
+func registerBlocker(f func(Request) string) {
+	blockerMu.Lock()
+	defer blockerMu.Unlock()
+	blockers = append(blockers, f)
+}
+
+// runBlockers checks a normalized call against the registered blockers; agent false skips them.
+func runBlockers(r Request) error {
+	if len(blockers) == 0 {
+		return nil
+	}
+	blockerMu.Lock()
+	list := append([]func(Request) string(nil), blockers...)
+	blockerMu.Unlock()
+	for _, f := range list {
+		if why := f(r); why != "" {
+			return errors.New(why)
+		}
+	}
+	return nil
+}
+
 // Normalize checks an agent call and brings it into a canonical form.
-func Normalize(r Request) (Request, error) {
+func Normalize(r Request) (Request, error) { return normalize(r, true) }
+
+// normalize checks a call and brings it into a canonical form. agent: the call comes from the agent
+// (a tool or the REST binding). Registered blockers skip calls of the gateway itself (agent false),
+// which read platform state for summaries and for the capability overview.
+func normalize(r Request, agent bool) (Request, error) {
 	r.Method = strings.ToUpper(strings.TrimSpace(r.Method))
 	if r.Method == "" {
 		r.Method = http.MethodGet
@@ -350,6 +392,12 @@ func Normalize(r Request) (Request, error) {
 		}
 		if string(r.Body) == "null" {
 			r.Body = nil
+		}
+	}
+	// Registered blockers see the canonical request (method upper case, body compacted).
+	if agent {
+		if err := runBlockers(r); err != nil {
+			return r, err
 		}
 	}
 	return r, nil
