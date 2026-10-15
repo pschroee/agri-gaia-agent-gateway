@@ -75,12 +75,17 @@ func withRenamablePlatform(t *testing.T, e *env) *renamablePlatform {
 // askApproval raises a write approval for one platform call and hands back the approval and the result channel.
 func askApproval(t *testing.T, e *env, ctx context.Context, chatID, slot string, req platform.Request) (store.Approval, <-chan platform.Result) {
 	t.Helper()
+	events, cancel := e.m.Subscribe(chatID)
+	defer cancel()
 	done := make(chan platform.Result, 1)
 	go func() {
 		r, _ := e.m.PlatformCall(ctx, chatID, slot, "cli", req)
 		done <- r
 	}()
-	return pendingApproval(t, e, chatID), done
+	// Wait for the approval event, not for the row in the database: the event goes out after the recheck
+	// of the summary is registered, so a decision here cannot race that registration.
+	ap, _ := waitEvent(t, events, "approval", "").Data.(store.Approval)
+	return ap, done
 }
 
 // patchDataset is the call every test of this file makes.
