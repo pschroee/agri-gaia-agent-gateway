@@ -22,12 +22,16 @@ import (
 type platformBackend struct {
 	fakeBackend
 	reqs []string
+	// toolCalls: the tool call of the session that arrived with every platform call (store.ToolCallFrom), so a test
+	// can check that a binding passes it on (F28, issue L2/#119).
+	toolCalls []string
 }
 
-func (p *platformBackend) PlatformCall(_ context.Context, chatID, slotID, via string, req platform.Request) (platform.Result, error) {
+func (p *platformBackend) PlatformCall(ctx context.Context, chatID, slotID, via string, req platform.Request) (platform.Result, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.reqs = append(p.reqs, chatID+"|"+via+"|"+req.String()+"|"+string(req.Body))
+	p.toolCalls = append(p.toolCalls, store.ToolCallFrom(ctx))
 	if req.Writes() && p.decide != "approved" {
 		return platform.Result{Status: "rejected", Message: "rejected by the user"}, nil
 	}

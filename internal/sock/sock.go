@@ -206,13 +206,26 @@ var sessionHeaderRe = regexp.MustCompile(`^(main|[0-9a-fA-F-]{8,64}(#[0-9]{1,4})
 
 // callerCtx takes tool call and session from agw-artifact's headers (the orchestrator puts the values
 // into the environment of every bash command; for display only, the agent can change them).
-func callerCtx(r *http.Request) context.Context {
-	ctx := r.Context()
-	if id := r.Header.Get("X-Agw-Tool-Call"); validToolCallID(id) {
+func callerCtx(r *http.Request) context.Context { return callerHeader(r.Context(), r.Header) }
+
+// callerHeader reads the tool call and the session from the headers a client sets: agw-artifact and agw-platform
+// send X-Agw-Tool-Call and X-Agw-Session, and the pi extensions do the same on their socket requests. The values
+// are for display only; the agent can change them.
+func callerHeader(ctx context.Context, h http.Header) context.Context {
+	if id := h.Get("X-Agw-Tool-Call"); validToolCallID(id) {
 		ctx = store.WithToolCall(ctx, id)
 	}
-	if s := r.Header.Get("X-Agw-Session"); sessionHeaderRe.MatchString(s) {
+	if s := h.Get("X-Agw-Session"); sessionHeaderRe.MatchString(s) {
 		ctx = store.WithSession(ctx, s)
+	}
+	return ctx
+}
+
+// callerExtra is callerHeader for an MCP request: the pi extension sends the tool call of the session as a header
+// on POST /mcp, so that a plan proposed over MCP carries its tool_call_id like CLI and REST do (issue L2/#119).
+func callerExtra(ctx context.Context, req *mcp.CallToolRequest) context.Context {
+	if req != nil && req.Extra != nil && req.Extra.Header != nil {
+		return callerHeader(ctx, req.Extra.Header)
 	}
 	return ctx
 }
@@ -692,7 +705,7 @@ func (h *handler) mcpServer() *mcp.Server {
 				if err != nil {
 					return textResult(true, "error: %v", err), nil
 				}
-				res, err := h.doPlatform(ctx, chat, "mcp", t, req.Params.Arguments)
+				res, err := h.doPlatform(callerExtra(ctx, req), chat, "mcp", t, req.Params.Arguments)
 				if err != nil {
 					return textResult(true, "error: %v", err), nil
 				}
