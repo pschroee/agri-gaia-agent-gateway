@@ -23,15 +23,34 @@ type Plan struct {
 	ChatID     string `json:"chat_id"`
 	ApprovalID string `json:"approval_id,omitempty"`
 	// Title is the agent's text, not checked by the gateway (issue #72): the API names it agent_title.
-	Title      string     `json:"agent_title"`
-	Session    string     `json:"session,omitempty"`
-	ToolCallID string     `json:"tool_call_id,omitempty"`
-	Via        string     `json:"via"`
-	State      string     `json:"state"`
-	CreatedAt  time.Time  `json:"created_at"`
-	DecidedAt  *time.Time `json:"decided_at,omitempty"`
-	ExpiresAt  *time.Time `json:"expires_at,omitempty"`
-	Steps      []PlanStep `json:"steps"`
+	Title      string `json:"agent_title"`
+	Session    string `json:"session,omitempty"`
+	ToolCallID string `json:"tool_call_id,omitempty"`
+	Via        string `json:"via"`
+	State      string `json:"state"`
+	// Mode is "interactive" (the plan covers only its steps) or "autonomous" (A-E1): an autonomous plan
+	// carries a budget and a grant derived from its steps that bounds every call of the chat.
+	Mode        string          `json:"mode,omitempty"`
+	Budget      PlanBudget      `json:"budget"`
+	AutoTurns   int             `json:"auto_turns,omitempty"`
+	Grant       json.RawMessage `json:"grant,omitempty"`
+	PauseReason string          `json:"pause_reason,omitempty"`
+	// Replaces names the plan this one superseded (D1.12).
+	Replaces  string     `json:"replaces,omitempty"`
+	CreatedAt time.Time  `json:"created_at"`
+	DecidedAt *time.Time `json:"decided_at,omitempty"`
+	ExpiresAt *time.Time `json:"expires_at,omitempty"`
+	// EndedAt marks the end of an autonomous plan (completed, failed, cancelled).
+	EndedAt *time.Time `json:"ended_at,omitempty"`
+	Steps   []PlanStep `json:"steps"`
+}
+
+// PlanBudget is the budget of an autonomous plan (A-E1): wall-clock seconds it may run, the model cost
+// it may spend and the turns without the user it may take. Zero on an interactive plan.
+type PlanBudget struct {
+	MaxDurationS int     `json:"max_duration_s"`
+	MaxLLMCost   float64 `json:"max_llm_cost"`
+	MaxAutoTurns int     `json:"max_auto_turns"`
 }
 
 // PlanStep is one call of a plan. Query, Body and Form hold the canonical JSON as stored.
@@ -63,6 +82,10 @@ type PlanStep struct {
 	CreatedResource string          `json:"created_resource,omitempty"`
 	CreatedID       string          `json:"created_id,omitempty"`
 	DoneAt          *time.Time      `json:"done_at,omitempty"`
+	// MaxAttempts: how often an autonomous plan may repeat this step after a failure (1 to 3, A-E1).
+	MaxAttempts int `json:"max_attempts,omitempty"`
+	// Attempts counts the claims of this step so far (incremented by ClaimPlanStep).
+	Attempts int `json:"attempts,omitempty"`
 	// PlanID: the plan the step belongs to (not part of the JSON; the plan carries it).
 	PlanID string `json:"-"`
 }
@@ -74,13 +97,17 @@ type PlanFile struct {
 	SHA256 string `json:"sha256"`
 }
 
-const planCols = `id::text, chat_id::text, approval_id, title, session, tool_call_id, via, state, created_at, decided_at, expires_at`
+const planCols = `id::text, chat_id::text, approval_id, title, session, tool_call_id, via, state, mode, max_duration_s, max_llm_cost, max_auto_turns, auto_turns, grant_json, pause_reason, replaces, created_at, decided_at, expires_at, ended_at`
 
-const planStepCols = `idx, summary, COALESCE(summary_proposed,''), description, tool, args, method, path, query, body, body_sha256, form, form_sha256, files, effect, state, result, created_resource, created_id, done_at`
+const planStepCols = `idx, summary, COALESCE(summary_proposed,''), description, tool, args, method, path, query, body, body_sha256, form, form_sha256, files, effect, state, result, created_resource, created_id, done_at, max_attempts, attempts`
 
 func scanPlan(row interface{ Scan(...any) error }) (Plan, error) {
 	var p Plan
-	err := row.Scan(&p.ID, &p.ChatID, &p.ApprovalID, &p.Title, &p.Session, &p.ToolCallID, &p.Via, &p.State, &p.CreatedAt, &p.DecidedAt, &p.ExpiresAt)
+	var grant string
+	err := row.Scan(&p.ID, &p.ChatID, &p.ApprovalID, &p.Title, &p.Session, &p.ToolCallID, &p.Via, &p.State,
+		&p.Mode, &p.Budget.MaxDurationS, &p.Budget.MaxLLMCost, &p.Budget.MaxAutoTurns, &p.AutoTurns, &grant,
+		&p.PauseReason, &p.Replaces, &p.CreatedAt, &p.DecidedAt, &p.ExpiresAt, &p.EndedAt)
+	p.Grant = rawOrNil(grant)
 	return p, err
 }
 
@@ -96,7 +123,7 @@ func scanPlanStep(row interface{ Scan(...any) error }) (PlanStep, error) {
 	var st PlanStep
 	var query, body, form, files, args string
 	err := row.Scan(&st.Idx, &st.Summary, &st.SummaryProposed, &st.Description, &st.Tool, &args, &st.Method, &st.Path, &query, &body, &st.BodySHA256, &form, &st.FormSHA256, &files,
-		&st.Effect, &st.State, &st.Result, &st.CreatedResource, &st.CreatedID, &st.DoneAt)
+		&st.Effect, &st.State, &st.Result, &st.CreatedResource, &st.CreatedID, &st.DoneAt, &st.MaxAttempts, &st.Attempts)
 	if err != nil {
 		return st, err
 	}
@@ -121,9 +148,11 @@ func (s *Store) CreatePlan(ctx context.Context, p Plan) (Plan, error) {
 	}
 	defer tx.Rollback(ctx)
 	var id string
-	err = tx.QueryRow(ctx, `INSERT INTO plans (chat_id, approval_id, title, session, tool_call_id, via)
-VALUES ($1,$2,$3,$4,$5,$6) RETURNING id::text`,
-		p.ChatID, p.ApprovalID, p.Title, p.Session, p.ToolCallID, p.Via).Scan(&id)
+	err = tx.QueryRow(ctx, `INSERT INTO plans (chat_id, approval_id, title, session, tool_call_id, via, mode,
+max_duration_s, max_llm_cost, max_auto_turns, grant_json, replaces)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id::text`,
+		p.ChatID, p.ApprovalID, p.Title, p.Session, p.ToolCallID, p.Via, orInteractive(p.Mode),
+		p.Budget.MaxDurationS, p.Budget.MaxLLMCost, p.Budget.MaxAutoTurns, string(p.Grant), p.Replaces).Scan(&id)
 	if err != nil {
 		return Plan{}, err
 	}
@@ -136,10 +165,14 @@ VALUES ($1,$2,$3,$4,$5,$6) RETURNING id::text`,
 			}
 			files = string(b)
 		}
+		attempts := st.MaxAttempts
+		if attempts < 1 {
+			attempts = 1
+		}
 		_, err := tx.Exec(ctx, `INSERT INTO plan_steps (plan_id, idx, description, tool, args, method, path, query, body, body_sha256,
-form, form_sha256, files, effect, summary) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+form, form_sha256, files, effect, summary, max_attempts) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
 			id, st.Idx, st.Description, st.Tool, string(st.Args), st.Method, st.Path, string(st.Query), string(st.Body), st.BodySHA256,
-			string(st.Form), st.FormSHA256, files, st.Effect, st.Summary)
+			string(st.Form), st.FormSHA256, files, st.Effect, st.Summary, attempts)
 		if err != nil {
 			return Plan{}, err
 		}
@@ -291,12 +324,12 @@ func (s *Store) SetPlanState(ctx context.Context, planID, from, to string) (bool
 	return tag.RowsAffected() > 0, err
 }
 
-// ClaimPlanStep sets an open step to running; ok is false if it was not open.
+// ClaimPlanStep sets an open step to running and counts the claim (attempts); ok is false if it was not open.
 func (s *Store) ClaimPlanStep(ctx context.Context, planID string, idx int) (bool, error) {
 	if !isUUID(planID) {
 		return false, ErrNotFound
 	}
-	tag, err := s.pool.Exec(ctx, `UPDATE plan_steps SET state='running' WHERE plan_id=$1 AND idx=$2 AND state='open'`, planID, idx)
+	tag, err := s.pool.Exec(ctx, `UPDATE plan_steps SET state='running', attempts=attempts+1 WHERE plan_id=$1 AND idx=$2 AND state='open'`, planID, idx)
 	return tag.RowsAffected() > 0, err
 }
 
@@ -308,6 +341,130 @@ func (s *Store) FinishPlanStep(ctx context.Context, planID string, idx int, from
 	tag, err := s.pool.Exec(ctx, `UPDATE plan_steps SET state=$4, result=$5, created_resource=$6, created_id=$7, done_at=now()
 WHERE plan_id=$1 AND idx=$2 AND state=$3`, planID, idx, from, to, result, resource, id)
 	return tag.RowsAffected() > 0, err
+}
+
+// --- Autonomous plans (A-E1) ---
+
+// ModeInteractive is the default mode of a plan; only "autonomous" carries a budget and a grant.
+const ModeInteractive = "interactive"
+
+func orInteractive(mode string) string {
+	if mode == "" {
+		return ModeInteractive
+	}
+	return mode
+}
+
+// ActiveAutonomousPlan returns the newest autonomous plan of a chat that is approved or paused,
+// independent of the session (A-E1, D1.11); ErrNotFound if there is none.
+func (s *Store) ActiveAutonomousPlan(ctx context.Context, chatID string) (Plan, error) {
+	var id string
+	err := s.pool.QueryRow(ctx, `SELECT id::text FROM plans WHERE chat_id=$1 AND mode='autonomous' AND state IN ('approved','paused')
+ORDER BY decided_at DESC NULLS LAST, created_at DESC LIMIT 1`, chatID).Scan(&id)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Plan{}, ErrNotFound
+		}
+		return Plan{}, err
+	}
+	return s.GetPlan(ctx, id)
+}
+
+// PausePlan moves an approved plan to paused with a reason; ok is false if it was not approved.
+func (s *Store) PausePlan(ctx context.Context, planID, reason string) (bool, error) {
+	if !isUUID(planID) {
+		return false, ErrNotFound
+	}
+	tag, err := s.pool.Exec(ctx, `UPDATE plans SET state='paused', pause_reason=$2 WHERE id=$1 AND state='approved'`, planID, reason)
+	return tag.RowsAffected() > 0, err
+}
+
+// ResumePlan moves a paused plan back to approved and clears the pause reason; ok is false if it was
+// not paused. Only the user's API calls this: no tool reaches it (A-E1, fail closed).
+func (s *Store) ResumePlan(ctx context.Context, planID string) (bool, error) {
+	if !isUUID(planID) {
+		return false, ErrNotFound
+	}
+	tag, err := s.pool.Exec(ctx, `UPDATE plans SET state='approved', pause_reason='' WHERE id=$1 AND state='paused'`, planID)
+	return tag.RowsAffected() > 0, err
+}
+
+// CancelPlan ends an approved or paused plan: state cancelled, its open steps skipped, ended_at set; one
+// transaction. ok is false if the plan was neither approved nor paused.
+func (s *Store) CancelPlan(ctx context.Context, planID string) (bool, error) {
+	if !isUUID(planID) {
+		return false, ErrNotFound
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback(ctx)
+	tag, err := tx.Exec(ctx, `UPDATE plans SET state='cancelled', ended_at=now() WHERE id=$1 AND state IN ('approved','paused')`, planID)
+	if err != nil {
+		return false, err
+	}
+	if tag.RowsAffected() == 0 {
+		return false, nil
+	}
+	if _, err := tx.Exec(ctx, `UPDATE plan_steps SET state='skipped' WHERE plan_id=$1 AND state IN ('open','running')`, planID); err != nil {
+		return false, err
+	}
+	return true, tx.Commit(ctx)
+}
+
+// SupersedePlan ends one plan by a newer one (D1.12), independent of the session; ok is false if it was
+// not approved or paused.
+func (s *Store) SupersedePlan(ctx context.Context, planID string) (bool, error) {
+	if !isUUID(planID) {
+		return false, ErrNotFound
+	}
+	tag, err := s.pool.Exec(ctx, `UPDATE plans SET state='superseded', ended_at=now() WHERE id=$1 AND state IN ('approved','paused')`, planID)
+	return tag.RowsAffected() > 0, err
+}
+
+// FinishPlan marks an autonomous plan completed or failed and sets ended_at; ok is false if it was not approved.
+func (s *Store) FinishPlan(ctx context.Context, planID, state string) (bool, error) {
+	if !isUUID(planID) {
+		return false, ErrNotFound
+	}
+	tag, err := s.pool.Exec(ctx, `UPDATE plans SET state=$2, ended_at=now() WHERE id=$1 AND state='approved'`, planID, state)
+	return tag.RowsAffected() > 0, err
+}
+
+// RetryPlanStep moves a failed step back to open, as long as it has attempts left (attempts < max_attempts);
+// ok is false if the step was not failed or no attempt is left (A-E1, D1.7).
+func (s *Store) RetryPlanStep(ctx context.Context, planID string, idx int) (bool, error) {
+	if !isUUID(planID) {
+		return false, ErrNotFound
+	}
+	tag, err := s.pool.Exec(ctx, `UPDATE plan_steps SET state='open', result='', done_at=NULL
+WHERE plan_id=$1 AND idx=$2 AND state='failed' AND attempts < max_attempts`, planID, idx)
+	return tag.RowsAffected() > 0, err
+}
+
+// IncPlanAutoTurns counts one turn without the user for the plan and returns the new number (A-E1).
+func (s *Store) IncPlanAutoTurns(ctx context.Context, planID string) (int, error) {
+	if !isUUID(planID) {
+		return 0, ErrNotFound
+	}
+	var n int
+	err := s.pool.QueryRow(ctx, `UPDATE plans SET auto_turns=auto_turns+1 WHERE id=$1 RETURNING auto_turns`, planID).Scan(&n)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return 0, ErrNotFound
+		}
+		return 0, err
+	}
+	return n, nil
+}
+
+// PlanLLMCost sums the model cost of a chat's calls from since on (A-E1, D1.9): llm_calls is the
+// authoritative source, subagent runs included.
+func (s *Store) PlanLLMCost(ctx context.Context, chatID string, since time.Time) (float64, error) {
+	var sum float64
+	err := s.pool.QueryRow(ctx, `SELECT COALESCE(SUM(cost),0) FROM llm_calls WHERE chat_id=$1 AND started_at >= $2`, chatID, since).Scan(&sum)
+	return sum, err
 }
 
 // RecoverPlans runs at startup: the waiting calls are gone, so proposals expire, and a step

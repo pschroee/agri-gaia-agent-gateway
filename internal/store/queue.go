@@ -116,6 +116,8 @@ const (
 	NoteContext    = "page_context" // page of the platform UI the user sent the message from (issue #13)
 	// NoteSubagentUser: the user wrote directly to a subagent (issue #81). Passive: it never wakes the agent.
 	NoteSubagentUser = "subagent_user"
+	// NotePlan: the user paused, resumed or cancelled an autonomous plan (A-E1); queued so the agent learns it.
+	NotePlan = "plan"
 )
 
 const queueCols = `id::text, chat_id::text, text, attachments, created_at, kind, note, refs, context`

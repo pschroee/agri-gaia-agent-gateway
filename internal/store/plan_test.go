@@ -178,3 +178,140 @@ func TestPlanAndApprovalSummary(t *testing.T) {
 		t.Fatalf("empty summary in JSON: %s", raw)
 	}
 }
+
+// A-E1: an autonomous plan stores its mode, budget, grant, replaces, ended_at and its steps' attempts.
+func TestAutonomousPlanColumns(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	c := newPlanChat(t, s)
+	p, err := s.CreatePlan(ctx, Plan{ChatID: c.ID, Title: "Auto", Session: "main", Via: "cli", Mode: "autonomous",
+		Budget:   PlanBudget{MaxDurationS: 3600, MaxLLMCost: 1.5, MaxAutoTurns: 20},
+		Grant:    json.RawMessage(`{"rules":[{"action":"create","resource":"dataset"}],"enforce":true}`),
+		Replaces: "00000000-0000-0000-0000-0000000000aa",
+		Steps: []PlanStep{
+			{Idx: 1, Method: "POST", Path: "/datasets", Effect: "write", MaxAttempts: 2},
+			{Idx: 2, Method: "DELETE", Path: "/models/5", Effect: "irreversible"},
+		}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Mode != "autonomous" || p.Budget.MaxDurationS != 3600 || p.Budget.MaxLLMCost != 1.5 || p.Budget.MaxAutoTurns != 20 {
+		t.Fatalf("budget: %+v", p)
+	}
+	if string(p.Grant) == "" || p.Replaces == "" || p.EndedAt != nil {
+		t.Fatalf("grant/replaces/ended: %+v", p)
+	}
+	if p.Steps[0].MaxAttempts != 2 || p.Steps[1].MaxAttempts != 1 {
+		t.Fatalf("max_attempts: %+v", p.Steps)
+	}
+	// An interactive plan keeps the default mode and zero budget.
+	q, err := s.CreatePlan(ctx, twoStepPlan(c.ID, "main"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if q.Mode != ModeInteractive || q.Budget.MaxDurationS != 0 || q.Grant != nil {
+		t.Fatalf("interactive plan: %+v", q)
+	}
+}
+
+// A-E1: the pause/resume/cancel transitions; invalid transitions do not take effect, cancel skips open steps.
+func TestPauseResumeCancel(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	c := newPlanChat(t, s)
+	p, err := s.CreatePlan(ctx, twoStepPlan(c.ID, "main"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	expires := time.Now().Add(time.Hour)
+	if ok, err := s.DecidePlan(ctx, p.ID, "approved", &expires); err != nil || !ok {
+		t.Fatalf("decide: %v %v", ok, err)
+	}
+	// Resume before pause does nothing.
+	if ok, err := s.ResumePlan(ctx, p.ID); err != nil || ok {
+		t.Fatalf("resume from approved: %v %v", ok, err)
+	}
+	if ok, err := s.PausePlan(ctx, p.ID, "user"); err != nil || !ok {
+		t.Fatalf("pause: %v %v", ok, err)
+	}
+	if ok, err := s.PausePlan(ctx, p.ID, "user"); err != nil || ok {
+		t.Fatalf("second pause: %v %v", ok, err)
+	}
+	if got, err := s.GetPlan(ctx, p.ID); err != nil || got.State != "paused" || got.PauseReason != "user" {
+		t.Fatalf("paused plan: %+v %v", got, err)
+	}
+	if ok, err := s.ResumePlan(ctx, p.ID); err != nil || !ok {
+		t.Fatalf("resume: %v %v", ok, err)
+	}
+	if got, _ := s.GetPlan(ctx, p.ID); got.State != "approved" || got.PauseReason != "" {
+		t.Fatalf("resumed plan: %+v", got)
+	}
+	if _, err := s.ActiveAutonomousPlan(ctx, c.ID); err == nil {
+		t.Fatalf("an interactive plan must not be the active autonomous one")
+	}
+	if ok, err := s.CancelPlan(ctx, p.ID); err != nil || !ok {
+		t.Fatalf("cancel: %v %v", ok, err)
+	}
+	got, err := s.GetPlan(ctx, p.ID)
+	if err != nil || got.State != "cancelled" || got.EndedAt == nil {
+		t.Fatalf("cancelled plan: %+v %v", got, err)
+	}
+	if got.Steps[0].State != "skipped" || got.Steps[1].State != "skipped" {
+		t.Fatalf("open steps must be skipped: %+v", got.Steps)
+	}
+	if ok, err := s.CancelPlan(ctx, p.ID); err != nil || ok {
+		t.Fatalf("second cancel: %v %v", ok, err)
+	}
+}
+
+// A-E1: a failed step retries only while attempts < max_attempts.
+func TestRetryPlanStep(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	c := newPlanChat(t, s)
+	p, err := s.CreatePlan(ctx, Plan{ChatID: c.ID, Title: "retry", Session: "main", Via: "cli", Mode: "autonomous",
+		Steps: []PlanStep{{Idx: 1, Method: "POST", Path: "/datasets", Effect: "write", MaxAttempts: 2}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	expires := time.Now().Add(time.Hour)
+	s.DecidePlan(ctx, p.ID, "approved", &expires)
+	if ok, err := s.ClaimPlanStep(ctx, p.ID, 1); err != nil || !ok {
+		t.Fatalf("claim: %v %v", ok, err)
+	}
+	if got, _ := s.GetPlan(ctx, p.ID); got.Steps[0].Attempts != 1 {
+		t.Fatalf("attempts after claim: %+v", got.Steps[0])
+	}
+	if ok, err := s.FinishPlanStep(ctx, p.ID, 1, "running", "failed", "500", "", ""); err != nil || !ok {
+		t.Fatalf("fail step: %v %v", ok, err)
+	}
+	if ok, err := s.RetryPlanStep(ctx, p.ID, 1); err != nil || !ok {
+		t.Fatalf("first retry: %v %v", ok, err)
+	}
+	// second try fails and no attempt is left
+	s.ClaimPlanStep(ctx, p.ID, 1)
+	s.FinishPlanStep(ctx, p.ID, 1, "running", "failed", "500", "", "")
+	if ok, err := s.RetryPlanStep(ctx, p.ID, 1); err != nil || ok {
+		t.Fatalf("retry beyond max_attempts: %v %v", ok, err)
+	}
+}
+
+// A-E1: PlanLLMCost sums only the calls from the given moment on.
+func TestPlanLLMCost(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	c := newPlanChat(t, s)
+	since := time.Now()
+	for _, cost := range []float64{0.10, 0.20} {
+		if _, err := s.AddLLMCall(ctx, LLMCall{ChatID: c.ID, SlotID: "s", SourceIP: "1.2.3.4", Model: "p/m", StartedAt: since.Add(time.Second), Cost: cost}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := s.AddLLMCall(ctx, LLMCall{ChatID: c.ID, SlotID: "s", SourceIP: "1.2.3.4", Model: "p/m", StartedAt: since.Add(-time.Minute), Cost: 9}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.PlanLLMCost(ctx, c.ID, since)
+	if err != nil || got < 0.29 || got > 0.31 {
+		t.Fatalf("cost since: %v %v", got, err)
+	}
+}
