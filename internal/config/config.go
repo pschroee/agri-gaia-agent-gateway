@@ -353,7 +353,23 @@ type Env struct {
 	// anything above these (plan.Limits). PlanMaxDuration never exceeds oidc.MaxSession - 1 h.
 	PlanMaxDuration time.Duration
 	PlanMaxLLMCost  float64
-	AllowedHosts    []string
+
+	// C-E3 (own code in the agent's notebook server). JupyterHubAPIURL empty: notebooks are off and
+	// every notebook tool answers "not configured on this instance".
+	JupyterHubAPIURL    string // AGW_JUPYTERHUB_API_URL: …/hub/api of the instance's JupyterHub
+	JupyterHubToken     string // AGW_JUPYTERHUB_TOKEN: service token (scopes servers, read:users:name)
+	JupyterHubPublicURL string // AGW_JUPYTERHUB_PUBLIC_URL: the address the user opens (links to a run)
+	NotebookPrefix      string // AGW_NOTEBOOK_PREFIX: prefix of the agent servers in the hub (spawner hardening)
+	// NotebookTimeoutMaxMin: upper limit of one run (AGW_NOTEBOOK_TIMEOUT_MAX_MIN, default 480 = the
+	// longest an autonomous plan may run).
+	NotebookTimeoutMaxMin int
+	// NotebookDatasetMaxMB: largest dataset archive a run unpacks (AGW_NOTEBOOK_DATASET_MAX_MB).
+	NotebookDatasetMaxMB int
+	// NotebookIdleMin: a chat's notebook server is stopped after this long without a run
+	// (AGW_NOTEBOOK_IDLE_MIN, 0 = never; the files stay).
+	NotebookIdleMin int
+
+	AllowedHosts []string
 	// Background tasks: at most BgMax at a time per slot (AGW_BG_MAX), at most
 	// BgWakesPerHour wake-ups per chat and hour (AGW_BG_WAKES_PER_HOUR, 0 = never); running tasks
 	// keep the chat awake until BgKeepAlive after the last activity (AGW_BG_KEEPALIVE).
@@ -435,6 +451,18 @@ func (e Env) Toolset() (toolset.Set, error) {
 // DefaultMaxSubagents: subagents that may run at the same time per chat unless AGW_MAX_SUBAGENTS says
 // otherwise (issue #24: fixed, no setting per chat).
 const DefaultMaxSubagents = 5
+
+// C-E3 (own code in the agent's notebook server): the defaults of AGW_NOTEBOOK_*.
+const (
+	// DefaultNotebookPrefix: the spawner of the instance only hardens servers whose name carries it
+	// (plan E2), so the gateway must never start one without it.
+	DefaultNotebookPrefix = "agri_gaia-jupyter"
+	// DefaultNotebookTimeoutMaxMin: 480 minutes is the longest an autonomous plan may run
+	// (AGW_PLAN_MAX_DURATION, 8 h), so a run inside a plan cannot outlive the plan.
+	DefaultNotebookTimeoutMaxMin = 480
+	DefaultNotebookDatasetMaxMB  = 2048
+	DefaultNotebookIdleMin       = 60
+)
 
 // Login modes of the API (AGW_AUTH_MODE).
 const (
@@ -522,21 +550,30 @@ func FromEnv() Env {
 		ComputeMaxPerChat:    max(1, num("AGW_COMPUTE_MAX_PER_CHAT", DefaultComputeMaxPerChat)),
 		PlanMaxDuration:      planMaxDuration(),
 		PlanMaxLLMCost:       planMaxLLMCost(),
-		AllowedHosts:         strings.Split(str("AGW_ALLOWED_HOSTS", "127.0.0.1:18480,localhost:18480"), ","),
-		BgMax:                max(1, num("AGW_BG_MAX", 5)),
-		BgWakesPerHour:       wakes(num("AGW_BG_WAKES_PER_HOUR", 10)),
-		BgKeepAlive:          keepAlive(dur("AGW_BG_KEEPALIVE", time.Hour)),
-		AutoTurnsMax:         wakes(num("AGW_AUTO_TURNS_MAX", 5)),
-		TrashRetentionDays:   max(0, num("AGW_TRASH_RETENTION_DAYS", 0)),
-		PlatformAPIURL:       str("AGW_PLATFORM_API_URL", ""),
-		PlatformTokenURL:     str("AGW_PLATFORM_TOKEN_URL", ""),
-		PlatformClientID:     str("AGW_PLATFORM_CLIENT_ID", "frontend"),
-		PlatformUser:         str("AGW_PLATFORM_USER", ""),
-		PlatformPassword:     str("AGW_PLATFORM_PASSWORD", ""),
-		PlatformClientSecret: str("AGW_PLATFORM_CLIENT_SECRET", ""),
-		PlatformExchange:     str("AGW_PLATFORM_TOKEN_EXCHANGE", "false") == "true",
-		PlatformAudiences:    strings.Split(str("AGW_PLATFORM_AUDIENCES", "backend,minio"), ","),
-		PlatformTokenMaxAge:  dur("AGW_PLATFORM_TOKEN_MAX_AGE", 5*time.Minute),
+
+		// C-E3 (own code in the agent's notebook server).
+		JupyterHubAPIURL:      strings.TrimRight(str("AGW_JUPYTERHUB_API_URL", ""), "/"),
+		JupyterHubToken:       str("AGW_JUPYTERHUB_TOKEN", ""),
+		JupyterHubPublicURL:   strings.TrimRight(str("AGW_JUPYTERHUB_PUBLIC_URL", ""), "/"),
+		NotebookPrefix:        str("AGW_NOTEBOOK_PREFIX", DefaultNotebookPrefix),
+		NotebookTimeoutMaxMin: max(1, num("AGW_NOTEBOOK_TIMEOUT_MAX_MIN", DefaultNotebookTimeoutMaxMin)),
+		NotebookDatasetMaxMB:  max(1, num("AGW_NOTEBOOK_DATASET_MAX_MB", DefaultNotebookDatasetMaxMB)),
+		NotebookIdleMin:       max(0, num("AGW_NOTEBOOK_IDLE_MIN", DefaultNotebookIdleMin)),
+		AllowedHosts:          strings.Split(str("AGW_ALLOWED_HOSTS", "127.0.0.1:18480,localhost:18480"), ","),
+		BgMax:                 max(1, num("AGW_BG_MAX", 5)),
+		BgWakesPerHour:        wakes(num("AGW_BG_WAKES_PER_HOUR", 10)),
+		BgKeepAlive:           keepAlive(dur("AGW_BG_KEEPALIVE", time.Hour)),
+		AutoTurnsMax:          wakes(num("AGW_AUTO_TURNS_MAX", 5)),
+		TrashRetentionDays:    max(0, num("AGW_TRASH_RETENTION_DAYS", 0)),
+		PlatformAPIURL:        str("AGW_PLATFORM_API_URL", ""),
+		PlatformTokenURL:      str("AGW_PLATFORM_TOKEN_URL", ""),
+		PlatformClientID:      str("AGW_PLATFORM_CLIENT_ID", "frontend"),
+		PlatformUser:          str("AGW_PLATFORM_USER", ""),
+		PlatformPassword:      str("AGW_PLATFORM_PASSWORD", ""),
+		PlatformClientSecret:  str("AGW_PLATFORM_CLIENT_SECRET", ""),
+		PlatformExchange:      str("AGW_PLATFORM_TOKEN_EXCHANGE", "false") == "true",
+		PlatformAudiences:     strings.Split(str("AGW_PLATFORM_AUDIENCES", "backend,minio"), ","),
+		PlatformTokenMaxAge:   dur("AGW_PLATFORM_TOKEN_MAX_AGE", 5*time.Minute),
 
 		// V1 — pre-annotation with CVAT.
 		CVATAPIURL:          strings.TrimRight(str("AGW_CVAT_API_URL", ""), "/"),

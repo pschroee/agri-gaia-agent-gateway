@@ -22,6 +22,7 @@ import (
 	"agw/internal/chat"
 	"agw/internal/config"
 	"agw/internal/llmproxy"
+	"agw/internal/notebook"
 	"agw/internal/oidc"
 	"agw/internal/platform"
 	"agw/internal/pool"
@@ -29,6 +30,7 @@ import (
 	"agw/internal/store"
 	"agw/internal/titler"
 	"agw/internal/toolset"
+	"agw/internal/watch"
 	"agw/internal/webproxy"
 	"agw/internal/worker"
 	"agw/web"
@@ -127,7 +129,9 @@ func run() error {
 	pcfg := platform.Config{APIURL: env.PlatformAPIURL, TokenURL: env.PlatformTokenURL,
 		ClientID: env.PlatformClientID, ClientSecret: env.PlatformClientSecret, User: env.PlatformUser, Password: env.PlatformPassword,
 		Exchange: env.PlatformExchange, Audiences: env.PlatformAudiences,
-		ChatTokenMaxAge: env.PlatformTokenMaxAge, CallKey: store.ToolCallFrom}
+		ChatTokenMaxAge: env.PlatformTokenMaxAge, CallKey: store.ToolCallFrom,
+		// One dataset archive of a notebook run is streamed, not held (own code C-E3).
+		MaxStream: int64(env.NotebookDatasetMaxMB) << 20}
 	konto := env.PlatformUser
 	if auth != nil {
 		// Every chat acts for its owner: the owner's token from the session is the subject_token.
@@ -146,6 +150,21 @@ func run() error {
 	} else {
 		slog.Info("platform binding on", "api", env.PlatformAPIURL, "account", konto, "client", env.PlatformClientID, "token_exchange", plat.Exchanging())
 	}
+	// C-E3 (own code in the agent's notebook server): without AGW_JUPYTERHUB_API_URL the service is
+	// not built, the manager registers no doer for its paths, and every notebook tool answers "not
+	// configured on this instance" (G1.5, G1.13).
+	var nb *notebook.Notebooks
+	var notebooker chat.Notebooker
+	if env.JupyterHubAPIURL != "" {
+		nb = notebook.New(notebook.Config{
+			APIURL: env.JupyterHubAPIURL, Token: env.JupyterHubToken, PublicURL: env.JupyterHubPublicURL,
+			Prefix: env.NotebookPrefix, TimeoutMaxMin: env.NotebookTimeoutMaxMin,
+			DatasetMaxMB: env.NotebookDatasetMaxMB, IdleMin: env.NotebookIdleMin,
+		}, plat, st, rt)
+		notebooker = nb
+		slog.Info("notebooks on", "hub", env.JupyterHubAPIURL, "server_prefix", env.NotebookPrefix,
+			"timeout_max_minutes", env.NotebookTimeoutMaxMin, "idle_minutes", env.NotebookIdleMin)
+	}
 	// Warm slots only for the configured combination; chats stored with another one (cli, mcp, api,
 	// both, …) get a slot on demand when they resume.
 	p := pool.New[chat.Agent](fac.Create, fac.Destroy, map[string]int{toolsets.Key(): env.PoolSize})
@@ -162,6 +181,7 @@ func run() error {
 		AutoCompactDefault: env.AutoCompactDefault, CompactReserveTokens: env.CompactReserveTokens, CompactKeepRecent: env.CompactKeepRecent,
 		BgWakesPerHour: env.BgWakesPerHour, BgKeepAlive: env.BgKeepAlive, AutoTurnsMax: env.AutoTurnsMax,
 		Titler: newTitler(cat, env.TitleModel), Platform: plat, Toolsets: toolsets,
+		Notebook: notebooker,
 	})
 	fac.Backend = m
 	plat.SetOnExchange(m.PlatformExchanged)
@@ -182,6 +202,19 @@ func run() error {
 		slog.Info("pre-annotation off (AGW_CVAT_API_URL or the platform binding is empty)")
 	}
 
+	if nb != nil {
+		// The notebook paths are answered by the gateway itself (G1.5); classification, approval,
+		// compute limit and log run unchanged in PlatformCall. The dataset archives the runner
+		// streams are logged here (the agent's own calls are logged by the socket).
+		m.RegisterVirtual(platform.NotebookPrefix, nb)
+		nb.LogCall = func(ctx context.Context, chatID, detail, result string) {
+			m.LogCallBy(ctx, m.SlotOf(chatID), chatID, "platform", "platform", detail, result)
+		}
+		method, path := notebook.RunRoute()
+		watch.RegisterRoute(method, path, notebook.KindName, notebook.RunIDFrom)
+		watch.Register(nb.WatchKind())
+	}
+
 	if err := m.Recover(ctx); err != nil {
 		return err
 	}
@@ -189,6 +222,11 @@ func run() error {
 	p.Start(poolCtx)
 	// Chats in the trash past AGW_TRASH_RETENTION_DAYS are deleted for good (off by default; issue #76).
 	go m.RunTrashRetention(poolCtx)
+	// Notebook servers of chats that had no run for a while are stopped (own code C-E3); the volumes
+	// with the files stay.
+	if nb != nil {
+		go nb.RunReaper(poolCtx)
+	}
 
 	var webFS fs.FS
 	if sub, err := fs.Sub(web.Dist, "dist"); err == nil {
