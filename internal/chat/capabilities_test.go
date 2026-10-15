@@ -78,11 +78,15 @@ func TestCapabilitiesBuiltIn(t *testing.T) {
 	if b := got["bindings"]; !b.Available || !strings.Contains(b.Detail, "cli") {
 		t.Errorf("bindings: %+v", b)
 	}
-	// The features' names are not part of this gateway version.
-	for _, name := range []string{"notebook", "edge", "annotation"} {
+	// The features' names are not part of this gateway version; annotation is registered since V1 and
+	// reports that this setup has no service for it (its own test is in capability_annotation_test.go).
+	for _, name := range []string{"notebook", "edge"} {
 		if f := got[name]; f.Available || f.Detail != missingCapability {
 			t.Errorf("%s: %+v", name, f)
 		}
+	}
+	if f := got["annotation"]; f.Available || !strings.Contains(f.Detail, "not part of this setup") {
+		t.Errorf("annotation: %+v", f)
 	}
 	if !strings.Contains(over.Summary, "vision: no") || !strings.Contains(over.Summary, "compute: yes") {
 		t.Errorf("summary: %q", over.Summary)

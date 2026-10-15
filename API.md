@@ -430,8 +430,8 @@ for a deleted chat's calls.
 - **Deleting for good** (`DELETE /api/chats/{id}`, `POST /api/trash/empty`) works only from the trash (409
   `not_in_trash` otherwise). In one transaction the call logs are kept and anonymised, then the chat is deleted; the
   objects in the object store (artifacts, display images, workspace archive, pending uploads) are removed afterwards.
-  Messages, runs, approvals, plans, subagents, messages to subagents, queue, background tasks, session and title go with the chat; nothing
-  of them stays.
+  Messages, runs, approvals, plans, subagents, messages to subagents, queue, background tasks, annotation runs
+  (V1), session and title go with the chat; nothing of them stays.
 - **What stays for the evaluation** (the decision of the author, 12.10.2026): the entries in `socket_calls`,
   `tool_executions`, `llm_calls`, `aux_llm_calls` and `web_requests` get `chat_id` NULL and `deleted_chat`, a random
   tombstone ID in `deleted_chats` that holds only owner, model and binding (no title, no times of the chat). The
@@ -1136,6 +1136,69 @@ covers the whole run instead of one question per writing call.
   and every step (steps with `max_attempts > 1` show "up to N attempts"). The answer after the approval carries `mode`,
   `budget` and `grant` (the full `delegation.Summary`), and its note points at the refusal outside the grant and at
   `replaces`. Which state a plan is in is visible in `GET …/plans` and the SSE `plan` event.
+
+## Pre-annotation with CVAT (V1)
+
+The agent prepares one of the user's image datasets in CVAT, runs a pre-annotation function over it, follows the run,
+counts the result and writes the annotations back (issue #106). The operation is wired only when `AGW_CVAT_API_URL` is
+set (`AGW_CVAT_PUBLIC_URL` defaults to it); without it the path `/_agw/annotation` answers `unavailable` and the
+capability entry `annotation` says that this setup does not have it.
+
+- **Tools** (CLI names in brackets), all of them virtual paths under `/_agw/annotation`, answered inside the gateway
+  and never sent to the platform (E4): `annotation_functions` (`annotation-functions`, read),
+  `annotation_task` (`annotation-task`, write), `pre_annotate` (`pre-annotate`, compute; `irreversible` with
+  `existing=replace`), `annotation_run` (`annotation-run`, read), `annotation_summary` (`annotation-summary`, read),
+  `annotation_sync` (`annotation-sync`, write).
+- **Answers:** JSON with status `ok` and HTTP 200. Every answer carries `steps`: the calls the one operation made
+  (method, path, status), e.g. `["POST /datasets/5/annotate 200", "POST /cvat/tasks/5 201", "PATCH /datasets/5 200"]`.
+  Each of them is logged as `annotation step` with the chat, and **no** step line or message carries a value of the
+  CVAT session.
+- **The CVAT session stays in the gateway** (E2): `internal/annotation` logs in through `POST /cvat/auth/login` with
+  the chat's exchanged token, keeps `key`, `csrftoken` and `sessionid` per user in memory for 10 minutes and never
+  logs out (a logout would end the user's own session in the browser). Without a CVAT account that login answers 4xx
+  or — because the backend turns CVAT's 400 into a 500 — 5xx; the agent then reads
+  `you have no CVAT account yet; open the platform once in the browser and try again`.
+- **Owner check in the gateway** (E6): every operation reads `GET /datasets/{id}` itself and refuses a dataset whose
+  `owner` is not the `preferred_username` of the chat's token (`dataset %d belongs to %s; only your own datasets can
+  be annotated`, status `denied`). The platform checks the owner only when deleting, and its annotate route mounts the
+  bucket of any dataset.
+- **Usable functions** (E7): `annotation_functions` lists the user's own functions (V2 names them
+  `agw-<user>-m<model id>-<hash>`) and those of `AGW_ANNOTATION_FUNCTIONS`; everything else is counted in `hidden`.
+  `pre_annotate` refuses any other function with status `denied` — a function receives every image of the run.
+- **Paths the agent may never reach** (`platform.registerBlocker`, V1): `/cvat` and everything below it
+  (`CVAT is reached only through the annotation_ tools` — the login answer carries the user's CVAT key and session),
+  `POST /datasets/{id}/annotate` (`use annotation_task`; it mounts the dataset's bucket in the CVAT container with
+  root rights) and `POST /datasets/auto-annotation` (`use annotation_function`; it passes a file name into a shell in
+  the backend).
+- **Tasks:** `annotation_task` checks the owner, the type `AgriImageDataResource` and the presence of
+  `annotation_labels`, reuses the `annotation_task_id` recorded on the dataset when CVAT still knows that task and it
+  belongs to the same user, and otherwise runs `POST /datasets/{id}/annotate` →
+  `POST /cvat/tasks/{id}` (the session in the body; the backend waits for CVAT to import the images, so this call may
+  take minutes) → `PATCH /datasets/{id}` with **exactly** `{"annotation_task_id":N}`. Only the id from the answer right
+  before is written: the backend exports the task with the CVAT superuser, so a hand-set id would read foreign images.
+- **Runs:** `pre_annotate` maps function labels to dataset classes (`mapping`; without one only equal names are used,
+  and the refusal `no function label matches a dataset class; give mapping` names both lists), refuses `existing=keep`
+  on a task that already has annotations, and starts `POST /api/lambda/requests` with `quality: original`,
+  `threshold: min_confidence/100` and `cleanup: true` for `replace` (CVAT then deletes every annotation of the task).
+  The run is recorded in `annotation_runs`; `run_id` is the id of CVAT's queue entry.
+- **States of a run:** `queued`, `started` and `finished` come from CVAT's queue, `failed` when it ended with an error
+  (`exc_info` shortened to 2000 characters), `expired` when CVAT no longer knows the run — what it already wrote stays
+  in the task. A run that is over is answered from the gateway's own row, so a finished run never turns into
+  `expired`. `started`/`ended` are CVAT's strings while the run is followed and RFC 3339 once it is over.
+- **Counting:** `annotation_summary` reads the task's annotations (`GET /api/tasks/{id}/annotations`, at most 64 MiB)
+  and counts per class `manual` (`source != "auto"`) and `auto`, the frames with and without annotations, the shapes
+  by type and the tags.
+- **Writing back:** `annotation_sync` sends `GET /datasets/{id}/download` (at most 512 MiB) and throws the ZIP away:
+  that call is what makes the backend export the task as `annotations.xml` into the object store. Starting a training
+  does the same.
+- **Observation:** the service registers the kind `annotation_run` and the route `POST ^/_agw/annotation/runs$`
+  (`ref` = `run_id` from the answer) with `internal/watch` (G1.7, autonomy A-E2). The loop that polls belongs to the
+  autonomy plan; until it exists, `annotation_run` reads CVAT itself.
+- **Configuration (V1):** `AGW_CVAT_API_URL`, `AGW_CVAT_PUBLIC_URL`, `AGW_ANNOTATION_FUNCTIONS` (comma separated,
+  default none). `AGW_ANNOTATION_MAX_FUNCTIONS` (default 3) and `AGW_ANNOTATION_MODEL_MAX_MB` (default 300) are read
+  here and enforced by V2.
+- **The skill `pre-annotation`** is loaded for the cli binding only; its description names both ways — the CVAT
+  functions here and manual annotation in CVAT — and points at `capabilities`.
 
 ## Summaries by the gateway
 
