@@ -19,7 +19,7 @@ import (
 // exception for an explicit question about technical details.
 func TestSystemNoteUserFacingRule(t *testing.T) {
 	for _, ts := range toolset.All() {
-		note := SystemNoteFor(ts.Key(), 4)
+		note := SystemNoteFor(ts.Key(), 4, nil)
 		if strings.Count(note, userFacingRule) != 1 {
 			t.Errorf("%s: user-facing rule not exactly once", ts.Key())
 		}

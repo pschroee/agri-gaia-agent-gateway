@@ -71,6 +71,48 @@ const (
 	webSkill = "/opt/agw/skills/web-research"
 )
 
+// cliSkills are the skill directories features registered (registerCLISkill, G1.6); they are loaded
+// for the cli binding after the fixed skills.
+var (
+	cliSkillMu sync.Mutex
+	cliSkills  []string
+)
+
+// registerCLISkill registers a skill directory of a feature (G1.6). It is loaded for the cli binding
+// after the fixed skills (also in combinations that contain cli) and is invisible for the other
+// bindings. Register from an init() of the feature's own file; the skill must be in the images (pi
+// image and execution image) before a slot starts with it.
+func registerCLISkill(path string) {
+	cliSkillMu.Lock()
+	defer cliSkillMu.Unlock()
+	cliSkills = append(cliSkills, path)
+}
+
+// fixedCLISkills are the skills every cli chat loads, in this order.
+var fixedCLISkills = []string{artifactSkil, internetSkil, webSkill, platformSkil, typstSkill, diagramSkill, mermaidSkill, documentSkil, trainingAdviceSkill, modelCardSkill}
+
+// registeredSkillArgs lists the --skill arguments features registered; a test that freezes the old
+// arguments takes its expectation from here instead of repeating the paths.
+func registeredSkillArgs() []string {
+	cliSkillMu.Lock()
+	defer cliSkillMu.Unlock()
+	out := make([]string, 0, 2*len(cliSkills))
+	for _, s := range cliSkills {
+		out = append(out, "--skill", s)
+	}
+	return out
+}
+
+// cliSkillArgs lists the --skill arguments of the cli binding: the fixed skills first, then the
+// registered ones.
+func cliSkillArgs() []string {
+	out := make([]string, 0, 2*(len(fixedCLISkills)+len(cliSkills)))
+	for _, s := range fixedCLISkills {
+		out = append(out, "--skill", s)
+	}
+	return append(out, registeredSkillArgs()...)
+}
+
 // noLazySubagent turns off pi-subagents' switch subagents_enable; the tool subagent is then
 // active from the start. Otherwise the tool list would change in the middle of the chat: one more
 // model call and an invalidated prefix cache (measured 2026-09-29: 8 607 uncached tokens in the call
@@ -79,7 +121,7 @@ const noLazySubagent = "subagents_enable"
 
 // SystemNote is appended to pi's system prompt (combinations with bash, default number of background
 // tasks; a slot uses SystemNoteFor with the configured limit).
-var SystemNote = SystemNoteFor("cli", execproto.DefaultBgMax)
+var SystemNote = SystemNoteFor("cli", execproto.DefaultBgMax, nil)
 
 // bgNote: the paragraph on background tasks, only for variants with bash. The last sentence explains
 // what orchestrator notes are (Review 3, H1).
@@ -119,9 +161,11 @@ const (
 )
 
 // SystemNoteFor is the system note of a variant; with bash including background tasks (at most
-// bgMax at the same time). It is fixed per orchestrator (no per-turn content), so the prefix cache
-// is preserved.
-func SystemNoteFor(variant string, bgMax int) string {
+// bgMax at the same time). caps are the capability lines of this setup (chat.SetupLines, G1.9): what
+// the setup offers and what does not change during a chat. It is fixed per slot (no per-turn content),
+// so the prefix cache is preserved — state such as internet or the compute calls left belongs in the
+// tool capabilities, not here.
+func SystemNoteFor(variant string, bgMax int, caps []string) string {
 	bg, mmdc, inputs := "", "", inputsAPI
 	ts, err := toolset.FromVariant(variant)
 	if err != nil {
@@ -133,7 +177,33 @@ func SystemNoteFor(variant string, bgMax int) string {
 	case ts.Has(toolset.MCP):
 		inputs = inputsMCP
 	}
-	return strings.NewReplacer("{{bg}}", bg, "{{mmdc}}", mmdc, "{{inputs}}", inputs, "{{internet}}", internetNote(ts), "{{send}}", sendNote(ts)).Replace(systemNote)
+	return strings.NewReplacer("{{bg}}", bg, "{{mmdc}}", mmdc, "{{inputs}}", inputs, "{{internet}}", internetNote(ts),
+		"{{send}}", sendNote(ts), "{{capabilities}}", capabilityNote(ts, caps)).Replace(systemNote)
+}
+
+// capabilityTool names, per binding, how the agent asks for the capabilities of this setup (G1.9).
+var capabilityTool = map[toolset.Binding]string{
+	toolset.CLI: "agw-platform capabilities",
+	toolset.MCP: "the tool mcp_platform_capabilities",
+	toolset.API: "GET /_agw/capabilities",
+}
+
+// capabilityNote is the line of the system note on the capabilities of this setup (G1.9): the static
+// lines (what a feature registered as not changing during a chat) and the hint to ask for the current
+// state. It ends with a newline, so that an empty result leaves no empty line in the note.
+func capabilityNote(ts toolset.Set, caps []string) string {
+	if len(caps) == 0 {
+		return ""
+	}
+	var how []string
+	for _, b := range ts.Bindings() {
+		if h, ok := capabilityTool[b]; ok {
+			how = append(how, h)
+		}
+	}
+	n := "- This setup offers " + strings.Join(caps, "; ") + ". This is fixed for this chat; the current state (internet, compute calls left, devices online) you ask with the capabilities (" +
+		strings.Join(how, " or ") + ") before you plan work that needs one of them; every entry says what to do without that capability.\n"
+	return n
 }
 
 // sendFile names, per binding, how the agent sends a file to the user (issue #62); the REST binding has no file tools.
@@ -206,7 +276,7 @@ const systemNote = `You work in an isolated sandbox (Debian, Python 3, curl, jq,
   - Files you will still need later (scripts, intermediate results, charts) therefore go under /workspace, not under /tmp.
 {{send}}
 {{internet}}
-- Your tools for commands and files run in this sandbox; the orchestrator executes and logs every call. pi itself runs separately from it.
+{{capabilities}}- Your tools for commands and files run in this sandbox; the orchestrator executes and logs every call. pi itself runs separately from it.
 - For self-contained subtasks you can start subagents with the tool subagent: individually with agent and task, in the foreground or in the background, or with workflowScript (chains with runs.run, parallel runs with runs.all; the script runs in the sandbox). Subagents have the same tools as you, including web search once internet is on. Anything that takes longer than about a minute (research, several subagents) you start in the background with async: true: you are then free again immediately, the user can keep talking to you, and you are notified as soon as the subagents are done; do not wait for them actively. Subagents can ask you questions while they work with contact_supervisor; you answer with subagent_supervisor (action reply, replyTo from the request). You give a running background subagent further hints with subagent (action steer, id of the run). With the tool intercom you and the subagents talk to each other directly (action list shows the sessions, send sends a message, ask waits for a reply, reply answers); subagents can also write to each other this way. workflowScriptPath, named workflows, runs.host, gate/acceptance, cwd, output and creating or changing agents are blocked. Give every subagent a short, descriptive name (for runs.run/runs.all the key, e.g. "reid" or "datasets"); the user sees it in the UI. You read the results of subagents from their reply or from files they write under /workspace; paths under /agent/sessions from notes about subagents are not in your sandbox.
 - Task list: for work with several steps, create a task list with the tool todo at the start; the user sees it live. Set a task to in_progress before you start on it, and to completed immediately once it is done, not all at once at the end; in_progress marks exactly what you are working on right now. If the plan changes, add or delete tasks. Before your final reply, no task is in_progress anymore.
 - You show images in your reply with ![description](/workspace/file.png): PNG, JPEG, GIF or WebP under /workspace, /tmp or /home/agent. URLs from the internet and SVG are not displayed. Save matplotlib charts as PNG (plt.savefig), not plt.show().
@@ -309,7 +379,7 @@ type VariantInfo struct {
 // command line pi keeps its default tools and adds those of the extensions (MCP, REST). All
 // combinations get the task list (todo).
 func PiArgs(variant, provider, model string) ([]string, error) {
-	return piArgs(variant, provider, model, SystemNoteFor(variant, execproto.DefaultBgMax))
+	return piArgs(variant, provider, model, SystemNoteFor(variant, execproto.DefaultBgMax, nil))
 }
 
 func piArgs(variant, provider, model, note string) ([]string, error) {
@@ -330,7 +400,7 @@ func piArgs(variant, provider, model, note string) ([]string, error) {
 		args = append(args, "-e", apiExt)
 	}
 	if ts.Has(toolset.CLI) {
-		args = append(args, "--skill", artifactSkil, "--skill", internetSkil, "--skill", webSkill, "--skill", platformSkil, "--skill", typstSkill, "--skill", diagramSkill, "--skill", mermaidSkill, "--skill", documentSkil, "--skill", trainingAdviceSkill, "--skill", modelCardSkill)
+		args = append(args, cliSkillArgs()...)
 	} else {
 		// The other skills describe commands; web-research names the tools of every binding, and
 		// MCP's read can load it (the skills are in both images).
@@ -356,6 +426,13 @@ type Factory struct {
 type Backend interface {
 	sock.Backend
 	sock.ToolRecorder
+}
+
+// capabilities are the capability lines of this setup for a binding (G1.9), as chat computes them from
+// the catalog and the environment. They feed the system note and change only when the orchestrator
+// restarts or the catalog changes, never during a chat.
+func (f *Factory) capabilities(variant string) []string {
+	return chat.SetupLines(chat.Setup{Catalog: f.Cat, Env: f.Env, Variant: variant})
 }
 
 func NewFactory(rt *sandbox.Runtime, cat *config.Catalog, env config.Env) (*Factory, error) {
@@ -510,7 +587,7 @@ func (w *Worker) SetInternet(ctx context.Context, on bool) error {
 func (f *Factory) Create(ctx context.Context, slotID, variant string) (chat.Agent, error) {
 	began := time.Now()
 	prov, model, _ := f.Cat.Lookup(f.Cat.Default)
-	args, err := piArgs(variant, prov.ID, model.ID, SystemNoteFor(variant, f.bgMax()))
+	args, err := piArgs(variant, prov.ID, model.ID, SystemNoteFor(variant, f.bgMax(), f.capabilities(variant)))
 	if err != nil {
 		return nil, err
 	}

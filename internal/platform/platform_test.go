@@ -171,6 +171,8 @@ func TestNormalize(t *testing.T) {
 		{Method: "GET", Path: "/URLs/basic-auth/fuseki"},
 		{Method: "POST", Path: "/service/user-registration"},
 		{Method: "GET", Path: "/users/me"},
+		{Method: "POST", Path: "/integrated-services/uploadService"}, // SSRF: the backend reads url=link itself
+		{Method: "POST", Path: "/integrated-services/uploadservice/extra"},
 		{Method: "TRACE", Path: "/datasets"},
 		{Method: "GET", Path: "/datasets", Body: json.RawMessage(`{}`)},
 		{Method: "POST", Path: "/train/config", Body: json.RawMessage(`{broken`)},
@@ -186,6 +188,13 @@ func TestNormalize(t *testing.T) {
 	}
 	if r, err := Normalize(Request{Path: "/urlsx"}); err != nil || r.Method != "GET" || r.Writes() {
 		t.Fatalf("empty method means GET, /urlsx is not blocked: %+v %v", r, err)
+	}
+	// Only the upload path is blocked, not the area: reading integrated services stays allowed.
+	if _, err := Normalize(Request{Method: "GET", Path: "/integrated-services"}); err != nil {
+		t.Fatalf("GET /integrated-services must stay allowed: %v", err)
+	}
+	if _, err := Normalize(Request{Method: "GET", Path: "/integrated-services/3"}); err != nil {
+		t.Fatalf("GET /integrated-services/3 must stay allowed: %v", err)
 	}
 }
 

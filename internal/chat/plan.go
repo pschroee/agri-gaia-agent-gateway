@@ -21,11 +21,11 @@ import (
 // planNow is the clock of plan validity; tests set it.
 var planNow = time.Now
 
-// planClassify gives the effect and delegation action of a call, the same classification that
-// PlatformCall uses (delegation.Classify, issue #63).
-func planClassify(r platform.Request) (effect, action string) {
+// planClassify gives the effect, the delegation action and the confirm-each trait of a call, the same
+// classification that PlatformCall uses (delegation.Classify, issue #63, G1.1).
+func planClassify(r platform.Request) (effect, action string, confirmEach bool) {
 	a := delegation.Classify(r)
-	return string(a.Effect), a.Action
+	return string(a.Effect), a.Action, a.ConfirmEach
 }
 
 // ProposePlan takes a plan proposal (POST /_agw/plan): one approval covers all steps. An approved

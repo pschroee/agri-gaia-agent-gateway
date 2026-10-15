@@ -44,8 +44,25 @@ type Case struct {
 	Rules   string // own delegation instead of ConformanceDelegation (empty: that one)
 }
 
-// ConformanceCases returns the test cases.
+// ConformanceCases returns the test cases: the base table plus everything features registered
+// (registerConformance, G1.6). The base cases keep their order; registered ones follow.
 func ConformanceCases() []Case {
+	return append(baseCases(), registeredCases...)
+}
+
+// registeredCases holds the cases features added (G1.6); each feature registers its own in its own file.
+var registeredCases []Case
+
+// registerConformance adds cases to the conformance check (G1.6), usually from an init() of the
+// feature's file. Register before ConformanceCases is used (at the start of the process or at the
+// start of a test).
+func registerConformance(cases ...Case) {
+	registeredCases = append(registeredCases, cases...)
+}
+
+// baseCases are the cases of this package: forbidden calls in all variants a parser might read
+// differently, plus allowed control calls.
+func baseCases() []Case {
 	req := func(m, p string) platform.Request { return platform.Request{Method: m, Path: p} }
 	body := func(m, p, b string) platform.Request {
 		return platform.Request{Method: m, Path: p, Body: json.RawMessage(b)}

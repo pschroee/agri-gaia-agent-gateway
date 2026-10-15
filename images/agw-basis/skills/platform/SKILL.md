@@ -5,6 +5,9 @@ description: Work with the Agri-Gaia platform (datasets, models, training, backg
 
 # Agri-Gaia platform
 
+Check with `agw-platform capabilities` what this setup offers before you plan work that needs
+notebooks, edge devices, pre-annotation or images.
+
 Agri-Gaia is an AI platform for the agricultural and food industry: datasets (mostly images with
 annotations), training from installed templates, model management, inference containers and
 edge devices. You reach it **only** via `agw-platform`; the orchestrator logs in there, there is no

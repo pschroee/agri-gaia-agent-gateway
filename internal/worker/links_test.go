@@ -50,7 +50,7 @@ func TestWebResearchLinkRule(t *testing.T) {
 // line asks for Markdown links too.
 func TestSystemNoteLinkRule(t *testing.T) {
 	for _, ts := range toolset.All() {
-		note := SystemNoteFor(ts.Key(), 4)
+		note := SystemNoteFor(ts.Key(), 4, nil)
 		if strings.Count(note, linkRule) != 1 {
 			t.Errorf("%s: link rule not exactly once", ts.Key())
 		}
@@ -69,7 +69,7 @@ func TestSystemNoteLinkRule(t *testing.T) {
 // never hints at a host, the gateway or the agent's own pages.
 func TestPlatformLinksInEveryBinding(t *testing.T) {
 	for _, ts := range toolset.All() {
-		note := SystemNoteFor(ts.Key(), 4)
+		note := SystemNoteFor(ts.Key(), 4, nil)
 		if strings.Count(note, platformLinks) != 1 {
 			t.Errorf("%s: platform links not exactly once", ts.Key())
 		}

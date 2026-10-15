@@ -27,7 +27,8 @@ import (
 
 const defaultSocket = "/run/agw/agw.sock"
 
-// Exit codes: 0 approved/successful, 1 error, 3 rejected by the user (internet, platform writes).
+// Exit codes: 0 approved/successful, 1 error, 3 rejected by the user (internet, platform writes),
+// 4 outside the delegated rights, 5 the capability is not part of this setup (G1.13).
 const exitRejected = 3
 
 func main() {

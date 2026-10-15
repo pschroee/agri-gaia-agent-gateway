@@ -285,6 +285,11 @@ type Manager struct {
 	rechecks map[string]recheck
 	// apMu serializes the decisions on one approval (two clicks at the same time).
 	apMu map[string]*sync.Mutex
+	// virtuals: doers for /_agw/ paths that the gateway answers itself (G1.5), by path prefix.
+	virtuals map[string]VirtualDoer
+	// capCache: capabilities that read platform state, held in memory for capabilityCacheTTL
+	// (G1.11), by chat and key.
+	capCache map[string]capabilityCacheEntry
 }
 
 func NewManager(st *store.Store, p *pool.Pool[Agent], cat *config.Catalog, blobs Blobs, broker *artifacts.Broker, opt Options) *Manager {
@@ -2033,6 +2038,16 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 	if req.Path == platform.PlanPath {
 		return m.ProposePlan(ctx, chatID, slotID, via, req)
 	}
+	if req.Path == platform.CapabilitiesPath {
+		// The overview of this chat's setup (G1.10): reading, without approval, like the rights.
+		res, _ := m.capabilitiesResult(ctx, chatID)
+		return res, nil
+	}
+	// A /_agw/ path that no doer answers belongs to the gateway and is answered here (G1.5): no
+	// delegation check, no approval, no compute call — there is no platform route behind it (G1.13).
+	if res, unavailable := m.virtualUnavailable(req.Path); unavailable {
+		return res, nil
+	}
 	// Delegation (step 1): classification from method and path alone, check before any confirmation.
 	access := delegation.Classify(req)
 	// Field allowlists hold without a delegation too (issue #65): a body with a field the platform would take
@@ -2055,6 +2070,13 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 			}
 			violation = dec.Reason // stage without protective measure: only log
 		}
+	}
+	// Guards of features (G1.4): after the delegation, before the compute limit, the plan match and
+	// the approval. A guard's error fails closed.
+	if res, refused, err := m.guardRefusal(ctx, chatID, req, access); err != nil {
+		return platform.Result{}, err
+	} else if refused {
+		return res, nil
 	}
 	if access.Effect == delegation.EffectCompute {
 		res, allowed, err := m.computeAllowed(ctx, chatID)
@@ -2080,7 +2102,7 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 			}
 		}()
 	}
-	if needsApproval(access.Effect, req.Writes(), del) && (step == nil || !step.Covered) {
+	if needsApproval(access, req.Writes(), del) && (step == nil || !step.Covered) {
 		if err := m.checkPendingLimit(ctx, chatID); err != nil {
 			return platform.Result{}, err
 		}
@@ -2178,7 +2200,7 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 	}
 	// Duration of the round trip to the platform (token exchange included), without the approval's waiting time.
 	t0 := time.Now()
-	res, err := m.opt.Platform.Do(ctx, chatID, req)
+	res, err := m.platformDo(ctx, chatID, req)
 	took := time.Since(t0)
 	stepFinished = true
 	m.planFinish(ctx, chatID, step, access, res, err) // nil step: nothing to record
@@ -2210,8 +2232,16 @@ func (m *Manager) PlatformPrecheck(ctx context.Context, chatID string, req platf
 	if err != nil {
 		return platform.Result{Status: "denied", Message: err.Error()}, false
 	}
-	if p := delegation.Classify(req).Problem; p != "" { // field allowlists hold without a delegation (issue #65)
-		return platform.Result{Status: "denied", Message: "refused: " + p}, false
+	access := delegation.Classify(req)
+	if access.Problem != "" { // field allowlists hold without a delegation (issue #65)
+		return platform.Result{Status: "denied", Message: "refused: " + access.Problem}, false
+	}
+	// The guards run here too (G1.4), also without an enforcing delegation: they can refuse a call
+	// that the delegation alone would allow.
+	if res, refused, err := m.guardRefusal(ctx, chatID, req, access); err != nil {
+		return platform.Result{Status: "error", Message: err.Error()}, false
+	} else if refused {
+		return res, false
 	}
 	if del == nil || !del.Enforcing() {
 		return platform.Result{}, true
@@ -2220,7 +2250,7 @@ func (m *Manager) PlatformPrecheck(ctx context.Context, chatID string, req platf
 		ok, _ := m.st.IsDelegationObject(ctx, chatID, res, id)
 		return ok
 	}
-	if dec := del.Check(delegation.Classify(req), time.Now(), own); !dec.Allowed {
+	if dec := del.Check(access, time.Now(), own); !dec.Allowed {
 		return platform.Result{Status: "denied", Message: dec.Reason}, false
 	}
 	return platform.Result{}, true

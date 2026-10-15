@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -119,8 +120,40 @@ func (s *summarizer) decodeBody() {
 	s.body = m
 }
 
-// describe picks the template of the route; the generic one lists every field.
+// registered describers (G1.6): templates features add in their own file. They run before the
+// built-in templates, in the order they were registered.
+var (
+	describerMu sync.Mutex
+	describers  []describer
+)
+
+// describer writes the head and the detail lines of a summary for a call it knows.
+type describer func(c SummaryCall, s *summarizer) (head string, details []string, ok bool)
+
+// registerDescriber registers a template for approval summaries (G1.6). ok false means: not my call,
+// the next describer (finally the built-in templates) describes it. The describer may read platform
+// state through s and should mark every field it names in s.usedBody, s.usedForm and s.usedFile, so
+// that the generic part still lists what the template itself did not name. Register from an init()
+// of the feature's own file.
+func registerDescriber(d func(c SummaryCall, s *summarizer) (head string, details []string, ok bool)) {
+	describerMu.Lock()
+	defer describerMu.Unlock()
+	describers = append(describers, d)
+}
+
+// describe picks the template of the route; a registered one first, then the built-in templates, and
+// the generic one lists every field.
 func (s *summarizer) describe() (string, []string) {
+	if len(describers) > 0 {
+		describerMu.Lock()
+		list := append([]describer(nil), describers...)
+		describerMu.Unlock()
+		for _, d := range list {
+			if head, details, ok := d(s.call, s); ok {
+				return head, details
+			}
+		}
+	}
 	c := s.call
 	switch {
 	case c.Method == http.MethodPatch && sumDatasetRe.MatchString(c.Path):

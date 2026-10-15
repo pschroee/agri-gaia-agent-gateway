@@ -80,8 +80,9 @@ type StepSpec struct {
 	FileSHA256  []string          `json:"file_sha256,omitempty"`
 }
 
-// Classify gives the effect and the delegation action of a call (see FallbackEffect).
-type Classify func(r platform.Request) (effect, action string)
+// Classify gives the effect and the delegation action of a call and whether the call asks for every
+// single approval (G1.1); see FallbackEffect.
+type Classify func(r platform.Request) (effect, action string, confirmEach bool)
 
 // Resolve gives the id that placeholder {{stepN.id}} stands for at matching time.
 type Resolve func(n int) (string, bool)
@@ -135,7 +136,7 @@ func StepRequest(spec StepSpec) (platform.Request, []int, error) {
 			return platform.Request{}, nil, errors.New("give either a tool or a method with path, not both")
 		}
 		switch spec.Tool {
-		case "propose_plan", "rights", "api_paths":
+		case "propose_plan", "rights", "api_paths", "capabilities":
 			return platform.Request{}, nil, fmt.Errorf("tool %s cannot be a plan step", spec.Tool)
 		}
 		tool, ok := platform.Lookup(spec.Tool)
@@ -256,7 +257,8 @@ func BuildStep(spec StepSpec, idx int) (store.PlanStep, platform.Request, []int,
 
 // Build turns a proposal into its steps. Reading calls, placeholders that point forward or at a
 // step that does not create an object (delegation action create or run) are refused. Every step
-// keeps its own approval rules; the plan only records them.
+// keeps its own approval rules; the plan only records them. A step that asks for every single
+// approval (confirm each, G1.1) is never covered: the plan's approval does not replace it.
 func Build(p Proposal, classify Classify) ([]store.PlanStep, error) {
 	if len(p.Steps) == 0 || len(p.Steps) > MaxSteps {
 		return nil, fmt.Errorf("a plan has 1 to %d steps", MaxSteps)
@@ -269,7 +271,7 @@ func Build(p Proposal, classify Classify) ([]store.PlanStep, error) {
 		if err != nil {
 			return nil, err
 		}
-		effect, action := classify(sample)
+		effect, action, confirmEach := classify(sample)
 		if effect == EffectRead {
 			return nil, fmt.Errorf("step %d: reading calls do not belong in a plan", idx)
 		}
@@ -283,7 +285,7 @@ func Build(p Proposal, classify Classify) ([]store.PlanStep, error) {
 		}
 		actions[idx] = action
 		st.Effect = effect
-		st.Covered = effect != EffectIrreversible
+		st.Covered = effect != EffectIrreversible && !confirmEach
 		out = append(out, st)
 	}
 	return out, nil

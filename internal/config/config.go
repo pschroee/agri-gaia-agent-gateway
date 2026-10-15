@@ -37,6 +37,21 @@ type Model struct {
 	ContextWindow int      `json:"context_window"`
 	MaxTokens     int      `json:"max_tokens"`
 	Pricing       *Pricing `json:"pricing"`
+	// Input lists what the model accepts, as in pi's registry: "text", with "image" additionally for
+	// models that read images (G1.12). Empty or without "image" means: text only. Nothing is guessed
+	// from the model's name; the capabilities overview reports this field.
+	Input []string `json:"input,omitempty"`
+}
+
+// ReadsImages reports whether the model accepts images. Without the field it does not: a model the
+// catalog does not describe as reading images must not be promised to the user.
+func (m Model) ReadsImages() bool {
+	for _, in := range m.Input {
+		if in == "image" {
+			return true
+		}
+	}
+	return false
 }
 
 type Provider struct {
