@@ -67,7 +67,7 @@ func TestUpdateModelBuildChecks(t *testing.T) {
 			t.Errorf("%s: accepted", raw)
 		}
 	}
-	for _, w := range []string{"None Acc.", "platform_training_logs", "keeps the old name"} {
+	for _, w := range []string{"None Acc.", "platform_assess_model", "keeps the old name"} {
 		if !strings.Contains(tool.Desc, w) {
 			t.Errorf("description without %q", w)
 		}

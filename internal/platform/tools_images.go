@@ -164,7 +164,7 @@ func modelReadiness(m map[string]any) (problems, warnings []string) {
 			"rename the model with platform_update_model to letters, digits, _ . - only, e.g. mnist_efficientnet", name))
 	}
 	if strings.Contains(name, "None Acc.") {
-		warnings = append(warnings, `name contains "None Acc.": the score was not recognized in the training log (see platform_training_logs)`)
+		warnings = append(warnings, `name contains "None Acc.": the score was not recognized in the training log (check the model with platform_assess_model)`)
 	}
 	if labels, _ := m["output_labels"].([]any); len(labels) == 0 {
 		warnings = append(warnings, "no output_labels: the service returns class indices only")
