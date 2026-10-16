@@ -84,6 +84,18 @@ const assessTrainingNoModelRules = `{
   "confirm": "none"
 }`
 
+// assessTrainingNoDatasetRules: the rules of the check without the two a split needs — it creates a
+// dataset and downloads (updates) its source. A delegation that lacks them must not be able to split,
+// although it may check (G1.6, the counterpart of assessTrainingNoModelRules).
+const assessTrainingNoDatasetRules = `{
+  "rules": [
+    {"action": "create", "resource": "assessment"},
+    {"action": "read",   "resource": "assessment"},
+    {"action": "read",   "resource": "model", "ids": ["*"]}
+  ],
+  "confirm": "none"
+}`
+
 // assessTrainingCases are the conformance cases of the training check (the seam of G1.6).
 func assessTrainingCases() []Case {
 	split := func(body string) platform.Request {
@@ -102,9 +114,10 @@ func assessTrainingCases() []Case {
 			Path: platform.AssessPrefix + "/models/5/latest"}, Allowed: true, Group: "control", Rules: assessTrainingRules},
 
 		// The calls themselves (R1.1, R1.7): create dataset plus the update of the downloaded source,
-		// create assessment plus reading the model and downloading the evaluation dataset.
+		// create assessment plus reading the model and downloading the evaluation dataset. A delegation
+		// without the rules the split needs must not be able to split.
 		{Name: "split a dataset without the rule for assessment", Req: split(`{"dataset_id":12}`), Group: "assessment",
-			Rules: assessTrainingRules},
+			Rules: assessTrainingNoDatasetRules},
 		{Name: "check a model without the right to read it", Req: check(`{"model_id":5}`), Group: "resource",
 			Rules: assessTrainingNoModelRules},
 		{Name: "check a model of another chat", Req: check(`{"model_id":9,"eval_dataset_id":12}`), Group: "object",
