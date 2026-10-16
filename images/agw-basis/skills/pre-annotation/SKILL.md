@@ -1,6 +1,6 @@
 ---
 name: pre-annotation
-description: Pre-annotate datasets in CVAT with agw-platform annotation-*. Check capabilities first (entry annotation); without it point to manual annotation in CVAT; only your own image datasets; annotation-functions, then annotation-task; propose the mapping from function labels to dataset classes by meaning as a table, never map a label you are unsure about; with manual annotations calibrate with annotation-check and report the sample size, under 80 percent hit rate annotate more by hand; annotation-fill writes only images without annotations; annotation-check uncertain names the weakest images and their cvat_url; follow a run or job (annotation-run, annotation-job) in a background loop, 30 s apart; annotation-summary, then offer annotation-sync; existing=keep only on an empty task, existing=replace deletes all; never claim the pre-annotation is correct, the user corrects it in CVAT; own ONNX model via annotation-function (irreversible, visible to all CVAT users, not removable); labels in the model's output order.
+description: Pre-annotate datasets in CVAT with annotation-*. Check capabilities first (entry annotation); without it point to manual annotation in CVAT; only own image datasets; annotation-functions, annotation-task; propose the mapping by meaning as a table, never map a label you are unsure about; calibrate before a fill; annotation-fill writes only images without annotations; annotation-check uncertain names the weakest images and their cvat_url; after every run or fill verify (annotation-check) and report the verdict (usable/questionable), whether images were reviewed (entry vision), per-class figures and the sample size; never call a pre-annotation done without a final verdict usable; annotation-rollback takes back only unchanged automatic annotations; follow a run or job in a background loop, 30 s apart; annotation-summary, then annotation-sync; existing=keep only on an empty task, existing=replace deletes all; never claim a pre-annotation is correct, the user corrects it in CVAT.
 ---
 
 # Pre-annotation with CVAT
@@ -14,7 +14,8 @@ checks them in CVAT and corrects them; the models of the platform then train on 
 - `agw-platform capabilities` names the entry `annotation`. Without it, say so and point at the
   **Annotate** button of the dataset, where the user works in CVAT by hand.
 - The entry `vision` only matters for looking at images yourself; the pre-annotation itself runs in CVAT
-  and needs no model of the chat.
+  and needs no model of the chat. Whether images were looked at is part of every verdict (`image_review`
+  in the report of §5b), and without that second view the gateway judges by stricter thresholds.
 - No usable function (`annotation-functions` is empty) means there is nothing to run. Say that plainly
   instead of proposing a run.
 
@@ -159,6 +160,70 @@ what to look at.
 from the new model (`annotation-function`) and calibrate again — the hit rate should have gone up. If the
 task takes several of these steps, propose them **together** as one plan (`propose-plan`) and say how many
 compute calls it needs.
+
+## 5b. Report the result
+
+A run or a fill is **not** a result. The gateway judges it, and you report that judgement:
+
+```bash
+agw-platform annotation-check --mode verify --source-id <run_id or job_id> --final true
+```
+
+- `--source-id` is the `run_id` of `pre-annotate` or the `job_id` of `annotation-fill`. The gateway
+  measures **that** function, with **that** mapping and **that** threshold, on the images the user
+  annotated himself — you do not name function, mapping or threshold here, and you never measure
+  against a better setting than the one that produced the result.
+- `--final true` measures the **held-out images** of the task and gives the verdict. It works **once
+  per task and chat**: a second call is refused, and every correction round afterwards has to use
+  the validation images (`--final false`) until new manual annotations or a new chat.
+- `--final false` (the default) measures the validation images and gives an interim figure. Use it
+  while you are still correcting.
+
+Follow the job as in §5 (background loop, `annotation-job <job_id>`). The finished result is the
+report:
+
+| Field | What it says |
+|---|---|
+| `header` | the one line your reply starts with, e.g. `Result: usable (held-out images, statistics only, no image review)` |
+| `verdict` | `usable`, `questionable` or `not_measured` |
+| `final`, `set` | held-out (final) or validation (interim) |
+| `measured_images` | how many images the figures rest on; `calibration_images` the size of the calibration set |
+| `image_review` | whether a model looked at the pictures, and why not |
+| `per_class` | precision, recall, F1 and support per class; `below` names the figures under their limit |
+| `overall` | accuracy (classification) or macro F1 (detector) |
+| `plausibility` | the automatic annotations against the manual ones: class shares, `tvd`, empty share, boxes per image, box area |
+| `reasons` | why the verdict is not `usable` |
+| `hints` | what stands close to a bound (they change nothing) |
+| `suggestions` | what to do next: more manual images, another threshold, another mapping, a rollback, a retraining |
+| `suspicious` | up to 50 images worth a look, each with `reason` and `cvat_url` |
+
+Then:
+
+1. **Begin your reply with the header line, word for word.** Is the verdict `questionable` or
+   `not_measured`, say so first and do **not** call the pre-annotation done, correct or finished.
+2. Name the figures per class as a table, and name the size of the set they rest on. A hit rate of
+   0.95 over eight images is not the same as one over eighty.
+3. Name the reasons if there are any, the hints if any, and the suggestions as the steps that follow.
+4. Give the suspicious images as links (`cvat_url`), not as a JSON dump: the user opens them and
+   corrects them.
+
+**Never call a pre-annotation done without a final verdict `usable` from `--final true`.** Without
+it the honest sentence is: the function ran, the figures are so and so, the gateway judges the
+result questionable — or the images have not been checked at all.
+
+**Taking the automatic annotations back.** If the verdict is questionable because the mapping or the
+threshold was wrong, the automatic annotations can be taken back — exactly what the run or the fill
+wrote, and only what still stands unchanged; every object the user changed or drew himself stays:
+
+```bash
+agw-platform annotation-rollback --source-id <run_id or job_id>                 # everything it wrote
+agw-platform annotation-rollback --source-id <run_id or job_id> --scope suspicious  # only the images the verification named
+```
+
+`--scope suspicious` goes by the last verification of that source, so that one has to run first. The
+answer names `deleted`, `changed_kept` (corrected by the user, left alone), `missing` (no longer in
+CVAT) and `frames_emptied`. After a rollback, fill again with the corrected setting — what was taken
+back comes again from the same function.
 
 ## 6. Count, then write back
 
