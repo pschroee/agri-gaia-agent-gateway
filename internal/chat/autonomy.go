@@ -84,6 +84,10 @@ func autonomousGuard(ctx context.Context, m *Manager, chatID string, req platfor
 			ap.ID, dec.Reason, ap.ID), nil
 	}
 	if ap.State == plan.StatePaused && (access.Effect != delegation.EffectRead || req.Writes()) {
+		if ap.PauseReason == store.PauseLogin {
+			// A-E3: nobody has to resume this one — the owner's next login continues the plan by itself (D3.6).
+			return "the plan is paused because the user's login is gone; nothing executed. It continues by itself once the user is logged in to the platform again.", nil
+		}
 		return "the plan is paused (" + ap.PauseReason + "); nothing executed. Wait until the user resumes it.", nil
 	}
 	return "", nil

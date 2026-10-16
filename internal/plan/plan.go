@@ -511,6 +511,10 @@ type Autonomy struct {
 	// cost so far (D1.12).
 	Replaces        string
 	ReplacedCostUSD float64
+	// EndsAt is the end the user's login session sets, when that end comes before the plan's own duration
+	// (A-E3, D3.3): a plan must not run into the end of the session that carries its calls. Nil when no
+	// session bounds it (the token mode, or a session that outlives the plan).
+	EndsAt *time.Time
 }
 
 // Preview lists every step with its effect, the gateway's summary and the technical parameters, for the approval.
@@ -525,6 +529,10 @@ func Preview(title string, steps []store.PlanStep, auto *Autonomy) string {
 			int(ValidFor/time.Minute))
 	} else {
 		fmt.Fprintf(&b, "Autonomous: runs without asking you for up to %s, or until you pause or cancel it.\n", DurationText(time.Duration(auto.Budget.MaxDurationMinutes)*time.Minute))
+		if auto.EndsAt != nil {
+			// The zone is part of the text: the gateway's clock is not necessarily the user's.
+			fmt.Fprintf(&b, "It ends at the latest at %s, one hour before your login session ends.\n", auto.EndsAt.Format("2006-01-02 15:04 MST"))
+		}
 		if auto.ComputeLeft >= 0 {
 			fmt.Fprintf(&b, "Budget: at most %d compute calls (%d left after this plan), model calls up to %.2f USD, up to %d turns without you.\n",
 				auto.ComputeNeeded, auto.ComputeLeft, auto.Budget.MaxLLMCostUSD, auto.Budget.MaxAutoTurns)

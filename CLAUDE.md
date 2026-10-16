@@ -293,6 +293,31 @@ refer to this repository.
   call the kind's `Stop` with the user's token and log it with `via: "user"`. Rules in `API.md`, *Long-running platform
   jobs*.
 
+## Plans over hours (autonomy A-E3)
+
+- An autonomous plan outlives the browser, so the **login has to be kept alive**: `Manager.RunPlanEndurance` (ticker
+  4 min, `internal/chat/endurance.go`) calls `oidc.Service.KeepFresh` for every owner that `Store.AutonomousPlanOwners`
+  names (an approved autonomous plan, joined onto `chats.owner`). It renews only an access token that expires within
+  five minutes, and only for those owners — the loop is off when `chat.Options.Sessions` is nil (`AGW_AUTH_MODE != oidc`).
+- **A lost login pauses, it does not fail.** `oidc.ErrNoSession` from `KeepFresh` or from a platform call pauses the
+  plan with `pause_reason` `login` (D3.5) and publishes SSE `attention`; a claimed step goes back to `open` through
+  `Store.ReleasePlanStep` and keeps its attempt, because the call never reached the platform. `loginGone(err)` in
+  `internal/chat/endurance.go` is the one place that recognises that error — it comes from the token exchange's subject
+  token (`platform.Config.Subject` → `oidc.AccessToken`).
+- **A login continues those plans by itself** (D3.6): `oidc.Service.OnSession` reports every successful login to the
+  manager, which resumes the plans of **that** owner that are paused for `login`. The owner is part of the store's
+  query, so a login never continues a foreign plan (`TestLoginResumesOnlyOwnPlans`). Plans paused for `restart` (D3.4,
+  after a gateway restart) or for `user`/`abort`/`budget_*` wait for the user.
+- `Store.RecoverPlans` pauses an autonomous plan after a restart instead of failing it and keeps `ended_at` empty
+  (also when it was paused already: the failed step would block it); steps in state `waiting` are untouched (D3.4).
+  The step that was `running` still fails, with a text that says the call may have reached the platform. **A failed step blocks a plan** (the agent may only run its next `open` step), so
+  `Manager.ResumePlan` puts the failed steps of an autonomous plan back to `open` (`Store.ReopenFailedPlanSteps`,
+  attempts kept) — that resume *is* the repeat D3.4 asks the user for.
+- The plan's end is capped one hour before the owner's session ends (`Autonomy.EndsAt`, D3.3; the session's own end is
+  `oidc.Service.SessionEnds` = `created + MaxSession`). The preview names that time; a session that ends within the
+  hour refuses the proposal. No refresh token is ever stored (D3.2) — a restart without a login in the browser pauses
+  the plan until the user opens a page of the platform again. Rules in `API.md`, *Autonomy over hours*.
+
 ## Notebook runs (own code, C-E3)
 
 - The agent's own code runs in the chat's notebook server in JupyterHub, one server per chat under the user's account

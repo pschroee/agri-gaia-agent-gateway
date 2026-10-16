@@ -398,6 +398,78 @@ ORDER BY decided_at DESC NULLS LAST, created_at DESC LIMIT 1`, chatID).Scan(&id)
 	return s.GetPlan(ctx, id)
 }
 
+// The pause reasons the gateway sets for itself when the login or the process is gone (A-E3). The other
+// reasons ("user", "abort", "budget_cost", "budget_turns") are set by whoever causes them.
+const (
+	// PauseLogin: the owner's login is gone; the owner's next login continues the plan (D3.6).
+	PauseLogin = "login"
+	// PauseRestart: the gateway restarted while a step was on its way; only the user resumes (D3.4).
+	PauseRestart = "restart"
+)
+
+// PlanOwner is one owner with the plans of that owner a query selected (A-E3), oldest first. The owner is
+// the "sub" of the login the plans were created with; an empty owner (a chat of the token mode) never
+// appears, there is no login to keep fresh.
+type PlanOwner struct {
+	Owner string
+	Plans []string
+}
+
+// AutonomousPlanOwners lists the owners with an approved autonomous plan and those plans (A-E3, D3.1): the
+// endurance loop of the manager renews their logins ahead of time, so a plan survives hours without a
+// browser. Plans of chats without an owner are left out.
+func (s *Store) AutonomousPlanOwners(ctx context.Context) ([]PlanOwner, error) {
+	return s.planOwnersBy(ctx, `p.state='approved'`)
+}
+
+// LoginPausedPlans lists the autonomous plans of one owner that are paused because the login was gone
+// (A-E3, D3.6): the owner's next login continues them. Plans paused for another reason (restart, user,
+// abort, budget) stay paused — the user decides about those.
+func (s *Store) LoginPausedPlans(ctx context.Context, owner string) ([]PlanOwner, error) {
+	if owner == "" {
+		return nil, nil
+	}
+	// The owner is part of the query, not of the caller's filtering: a login of one user must never continue
+	// a plan of another (chats.owner is the only link between the two).
+	return s.planOwnersBy(ctx, `c.owner=$1 AND p.state='paused' AND p.pause_reason=$2`, owner, PauseLogin)
+}
+
+// planOwnersBy groups the autonomous plans that match a condition by their chat's owner.
+func (s *Store) planOwnersBy(ctx context.Context, cond string, args ...any) ([]PlanOwner, error) {
+	rows, err := s.pool.Query(ctx, `SELECT COALESCE(c.owner,''), p.id::text FROM plans p JOIN chats c ON c.id=p.chat_id
+WHERE p.mode='autonomous' AND COALESCE(c.owner,'') <> '' AND `+cond+`
+ORDER BY c.owner, p.created_at, p.id`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []PlanOwner
+	for rows.Next() {
+		var owner, id string
+		if err := rows.Scan(&owner, &id); err != nil {
+			return nil, err
+		}
+		if n := len(out); n > 0 && out[n-1].Owner == owner {
+			out[n-1].Plans = append(out[n-1].Plans, id)
+			continue
+		}
+		out = append(out, PlanOwner{Owner: owner, Plans: []string{id}})
+	}
+	return out, rows.Err()
+}
+
+// ReleasePlanStep moves a claimed step back to open and gives its claim back (A-E3, D3.5): the call did not
+// reach the platform because the user's login was gone, which is no failure of the step and does not count
+// against max_attempts. ok is false if the step was not running.
+func (s *Store) ReleasePlanStep(ctx context.Context, planID string, idx int, result string) (bool, error) {
+	if !isUUID(planID) {
+		return false, ErrNotFound
+	}
+	tag, err := s.pool.Exec(ctx, `UPDATE plan_steps SET state='open', result=$3, done_at=NULL, attempts=GREATEST(attempts-1,0)
+WHERE plan_id=$1 AND idx=$2 AND state='running'`, planID, idx, result)
+	return tag.RowsAffected() > 0, err
+}
+
 // PausePlan moves an approved plan to paused with a reason; ok is false if it was not approved.
 func (s *Store) PausePlan(ctx context.Context, planID, reason string) (bool, error) {
 	if !isUUID(planID) {
@@ -472,6 +544,18 @@ WHERE plan_id=$1 AND idx=$2 AND state='failed' AND attempts < max_attempts`, pla
 	return tag.RowsAffected() > 0, err
 }
 
+// ReopenFailedPlanSteps moves the failed steps of a plan back to open and reports how many (A-E3, D3.4):
+// resuming a plan is the user's repeat of a step a restart interrupted, after they checked on the platform
+// whether the call arrived. The attempts stay: the claim of the interrupted call was used.
+func (s *Store) ReopenFailedPlanSteps(ctx context.Context, planID string) (int, error) {
+	if !isUUID(planID) {
+		return 0, ErrNotFound
+	}
+	tag, err := s.pool.Exec(ctx, `UPDATE plan_steps SET state='open', result='', done_at=NULL
+WHERE plan_id=$1 AND state='failed'`, planID)
+	return int(tag.RowsAffected()), err
+}
+
 // IncPlanAutoTurns counts one turn without the user for the plan and returns the new number (A-E1).
 func (s *Store) IncPlanAutoTurns(ctx context.Context, planID string) (int, error) {
 	if !isUUID(planID) {
@@ -496,16 +580,24 @@ func (s *Store) PlanLLMCost(ctx context.Context, chatID string, since time.Time)
 	return sum, err
 }
 
-// RecoverPlans runs at startup: the waiting calls are gone, so proposals expire, and a step
-// that was running fails together with its plan. Approved plans stay approved.
+// RecoverPlans runs at startup: the waiting calls are gone, so proposals expire, and a step that was
+// running fails. An interactive plan fails with it; an autonomous plan is paused instead (A-E3, D3.4):
+// hours of work are not thrown away because the container was replaced, and only the user resumes a plan
+// whose interrupted call may or may not have reached the platform. A plan that was already paused when the
+// step was running takes the reason "restart" as well: its failed step blocks it (the agent may only run
+// its next open step), so the user has to decide — the same check on the platform D3.4 asks for.
 func (s *Store) RecoverPlans(ctx context.Context) error {
 	if _, err := s.pool.Exec(ctx, `UPDATE plans SET state='expired', decided_at=now() WHERE state='proposed'`); err != nil {
 		return err
 	}
 	if _, err := s.pool.Exec(ctx, `WITH stuck AS (
-  UPDATE plan_steps SET state='failed', result='orchestrator restarted', done_at=now() WHERE state='running' RETURNING plan_id
+  UPDATE plan_steps SET state='failed', result=$1, done_at=now() WHERE state='running' RETURNING plan_id
 )
-UPDATE plans SET state='failed' WHERE state='approved' AND id IN (SELECT plan_id FROM stuck)`); err != nil {
+UPDATE plans SET state = CASE WHEN mode='autonomous' THEN 'paused' ELSE 'failed' END,
+  pause_reason = CASE WHEN mode='autonomous' THEN $2 ELSE pause_reason END,
+  ended_at = CASE WHEN mode='autonomous' THEN ended_at ELSE now() END
+WHERE (state='approved' OR (mode='autonomous' AND state='paused')) AND id IN (SELECT plan_id FROM stuck)`,
+		"orchestrator restarted during the call; check the platform before retrying", PauseRestart); err != nil {
 		return err
 	}
 	// Steps in state "waiting" (A-E2) are not stuck: their platform job runs on and their row in watch_jobs
