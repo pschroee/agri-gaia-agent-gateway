@@ -60,3 +60,30 @@ func TestSummaryAnnotationFunction(t *testing.T) {
 		t.Errorf("a call without a model: %q", odd)
 	}
 }
+
+// The preview of a rollback (V3b) names the source, the extent and that nothing the user annotated or
+// corrected himself is touched; every field of the call is named, so nothing stays hidden.
+func TestSummaryAnnotationRollback(t *testing.T) {
+	got := summarize(t, nil, SummaryCall{Tool: "annotation_rollback", Method: http.MethodPost,
+		Path: AnnotationPrefix + "/rollbacks",
+		Body: json.RawMessage(`{"source_id":"run-1","scope":"suspicious"}`)})
+	wantLines(t, got,
+		"Takes back the annotations a CVAT pre-annotation wrote",
+		"Deletes in CVAT the annotations of the run or fill run-1, only the images the last verification named as suspicious.",
+		"stands in its own register for this chat and this source",
+		"reported as changed_kept",
+		"comes again through a new fill with the same model and setting")
+	if strings.Contains(got, "Also sends") {
+		t.Errorf("the summary hides a field:\n%s", got)
+	}
+	// Without a scope the whole source is taken back; without a source the built-in template stands, so
+	// that a call the service refuses is not described as if it did something.
+	bare := summarize(t, nil, SummaryCall{Method: http.MethodPost, Path: AnnotationPrefix + "/rollbacks",
+		Body: json.RawMessage(`{"source_id":"job-2"}`)})
+	wantLines(t, bare, "every image of the task")
+	odd := summarize(t, nil, SummaryCall{Method: http.MethodPost, Path: AnnotationPrefix + "/rollbacks",
+		Body: json.RawMessage(`{"scope":"all"}`)})
+	if !strings.HasPrefix(odd, "Send POST ") || !strings.Contains(odd, "Also sends") {
+		t.Errorf("a rollback without a source: %q", odd)
+	}
+}

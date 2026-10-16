@@ -217,6 +217,37 @@ type NewAnnotations struct {
 	Tracks  []any      `json:"tracks"`
 }
 
+// AnnotationsDelete is the body of PATCH /api/tasks/{id}/annotations?action=delete (V3b): CVAT deletes
+// exactly the objects whose id stands in one of the three lists, whatever their source
+// (apps/engine/views.py:1060-1068, apps/dataset_manager/task.py:327-356). What stands in the lists is
+// the gateway's own choice, never the agent's (see rollback.go).
+type AnnotationsDelete struct {
+	Tags   []int64 `json:"tags"`
+	Shapes []int64 `json:"shapes"`
+	Tracks []int64 `json:"tracks"`
+}
+
+// DeleteAnnotations removes exactly the named annotations of a task (V3b). CVAT itself does not look at
+// the source of an object, so the caller passes only what the gateway wrote and found unchanged.
+func (c *CVAT) DeleteAnnotations(ctx context.Context, s session, taskID int64, a AnnotationsDelete) error {
+	if a.Tags == nil {
+		a.Tags = []int64{}
+	}
+	if a.Shapes == nil {
+		a.Shapes = []int64{}
+	}
+	if a.Tracks == nil {
+		a.Tracks = []int64{}
+	}
+	body, err := json.Marshal(a)
+	if err != nil {
+		return err
+	}
+	q := url.Values{"action": {"delete"}}
+	_, err = c.do(ctx, s, http.MethodPatch, cvatAPI+"/tasks/"+strconv.FormatInt(taskID, 10)+"/annotations", q, body, maxJSONBytes)
+	return err
+}
+
 // CreateAnnotations writes new annotations into a task and leaves everything else alone
 // (action=create). The body carries whole images: the caller checks before the call that the images
 // it touches are still empty (V3).

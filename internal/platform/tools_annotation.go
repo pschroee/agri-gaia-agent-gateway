@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"regexp"
 	"strconv"
+	"strings"
 )
 
 // AnnotationPrefix is the virtual path prefix of the pre-annotation tools (V1). The calls go through
@@ -253,6 +254,7 @@ func annotationDatasetPath(op string) func(Args) (Request, error) {
 const (
 	checkModeCalibrate  = "calibrate"
 	checkModeUncertain  = "uncertain"
+	checkModeVerify     = "verify"
 	checkLimitCalibrate = 50
 	checkLimitUncertain = 200
 	// jobLimitMax is the highest number of images one job takes.
@@ -263,16 +265,21 @@ const (
 	uncertainBelowHigh    = 99
 )
 
-// V3 adds its three tools in an init of its own, so that the tools of V1 and V2 stay as they are.
-func init() { Tools = append(Tools, annotationCheck, annotationFill, annotationJob) }
+// V3 adds its three tools in an init of its own, so that the tools of V1 and V2 stay as they are. V3b
+// adds the rollback of the automatic annotations (annotationRollback) next to them.
+func init() {
+	Tools = append(Tools, annotationCheck, annotationFill, annotationJob, annotationRollback)
+}
 
 var annotationCheck = Tool{
 	Name: "annotation_check", CLI: "annotation-check",
-	Desc: `Measures a pre-annotation function before it runs over all images, or names the images whose answer is weak. mode=calibrate asks the function about the images the user annotated by hand (source != "auto"), counts the confusion between the classes it answers and the manual classes and proposes the mapping plus a threshold; mode=uncertain asks about the images of the task and lists the ones under uncertain_below with their CVAT link. Limit 1 to 1000 images (default 50 for calibrate, 200 for uncertain). Without mapping the calls map every class of the function onto the first class of the dataset, so that CVAT drops nothing and the check reads the classes of the function (a function that answers no raw_label needs mapping). Effect compute; the user must approve. Runs as a background job (annotation_jobs): the answer carries job_id, follow it with annotation-job.`,
+	Desc: `Measures a pre-annotation function before it runs over all images, names the images whose answer is weak, or judges the result of a run or a fill. mode=calibrate asks the function about the images of the calibration set (the ones the mapping and the threshold may be chosen on), counts the confusion between the classes it answers and the manual classes and proposes the mapping plus a threshold; mode=uncertain asks about the images of the task and lists the ones under uncertain_below with their CVAT link; mode=verify measures the function of the named run or fill (source_id) with ITS mapping and threshold on the held-out images (final=true) or on the validation images (final=false, an interim figure) and reports a verdict usable, questionable or not measured. In mode verify do not send function or mapping: judged is the setting that produced the result. A final verdict is possible once per task and chat. Limit 1 to 1000 images (default 50 for calibrate, 200 for uncertain; verify measures the whole set). Without mapping the calls of calibrate and uncertain map every class of the function onto the first class of the dataset, so that CVAT drops nothing and the check reads the classes of the function (a function that answers no raw_label needs mapping). Effect compute; the user must approve. Runs as a background job (annotation_jobs): the answer carries job_id, follow it with annotation-job.`,
 	Params: []Param{
-		{Name: "dataset_id", Type: "integer", Desc: "id of your own dataset of type AgriImageDataResource with classes and a CVAT task", Required: true},
-		{Name: "function", Type: "string", Desc: "id of the pre-annotation function (platform_annotation_functions)", Required: true},
-		{Name: "mode", Type: "string", Desc: "calibrate (measure on the manually annotated images) or uncertain (list the images with the weakest answers)", Required: true},
+		{Name: "dataset_id", Type: "integer", Desc: "id of your own dataset of type AgriImageDataResource with classes and a CVAT task (not needed for mode verify: it comes from the source)"},
+		{Name: "function", Type: "string", Desc: "id of the pre-annotation function (platform_annotation_functions); required for calibrate and uncertain, refused for verify"},
+		{Name: "mode", Type: "string", Desc: "calibrate (measure on the calibration set), uncertain (list the images with the weakest answers) or verify (judge the result of a run or a fill)", Required: true},
+		{Name: "source_id", Type: "string", Desc: "the run_id of pre_annotate or the job_id of annotation_fill whose result is judged; only for mode verify"},
+		{Name: "final", Type: "string", Desc: "true: measure on the held-out images of the task and give a final verdict (once per task and chat); false (default): measure on the validation images and give an interim figure"},
 		{Name: "limit", Type: "integer", Desc: "how many images to measure, 1 to 1000 (default 50 for calibrate, 200 for uncertain)"},
 		{Name: "mapping", Type: "object", Desc: `function label to dataset class, e.g. {"cow": "Rind"}; with one the check measures through it, without one it reads the classes the function answers`},
 		{Name: "uncertain_below", Type: "integer", Desc: "confidence in percent under which an answer counts as uncertain, 1 to 99 (default 60; only mode uncertain)"},
@@ -282,6 +289,16 @@ var annotationCheck = Tool{
 }
 
 func buildAnnotationCheck(a Args) (Request, error) {
+	mode, err := requiredStr(a, "mode")
+	if err != nil {
+		return Request{}, err
+	}
+	if mode != checkModeCalibrate && mode != checkModeUncertain && mode != checkModeVerify {
+		return Request{}, fmt.Errorf("mode must be %s, %s or %s", checkModeCalibrate, checkModeUncertain, checkModeVerify)
+	}
+	if mode == checkModeVerify {
+		return buildAnnotationVerify(a)
+	}
 	id, err := requiredInt(a, "dataset_id")
 	if err != nil {
 		return Request{}, err
@@ -289,13 +306,6 @@ func buildAnnotationCheck(a Args) (Request, error) {
 	fn, err := requiredStr(a, "function")
 	if err != nil {
 		return Request{}, err
-	}
-	mode, err := requiredStr(a, "mode")
-	if err != nil {
-		return Request{}, err
-	}
-	if mode != checkModeCalibrate && mode != checkModeUncertain {
-		return Request{}, fmt.Errorf("mode must be %s or %s", checkModeCalibrate, checkModeUncertain)
 	}
 	limit, ok, err := a.int("limit")
 	if err != nil {
@@ -421,6 +431,99 @@ var annotationJob = Tool{
 
 // annotationJobIDRe is the shape of a job id: the uuid the table of the gateway gives it.
 var annotationJobIDRe = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+
+// buildAnnotationVerify builds the call of mode verify (V3b): the agent names the source it judges and
+// whether the held-out images are measured, nothing else. Function, mapping and threshold come from the
+// judged run or fill — the gateway reads them from its own rows —, so that the agent cannot measure
+// against a better setting than the one that produced the result.
+func buildAnnotationVerify(a Args) (Request, error) {
+	source, ok, err := a.str("source_id")
+	if err != nil {
+		return Request{}, err
+	}
+	if !ok || !runIDRe.MatchString(source) {
+		return Request{}, errors.New("source_id missing or not a valid run or job id")
+	}
+	final, err := annotationFinal(a)
+	if err != nil {
+		return Request{}, err
+	}
+	body := map[string]any{"mode": checkModeVerify, "source_id": source, "final": final}
+	if id, ok, err := a.int("dataset_id"); err != nil {
+		return Request{}, err
+	} else if ok {
+		body["dataset_id"] = id
+	}
+	b, err := json.Marshal(body)
+	if err != nil {
+		return Request{}, err
+	}
+	return Request{Method: http.MethodPost, Path: AnnotationPrefix + "/checks", Body: b}, nil
+}
+
+// annotationFinal reads the final flag of a verification. The tool table knows no boolean (E13), so the
+// flag comes as the string "true" or "false"; a real boolean, which MCP may still send, is taken as well.
+func annotationFinal(a Args) (bool, error) {
+	v, ok := a["final"]
+	if !ok || v == nil {
+		return false, nil
+	}
+	switch x := v.(type) {
+	case bool:
+		return x, nil
+	case string:
+		switch strings.ToLower(strings.TrimSpace(x)) {
+		case "", "false", "0", "no":
+			return false, nil
+		case "true", "1", "yes":
+			return true, nil
+		}
+	}
+	return false, errors.New("final must be true or false")
+}
+
+// annotationRollback is the tool that takes back what a run or a fill wrote (V3b, E21).
+var annotationRollback = Tool{
+	Name: "annotation_rollback", CLI: "annotation-rollback",
+	Desc: `Takes back the annotations a pre-annotation run or a fill wrote into the CVAT task (source "auto") and leaves everything the user annotated or corrected himself in place. source_id is the run_id of pre_annotate or the job_id of annotation_fill; scope all (default) takes back everything that source wrote, scope suspicious only what stands on the images the last annotation-check mode=verify named as suspicious (that verification has to run first). An annotation the user changed in CVAT since is not touched and is reported as changed_kept. What was taken back comes again through a new fill with the corrected setting. Effect write; the user must approve.`,
+	Params: []Param{
+		{Name: "source_id", Type: "string", Desc: "run_id of pre_annotate or job_id of annotation_fill whose annotations are taken back", Required: true},
+		{Name: "scope", Type: "string", Desc: "all (default) or suspicious (only the images the last verification of this source named)"},
+	},
+	Write: true,
+	build: buildAnnotationRollback,
+}
+
+func buildAnnotationRollback(a Args) (Request, error) {
+	source, ok, err := a.str("source_id")
+	if err != nil {
+		return Request{}, err
+	}
+	if !ok || !runIDRe.MatchString(source) {
+		return Request{}, errors.New("source_id missing or not a valid run or job id")
+	}
+	scope, ok, err := a.str("scope")
+	if err != nil {
+		return Request{}, err
+	}
+	if !ok {
+		scope = rollbackScopeAll
+	}
+	if scope != rollbackScopeAll && scope != rollbackScopeSuspicious {
+		return Request{}, fmt.Errorf("scope must be %s or %s", rollbackScopeAll, rollbackScopeSuspicious)
+	}
+	b, err := json.Marshal(map[string]any{"source_id": source, "scope": scope})
+	if err != nil {
+		return Request{}, err
+	}
+	return Request{Method: http.MethodPost, Path: AnnotationPrefix + "/rollbacks", Body: b}, nil
+}
+
+// The scopes of annotation_rollback (V3b); the service checks them again.
+const (
+	rollbackScopeAll        = "all"
+	rollbackScopeSuspicious = "suspicious"
+)
 
 // annotationMapping reads the mapping of a check or a fill; empty means "no mapping given", and the
 // service then decides which classes it maps (V3).

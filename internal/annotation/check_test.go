@@ -356,19 +356,23 @@ func TestCalibrateNeedsMappingWithoutRawLabel(t *testing.T) {
 	}
 }
 
-// A calibration measures the manually annotated images of the task, proposes the mapping and the
-// threshold and names the sample it stands on.
+// A calibration measures the images of the calibration set (V3b: not the whole manually annotated task,
+// so that the validation and the held-out set stay untouched), proposes the mapping and the threshold and
+// names the sample it stands on.
 func TestCheckCalibrateJob(t *testing.T) {
 	e := v3Env(t, 30)
 	chatID := e.chat(t)
-	// Ten images with a manual tag: the first eight annotated "0", the last two "1".
-	e.fc.setAnnotations(7, manualTags(map[int64][]int{1: {0, 1, 2, 3, 4, 5, 6, 7}, 2: {8, 9}}))
+	// Ten manually annotated frames, which the split of V3b counts off: the frames 0, 1, 5 and 6 fall
+	// into the calibration set (index 0, 1, 5, 6), 2 and 7 into the validation set and 3, 4, 8, 9 into
+	// the held-out set. The calibration set carries "0" three times and "1" once.
+	e.fc.setAnnotations(7, manualTags(map[int64][]int{1: {0, 1, 2, 3, 4, 5, 7}, 2: {6, 8, 9}}))
 	answers := map[int]string{}
 	for i := 0; i < 8; i++ {
 		answers[i] = `[{"label":"0","raw_label":"class_0","type":"tag","confidence":"0.9000","scores":[0.9,0.1]}]`
 	}
-	answers[8] = `[{"label":"0","raw_label":"class_0","type":"tag","confidence":"0.2000","scores":[0.2,0.8]}]`
-	answers[9] = `[{"label":"0","raw_label":"class_0","type":"tag","confidence":"0.2000","scores":[0.2,0.8]}]`
+	for _, i := range []int{6, 8, 9} {
+		answers[i] = `[{"label":"0","raw_label":"class_0","type":"tag","confidence":"0.2000","scores":[0.2,0.8]}]`
+	}
 	e.fc.setAnswers(answers)
 
 	jobID := e.startJob(t, chatID, "/checks", `{"dataset_id":5,"function":"agw-test-m1-abcd1234","mode":"calibrate"}`)
@@ -378,26 +382,43 @@ func TestCheckCalibrateJob(t *testing.T) {
 	}
 	var got Calibration
 	e.jobResult(t, chatID, jobID, &got)
-	if got.Images != 10 || got.Mapping["class_0"] != "0" {
+	if got.Images != 4 || got.Mapping["class_0"] != "0" {
 		t.Fatalf("calibration: %+v", got)
 	}
-	if got.ProposedMinConfidence != 25 || got.Accuracy == nil || *got.Accuracy != 1 || got.Coverage != 0.8 {
+	// The threshold of a calibration that never reaches the wanted coverage: the three images at 0.9 are
+	// right, the one at 0.2 is not, and the threshold 0.25 would drop one image too many.
+	if got.ProposedMinConfidence != 10 || got.Accuracy == nil || *got.Accuracy != 0.75 || got.Coverage != 1 {
 		t.Errorf("figures: %+v", got)
 	}
-	if !strings.Contains(got.Note, "Measured on 10") || !strings.Contains(got.Note, "confirm it") {
+	if !strings.Contains(got.Note, "Measured on 4") || !strings.Contains(got.Note, "confirm it") {
 		t.Errorf("note: %q", got.Note)
 	}
-	// Every call carries the low threshold and the mapping that keeps CVAT from dropping classes.
-	if len(e.fc.funcBodies) != 10 {
-		t.Fatalf("calls: %d", len(e.fc.funcBodies))
+	// Only the frames of the calibration set were asked, each with the low threshold and the mapping that
+	// keeps CVAT from dropping classes.
+	if asked := e.fc.askedFrames(); len(asked) != 4 {
+		t.Fatalf("frames asked: %v", asked)
 	}
-	for _, b := range e.fc.funcBodies {
+	e.fc.mu.Lock()
+	bodies := append([]string(nil), e.fc.funcBodies...)
+	e.fc.mu.Unlock()
+	if len(bodies) != 4 {
+		t.Fatalf("calls: %d", len(bodies))
+	}
+	for _, b := range bodies {
 		if !strings.Contains(b, `"threshold":0.01`) {
 			t.Errorf("the call does not use the low threshold: %s", b)
 		}
 		if !strings.Contains(b, `"class_1":{"name":"0"}`) {
 			t.Errorf("the call does not map every class of the function: %s", b)
 		}
+	}
+	// The three sets are recorded, so that a second run of the same task counts them the same way.
+	split, err := e.st.SplitFor(context.Background(), chatID, 7, nil, PartForIndex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(split) != 10 || split[6] != store.SplitCalibration || split[2] != store.SplitValidation || split[3] != store.SplitHoldout {
+		t.Errorf("split: %v", split)
 	}
 }
 
@@ -581,16 +602,32 @@ func TestClassName(t *testing.T) {
 	}
 }
 
-// The frames of a check are the ones with a manual annotation (calibrate) or every frame (uncertain).
+// The frames of a check are the ones of the calibration set (calibrate, V3b) or every frame (uncertain).
 func TestCheckFrames(t *testing.T) {
-	manual := map[int][]ManualObject{3: {{Class: "0"}}, 7: {{Class: "0"}}, 11: {{Class: "0"}}}
-	cal := jobSpec{Kind: JobCalibrate, Limit: 2}
-	if got := checkFrames(cal, 20, manual); len(got) != 2 || got[0] != 3 || got[1] != 11 {
-		t.Errorf("calibrate: %v", got)
+	split := map[int]string{3: store.SplitCalibration, 7: store.SplitHoldout, 11: store.SplitCalibration}
+	cal := jobSpec{Kind: JobCalibrate, Limit: 1}
+	if got := checkFrames(cal, 20, split); len(got) != 1 || got[0] != 3 {
+		t.Errorf("calibrate measures the calibration set: %v", got)
+	}
+	cal = jobSpec{Kind: JobCalibrate, Limit: 50}
+	if got := checkFrames(cal, 20, split); len(got) != 2 || got[0] != 3 || got[1] != 11 {
+		t.Errorf("calibrate over the whole calibration set: %v", got)
 	}
 	un := jobSpec{Kind: JobUncertain, Limit: 2}
-	if got := checkFrames(un, 20, manual); len(got) != 2 || got[0] != 0 || got[1] != 10 {
+	if got := checkFrames(un, 20, split); len(got) != 2 || got[0] != 0 || got[1] != 10 {
 		t.Errorf("uncertain: %v", got)
+	}
+}
+
+// framesInPart lists the frames of one part of the split, sorted by frame number (V3b).
+func TestFramesInPart(t *testing.T) {
+	split := map[int]string{11: store.SplitHoldout, 3: store.SplitHoldout, 7: store.SplitValidation}
+	got := framesInPart(split, store.SplitHoldout)
+	if len(got) != 2 || got[0] != 3 || got[1] != 11 {
+		t.Errorf("frames of the held-out set: %v", got)
+	}
+	if got := framesInPart(split, store.SplitCalibration); len(got) != 0 {
+		t.Errorf("a part without frames is not empty: %v", got)
 	}
 }
 
