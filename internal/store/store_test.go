@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -493,5 +494,138 @@ func TestSetTitleKeepsOrder(t *testing.T) {
 	}
 	if ok, _ := s.ModelTitle(ctx, older.ID, "From the model"); ok {
 		t.Fatal("model title replaced the user's")
+	}
+}
+
+// L4/#121: an input remembers whether it went with a message. MarkInputsSent sets the time once (a second call
+// does not move it), leaves outputs and foreign names alone, and only what is marked is protected from deletion.
+func TestMarkInputsSent(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	c, _ := s.CreateChat(ctx, NewChat{Title: "x", Model: "m/m", Variant: "cli"})
+	put := func(kind, name string) {
+		t.Helper()
+		if err := s.PutArtifact(ctx, Artifact{ChatID: c.ID, Kind: kind, Name: name, Size: 1, SHA256: "aa", Via: "ui", ObjectKey: c.ID + "/" + kind + "/" + name}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	put(KindInput, "a.csv")
+	put(KindInput, "b.csv")
+	put(KindInput, "c.csv")
+	put(KindOutput, "r.csv")
+
+	if err := s.MarkInputsSent(ctx, c.ID, []string{"a.csv", "r.csv", "unknown.csv"}); err != nil {
+		t.Fatal(err)
+	}
+	a, err := s.GetArtifact(ctx, c.ID, KindInput, "a.csv")
+	if err != nil || a.SentAt == nil {
+		t.Fatalf("sent input: %+v %v", a, err)
+	}
+	if b, err := s.GetArtifact(ctx, c.ID, KindInput, "b.csv"); err != nil || b.SentAt != nil {
+		t.Fatalf("untouched input: %+v %v", b, err)
+	}
+	if r, err := s.GetArtifact(ctx, c.ID, KindOutput, "r.csv"); err != nil || r.SentAt != nil {
+		t.Fatalf("output must keep sent_at unset: %+v %v", r, err)
+	}
+	// a second message with the same attachment keeps the time of the first
+	first := *a.SentAt
+	if err := s.MarkInputsSent(ctx, c.ID, []string{"a.csv"}); err != nil {
+		t.Fatal(err)
+	}
+	if a, _ = s.GetArtifact(ctx, c.ID, KindInput, "a.csv"); !a.SentAt.Equal(first) {
+		t.Fatalf("sent_at moved: %v → %v", first, *a.SentAt)
+	}
+	// without names nothing happens (and no empty ANY() crashes the query)
+	if err := s.MarkInputsSent(ctx, c.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// L4/#121: only an unsent input can be taken back; the row is returned so its file can be removed from the store.
+func TestDeleteUnsentInput(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	c, _ := s.CreateChat(ctx, NewChat{Title: "x", Model: "m/m", Variant: "cli"})
+	key := c.ID + "/input/a.csv"
+	if err := s.PutArtifact(ctx, Artifact{ChatID: c.ID, Kind: KindInput, Name: "a.csv", Size: 4, SHA256: "aa", Via: "ui", ObjectKey: key}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.DeleteUnsentInput(ctx, c.ID, "a.csv")
+	if err != nil || got.ObjectKey != key {
+		t.Fatalf("DeleteUnsentInput: %+v %v", got, err)
+	}
+	if _, err := s.GetArtifact(ctx, c.ID, KindInput, "a.csv"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("row still there: %v", err)
+	}
+	if _, err := s.DeleteUnsentInput(ctx, c.ID, "a.csv"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("second delete: %v", err)
+	}
+	// an output of the same name is a result, not an input
+	if err := s.PutArtifact(ctx, Artifact{ChatID: c.ID, Kind: KindOutput, Name: "r.csv", Size: 1, Via: "cli", ObjectKey: c.ID + "/output/r.csv"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DeleteUnsentInput(ctx, c.ID, "r.csv"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("output removed as input: %v", err)
+	}
+}
+
+// L4/#121: an input that went with a message belongs to the history — deleting it is refused, the row stays.
+func TestDeleteSentInputRefused(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	c, _ := s.CreateChat(ctx, NewChat{Title: "x", Model: "m/m", Variant: "cli"})
+	if err := s.PutArtifact(ctx, Artifact{ChatID: c.ID, Kind: KindInput, Name: "a.csv", Size: 4, Via: "ui", ObjectKey: c.ID + "/input/a.csv"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.MarkInputsSent(ctx, c.ID, []string{"a.csv"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DeleteUnsentInput(ctx, c.ID, "a.csv"); !errors.Is(err, ErrAlreadySent) {
+		t.Fatalf("sent input deleted: %v", err)
+	}
+	a, err := s.GetArtifact(ctx, c.ID, KindInput, "a.csv")
+	if err != nil || a.SentAt == nil {
+		t.Fatalf("row gone after the refusal: %+v %v", a, err)
+	}
+}
+
+// L4/#121 (safe error): uploading a name again that was already sent does not reset sent_at, so the attachment of
+// the earlier message is never removed by a DELETE of the new file.
+func TestReuploadKeepsSentAt(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	c, _ := s.CreateChat(ctx, NewChat{Title: "x", Model: "m/m", Variant: "cli"})
+	art := func(size int64) Artifact {
+		return Artifact{ChatID: c.ID, Kind: KindInput, Name: "a.csv", Size: size, SHA256: "aa", Via: "ui", ObjectKey: c.ID + "/input/a.csv"}
+	}
+	if err := s.PutArtifact(ctx, art(1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.MarkInputsSent(ctx, c.ID, []string{"a.csv"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutArtifact(ctx, art(9)); err != nil {
+		t.Fatal(err)
+	}
+	a, err := s.GetArtifact(ctx, c.ID, KindInput, "a.csv")
+	if err != nil || a.Size != 9 {
+		t.Fatalf("re-upload did not replace the file: %+v %v", a, err)
+	}
+	if a.SentAt == nil {
+		t.Fatal("sent_at was reset by the re-upload")
+	}
+	if _, err := s.DeleteUnsentInput(ctx, c.ID, "a.csv"); !errors.Is(err, ErrAlreadySent) {
+		t.Fatalf("re-uploaded input became removable: %v", err)
+	}
+	// and a fresh upload with sent_at NULL is removable again
+	if err := s.PutArtifact(ctx, Artifact{ChatID: c.ID, Kind: KindInput, Name: "b.csv", Size: 1, Via: "ui", ObjectKey: c.ID + "/input/b.csv"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DeleteUnsentInput(ctx, c.ID, "b.csv"); err != nil {
+		t.Fatalf("new input not removable: %v", err)
+	}
+	// the list carries the field as well
+	if _, err := s.ListArtifacts(ctx, c.ID); err != nil {
+		t.Fatal(err)
 	}
 }
