@@ -19,9 +19,28 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"agw/internal/platform"
 )
+
+// tritonSpelling turns the type of a test fixture into the spelling the platform's enum uses (R3.4: the
+// record of the platform names datatypes like the device's model config).
+func tritonSpelling(t string) string {
+	switch t {
+	case "FP32":
+		return "float32"
+	case "FP64":
+		return "float64"
+	case "INT64":
+		return "int64"
+	case "UINT8":
+		return "uint8"
+	case "BOOL":
+		return "bool"
+	}
+	return strings.ToLower(t)
+}
 
 // The tests of the training check need a platform: the check downloads datasets and models and creates
 // the training dataset. fakePlatform is an HTTP server that answers the few paths a check reads and
@@ -32,12 +51,14 @@ type fakePlatform struct {
 	mu  sync.Mutex
 	srv *httptest.Server
 
-	datasets map[int64]datasetFixture
-	models   map[int64]modelFixture
-	logs     map[int64]string
-	created  []createdDataset
-	calls    []string
-	newID    int64
+	datasets    map[int64]datasetFixture
+	models      map[int64]modelFixture
+	deployments map[int64]deploymentFixture
+	devices     []map[string]any
+	logs        map[int64]string
+	created     []createdDataset
+	calls       []string
+	newID       int64
 }
 
 type datasetFixture struct {
@@ -50,6 +71,22 @@ type modelFixture struct {
 	name   string
 	format string
 	file   []byte // what GET /models/<id>/download answers (a file or a ZIP)
+	// The tensor metadata of the platform's model record (R3.4); empty: the record names none.
+	inputName, inputDatatype   string
+	inputShape                 []int
+	outputName, outputDatatype string
+	outputShape                []int
+}
+
+// deploymentFixture is one container deployment of the fake platform (R3.4): the device it runs on, the
+// port of its Triton HTTP port and the model its image was built from.
+type deploymentFixture struct {
+	name    string
+	device  int64
+	port    int
+	repo    string
+	tag     string
+	modelID int64
 }
 
 // createdDataset is one POST /datasets: its form, the file names and the bytes it carried.
@@ -71,7 +108,7 @@ type testImage struct {
 func newFakePlatform(t *testing.T) *fakePlatform {
 	t.Helper()
 	f := &fakePlatform{t: t, datasets: map[int64]datasetFixture{}, models: map[int64]modelFixture{},
-		logs: map[int64]string{}, newID: 42}
+		deployments: map[int64]deploymentFixture{}, logs: map[int64]string{}, newID: 42}
 	f.srv = httptest.NewServer(http.HandlerFunc(f.handle))
 	t.Cleanup(f.srv.Close)
 	return f
@@ -102,6 +139,29 @@ func (f *fakePlatform) dataset(id int64, name string, images []testImage) {
 // model registers a model: its name, its format and the bytes of GET /models/<id>/download.
 func (f *fakePlatform) model(id int64, name, format string, file []byte) {
 	f.models[id] = modelFixture{name: name, format: format, file: file}
+}
+
+// modelWithIO registers a model whose record carries the tensor metadata of a build (R3.4).
+func (f *fakePlatform) modelWithIO(id int64, name string, in, out TensorInfo, file []byte) {
+	f.models[id] = modelFixture{
+		name: name, format: "onnx", file: file,
+		inputName: in.Name, inputShape: in.Shape, inputDatatype: tritonSpelling(in.Type),
+		outputName: out.Name, outputShape: out.Shape, outputDatatype: tritonSpelling(out.Type),
+	}
+}
+
+// deployment registers a container deployment of a device (R3.4).
+func (f *fakePlatform) deployment(id int64, d deploymentFixture) { f.deployments[id] = d }
+
+// device registers an edge device as GET /edge-devices answers it.
+func (f *fakePlatform) device(id int64, name string, tags []string, registered bool) {
+	if tags == nil {
+		tags = []string{}
+	}
+	f.devices = append(f.devices, map[string]any{
+		"id": id, "name": name, "arch": "amd64", "tags": tags, "registered": registered,
+		"last_heartbeat": time.Now().UTC().Format("2006-01-02T15:04:05.000000"),
+	})
 }
 
 // trainLog registers the log of a training container (GET /train/containers/<id>/logs).
@@ -139,6 +199,26 @@ func (f *fakePlatform) handle(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.Method == http.MethodPost && path == "/datasets":
 		f.createdDataset(w, r)
+	case len(parts) >= 1 && parts[0] == "edge-devices":
+		writeTestJSON(w, f.devices)
+	case len(parts) >= 2 && parts[0] == "container-deployments":
+		id, err := strconv.ParseInt(parts[1], 10, 64)
+		if err != nil {
+			http.Error(w, "bad id", http.StatusBadRequest)
+			return
+		}
+		d, ok := f.deployments[id]
+		if !ok {
+			http.Error(w, "no such deployment", http.StatusNotFound)
+			return
+		}
+		writeTestJSON(w, map[string]any{
+			"id": id, "name": d.name, "status": "deployed", "edge_device_id": d.device,
+			"port_bindings": []map[string]string{
+				{"host_port": strconv.Itoa(d.port), "container_port": "8000", "protocol": "tcp"}},
+			"container_image": map[string]any{
+				"id": 7, "repository": d.repo, "tag": d.tag, "model_id": d.modelID},
+		})
 	case len(parts) >= 2 && parts[0] == "datasets":
 		id, err := strconv.ParseInt(parts[1], 10, 64)
 		if err != nil {
@@ -194,7 +274,14 @@ func (f *fakePlatform) handle(w http.ResponseWriter, r *http.Request) {
 			w.Write(md.file)
 			return
 		}
-		writeTestJSON(w, map[string]any{"id": id, "name": md.name, "format": md.format})
+		out := map[string]any{"id": id, "name": md.name, "format": md.format}
+		if md.inputName != "" {
+			out["input_name"], out["input_shape"], out["input_datatype"] = md.inputName, md.inputShape, md.inputDatatype
+		}
+		if md.outputName != "" {
+			out["output_name"], out["output_shape"], out["output_datatype"] = md.outputName, md.outputShape, md.outputDatatype
+		}
+		writeTestJSON(w, out)
 	default:
 		http.Error(w, "not found", http.StatusNotFound)
 	}
