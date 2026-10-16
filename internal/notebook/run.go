@@ -138,6 +138,11 @@ func (n *Notebooks) Run(ctx context.Context, chatID, user string, body platform.
 	if err != nil {
 		return store.NotebookRun{}, err
 	}
+	// The directory of the runs is created here: /home/jovyan/work is a volume per server, so on the
+	// first run of a fresh notebook server it holds nothing but the datasets, and tar -C would fail.
+	if _, err := n.mustExec(ctx, id, []string{"mkdir", "-p", runsDir}, nil); err != nil {
+		return store.NotebookRun{}, err
+	}
 	if _, err := n.mustExec(ctx, id, []string{"tar", "-x", "-C", runsDir}, bytes.NewReader(archive)); err != nil {
 		return store.NotebookRun{}, err
 	}

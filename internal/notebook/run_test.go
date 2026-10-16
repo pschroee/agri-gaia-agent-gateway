@@ -69,6 +69,28 @@ func (f *fakeDocker) FindByLabels(_ context.Context, labels map[string]string) (
 	return f.ids, nil
 }
 
+// callIndex returns the position of the first recorded command that starts with the given words, or -1.
+func (f *fakeDocker) callIndex(words ...string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i, c := range f.calls {
+		if len(c.Cmd) < len(words) {
+			continue
+		}
+		ok := true
+		for j, w := range words {
+			if c.Cmd[j] != w {
+				ok = false
+				break
+			}
+		}
+		if ok {
+			return i
+		}
+	}
+	return -1
+}
+
 // call returns the first recorded command that starts with the given words.
 func (f *fakeDocker) call(words ...string) (execCall, bool) {
 	f.mu.Lock()
@@ -151,6 +173,16 @@ func TestRunWritesTarAndStarts(t *testing.T) {
 	// The datasets and the run go in as a command as the notebook user.
 	if labels := dockerLabels(docker); labels[labelNotebook] != "1" || labels[labelUser] != "agent-test" || labels[labelServer] != n.Server(chatID) {
 		t.Errorf("container labels: %v", labels)
+	}
+
+	// The runs directory is created before the tar unpacks into it: /home/jovyan/work is a volume per
+	// server, so on the first run of a fresh notebook server tar -C would fail.
+	mk, tarIdx := docker.callIndex("mkdir", "-p", runsDir), docker.callIndex("tar", "-x", "-C", runsDir)
+	if mk < 0 {
+		t.Fatalf("no mkdir of the runs directory among %v", docker.callWords())
+	}
+	if tarIdx < 0 || mk > tarIdx {
+		t.Fatalf("the runs directory is created after the tar (%d > %d) among %v", mk, tarIdx, docker.callWords())
 	}
 
 	// The tar carries the directory, the launcher (0755) and the approved bytes.
