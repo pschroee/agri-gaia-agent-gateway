@@ -56,7 +56,8 @@ func TestWaitingStepLifecycle(t *testing.T) {
 
 	// What the loop writes lands on the step as well.
 	if err := s.SetJobProgress(ctx, jobID, WatchProgress{State: JobRunning, Percent: floatPtr(40),
-		Message: "building", LogTail: "a\nb", Outputs: []WatchOutput{{Resource: "container_image", ID: "u/i:1"}}}); err != nil {
+		Message: "building", LogTail: "a\nb",
+		Outputs: []WatchOutput{{Resource: "container_image", ID: "u/i:1", Size: 42}}}); err != nil {
 		t.Fatal(err)
 	}
 	got, err = s.GetPlan(ctx, p.ID)
@@ -67,7 +68,7 @@ func TestWaitingStepLifecycle(t *testing.T) {
 	if st.Progress == nil || *st.Progress != 40 || st.ProgressMsg != "building" || st.LogTail != "a\nb" {
 		t.Fatalf("progress of the step: %+v", st)
 	}
-	if len(st.Outputs) != 1 || st.Outputs[0].ID != "u/i:1" {
+	if len(st.Outputs) != 1 || st.Outputs[0].ID != "u/i:1" || st.Outputs[0].Size != 42 {
 		t.Fatalf("outputs of the step: %+v", st.Outputs)
 	}
 	if st.JobStarted == nil {
@@ -223,6 +224,70 @@ func TestWatchJobLink(t *testing.T) {
 	}
 	if job, err = s.GetWatchJob(ctx, c.ID, id); err != nil || job.Link != "" {
 		t.Fatalf("link after the hand-over: %+v %v", job, err)
+	}
+}
+
+// Who stopped a job (own code C-E4, the words of issue #120/L3): the field is written once — a progress
+// update and a second stop leave it alone —, an empty stopper is an error, and the hand-over of the row to
+// another kind clears it with the rest of the slate.
+func TestJobStoppedBy(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	c := newPlanChat(t, s)
+	id, err := s.AddWatchJob(ctx, WatchJob{ChatID: c.ID, Kind: "notebook_run", Ref: "r20260101120000-abcd"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job, err := s.GetWatchJob(ctx, c.ID, id); err != nil || job.StoppedBy != "" {
+		t.Fatalf("a fresh job: %+v %v", job, err)
+	}
+	if _, err := s.SetJobStoppedBy(ctx, c.ID, "notebook_run", ""); err == nil {
+		t.Error("an empty stopper must be an error")
+	}
+	ok, err := s.SetJobStoppedBy(ctx, c.ID, "notebook_run", StoppedByUser)
+	if err != nil || !ok {
+		t.Fatalf("set: ok=%v err=%v", ok, err)
+	}
+	// A stop of another kind of that chat marks nothing.
+	if ok, err := s.SetJobStoppedBy(ctx, c.ID, "image_build", StoppedByAgent); err != nil || ok {
+		t.Errorf("another kind: ok=%v err=%v", ok, err)
+	}
+	// The first stopper stands: a progress update and a second stop do not touch it.
+	if err := s.SetJobProgress(ctx, id, WatchProgress{State: JobRunning, Message: "running", Link: "http://hub/x"}); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := s.SetJobStoppedBy(ctx, c.ID, "notebook_run", StoppedByAgent); err != nil || ok {
+		t.Errorf("a second stopper: ok=%v err=%v", ok, err)
+	}
+	job, err := s.GetWatchJob(ctx, c.ID, id)
+	if err != nil || job.StoppedBy != StoppedByUser || job.Link != "http://hub/x" {
+		t.Fatalf("after progress and a second stop: %+v %v", job, err)
+	}
+	// The hand-over to another kind cleans the slate, the stopper included.
+	if ok, err := s.ReArmWatchJob(ctx, id, "training_run", "9"); err != nil || !ok {
+		t.Fatalf("re-arm: ok=%v err=%v", ok, err)
+	}
+	job, err = s.GetWatchJob(ctx, c.ID, id)
+	if err != nil || job.StoppedBy != "" {
+		t.Fatalf("after the hand-over: %+v %v", job, err)
+	}
+	// The JSON of a job without a stopper carries no such field.
+	plain, err := json.Marshal(WatchJob{ID: "w1", ChatID: c.ID, Kind: "notebook_run", State: JobRunning})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(plain), "stopped_by") {
+		t.Errorf("a job nobody stopped carries the field: %s", plain)
+	}
+	// A job that ended cannot be marked any more.
+	if err := s.SetJobProgress(ctx, id, WatchProgress{State: JobDone}); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := s.SetJobStoppedBy(ctx, c.ID, "training_run", StoppedByAgent); err != nil || ok {
+		t.Errorf("a job that ended: ok=%v err=%v", ok, err)
+	}
+	if job, err = s.GetWatchJob(ctx, c.ID, id); err != nil || job.StoppedBy != "" {
+		t.Fatalf("the stopper of a job that ended: %+v %v", job, err)
 	}
 }
 

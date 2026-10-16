@@ -374,6 +374,18 @@ refer to this repository.
   `GET /api/chats/{id}/jobs`: the kind `notebook_run` writes the run's link into `watch_jobs.link` with its first poll
   (`watch.Progress.Link`, cleared when a row is handed over to another kind, empty for every other kind), and no card
   builds the address itself.
+- The **agent's own note** to a run (`note`, at most 500 characters, `platform.NotebookNoteMax`) is the agent's text and
+  only that: the card shows it in a block of its own, marked "not verified", and the gateway never states it. The
+  summary of the call therefore *names* it without quoting it (`summary_notebook.go` marks the form field as used — an
+  unmarked form field would be echoed into the summary as agent text, which issue #72 forbids), and the preview does not
+  carry it (`Request.String` shows no form values).
+- Who **stopped** a run reaches the card as `stopped_by` of its job (`user`/`agent`, the words of issue #120/L3;
+  `store.SetJobStoppedBy` writes it once, a progress update or a second stop leaves it standing). The **caller**
+  records it: `StopJob` for the user's route, `Manager.PlatformCall` for a call of the agent's own tools
+  (`stopJobByTheAgent`, guarded by `notebook.StoppingCall`). Never from the call itself — an invocation is set for the
+  tools with steps only, and the tool call id is a header the client sets. The **result
+  files** of a run carry their size in the job's outputs (`watch.Output.Size` → `watch_jobs.outputs`, 0 for the kinds
+  that know none).
 
 ## Result checks (R0)
 

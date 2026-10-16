@@ -27,6 +27,7 @@ import (
 
 	"agw/internal/artifacts"
 	"agw/internal/delegation"
+	"agw/internal/notebook"
 	"agw/internal/plan"
 	"agw/internal/platform"
 	"agw/internal/store"
@@ -242,7 +243,7 @@ func storeOutputs(out []watch.Output) []store.WatchOutput {
 	}
 	res := make([]store.WatchOutput, 0, len(out))
 	for _, o := range out {
-		res = append(res, store.WatchOutput{Resource: o.Resource, ID: o.ID, Label: o.Label})
+		res = append(res, store.WatchOutput{Resource: o.Resource, ID: o.ID, Label: o.Label, Size: o.Size})
 	}
 	return res
 }
@@ -323,6 +324,20 @@ func (m *Manager) recordJobOutsidePlan(ctx context.Context, chatID string, acces
 		return
 	}
 	slog.Info("job observed without a plan", "chat", chatID, "job", id, "kind", kind, "ref", ref)
+}
+
+// stopJobByTheAgent records that a call of the agent's own tools stopped a job (own code C-E4): the job of the
+// run says so (watch_jobs.stopped_by, the words of the aborts of issue #120/L3), and the card shows it. The
+// user's own stop route marks the same field in StopJob — that is where the two are told apart, because the
+// call itself cannot (the invocation is only set for the tools with steps, and the tool call id is a header
+// the client sets).
+func (m *Manager) stopJobByTheAgent(ctx context.Context, chatID string, req platform.Request, res platform.Result) {
+	if res.Status != "ok" || !notebook.StoppingCall(req) {
+		return
+	}
+	if _, err := m.st.SetJobStoppedBy(ctx, chatID, notebook.KindName, store.StoppedByAgent); err != nil {
+		slog.Error("who stopped the job not recorded", "chat", chatID, "kind", notebook.KindName, "error", err)
+	}
 }
 
 // finishWatched ends a plan step whose job ended: the step is done or failed (the retry of A-E1 applies
@@ -786,6 +801,11 @@ func (m *Manager) StopJob(ctx context.Context, chatID, jobID string) (store.Watc
 	}
 	if res.Status != "ok" {
 		return job, fmt.Errorf("the platform refused the stop: %s", res.Message)
+	}
+	// The user's own stop marks the job (own code C-E4): the same field the agent's own stop writes
+	// (stopJobByTheAgent), so the card can tell the two apart. A job without a stopper keeps none.
+	if _, err := m.st.SetJobStoppedBy(ctx, chatID, job.Kind, store.StoppedByUser); err != nil {
+		slog.Error("who stopped the job not recorded", "chat", chatID, "job", job.ID, "error", err)
 	}
 	slog.Info("job stopped by the user", "chat", chatID, "job", job.ID, "kind", job.Kind)
 	return job, nil

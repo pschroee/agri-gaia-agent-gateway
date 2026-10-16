@@ -83,6 +83,15 @@ func notebookRunReq(t *testing.T, code string) platform.Request {
 	return r
 }
 
+// notebookRunReqWithNote is the same call with the agent's own note (own code C-E4): the note travels in
+// the form and reaches the approval as the agent's text.
+func notebookRunReqWithNote(t *testing.T, code, note string) platform.Request {
+	t.Helper()
+	req := notebookRunReq(t, code)
+	req.Form["note"] = []string{note}
+	return req
+}
+
 // notebookTestChat creates a chat that runs the tests' notebook calls.
 func notebookTestChat(t *testing.T, e *env, nb *fakeNotebook) (string, string) {
 	t.Helper()
@@ -184,6 +193,38 @@ func TestNotebookRunApprovalData(t *testing.T) {
 	<-done
 }
 
+// The agent's own note reaches the approval (own code C-E4) and stays what it is: the card shows it as the
+// agent's text, marked as not verified, and the gateway never states it as something it checked.
+func TestNotebookRunApprovalCarriesTheAgentsNote(t *testing.T) {
+	e := setup(t)
+	withNamedPlatform(t, e)
+	nb := &fakeNotebook{}
+	chatID, slot := notebookTestChat(t, e, nb)
+	ctx := context.Background()
+
+	const note = "trains the baseline for the next step"
+	done := startCall(e, chatID, slot, notebookRunReqWithNote(t, "print('hi')\n", note))
+	ap := pendingApproval(t, e, chatID)
+	var data notebook.ApprovalData
+	if err := json.Unmarshal(ap.Notebook, &data); err != nil {
+		t.Fatalf("notebook field %s: %v", ap.Notebook, err)
+	}
+	if data.Note != note {
+		t.Errorf("note in the data: %q", data.Note)
+	}
+	// The summary names the note, it does not quote it: what the gateway states stays its own reading.
+	if !strings.Contains(ap.Summary, "The agent's own note to the user (not verified) stands in the approval.") {
+		t.Errorf("summary without the note line:\n%s", ap.Summary)
+	}
+	if strings.Contains(ap.Summary, note) {
+		t.Errorf("the summary quotes the agent's text:\n%s", ap.Summary)
+	}
+	if _, err := e.m.Decide(ctx, ap.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	<-done
+}
+
 // Only the approval of a run carries the structured data (own code C-E4); another platform call leaves
 // the field empty.
 func TestNotebookApprovalDataOnlyForRuns(t *testing.T) {
@@ -241,6 +282,45 @@ func TestStopNotebookJobReachesTheGateway(t *testing.T) {
 	nb.mu.Unlock()
 	if len(calls) != 1 || calls[0].Method != http.MethodPost || calls[0].Path != platform.NotebookPrefix+"/stop" {
 		t.Fatalf("calls at the notebook service: %+v", calls)
+	}
+	if calls := got(); len(calls) != 0 {
+		t.Errorf("the stop went to the platform: %v", calls)
+	}
+	// The user's own route marks the job (own code C-E4): the card shows who stopped it.
+	if stopped, err := e.st.GetWatchJob(ctx, chatID, jobID); err != nil || stopped.StoppedBy != store.StoppedByUser {
+		t.Fatalf("stopped_by after the user's stop: %+v %v", stopped, err)
+	}
+}
+
+// The agent's own stop of a run marks its job as well (own code C-E4): the call goes through the notebook
+// paths like every call of the agent, and the job of the run says who stopped it.
+func TestNotebookStopByTheAgentMarksTheJob(t *testing.T) {
+	e := setup(t)
+	got := withPlatform(t, e)
+	ctx := context.Background()
+	nb := &fakeNotebook{res: platform.Result{Status: "ok", HTTPStatus: 200, Body: `{"state":"stopped"}`}}
+	e.m.opt.Notebook = nb
+	e.m.RegisterVirtual(platform.NotebookPrefix, nb)
+	// The stop of the server is an "update notebook": the delegation of this chat grants it (with confirm
+	// none, so that nobody is asked in the test).
+	c, err := e.m.Create(ctx, NewChat{Delegation: json.RawMessage(
+		`{"rules":[{"action":"run","resource":"notebook"},{"action":"update","resource":"notebook"}],"confirm":"none"}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	chatID, slot := c.ID, e.m.live[c.ID].slot.ID
+	jobID, err := e.st.AddWatchJob(ctx, store.WatchJob{ChatID: chatID, Kind: notebook.KindName,
+		Ref: "r20260101120000-abcd"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := e.m.PlatformCall(ctx, chatID, slot, "cli",
+		platform.Request{Method: http.MethodPost, Path: platform.NotebookPrefix + "/stop"})
+	if err != nil || res.Status != "ok" {
+		t.Fatalf("the agent's stop: %+v %v", res, err)
+	}
+	if stopped, err := e.st.GetWatchJob(ctx, chatID, jobID); err != nil || stopped.StoppedBy != store.StoppedByAgent {
+		t.Fatalf("stopped_by after the agent's stop: %+v %v", stopped, err)
 	}
 	if calls := got(); len(calls) != 0 {
 		t.Errorf("the stop went to the platform: %v", calls)

@@ -646,6 +646,10 @@ func TestNotebookWatchKind(t *testing.T) {
 	if len(p.Outputs) != 1 || p.Outputs[0].Resource != "notebook_file" || p.Outputs[0].ID != runID+"/model.onnx" {
 		t.Errorf("outputs: %+v", p.Outputs)
 	}
+	// A result file carries its size (own code C-E4): the card shows it next to the name.
+	if p.Outputs[0].Size != 1234 {
+		t.Errorf("size of the result file: %+v", p.Outputs[0])
+	}
 	// The link of the run goes along (own code C-E4): it is the address the card offers for the run.
 	if want := "http://hub.example/user/agent-test/" + n.Server(chatID) + "/lab/tree/work/runs/" + runID; p.Link != want {
 		t.Errorf("link: %q, expected %q", p.Link, want)
@@ -811,5 +815,23 @@ func TestNotebookRunStop(t *testing.T) {
 	}
 	if !strings.Contains(info.Note, "a new run starts it again") {
 		t.Errorf("note of a run that ended: %q", info.Note)
+	}
+}
+
+// The kind knows the call that stops a run (own code C-E4): whoever asks — the agent's tool or the user's stop
+// route of A-E2 — ends the server of the chat with it, and the caller records who asked (watch_jobs.stopped_by).
+func TestNotebookStoppingCall(t *testing.T) {
+	stop := platform.Request{Method: http.MethodPost, Path: platform.NotebookPrefix + "/stop"}
+	if !StoppingCall(stop) {
+		t.Error("the stop of the server must count as the call that stops a run")
+	}
+	for _, other := range []platform.Request{
+		{Method: http.MethodPost, Path: platform.NotebookPrefix + "/runs"},
+		{Method: http.MethodGet, Path: platform.NotebookPrefix},
+		{Method: http.MethodPost, Path: platform.NotebookPrefix + "/stop/now"},
+	} {
+		if StoppingCall(other) {
+			t.Errorf("%s must not count as the stop", other)
+		}
 	}
 }

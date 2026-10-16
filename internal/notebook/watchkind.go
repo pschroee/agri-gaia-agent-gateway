@@ -44,6 +44,13 @@ func (n *Notebooks) WatchKind() watch.Kind {
 	return watch.Kind{Name: KindName, Poll: n.poll, Stop: stopRun}
 }
 
+// StoppingCall reports whether a call stops this chat's notebook server (own code C-E4): the run that was going
+// in it ends with the server, and the job of that run then names who stopped it (watch_jobs.stopped_by). The
+// caller knows whether the agent or the user asked — the call itself does not.
+func StoppingCall(req platform.Request) bool {
+	return req.Method == http.MethodPost && req.Path == platform.NotebookPrefix+"/stop"
+}
+
 // stopRun builds the call that ends a run of this kind at the user's request ("Stop job", A-E2 D2.9, own
 // code C-E4). A single run is not addressable: the code runs in the chat's notebook server, so the call
 // stops that server — the hub removes its container (Hub.Stop: DELETE /users/<user>/servers/<server>),
@@ -114,7 +121,8 @@ func durationText(seconds int64) string {
 func runOutputs(info RunInfo) []watch.Output {
 	out := make([]watch.Output, 0, len(info.Results))
 	for _, f := range info.Results {
-		out = append(out, watch.Output{Resource: "notebook_file", ID: info.RunID + "/" + f.Path, Label: f.Path})
+		out = append(out, watch.Output{Resource: "notebook_file", ID: info.RunID + "/" + f.Path, Label: f.Path,
+			Size: f.Bytes})
 	}
 	return out
 }

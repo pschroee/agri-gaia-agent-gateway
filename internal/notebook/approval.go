@@ -29,6 +29,10 @@ type ApprovalData struct {
 	Files    []ApprovalFile    `json:"files"`
 	Datasets []ApprovalDataset `json:"datasets"`
 	Limits   ApprovalLimits    `json:"limits"`
+	// Note is the agent's own note to the user about what this run is for, exactly as the agent wrote it
+	// (only escaped for display) and **not** something the gateway read or checked. The card shows it in a
+	// block of its own, marked "not verified" — the point of the field is that the two voices stay apart.
+	Note string `json:"note,omitempty"`
 }
 
 // ApprovalFile is one file of the run as it was approved: name, size and SHA-256 always, the text while
@@ -75,6 +79,7 @@ func (n *Notebooks) ApprovalData(ctx context.Context, req platform.Request, read
 	}
 	data := ApprovalData{
 		Entry: platform.VisibleControls(body.Entry),
+		Note:  platform.VisibleControls(body.Note),
 		// The server of this instance has no internet and no access to the platform; the place is here
 		// rather than in the card, so that the card shows what the gateway states.
 		Limits:   ApprovalLimits{CPUs: serverCPUs, MemGB: serverMemGB, TimeoutMin: body.TimeoutMinutes, Internet: false},

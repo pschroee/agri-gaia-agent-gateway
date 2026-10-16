@@ -40,7 +40,7 @@ func (s *summarizer) notebookRun() (string, []string, bool) {
 	if err != nil {
 		return "", nil, false // a form the runner would refuse: the generic template lists it
 	}
-	for _, k := range []string{"entry", "args", "dataset_ids", "timeout_minutes"} {
+	for _, k := range []string{"entry", "args", "dataset_ids", "timeout_minutes", "note"} {
 		if _, ok := s.call.Form[k]; ok {
 			s.usedForm[k] = true
 		}
@@ -59,6 +59,12 @@ func (s *summarizer) notebookRun() (string, []string, bool) {
 		} else {
 			details = append(details, fmt.Sprintf("Dataset %s is unpacked to %s before the run", sid, where))
 		}
+	}
+	// The agent's own note is named, never quoted: it stands in the approval as the agent's text, marked as
+	// not verified — the summary states what the gateway itself read, and nothing of it comes from the
+	// agent (issue #72, own code C-E4).
+	if b.Note != "" {
+		details = append(details, "The agent's own note to the user (not verified) stands in the approval.")
 	}
 	details = append(details, "The code runs as shown in the approval above, in full.")
 	return head, append(details, s.fileLines()...), true
