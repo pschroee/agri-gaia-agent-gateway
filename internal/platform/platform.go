@@ -901,7 +901,9 @@ func textual(ct string) bool {
 // the connector's password, API and edge keys, tokens.
 var secretKeys = []string{"password", "passwd", "secret", "token", "api_key", "apikey", "edge_key", "private_key", "credential"}
 
-const redacted = "[redacted by the orchestrator]"
+// redacted is what stands in place of a secret value. The mark names no infrastructure: it also appears in the
+// step details of the chat, which the user reads (issue L6/#123).
+const redacted = "[redacted]"
 
 // redact replaces the values of secret keys in a JSON response and returns it compacted.
 func redact(raw []byte) []byte {

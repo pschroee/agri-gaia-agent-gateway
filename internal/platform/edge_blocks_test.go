@@ -98,7 +98,7 @@ func TestEdgeKeyRedacted(t *testing.T) {
 	if strings.Contains(res.Body, "EK-secret") {
 		t.Fatalf("the edge key reached the agent: %s", res.Body)
 	}
-	for _, want := range []string{`"name":"sim-edge-01"`, `"edge_key":"[redacted by the orchestrator]"`} {
+	for _, want := range []string{`"name":"sim-edge-01"`, `"edge_key":"[redacted]"`} {
 		if !strings.Contains(res.Body, want) {
 			t.Fatalf("the answer lost %q: %s", want, res.Body)
 		}
