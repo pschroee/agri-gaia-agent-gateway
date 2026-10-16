@@ -194,10 +194,12 @@ func run() error {
 		if err != nil {
 			return err
 		}
-		svc := annotation.New(plat, st, cvat, env.AnnotationFunctions, env.CVATPublicURL)
+		svc := annotation.New(plat, st, cvat, env.AnnotationFunctions, env.CVATPublicURL,
+			env.AnnotationMaxFunctions, env.AnnotationModelMaxMB)
 		m.RegisterVirtual(platform.AnnotationPrefix, svc)
 		svc.RegisterWatch()
-		slog.Info("pre-annotation on", "cvat", env.CVATAPIURL, "functions", len(env.AnnotationFunctions))
+		slog.Info("pre-annotation on", "cvat", env.CVATAPIURL, "functions", len(env.AnnotationFunctions),
+			"max_functions", env.AnnotationMaxFunctions, "model_max_mb", env.AnnotationModelMaxMB)
 	} else {
 		slog.Info("pre-annotation off (AGW_CVAT_API_URL or the platform binding is empty)")
 	}
