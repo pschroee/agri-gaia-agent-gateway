@@ -76,3 +76,16 @@ ALTER TABLE plans ADD COLUMN IF NOT EXISTS ended_at timestamptz;
 -- claims so far (incremented by ClaimPlanStep).
 ALTER TABLE plan_steps ADD COLUMN IF NOT EXISTS max_attempts integer NOT NULL DEFAULT 1;
 ALTER TABLE plan_steps ADD COLUMN IF NOT EXISTS attempts integer NOT NULL DEFAULT 0;
+
+-- confirm_each: the route of the step asks for every single call (G1.1, from delegation.Classify at
+-- proposal time). Such a step is never covered by a plan, also not after the plan was loaded again —
+-- without this column a reloaded plan would cover a call that has to ask the user every time (A-E2).
+ALTER TABLE plan_steps ADD COLUMN IF NOT EXISTS confirm_each boolean NOT NULL DEFAULT false;
+
+-- watch_job names the observed platform job the step waits for (A-E2): the step is "waiting" (a value of
+-- the state column, no new type) until the job ends, and the row of watch_jobs carries state, percent,
+-- message, ETA and log tail of that job.
+ALTER TABLE plan_steps ADD COLUMN IF NOT EXISTS watch_job text NOT NULL DEFAULT '';
+-- parked_approval names the approval a non-covered step of an autonomous plan waits for (D2.8): the
+-- approval stays open until the plan expires, and the gateway repeats the stored call on approval.
+ALTER TABLE plan_steps ADD COLUMN IF NOT EXISTS parked_approval text NOT NULL DEFAULT '';
