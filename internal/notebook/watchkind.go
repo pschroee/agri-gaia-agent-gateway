@@ -45,13 +45,14 @@ func (n *Notebooks) WatchKind() watch.Kind {
 }
 
 // poll answers the state of a run. It reads the same way a status call does, so a run that ended
-// while nobody looked gets its end recorded here too.
+// while nobody looked gets its end recorded here too. The link goes along (own code C-E4): it is the
+// address of the run the card offers, and the gateway is the one that knows it.
 func (n *Notebooks) poll(ctx context.Context, j watch.Job, _ watch.Reader) (watch.Progress, error) {
 	info, err := n.Status(ctx, j.ChatID, j.Ref)
 	if err != nil {
 		return watch.Progress{}, err
 	}
-	p := watch.Progress{State: info.State, Message: runMessage(info), Outputs: runOutputs(info)}
+	p := watch.Progress{State: info.State, Message: runMessage(info), Outputs: runOutputs(info), Link: info.Link}
 	if info.State != StateRunning {
 		pct := 100.0
 		p.Percent = &pct

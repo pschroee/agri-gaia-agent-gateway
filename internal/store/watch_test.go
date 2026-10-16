@@ -6,6 +6,8 @@ package store
 
 import (
 	"context"
+	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
@@ -174,6 +176,53 @@ func TestWatchJobOutsidePlan(t *testing.T) {
 	}
 	if job.Kind != "training_run" || job.Ref != "9" || job.Progress != nil || job.Message != "" || job.CheckedAt != nil {
 		t.Fatalf("after the hand-over: %+v", job)
+	}
+}
+
+// The link of a job (own code C-E4) survives the round trip through the store and reaches every reading
+// path; a job without one leaves the field out of its JSON, and the hand-over to another kind clears it.
+func TestWatchJobLink(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	c := newPlanChat(t, s)
+	id, err := s.AddWatchJob(ctx, WatchJob{ChatID: c.ID, Kind: "notebook_run", Ref: "r20260101120000-abcd"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A fresh job carries none: the link appears with the first poll of its kind.
+	job, err := s.GetWatchJob(ctx, c.ID, id)
+	if err != nil || job.Link != "" {
+		t.Fatalf("new job: %+v %v", job, err)
+	}
+	const link = "http://hub.example/user/agent-test/agw-1a2b3c4d/lab/tree/work/runs/r20260101120000-abcd"
+	if err := s.SetJobProgress(ctx, id, WatchProgress{State: JobRunning, Message: "running", Link: link}); err != nil {
+		t.Fatal(err)
+	}
+	if job, err = s.GetWatchJob(ctx, c.ID, id); err != nil || job.Link != link {
+		t.Fatalf("link after the poll: %+v %v", job, err)
+	}
+	jobs, err := s.ChatWatchJobs(ctx, c.ID)
+	if err != nil || len(jobs) != 1 || jobs[0].Link != link {
+		t.Fatalf("link in the list of the chat: %+v %v", jobs, err)
+	}
+	open, err := s.OpenWatchJobs(ctx)
+	if err != nil || len(open) != 1 || open[0].Link != link {
+		t.Fatalf("link in the open jobs: %+v %v", open, err)
+	}
+	// The JSON of a job without a link carries no such field: the card builds no address of its own.
+	plain, err := json.Marshal(WatchJob{ID: "w1", ChatID: c.ID, Kind: "notebook_run", State: JobRunning})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(plain), "link") {
+		t.Errorf("a job without a link carries the field: %s", plain)
+	}
+	// The hand-over of the row to another kind cleans its slate, the link included.
+	if ok, err := s.ReArmWatchJob(ctx, id, "training_run", "9"); err != nil || !ok {
+		t.Fatalf("re-arm: ok=%v err=%v", ok, err)
+	}
+	if job, err = s.GetWatchJob(ctx, c.ID, id); err != nil || job.Link != "" {
+		t.Fatalf("link after the hand-over: %+v %v", job, err)
 	}
 }
 

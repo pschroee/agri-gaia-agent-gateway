@@ -569,6 +569,19 @@ func TestNotebookWatchKind(t *testing.T) {
 	if len(p.Outputs) != 1 || p.Outputs[0].Resource != "notebook_file" || p.Outputs[0].ID != runID+"/model.onnx" {
 		t.Errorf("outputs: %+v", p.Outputs)
 	}
+	// The link of the run goes along (own code C-E4): it is the address the card offers for the run.
+	if want := "http://hub.example/user/agent-test/" + n.Server(chatID) + "/lab/tree/work/runs/" + runID; p.Link != want {
+		t.Errorf("link: %q, expected %q", p.Link, want)
+	}
+	// Without a public address of the hub there is no link to pass on.
+	n.cfg.PublicURL = ""
+	if p, err = kind.Poll(ctx, watch.Job{ID: "j1", ChatID: chatID, Kind: KindName, Ref: runID}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if p.Link != "" {
+		t.Errorf("link without a public address: %q", p.Link)
+	}
+	n.cfg.PublicURL = "http://hub.example"
 
 	// An exit code of 0 ends the run as done, and the store is told.
 	docker.reply = func(cmd []string, _ []byte) ([]byte, int) {

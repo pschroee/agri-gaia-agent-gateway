@@ -47,6 +47,9 @@ type WatchJob struct {
 	ETA      *time.Time    `json:"eta,omitempty"`
 	LogTail  string        `json:"log_tail,omitempty"`
 	Outputs  []WatchOutput `json:"outputs,omitempty"`
+	// Link is the address the user can open for the job (own code C-E4); empty for the kinds that know
+	// none, and the card never builds one of its own.
+	Link string `json:"link,omitempty"`
 	// FailReads counts reading calls that failed in a row (D2.3).
 	FailReads int        `json:"fail_reads,omitempty"`
 	StartedAt time.Time  `json:"started_at"`
@@ -68,17 +71,18 @@ type WatchProgress struct {
 	Message  string
 	LogTail  string
 	Outputs  []WatchOutput
+	Link     string
 	ETA      *time.Time
 	ReadFail bool // the reading call failed: the row keeps its state and counts the failure
 }
 
-const watchJobCols = `id, chat_id::text, plan_id, step_idx, tool_call_id, kind, ref, state, progress, message, eta, log_tail, outputs, fail_reads, started_at, checked_at, ended_at`
+const watchJobCols = `id, chat_id::text, plan_id, step_idx, tool_call_id, kind, ref, state, progress, message, eta, log_tail, outputs, link, fail_reads, started_at, checked_at, ended_at`
 
 func scanWatchJob(row interface{ Scan(...any) error }) (WatchJob, error) {
 	var j WatchJob
 	var outputs string
 	err := row.Scan(&j.ID, &j.ChatID, &j.PlanID, &j.StepIdx, &j.ToolCallID, &j.Kind, &j.Ref, &j.State,
-		&j.Progress, &j.Message, &j.ETA, &j.LogTail, &outputs, &j.FailReads, &j.StartedAt, &j.CheckedAt, &j.EndedAt)
+		&j.Progress, &j.Message, &j.ETA, &j.LogTail, &outputs, &j.Link, &j.FailReads, &j.StartedAt, &j.CheckedAt, &j.EndedAt)
 	if err != nil {
 		return j, err
 	}
@@ -195,8 +199,8 @@ func (s *Store) SetJobProgress(ctx context.Context, jobID string, p WatchProgres
 		ended = time.Now()
 	}
 	_, err := s.pool.Exec(ctx, `UPDATE watch_jobs SET state=$2, progress=$3, message=$4, eta=$5, log_tail=$6, outputs=$7,
-fail_reads=0, checked_at=now(), ended_at=$8 WHERE id=$1 AND state='running'`,
-		jobID, state, p.Percent, p.Message, p.ETA, p.LogTail, outputs, ended)
+fail_reads=0, checked_at=now(), ended_at=$8, link=$9 WHERE id=$1 AND state='running'`,
+		jobID, state, p.Percent, p.Message, p.ETA, p.LogTail, outputs, ended, p.Link)
 	return err
 }
 
@@ -212,7 +216,7 @@ func (s *Store) SetJobMessage(ctx context.Context, jobID, message string) error 
 // kind reported.
 func (s *Store) ReArmWatchJob(ctx context.Context, jobID, kind, ref string) (bool, error) {
 	tag, err := s.pool.Exec(ctx, `UPDATE watch_jobs SET kind=$2, ref=$3, progress=NULL, message='', eta=NULL, log_tail='',
-outputs='[]', fail_reads=0, checked_at=NULL WHERE id=$1 AND state='running'`, jobID, kind, ref)
+outputs='[]', link='', fail_reads=0, checked_at=NULL WHERE id=$1 AND state='running'`, jobID, kind, ref)
 	return tag.RowsAffected() > 0, err
 }
 

@@ -40,6 +40,10 @@ type Progress struct {
 	Message string   // one line, from the platform, at most 200 runes
 	LogTail string   // at most 20 lines / 4000 runes
 	Outputs []Output // objects the job produced: {Resource, ID, Label}
+	// Link is what the user opens for this job, when the kind knows such an address (the kind
+	// notebook_run carries the run in the user's JupyterHub). Empty for the kinds without one, and the
+	// card builds no address of its own (own code C-E4).
+	Link string
 	// Next (A-E2) replaces the kind and the reference of the running job: the observed task only
 	// started another job (a started training container, a built image), and the same row is observed
 	// on as that job. nil for every kind that follows its job to its end.

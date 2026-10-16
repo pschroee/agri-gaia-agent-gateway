@@ -172,6 +172,7 @@ func (m *Manager) pollJob(ctx context.Context, j store.WatchJob, kind watch.Kind
 		Message: watch.ClipRunes(p.Message, watch.MaxMessage),
 		LogTail: watch.Tail(p.LogTail),
 		Outputs: storeOutputs(p.Outputs),
+		Link:    p.Link,
 		ETA:     m.jobETA(j, p, time.Now()),
 	}
 	if err := m.st.SetJobProgress(ctx, j.ID, prog); err != nil {
@@ -180,6 +181,7 @@ func (m *Manager) pollJob(ctx context.Context, j store.WatchJob, kind watch.Kind
 	}
 	j.Progress, j.Message, j.LogTail, j.ETA = prog.Percent, prog.Message, prog.LogTail, prog.ETA
 	j.Outputs = prog.Outputs
+	j.Link = prog.Link
 	j.CheckedAt = timePtr(time.Now())
 	j.State = prog.State
 	m.publishJob(ctx, j, p)
