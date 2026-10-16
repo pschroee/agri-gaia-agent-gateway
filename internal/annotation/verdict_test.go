@@ -82,14 +82,22 @@ func (it obsItem) one(kind string) Observation {
 	return o
 }
 
+// noReviewReason is the text these tests use for a report no model looked at. The real one comes from the
+// rule of #111 (assess.ImageReviewAllowed, V3d); what these tests need is that the field is filled at all.
+const noReviewReason = "no model has looked at the images"
+
 // verifyInput builds the input of a verdict over a classification that is measured right everywhere.
 func verifyInput(measured []Observation, final bool, review bool) VerifyInput {
-	return VerifyInput{
+	in := VerifyInput{
 		Kind: KindClassification, Final: final, Measured: measured,
 		Classes: []string{"0", "1"}, Mapping: map[string]string{"0": "0", "1": "1"}, Threshold: 0.5,
-		ImageReview: assess.ImageReview{Done: review, Model: "m", Reason: imageReviewReason},
+		ImageReview: assess.ImageReview{Done: review, Model: "m"},
 		Objects:     TaskObjects{Frames: len(measured)},
 	}
+	if !review {
+		in.ImageReview.Reason = noReviewReason
+	}
+	return in
 }
 
 // A final verdict rests on the held-out set, an interim one on the validation set (V3b, E22); the set is

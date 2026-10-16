@@ -113,10 +113,6 @@ const (
 	SuggestionRetrain        = "retrain"
 )
 
-// imageReviewReason is what a report of V3b says about the image review: the gateway never sends
-// pictures to a model on its own (that is V3d), so the field is always filled and always false.
-const imageReviewReason = "no image review: no model has looked at the pictures of this task"
-
 // The figures of a verify report (V3b). They stand next to the verdict in the answer of the job.
 type VerifyFigures struct {
 	// CalibrationImages is the size of the calibration set the mapping and the threshold of the judged

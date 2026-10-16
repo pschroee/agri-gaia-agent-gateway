@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"log/slog"
 	"net"
@@ -220,10 +221,24 @@ func run() error {
 		}
 		svc := annotation.New(plat, st, cvat, env.AnnotationFunctions, env.CVATPublicURL,
 			env.AnnotationMaxFunctions, env.AnnotationModelMaxMB)
+		// V3d: the image review runs with the chat's model, and only where #111 allows it — a self hosted
+		// model may see every dataset, a cloud model only those whose name matches the pattern. Every call
+		// it makes is an auxiliary call of the chat, like a title (never an llm_call of the agent).
+		pattern, err := assess.VisionPattern(env.VisionDatasetPattern)
+		if err != nil {
+			return fmt.Errorf("AGW_VISION_DATASET_PATTERN: %w", err)
+		}
+		svc.Cat, svc.VisionPattern = cat, pattern
+		svc.Aux = func(ctx context.Context, call store.AuxCall) {
+			if err := st.RecordAuxCall(ctx, call); err != nil {
+				slog.Warn("image review call not recorded", "chat", call.ChatID, "error", err)
+			}
+		}
 		m.RegisterVirtual(platform.AnnotationPrefix, svc)
 		svc.RegisterWatch()
 		slog.Info("pre-annotation on", "cvat", env.CVATAPIURL, "functions", len(env.AnnotationFunctions),
-			"max_functions", env.AnnotationMaxFunctions, "model_max_mb", env.AnnotationModelMaxMB)
+			"max_functions", env.AnnotationMaxFunctions, "model_max_mb", env.AnnotationModelMaxMB,
+			"vision_dataset_pattern", env.VisionDatasetPattern)
 	} else {
 		slog.Info("pre-annotation off (AGW_CVAT_API_URL or the platform binding is empty)")
 	}
