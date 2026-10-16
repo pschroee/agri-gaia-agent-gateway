@@ -54,7 +54,7 @@ func TestTrainingRunChain(t *testing.T) {
 func TestTrainingRunStates(t *testing.T) {
 	answers := func(status, score, logs string) map[string]string {
 		return map[string]string{
-			"GET /train/containers/9/status": `{"status":"` + status + `","score":` + score + `}`,
+			"GET /train/containers/9/status":       `{"status":"` + status + `","score":` + score + `}`,
 			"GET /train/containers/9/logs?tail=20": `{"logs":` + logs + `}`,
 		}
 	}

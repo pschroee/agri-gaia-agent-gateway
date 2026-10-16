@@ -42,10 +42,10 @@ type WatchJob struct {
 	Ref        string `json:"ref"`
 	State      string `json:"state"`
 	// Progress is the percent the platform reported; nil while it reports none (D2.4).
-	Progress *float64 `json:"progress,omitempty"`
-	Message  string   `json:"message,omitempty"`
-	ETA      *time.Time `json:"eta,omitempty"`
-	LogTail  string   `json:"log_tail,omitempty"`
+	Progress *float64      `json:"progress,omitempty"`
+	Message  string        `json:"message,omitempty"`
+	ETA      *time.Time    `json:"eta,omitempty"`
+	LogTail  string        `json:"log_tail,omitempty"`
 	Outputs  []WatchOutput `json:"outputs,omitempty"`
 	// FailReads counts reading calls that failed in a row (D2.3).
 	FailReads int        `json:"fail_reads,omitempty"`

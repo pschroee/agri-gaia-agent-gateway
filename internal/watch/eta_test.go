@@ -63,7 +63,7 @@ func TestPercent(t *testing.T) {
 func TestLogTailBounded(t *testing.T) {
 	var b []rune
 	for i := 0; i < 30; i++ {
-		b = append(b, ('a'+rune(i%26)), '\n')
+		b = append(b, ('a' + rune(i%26)), '\n')
 	}
 	out := Tail(string(b))
 	if n := len(splitLines(out)); n != MaxLogLines {

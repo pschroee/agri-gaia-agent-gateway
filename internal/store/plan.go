@@ -66,25 +66,25 @@ type PlanStep struct {
 	Description string `json:"agent_note,omitempty"`
 	Tool        string `json:"tool,omitempty"`
 	// Args: canonical arguments of a tool step with steps, scalars as text, placeholders as {{stepN.id}}.
-	Args            json.RawMessage `json:"args,omitempty"`
-	Method          string          `json:"method"`
-	Path            string          `json:"path"`
-	Query           json.RawMessage `json:"query,omitempty"`
-	Body            json.RawMessage `json:"body,omitempty"`
-	BodySHA256      string          `json:"body_sha256,omitempty"`
-	Form            json.RawMessage `json:"form,omitempty"`
-	FormSHA256      string          `json:"form_sha256,omitempty"`
-	Files           []PlanFile      `json:"files,omitempty"`
-	Effect string `json:"effect"`
+	Args       json.RawMessage `json:"args,omitempty"`
+	Method     string          `json:"method"`
+	Path       string          `json:"path"`
+	Query      json.RawMessage `json:"query,omitempty"`
+	Body       json.RawMessage `json:"body,omitempty"`
+	BodySHA256 string          `json:"body_sha256,omitempty"`
+	Form       json.RawMessage `json:"form,omitempty"`
+	FormSHA256 string          `json:"form_sha256,omitempty"`
+	Files      []PlanFile      `json:"files,omitempty"`
+	Effect     string          `json:"effect"`
 	// ConfirmEach: the route asks for every single call (G1.1); such a step is never covered by a plan,
 	// also not after the plan was loaded again (A-E2).
-	ConfirmEach bool   `json:"confirm_each,omitempty"`
-	Covered     bool   `json:"covered"`
-	State           string          `json:"state"`
-	Result          string          `json:"result,omitempty"`
-	CreatedResource string          `json:"created_resource,omitempty"`
-	CreatedID       string          `json:"created_id,omitempty"`
-	DoneAt          *time.Time      `json:"done_at,omitempty"`
+	ConfirmEach     bool       `json:"confirm_each,omitempty"`
+	Covered         bool       `json:"covered"`
+	State           string     `json:"state"`
+	Result          string     `json:"result,omitempty"`
+	CreatedResource string     `json:"created_resource,omitempty"`
+	CreatedID       string     `json:"created_id,omitempty"`
+	DoneAt          *time.Time `json:"done_at,omitempty"`
 	// MaxAttempts: how often an autonomous plan may repeat this step after a failure (1 to 3, A-E1).
 	MaxAttempts int `json:"max_attempts,omitempty"`
 	// Attempts counts the claims of this step so far (incremented by ClaimPlanStep).
@@ -116,7 +116,9 @@ const planCols = `id::text, chat_id::text, approval_id, title, session, tool_cal
 
 // planStepCols reads a step together with the progress of its observed job (A-E2): the step's own columns
 // first, then the fields of watch_jobs, so that the plan API carries them for every step at once.
-const planStepCols = `s.idx, s.summary, COALESCE(s.summary_proposed,''), s.description, s.tool, s.args, s.method, s.path, s.query, s.body, s.body_sha256, s.form, s.form_sha256, s.files, s.effect, s.confirm_each, s.state, s.result, s.created_resource, s.created_id, s.done_at, s.max_attempts, s.attempts, s.watch_job, s.parked_approval, w.progress, w.message, w.eta, w.log_tail, w.outputs, w.started_at`
+// The columns of the job are COALESCEd: a step without an observed job joins onto no row at all, and NULL
+// would be readable only into pointers.
+const planStepCols = `s.idx, s.summary, COALESCE(s.summary_proposed,''), s.description, s.tool, s.args, s.method, s.path, s.query, s.body, s.body_sha256, s.form, s.form_sha256, s.files, s.effect, s.confirm_each, s.state, s.result, s.created_resource, s.created_id, s.done_at, s.max_attempts, s.attempts, s.watch_job, s.parked_approval, w.progress, COALESCE(w.message,''), w.eta, COALESCE(w.log_tail,''), COALESCE(w.outputs,'[]'), w.started_at`
 
 func scanPlan(row interface{ Scan(...any) error }) (Plan, error) {
 	var p Plan
