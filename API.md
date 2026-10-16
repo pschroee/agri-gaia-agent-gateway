@@ -1426,12 +1426,14 @@ image, and CVAT stores no confidence of them (`apps/lambda_manager/views.py:519-
 and (classification) `scores` next to the objects, and it writes only into images that carry no annotation at all.
 
 - **Tools** (CLI names in brackets), all virtual paths under `/_agw/annotation`:
-  `annotation_check` (`annotation-check`, effect `compute`; `mode` is `calibrate` or `uncertain`),
+  `annotation_check` (`annotation-check`, effect `compute`; `mode` is `calibrate`, `uncertain` or `verify` — the
+  last is V3b),
   `annotation_fill` (`annotation-fill`, effect `compute`) and `annotation_job` (`annotation-job`, read).
 - **`annotation_check`**: `dataset_id`, `function`, `mode` (required), `limit` (default 50 for `calibrate`, 200 for
   `uncertain`, at most 1000), `mapping`, `uncertain_below` (1 to 99 percent, default 60). `calibrate` measures the
-  images with a manual annotation (at least one annotation with `source != "auto"`), evenly spread over the task (every
-  k-th image — reproducible, no random source). `uncertain` checks the images of the task and lists the weak ones.
+  images of the **calibration set** of the task (V3b: not every manually annotated image, so that the other two sets
+  stay untouched), evenly spread over that set (every k-th image — reproducible, no random source). `uncertain` checks
+  the images of the task and lists the weak ones.
 - **`annotation_fill`**: `dataset_id`, `function` (required), `min_confidence` (1 to 99 percent, default 50),
   `mapping`, `limit` (at most 1000, default 1000). It reads the task's annotations, takes the images without any
   annotation in frame order and asks the function about each one.
@@ -1523,6 +1525,95 @@ one route, so a card survives a reload of the page.
   built on it (`<base>/tasks/<id>`), and without that address both stay empty. The UI opens no other link.
 - **No observer and no SSE kind of its own** (V4 decision): a run and a job are observed by the watcher of A-E2, which
   already publishes their state.
+## Verifying a pre-annotation result (V3b)
+
+A run and a fill write proposals, not a result: the gateway therefore judges what they wrote (issue #109) and the
+agent reports that judgement instead of "done". The judgement rests on the images the user annotated **himself** and
+that were held back from the calibration (E22), and on what the automatic annotations look like against the manual
+ones. Taking the result back goes over exactly the objects the gateway wrote and found unchanged (E21).
+
+- **Three sets per task** (`annotation_splits`, E22): the manually annotated frames of a task are sorted by frame
+  number and counted off in fives — the first two into the **calibration set** (40 %), the third into the **validation
+  set** (20 %), the last two into the **held-out set** (40 %). `calibrate` measures only the calibration set; the
+  validation set is for comparing rounds (V3c); the verdict falls on the held-out set. A frame is put into its set when
+  it is first seen and never changes it, so that a later manual annotation joins without moving the frames that were
+  already measured on. When a frame joins is decided by the operation that reads the manual annotations for the first
+  time: `runCheck` records the split before it measures.
+- **The register** `annotation_objects` holds what a run or a fill wrote: source, chat, task, `kind`
+  (`tag`|`shape`|`track`), the id CVAT gave it, frame, class and a fingerprint. The fingerprint is the SHA-256 over
+  frame, class, kind, the points rounded to a tenth of a pixel and the attributes — a correction of the user changes
+  it. A fill writes its rows right after the write of a batch, out of a fresh read of the task (what the answer of the
+  write itself carries is not relied on); a run snapshots every object with `source: "auto"` when it reaches
+  `finished` for the first time (it ran on a task that carried no annotation, E12). The first source that registered an
+  object keeps it.
+- **`annotation_check` `mode=verify`**: `source_id` (the `run_id` of `pre_annotate` or the `job_id` of a fill,
+  required) and `final` (`true`|`false`). `function`, `mapping` and a differing `dataset_id` are refused: the gateway
+  takes function, mapping and `min_confidence` from its own row of the judged source (`annotation_runs` /
+  `annotation_jobs`), so that the agent cannot measure against a better setting than the one that produced the result.
+  Only a run or a fill can be judged, not a check. The job kind is `verify` and its answer is the report.
+- **What is measured:** the same function, the same mapping and the same threshold as the judged source, by single
+  calls (`threshold: 0.01`, so that the function answers as much as it can); the figures apply the `min_confidence` of
+  the judged source. `final=true` measures the **held-out set** and is possible **once per task and chat**
+  (`annotation_tasks.final_verified_at`; a second call answers
+  `the held-out images of task N were already used in this chat; the result stands. Annotate more images manually and
+  start a new chat to measure again`). `final=false` measures the **validation set** and gives an interim figure; the
+  calibration set is measured next to it, only so that the suggestions come from there.
+- **The figures:** for a classification the manual class of every image against the class the function means (the
+  mapping of its best answer at the threshold; an image without such an answer counts as `(no answer)`, so that a
+  function that answers rarely does not look accurate) — accuracy and per class precision, recall, F1 and support
+  (`assess.ClassMetrics`). For a detector the answered boxes are matched with the manual objects by overlap (IoU 0.5,
+  greedy by confidence), which gives precision, recall and F1 per class and the macro F1. `below` names the figures
+  under their limit (recall under 0.50 in a class with at least 3 images), which is what the check card paints red.
+- **The plausibility** compares the automatic annotations of the source with the manual ones of the same task: class
+  shares and their total variation distance, the share of images the source left empty (`empty_share_auto`, the frames
+  it wrote on plus the frames that are still empty are the frames it was given) against the share of the task the user
+  left without an annotation, the average objects per annotated image and (detection) the median relative box area.
+- **The verdict** (`assess.Verdict`): `usable`, `questionable` or `not_measured`. Thresholds are constants of
+  `internal/annotation/verdict.go`, chosen by whether a model looked at the images (V3d):
+  - without an image review: held-out set at least **20** images and accuracy/macro F1 at least **0.85**;
+  - with one: at least **10** images and **0.80**, and at most 20 % of the measured images flagged.
+  Below the sample bound the verdict is `not_measured` (`too few held-out images (N of at least M)`); the validation
+  set needs 5 images. Further reasons for `questionable` (each one suffices): a class with at least 3 measured images
+  and a hit rate under 0.50; the class shares of the automatic and the manual side further apart than 0.25 (0.20
+  without an image review); a class with at least 5 % of the manual annotations and none of the automatic ones; the
+  share of images a classification left empty over 0.20 (detection: the distance to the manual empty share over 0.20);
+  the objects per annotated image or the median relative box area further than a factor 2 from the manual side. Hints
+  (they change nothing): a figure within 0.15 above its bound, and a usable figure under 0.90.
+- **Already the call refuses to be judged by the wrong setting** — but the agent also never sees the held-out images:
+  answers carry numbers, per-class figures and the sizes of the sets, never the frame numbers of the held-out set, and
+  the suspicious images never name one (E22).
+- **Suspicious images** (`suspicious`, at most 50, ordered by reason): a box with a relative area under 0.0005 or over
+  0.9, a box longer than ten times its width, more than three times the boxes of the fullest manually annotated image,
+  and, for a classification, an image the function answered nothing on. Each carries `frame`, `reason`, `file` and
+  `cvat_url` into the CVAT job of the frame.
+- **The suggestions** the report carries are built by the gateway out of the **calibration set**, never out of the
+  measured images: `more_manual` (how many images the held-out set needs), `other_threshold` and `remap` (what the
+  calibration set answers best at and which mapping it gives), `rollback` and `retrain`. V3c carries exactly these out.
+- **The report** is the result of the job: the `assess.Report` shell (`kind`, `verdict`, `final`, `set`,
+  `measured_images`, `image_review`, `reasons`, `hints`, `suggestions`, `note`, `header`) plus
+  `calibration_images`, `per_class`, `overall`, `plausibility` and `suspicious`. `image_review` is always filled —
+  V3b never sends pictures to a model (`done: false`, `reason: "no image review: no model has looked at the pictures of
+  this task"`), and without a review the stricter thresholds hold.
+- **`annotation_rollback`** (`annotation-rollback`, effect **write**, E21): `source_id` (required) and `scope`
+  (`all`, default, or `suspicious`). It deletes in CVAT exactly the objects that stand in the register of this chat for
+  that source, read again right before the delete and only when CVAT still carries them with `source: "auto"` and the
+  same fingerprint; everything the user drew, moved or corrected stays. Batches of 200 ids with
+  `PATCH /api/tasks/{id}/annotations?action=delete` and `{"tags":[],"shapes":[],"tracks":[]}`. `scope=suspicious`
+  goes by the newest finished verification of that source (`LastVerifyResult`) and refuses without one. The answer:
+  `{"source_id", "scope", "deleted", "changed_kept", "missing", "frames_emptied", "note"}`; the rows of what was
+  deleted leave the register.
+- **Delegation:** `run dataset` for `mode=verify` (it goes over `POST /_agw/annotation/checks` like a check) and
+  `update dataset` for the rollback. The rollback body names no dataset — the register binds the source to it —, so the
+  refinement checks only the source and the extent, and the service is the boundary: the register of this chat, the
+  source `auto` and an unchanged fingerprint. The conformance table therefore holds no case pair for the rollback; it
+  could not tell one dataset from another.
+- **Storage:** `annotation_splits` (primary key `task_id`, `frame`), `annotation_objects` (primary key `task_id`,
+  `kind`, `cvat_id`) and `annotation_tasks` (`chat_id`, `task_id`; `rounds`, `retrains`, `final_verified_at`). All
+  three carry a `chat_id` and go with the chat.
+- **Configuration:** none of its own; the thresholds are constants.
+- **The skill `pre-annotation`** carries the report as its section *Report the result*: begin the reply with the header
+  line, never call a pre-annotation done without a final verdict `usable`, name the figures per class and the size of
+  the set they rest on, and offer the rollback when the setting was wrong.
 
 ## Summaries by the gateway
 

@@ -115,3 +115,33 @@ func textList(list []any) string {
 	}
 	return strings.Join(parts, ", ")
 }
+
+// describeAnnotationRollback answers the rollback of the automatic annotations of a run or a fill (V3b):
+// the preview names what will be deleted, of which source, and that nothing the user annotated or
+// corrected himself is touched.
+func describeAnnotationRollback(c SummaryCall, s *summarizer) (string, []string, bool) {
+	if c.Method != http.MethodPost || c.Path != AnnotationPrefix+"/rollbacks" {
+		return "", nil, false
+	}
+	source := scalarText(s.body["source_id"])
+	if source == "" {
+		return "", nil, false // a call the service refuses: the generic template lists its fields
+	}
+	s.usedBody["source_id"] = true
+	scope := "all"
+	if v, ok := s.body["scope"].(string); ok && v != "" {
+		scope = v
+		s.usedBody["scope"] = true
+	}
+	head := "Takes back the annotations a CVAT pre-annotation wrote"
+	where := "every image of the task"
+	if scope == "suspicious" {
+		where = "only the images the last verification named as suspicious"
+	}
+	details := []string{
+		fmt.Sprintf("Deletes in CVAT the annotations of the run or fill %s, %s.", source, where),
+		"The gateway deletes only what stands in its own register for this chat and this source: an annotation the user drew, moved or corrected in CVAT in the meantime is left alone and reported as changed_kept.",
+		"What was taken back comes again through a new fill with the same model and setting; the dataset and the images are not touched.",
+	}
+	return head, details, true
+}

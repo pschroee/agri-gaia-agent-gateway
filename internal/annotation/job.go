@@ -30,6 +30,9 @@ const (
 	JobCalibrate = "calibrate"
 	JobUncertain = "uncertain"
 	JobFill      = "fill"
+	// JobVerify judges the result of a run or a fill (V3b); it is also the kind of the report the job
+	// leaves behind (assess.Report.Kind) and the name the store knows (store.AnnotationJobVerify).
+	JobVerify = store.AnnotationJobVerify
 )
 
 const (
@@ -61,6 +64,10 @@ type jobSpec struct {
 	Mapping        map[string]string `json:"mapping,omitempty"`
 	UncertainBelow int               `json:"uncertain_below,omitempty"`
 	MinConfidence  int               `json:"min_confidence,omitempty"`
+	// SourceID and Final belong to mode verify (V3b): the run or the fill whose result is judged and
+	// whether the held-out set is measured (a final verdict, at most once per task and chat).
+	SourceID string `json:"source_id,omitempty"`
+	Final    bool   `json:"final,omitempty"`
 }
 
 // JobKindName is the kind of an observed background job of pre-annotation (V3, G1.7).
@@ -167,6 +174,10 @@ type jobAnswer struct {
 // kind report it.
 const checkFollowNote = "Follow it with annotation-job <job_id> in a background loop (30 s or more between queries); a job runs in the gateway and keeps running while the chat is idle."
 
+// verifyFollowNote says how to follow a verification (V3b). The report is the answer of the job, and the
+// agent reports it as it stands.
+const verifyFollowNote = "Follow it with annotation-job <job_id> in a background loop (30 s or more between queries), then report the verdict of the result with the figures and the sample size. The task has no held-out images left for a second final verdict."
+
 // startCheck answers POST /_agw/annotation/checks: it checks the call, lays the job down and starts it
 // in the background.
 func (s *Service) startCheck(ctx context.Context, chatID string, req platform.Request) (platform.Result, error) {
@@ -178,9 +189,14 @@ func (s *Service) startCheck(ctx context.Context, chatID string, req platform.Re
 		Limit          *int              `json:"limit"`
 		Mapping        map[string]string `json:"mapping"`
 		UncertainBelow *int              `json:"uncertain_below"`
+		SourceID       string            `json:"source_id"`
+		Final          bool              `json:"final"`
 	}
 	if err := json.Unmarshal(req.Body, &body); err != nil {
 		return failed(errors.New("the body of the check is not readable"))
+	}
+	if body.Mode == JobVerify {
+		return s.startVerify(ctx, chatID, r, body.SourceID, body.Final, body.DatasetID, body.Function, body.Mapping)
 	}
 	// A raw call over the request tool reaches this path as well: check everything the tool checks.
 	if body.DatasetID <= 0 {
@@ -190,7 +206,7 @@ func (s *Service) startCheck(ctx context.Context, chatID string, req platform.Re
 		return failed(errors.New("function missing"))
 	}
 	if body.Mode != JobCalibrate && body.Mode != JobUncertain {
-		return failed(fmt.Errorf("mode must be %s or %s", JobCalibrate, JobUncertain))
+		return failed(fmt.Errorf("mode must be %s, %s or %s", JobCalibrate, JobUncertain, JobVerify))
 	}
 	limit := jobLimitCalibrate
 	if body.Mode == JobUncertain {
@@ -212,6 +228,45 @@ func (s *Service) startCheck(ctx context.Context, chatID string, req platform.Re
 	spec := jobSpec{Kind: body.Mode, DatasetID: body.DatasetID, Function: body.Function,
 		Limit: limit, Mapping: body.Mapping, UncertainBelow: below}
 	return s.startJob(ctx, chatID, r, spec, checkFollowNote)
+}
+
+// startVerify answers the mode verify of annotation_check (V3b): the result of a run or a fill is
+// judged. The setting of the judged source decides what is measured — the agent names neither the
+// function nor the mapping nor the threshold, so that it cannot measure against a better setting than
+// the one that produced the result. A final verdict uses the held-out images of the task, and those
+// once per task and chat.
+func (s *Service) startVerify(ctx context.Context, chatID string, r *recorder, sourceID string, final bool,
+	datasetID int64, function string, mapping map[string]string) (platform.Result, error) {
+	if sourceID == "" {
+		return failed(errors.New("source_id missing; mode verify judges a run (annotation-run) or a fill (annotation-job)"))
+	}
+	if function != "" {
+		return failed(errors.New("mode verify does not take function; it measures with the function of the run or fill it judges"))
+	}
+	if len(mapping) > 0 {
+		return failed(errors.New("mode verify does not take mapping; it measures with the mapping of the run or fill it judges"))
+	}
+	src, err := s.verifySource(ctx, chatID, sourceID)
+	if err != nil {
+		return failed(err)
+	}
+	if datasetID != 0 && datasetID != src.DatasetID {
+		return failed(fmt.Errorf("run %q belongs to dataset %d, not to dataset %d", sourceID, src.DatasetID, datasetID))
+	}
+	// The held-out images are measured at most once per task and chat (E22): a second look would be a
+	// choice by the outcome, and every round afterwards would be optimised against them.
+	if final {
+		used, err := s.St.MarkFinalVerified(ctx, chatID, src.TaskID)
+		if err != nil {
+			return platform.Result{}, err
+		}
+		if used {
+			return failed(fmt.Errorf("the held-out images of task %d were already used in this chat; the result stands. Annotate more images manually and start a new chat to measure again", src.TaskID))
+		}
+	}
+	spec := jobSpec{Kind: JobVerify, DatasetID: src.DatasetID, Function: src.Function,
+		Mapping: src.Mapping, MinConfidence: src.MinConfidence, SourceID: sourceID, Final: final}
+	return s.startJob(ctx, chatID, r, spec, verifyFollowNote)
 }
 
 // startFill answers POST /_agw/annotation/fills: the images without annotations are what it fills.
@@ -396,9 +451,11 @@ func pageOf(row store.AnnotationJob, want int) (json.RawMessage, int, int) {
 func jobFinishedNote(kind string) string {
 	switch kind {
 	case JobFill:
-		return "The images without annotations carry the proposals of the function now; annotation-summary counts them, annotation-sync writes them into the dataset. Correct them in CVAT before a training."
+		return "The images without annotations carry the proposals of the function now; annotation-summary counts them, annotation-sync writes them into the dataset. Correct them in CVAT before a training. Report the result with annotation-check mode=verify."
 	case JobUncertain:
 		return "The list names the images with the weakest answers; the user corrects them in CVAT, then annotation-sync and a new training follow."
+	case JobVerify:
+		return "The verdict stands. Report it with its header line, the figures per class and the size of the set they rest on; if it is questionable, name the reasons and the suggestions of the gateway. Do not call the pre-annotation done without a usable verdict of a final measurement."
 	}
 	return "Check the numbers before the run: a low hit rate means the function does not fit this dataset — annotate more images by hand instead of running it over all of them."
 }
@@ -429,9 +486,12 @@ func (s *Service) runJob(id, chatID string, spec jobSpec) {
 		result any
 		err    error
 	)
-	if spec.Kind == JobFill {
+	switch spec.Kind {
+	case JobFill:
 		result, err = s.runFill(ctx, id, chatID, spec)
-	} else {
+	case JobVerify:
+		result, err = s.runVerify(ctx, id, chatID, spec)
+	default:
 		result, err = s.runCheck(ctx, id, chatID, spec)
 	}
 	raw := ""

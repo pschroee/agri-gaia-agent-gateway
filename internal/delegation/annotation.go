@@ -46,6 +46,13 @@ func init() {
 		as(EffectCompute).refine(datasetFromBody)
 	fill := r(http.MethodPost, platform.AnnotationPrefix+`/fills`, Run, Dataset, 0).
 		as(EffectCompute).refine(datasetFromBody)
+	// Taking the automatic annotations of a run or a fill back (V3b, E21) is a write. The body names no
+	// dataset: it names the source, and the register of the gateway binds that source to the task and
+	// the dataset. So this route carries no identifier, and the boundary is the service — it deletes
+	// only what stands in the register of this chat with source "auto" and an unchanged fingerprint.
+	// The refinement refuses a body without a usable source.
+	rollback := r(http.MethodPost, platform.AnnotationPrefix+`/rollbacks`, Update, Dataset, 0).
+		as(EffectWrite).refine(rollbackBody)
 	routes = append(routes,
 		r(http.MethodGet, platform.AnnotationPrefix+`/functions`, Read, AnnotationFunction, 0),
 		function,
@@ -54,6 +61,7 @@ func init() {
 		r(http.MethodGet, platform.AnnotationPrefix+`/runs/`+seg, Read, AnnotationRun, 1),
 		check,
 		fill,
+		rollback,
 		r(http.MethodGet, platform.AnnotationPrefix+`/jobs/`+seg, Read, AnnotationRun, 1),
 		r(http.MethodGet, platform.AnnotationPrefix+`/datasets/`+seg+`/summary`, Read, Dataset, 1),
 		r(http.MethodPost, platform.AnnotationPrefix+`/datasets/`+seg+`/sync`, Update, Dataset, 1),
@@ -84,13 +92,21 @@ func init() {
 			re     *regexp.Regexp
 			fields []string
 		}{http.MethodPost, regexp.MustCompile(`^` + platform.AnnotationPrefix + `/checks$`),
-			[]string{"dataset_id", "function", "mode", "limit", "mapping", "uncertain_below"}},
+			[]string{"dataset_id", "function", "mode", "limit", "mapping", "uncertain_below", "source_id", "final"}},
 		struct {
 			method string
 			re     *regexp.Regexp
 			fields []string
 		}{http.MethodPost, regexp.MustCompile(`^` + platform.AnnotationPrefix + `/fills$`),
-			[]string{"dataset_id", "function", "min_confidence", "mapping", "limit"}})
+			[]string{"dataset_id", "function", "min_confidence", "mapping", "limit"}},
+		// The rollback names the source and the extent, nothing else (V3b): which objects it touches is
+		// decided by the register of the gateway, never by the call.
+		struct {
+			method string
+			re     *regexp.Regexp
+			fields []string
+		}{http.MethodPost, regexp.MustCompile(`^` + platform.AnnotationPrefix + `/rollbacks$`),
+			[]string{"source_id", "scope"}})
 	registerConformance(
 		Case{Name: "pre-annotate another user's dataset", Group: "action",
 			Req: annotationRunCall(`{"dataset_id":5,"function":"agw-x","min_confidence":50,"mapping":{},"existing":"keep"}`)},
@@ -113,6 +129,20 @@ func init() {
 // dataset is not part of their path).
 func datasetFromBody(a *Access, req platform.Request) {
 	a.ID = bodyIDOr(req.Body, "dataset_id")
+}
+
+// rollbackBody checks the body of a rollback (V3b): the source that names what is taken back, and the
+// extent. The dataset is not part of the body — the register of the gateway binds the source to it —,
+// so this is the one thing the classification can decide about the call; what it deletes is decided by
+// the service alone (E21).
+func rollbackBody(a *Access, req platform.Request) {
+	if bodyIDOr(req.Body, "source_id") == "" {
+		a.Problem = "the rollback names no source_id"
+		return
+	}
+	if scope := bodyID(req.Body, "scope"); scope != "" && scope != "all" && scope != "suspicious" {
+		a.Problem = "unknown scope " + scope
+	}
 }
 
 // functionModel names the model a function is built from (V2): the call reads the model of the body,
