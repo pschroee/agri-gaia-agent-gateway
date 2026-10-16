@@ -150,7 +150,7 @@ func TestAssessmentsRouteHidesHoldout(t *testing.T) {
 	}
 	allowed := map[string]bool{"check_id": true, "kind": true, "subject": true, "final": true, "state": true,
 		"report": true, "progress": true, "error": true, "tool_call_id": true, "created_at": true,
-		"started_at": true, "ended_at": true}
+		"started_at": true, "ended_at": true, "uploaded_model": true}
 	for _, raw := range checksOf(t, body) {
 		for key := range raw {
 			if !allowed[key] {
@@ -169,5 +169,87 @@ func TestAssessmentsRouteHidesHoldout(t *testing.T) {
 	_, body = call(t, a, "GET", srv.URL+"/api/chats/"+c.ID+"/assessments", "")
 	if !strings.Contains(body, `"note":"checking 10 of 42 images"`) || !strings.Contains(body, `"state":"running"`) {
 		t.Errorf("progress: %s", body)
+	}
+}
+
+// A check of a file names the model this file was uploaded as (R2.6, L14): the card shows which model
+// stands behind the check of a file. The route reads it from the gateway's own table, never from the
+// platform.
+func TestAssessmentsRouteUploadedModel(t *testing.T) {
+	st, srv, is := assessServer(t)
+	ctx := context.Background()
+	a := loggedIn(t, srv, is, anna)
+	c, err := st.CreateChat(ctx, store.NewChat{Title: "own model", Model: "p/m", Variant: "cli", Owner: anna.Sub})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = st.SetState(ctx, c.ID, store.StateDormant)
+	sha := strings.Repeat("ab", 32)
+	// The check of the file ran before the upload: the report names the file, not yet a model. The name of
+	// the model is therefore not in the report; the row itself still knows it.
+	fileRow, err := st.CreateAssessment(ctx, store.Assessment{ChatID: c.ID, Kind: "own_model",
+		Subject: "sha:" + sha, EvalDatasetID: 3, Final: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.FinishAssessment(ctx, c.ID, fileRow.ID, store.AssessFinished,
+		json.RawMessage(`{"kind":"own_model","verdict":"usable","measured_images":24,"figures":{"file":{"name":"model.onnx","sha256":"`+sha+`"}}}`), ""); err != nil {
+		t.Fatal(err)
+	}
+	_, body := call(t, a, "GET", srv.URL+"/api/chats/"+c.ID+"/assessments", "")
+	if line := checksOf(t, body)[0]; line["uploaded_model"] != nil {
+		t.Fatalf("a file no model was uploaded as names one: %v", line["uploaded_model"])
+	}
+	if err := st.RecordModelOrigin(ctx, store.ModelOrigin{ModelID: 7, ChatID: c.ID, Source: store.OriginNotebook,
+		SourceSHA: sha, SeenDatasetIDs: []int64{5}}); err != nil {
+		t.Fatal(err)
+	}
+	_, body = call(t, a, "GET", srv.URL+"/api/chats/"+c.ID+"/assessments", "")
+	line := checksOf(t, body)[0]
+	um, _ := line["uploaded_model"].(map[string]any)
+	if um == nil {
+		t.Fatalf("the model behind the file is missing: %v", line)
+	}
+	if um["id"] != float64(7) {
+		t.Errorf("the model: %v", um)
+	}
+	if _, hasName := um["name"]; hasName {
+		t.Errorf("a name the report does not carry is invented: %v", um)
+	}
+	// A check that ran after the upload names the model in its figures: the route takes the name from there.
+	after, err := st.CreateAssessment(ctx, store.Assessment{ChatID: c.ID, Kind: "own_model",
+		Subject: "sha:" + sha, EvalDatasetID: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.FinishAssessment(ctx, c.ID, after.ID, store.AssessFinished,
+		json.RawMessage(`{"kind":"own_model","verdict":"usable","measured_images":12,"figures":{"file":{"name":"model.onnx","sha256":"`+sha+`"},"model":{"id":7,"name":"mnist_cnn"}}}`), ""); err != nil {
+		t.Fatal(err)
+	}
+	_, body = call(t, a, "GET", srv.URL+"/api/chats/"+c.ID+"/assessments", "")
+	for _, raw := range checksOf(t, body) {
+		if raw["check_id"] != after.ID {
+			continue
+		}
+		um, _ := raw["uploaded_model"].(map[string]any)
+		if um == nil || um["id"] != float64(7) || um["name"] != "mnist_cnn" {
+			t.Errorf("the name of the model from the report: %v", raw["uploaded_model"])
+		}
+	}
+	// A check of a platform model carries no such field.
+	modelRow, err := st.CreateAssessment(ctx, store.Assessment{ChatID: c.ID, Kind: "training_model",
+		Subject: "model:7", EvalDatasetID: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.FinishAssessment(ctx, c.ID, modelRow.ID, store.AssessFinished,
+		json.RawMessage(`{"kind":"training_model","verdict":"usable","measured_images":40,"figures":{"model":{"id":7,"name":"mnist_cnn"}}}`), ""); err != nil {
+		t.Fatal(err)
+	}
+	_, body = call(t, a, "GET", srv.URL+"/api/chats/"+c.ID+"/assessments", "")
+	for _, raw := range checksOf(t, body) {
+		if raw["check_id"] == modelRow.ID && raw["uploaded_model"] != nil {
+			t.Errorf("a check of a model names an uploaded model: %v", raw["uploaded_model"])
+		}
 	}
 }

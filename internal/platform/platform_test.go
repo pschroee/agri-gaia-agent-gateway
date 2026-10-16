@@ -198,6 +198,34 @@ func TestNormalize(t *testing.T) {
 	}
 }
 
+// A check of an own model names the file it measures in the body and hands the same file over as an
+// upload of that call (R2.2). Only the check paths may do that; every call to the platform keeps the old
+// refusal, because the multipart builder would drop the body (Review K2).
+func TestBodyWithFileOnlyForChecks(t *testing.T) {
+	body := json.RawMessage(`{"path":"/workspace/notebook/r20260101120000-abcd/model.onnx","final":true}`)
+	file := File{Field: "modelfile", Path: "/workspace/notebook/r20260101120000-abcd/model.onnx"}
+	r, err := Normalize(Request{Method: "POST", Path: AssessCheckPath, Body: body, Files: []File{file}})
+	if err != nil {
+		t.Fatalf("the check with its file: %v", err)
+	}
+	if string(r.Body) != string(body) || len(r.Files) != 1 {
+		t.Fatalf("the check call is not kept: %+v", r)
+	}
+	// Everywhere else the combination stays refused, and so does a check with a form next to the body.
+	for _, bad := range []Request{
+		{Method: "POST", Path: "/models", Body: body, Files: []File{file}},
+		{Method: "POST", Path: AssessCheckPath, Body: body,
+			Files: []File{file, {Field: "second", Path: "/workspace/b.onnx"}}},
+		{Method: "POST", Path: AssessCheckPath, Body: body, Form: map[string][]string{"final": {"true"}},
+			Files: []File{file}},
+		{Method: "POST", Path: "/_agw/assess", Body: body, Files: []File{file}},
+	} {
+		if _, err := Normalize(bad); err == nil || !strings.Contains(err.Error(), "either JSON body or form, not both") {
+			t.Errorf("accepted: %+v (%v)", bad, err)
+		}
+	}
+}
+
 func TestToolsBuild(t *testing.T) {
 	cases := []struct {
 		tool, args, want string

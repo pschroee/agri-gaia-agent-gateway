@@ -63,6 +63,9 @@ const (
 	ReasonNotONNX = "not an ONNX model: the platform saved no ONNX export"
 	// ReasonNoEvalDataset: the gateway does not know which dataset to measure on.
 	ReasonNoEvalDataset = "no evaluation dataset: the gateway does not know which dataset the model was trained on; name one with eval_dataset_id"
+	// ReasonDeclaredClassOrder: the class order the agent declared for its own model (R2.4) contradicts
+	// the order the gateway derived from the images the model saw.
+	ReasonDeclaredClassOrder = "declared class order differs from the order the model shows on training images"
 )
 
 // TooFewValidation is the reason of a not measured report with too few validation images (L16).
@@ -157,6 +160,15 @@ type JudgeInput struct {
 	HoldoutImages    int
 	// NoHeldOut: the evaluation dataset holds no image the model did not see.
 	NoHeldOut bool
+	// NoHeldOutReason: what to say instead of the training wording when NoHeldOut (R2: the notebook
+	// server of this chat received every image of the dataset). Empty: the training wording.
+	NoHeldOutReason string
+	// NotMeasuredReason: a reason of an own-model check (R2.5) that was decided from the file itself —
+	// it does not load, or it does not take exactly one input. It makes the verdict not measured,
+	// whatever the figures say.
+	NotMeasuredReason string
+	// ConstantOutput: the model answered the same for different images (R2.5): one more reason.
+	ConstantOutput bool
 	// NotClassification: the output of the model is neither [1, C] nor [C] (P8).
 	NotClassification bool
 	// OutputShape: what the model answered, for the reason.
@@ -178,6 +190,9 @@ type JudgeInput struct {
 	Mapping       map[int]string
 	MappingOK     bool
 	MappingReason string
+	// DeclaredClassNames: the class names the agent declared for its own model, in the order of the
+	// model's outputs (R2.4). Empty: none were declared, and then nothing is compared.
+	DeclaredClassNames []string
 	// NonFinite: at least one prediction of the measured set was not a finite number.
 	NonFinite bool
 	// SkippedPredictions: how many images of the measured set the model could not run.
@@ -198,18 +213,12 @@ type JudgeInput struct {
 // pure function: verdict, reasons, hints and suggestions come from the rules here and nowhere else. The
 // caller sets Kind, Note and Finish; the figures of the report come from this function.
 func JudgeClassification(in JudgeInput) Report {
-	set, measured := SetValidation, in.ValidationImages
-	if in.Final {
-		set, measured = SetHoldout, in.HoldoutImages
-	}
-	rep := NewReport(in.Kind, set, measured)
-	rep.ImageReview = ImageReview{Done: false, Reason: imageReviewReason(in.Final)}
 	if in.PerClass == nil {
 		in.PerClass = map[string]ClassFigures{}
 	}
-	rep.Figures = &TrainingFigures{
+	return judgeReport(in, &TrainingFigures{
 		Model: in.Model, EvalDataset: in.EvalDataset, SeenDatasets: in.SeenDatasets,
-		MeasuredImages: measured, PerClass: in.PerClass,
+		MeasuredImages: measuredImages(in), PerClass: in.PerClass,
 		Overall:    OverallFigures{Accuracy: in.Accuracy, MacroF1: in.MacroF1},
 		Baseline:   BaselineFigures{Kind: "majority", Class: in.Baseline.Class, Accuracy: in.Baseline.Accuracy, MacroF1: in.Baseline.MacroF1, PValue: in.PValue},
 		SeenSample: SeenSample{Images: in.SeenImages, Accuracy: in.SeenAccuracy},
@@ -217,13 +226,56 @@ func JudgeClassification(in JudgeInput) Report {
 		// PlatformFigure stays a typed nil when the log held none: the key is written as null.
 		PlatformFigure: in.PlatformFigure,
 		LogNaN:         in.LogNaN,
+	})
+}
+
+// ModelFigures are the figures of a model check. A training check (R1) and an own-model check (R2)
+// carry different ones; the rules over them are the same, so judgeReport takes them as they are. Both
+// keep the comparison with the previous round of the same dataset (R1.12).
+type ModelFigures interface {
+	setComparison(prev *CheckComparison, delta map[string]float64)
+}
+
+func (f *TrainingFigures) setComparison(prev *CheckComparison, delta map[string]float64) {
+	f.Previous, f.Delta = prev, delta
+}
+
+// measuredImages is the number of images the figures of a check rest on: the hold-out set of a final
+// check, the validation set otherwise (P3).
+func measuredImages(in JudgeInput) int {
+	if in.Final {
+		return in.HoldoutImages
 	}
+	return in.ValidationImages
+}
+
+// judgeReport is the one rule set of a model check (R1.9–R1.11, R2.4): the measurement is in, the
+// figures of its kind are in, and what comes back is the verdict with its reasons, hints and
+// suggestions. It never touches the measurement.
+func judgeReport(in JudgeInput, figures ModelFigures) Report {
+	set := SetValidation
+	if in.Final {
+		set = SetHoldout
+	}
+	rep := NewReport(in.Kind, set, measuredImages(in))
+	rep.ImageReview = ImageReview{Done: false, Reason: imageReviewReason(in.Final)}
+	rep.Figures = figures
 
 	// Not measured: there is nothing to judge on (R1.9).
 	switch {
+	case in.NotMeasuredReason != "":
+		// An own-model check that found out about the file itself that it cannot be measured (R2.5): the
+		// file does not load, or it takes no single image input.
+		rep.Verdict = NotMeasured
+		rep.Reasons = []string{in.NotMeasuredReason}
+		return rep
 	case in.NoHeldOut:
 		rep.Verdict = NotMeasured
-		rep.Reasons = []string{NoHeldOut(in.EvalDataset.Name)}
+		reason := in.NoHeldOutReason
+		if reason == "" {
+			reason = NoHeldOut(in.EvalDataset.Name)
+		}
+		rep.Reasons = []string{reason}
 		rep.Suggestions = []Suggestion{suggestionSplitDataset}
 		return rep
 	case in.NotClassification:
@@ -249,12 +301,19 @@ func JudgeClassification(in JudgeInput) Report {
 	var reasons []string
 	if !in.MappingOK {
 		reasons = append(reasons, ClassOrderUnclear(in.MappingReason))
+	} else if declaredOrderDiffers(in.Mapping, in.DeclaredClassNames) {
+		// An own model (R2.4): the order the agent declared contradicts the one the model shows. The
+		// gateway keeps its own order; the difference is what the user has to know.
+		reasons = append(reasons, ReasonDeclaredClassOrder)
 	}
 	if in.Outputs > 0 && len(in.Classes) > 0 && in.Outputs != len(in.Classes) {
 		reasons = append(reasons, fmt.Sprintf("the model has %d outputs for %d classes", in.Outputs, len(in.Classes)))
 	}
 	if in.NonFinite {
 		reasons = append(reasons, "the model answered values that are not finite numbers")
+	}
+	if in.ConstantOutput {
+		reasons = append(reasons, ReasonConstantOutput)
 	}
 	if in.Counted == 0 {
 		// Without a counted pair the figures say nothing: that is no usable result, whatever the reason
@@ -283,12 +342,29 @@ func JudgeClassification(in JudgeInput) Report {
 	// Hints change nothing about the verdict (R1.10); the suggestions name what to do next (R1.11).
 	rep.Hints = hints(in, rep.Verdict)
 	rep.Suggestions = suggestions(in, rep.Verdict)
-	figures := rep.Figures.(*TrainingFigures)
 	if in.Previous != nil {
-		figures.Previous = in.Previous
-		figures.Delta = deltaOf(in, in.Previous)
+		figures.setComparison(in.Previous, deltaOf(in, in.Previous))
 	}
 	return rep
+}
+
+// declaredOrderDiffers reports whether the class order the agent declared for its own model (R2.4)
+// contradicts the order the gateway derived from images the model saw. classNames[i] is what the agent
+// says the output i means; nothing declared (or nothing derived): nothing differs. A list that does not
+// name as many classes as the model has outputs differs — that is a statement about the outputs.
+func declaredOrderDiffers(derived map[int]string, classNames []string) bool {
+	if len(classNames) == 0 || len(derived) == 0 {
+		return false
+	}
+	if len(classNames) != len(derived) {
+		return true
+	}
+	for i, name := range classNames {
+		if got, ok := derived[i]; !ok || got != name {
+			return true
+		}
+	}
+	return false
 }
 
 // weakClasses names the classes whose hit rate is below the limit (R1.9); each names one reason.
@@ -440,13 +516,6 @@ func (s *Service) checksRoute(ctx context.Context, chatID string, req platform.R
 
 // --- the handler ---
 
-// assessRequest is the body of the check call (the tool fills it; the agent cannot reach the path).
-type assessRequest struct {
-	ModelID       int64 `json:"model_id"`
-	EvalDatasetID int64 `json:"eval_dataset_id"`
-	Final         bool  `json:"final"`
-}
-
 // assessAnswer is the immediate answer of assess_model: the check runs in the background (R0.20).
 type assessAnswer struct {
 	CheckID string `json:"check_id"`
@@ -454,9 +523,10 @@ type assessAnswer struct {
 	Note    string `json:"note"`
 }
 
-// assessModel is POST /_agw/assess/checks (R1.7, source model_id): it starts the check of a platform
-// model in the background. The evaluation dataset is resolved here already, so that the rule "one final
-// check per dataset and chat" (P4) holds before the row is written.
+// assessModel is POST /_agw/assess/checks: it starts the check of a platform model (R1.7, source
+// model_id) or of a file of the sandbox (R2.2, source path) in the background. The evaluation dataset is
+// resolved here already, so that the rule "one final check per dataset and chat" (P4) holds before the
+// row is written.
 func (s *Service) assessModel(ctx context.Context, chatID string, req platform.Request) (platform.Result, error) {
 	if !s.Configured() || s.Plat == nil {
 		return unavailableResult(), nil
@@ -465,8 +535,13 @@ func (s *Service) assessModel(ctx context.Context, chatID string, req platform.R
 	if err := json.Unmarshal(req.Body, &body); err != nil {
 		return errResult("the check call is unreadable: " + err.Error()), nil
 	}
-	if body.ModelID <= 0 {
-		return errResult("model_id missing"), nil
+	switch {
+	case body.ModelID > 0 && body.Path != "":
+		return errResult("give either model_id or path, not both"), nil
+	case body.ModelID <= 0 && body.Path == "":
+		return errResult("model_id or path missing"), nil
+	case body.Path != "":
+		return s.assessOwnFile(ctx, chatID, body, req)
 	}
 	evalID := body.EvalDatasetID
 	if evalID == 0 {
@@ -649,6 +724,18 @@ func figuresOf(in JudgeInput) *TrainingFigures {
 // from the measured set, the baseline, the test and the judgement (R1.8, R1.9).
 func (s *Service) judgeRun(ctx context.Context, chatID string, in JudgeInput, out Output, sample, measured []checkImage,
 	seen map[string]Item, skipped int) Report {
+	s.measure(&in, out, sample, measured, seen)
+	in.Previous = s.previousCheck(ctx, chatID, in.EvalDataset.ID, modelSubject(in.Model.ID))
+	rep := JudgeClassification(in)
+	rep.Note = reportNote(in, skipped, len(measured))
+	return rep
+}
+
+// measure reads the raw predictions of one container run into the judgement input (R1.8, R2.5): the class
+// order from the sample of the images the model saw, the figures of the measured set, the baseline and
+// the test. It answers the predictions by SHA-256, so that a caller can look at single images again (the
+// own-model check asks a probe whether the model answers differently at all).
+func (s *Service) measure(in *JudgeInput, out Output, sample, measured []checkImage, seen map[string]Item) map[string]Prediction {
 	byID := map[string]Prediction{}
 	for _, p := range out.Predictions {
 		byID[p.ID] = p
@@ -720,10 +807,7 @@ func (s *Service) judgeRun(ctx context.Context, chatID string, in JudgeInput, ou
 	}
 	in.PValue = BetterThanBaseline(passed, len(truth), in.Baseline.Accuracy)
 	in.MissingClass = missingClass(seen, truth)
-	in.Previous = s.previousCheck(ctx, chatID, in.EvalDataset.ID, modelSubject(in.Model.ID))
-	rep := JudgeClassification(in)
-	rep.Note = reportNote(in, skipped, len(measured))
-	return rep
+	return byID
 }
 
 // reportNote is the line under the header (H114): it names the dataset and the check, never an image.
@@ -1115,37 +1199,21 @@ func (c ModelCheck) Text() string {
 	return "none in this chat"
 }
 
-// ModelCheckOf reads the last finished check of a model in a chat (R1.14). It counts the last finished
-// check of the model, so a finished interim check says "interim only" and a failed one says nothing.
+// ModelCheckOf reads the last finished check of a model in a chat (R1.14, W4): the check of the model
+// itself or — for a model uploaded from a file (R2.6) — the check of that file, whichever is newer. The
+// wording of the answer is ModelCheck.Text.
 func (s *Service) ModelCheckOf(ctx context.Context, chatID string, modelID int64) (ModelCheck, error) {
-	if s.St == nil {
-		return ModelCheck{}, nil
+	subjects := []string{modelSubject(modelID)}
+	if s.St != nil {
+		o, err := s.St.ModelOriginOf(ctx, chatID, modelID)
+		if err != nil && !errors.Is(err, store.ErrNotFound) {
+			return ModelCheck{}, err
+		}
+		if err == nil && o.SourceSHA != "" {
+			subjects = append(subjects, FileSubject(o.SourceSHA))
+		}
 	}
-	row, found, err := s.St.LastFinishedCheck(ctx, chatID, modelSubject(modelID))
-	if err != nil || !found {
-		return ModelCheck{}, err
-	}
-	out := ModelCheck{Found: true, Final: row.Final}
-	var rep struct {
-		Verdict  Verdict  `json:"verdict"`
-		Measured int      `json:"measured_images"`
-		Reasons  []string `json:"reasons"`
-		Figures  struct {
-			Overall struct {
-				Accuracy float64 `json:"accuracy"`
-			} `json:"overall"`
-		} `json:"figures"`
-	}
-	if json.Unmarshal(row.Report, &rep) != nil {
-		return ModelCheck{}, nil
-	}
-	out.Verdict = rep.Verdict
-	out.Measured = rep.Measured
-	out.Accuracy = rep.Figures.Overall.Accuracy
-	if len(rep.Reasons) > 0 {
-		out.Reason = rep.Reasons[0]
-	}
-	return out, nil
+	return s.checkOfSubjects(ctx, chatID, subjects...)
 }
 
 // modelCheck is GET /_agw/assess/models/<id>/latest (R1.14): the line an approval adds about the check

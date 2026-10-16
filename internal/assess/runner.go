@@ -87,6 +87,10 @@ type Job struct {
 	Images  []Image
 	Tensors []Tensor
 	Pre     Pre
+	// KeepLoadError: answer a model that does not load in the output instead of failing the check. The
+	// check of an own model sets it, because whether the file loads is one of the things it looks at
+	// (R2.5). Every other check wants a model that does not load as an error, not as figures.
+	KeepLoadError bool
 }
 
 // ModelInfo is what the script read out of the ONNX file (R0.13).
@@ -191,7 +195,7 @@ func (r *Runner) Run(ctx context.Context, j Job) (Output, error) {
 	if dec.More() {
 		return Output{}, errors.New("the check container answered more than one JSON value")
 	}
-	if out.Model.LoadError != "" {
+	if out.Model.LoadError != "" && !j.KeepLoadError {
 		return Output{}, fmt.Errorf("the model could not be loaded: %s", out.Model.LoadError)
 	}
 	if out.Error != "" {

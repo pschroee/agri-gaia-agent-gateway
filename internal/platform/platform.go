@@ -323,6 +323,16 @@ func runBlockers(r Request) error {
 // Normalize checks an agent call and brings it into a canonical form.
 func Normalize(r Request) (Request, error) { return normalize(r, true) }
 
+// bodyWithFile reports whether a call may carry a JSON body and one uploaded file together (R2.2): the
+// check of an own model names the file it measures in the body and hands the same file over as an upload
+// of that call. Only the check paths may do that — the gateway answers them itself (RegisterVirtual) and
+// never builds a multipart request from them, so no body can be lost. Every call that goes to the
+// platform refuses the combination: the multipart builder would drop the body, and the two parsers
+// would read different calls (Review K2).
+func bodyWithFile(r Request) bool {
+	return len(r.Files) == 1 && len(r.Form) == 0 && strings.HasPrefix(r.Path, AssessPrefix+"/")
+}
+
 // normalize checks a call and brings it into a canonical form. agent: the call comes from the agent
 // (a tool or the REST binding). Registered blockers skip calls of the gateway itself (agent false),
 // which read platform state for summaries and for the capability overview.
@@ -359,7 +369,7 @@ func normalize(r Request, agent bool) (Request, error) {
 		if r.Method != http.MethodPost && r.Method != http.MethodPut && r.Method != http.MethodPatch {
 			return r, errors.New("form and files only with POST, PUT or PATCH")
 		}
-		if len(r.Body) > 0 {
+		if len(r.Body) > 0 && !bodyWithFile(r) {
 			return r, errors.New("either JSON body or form, not both")
 		}
 		if len(r.Files) > MaxFiles {

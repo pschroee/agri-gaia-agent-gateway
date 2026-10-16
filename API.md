@@ -449,8 +449,8 @@ for a deleted chat's calls.
   `not_in_trash` otherwise). In one transaction the call logs are kept and anonymised, then the chat is deleted; the
   objects in the object store (artifacts, display images, workspace archive, pending uploads) are removed afterwards.
   Messages, runs, approvals, plans, subagents, messages to subagents, queue, background tasks, annotation runs
-  (V1), result checks, recorded splits and model origins (R0/R1), session and title go with the chat; nothing
-  of them stays.
+  (V1), result checks, recorded splits and model origins (R0/R1), the files fetched out of notebook runs (R2),
+  session and title go with the chat; nothing of them stays.
 - **What stays for the evaluation** (the decision of the author, 12.10.2026): the entries in `socket_calls`,
   `tool_executions`, `llm_calls`, `aux_llm_calls` and `web_requests` get `chat_id` NULL and `deleted_chat`, a random
   tombstone ID in `deleted_chats` that holds only owner, model and binding (no title, no times of the chat). The
@@ -1729,7 +1729,9 @@ user (uid 1000) and reads state, log and results back the same way. The server h
   run directory is checked twice: the tool refuses anything that is not up to five plain segments, and the script
   resolves it with `realpath` and refuses a file outside the run directory (a symbolic link included). Only the
   command line sandbox has a place for such a file: at pi's socket the answer is
-  `fetch needs the command line sandbox`.
+  `fetch needs the command line sandbox`. Every fetched file is remembered with the SHA-256 of the bytes the
+  gateway read (table `notebook_fetches`, R2.1): a check of a file of the sandbox rests on that row, and no
+  call of the gateway ever states such an origin itself.
 - **Raw calls are refused.** `platform_request` and the REST binding (`/platform-api/_agw/notebook…`) answer
   `notebook calls go through the notebook tools (…)`: only the tools read the files of a run from the sandbox. A
   GET of the paths is refused the same way.
@@ -1851,11 +1853,11 @@ report form and the figures are those of the result checks (R0); this section na
   (`split_dataset supports classification datasets (one tag per image); this dataset has boxes or polygons`,
   P8). The answer names `train_dataset_id`, both counts and the classes. Every image is identified by its
   content, so a copy under another file name counts as seen (P1).
-- **`assess_model`** (`model_id`, `eval_dataset_id` optional, `final` optional) starts a check in the
-  background and answers `{"check_id", "state": "queued", "note"}`; `assess_status` and the wake-up follow
-  it. The evaluation dataset defaults to the source of the split whose training dataset the model saw
-  (`assess_splits`); without a split it is that training dataset itself, and then every image of it is a
-  seen one.
+- **`assess_model`** (`model_id`, `eval_dataset_id` optional, `final` optional; R2 adds the source `path`
+  and what the agent declares about its own model) starts a check in the background and answers
+  `{"check_id", "state": "queued", "note"}`; `assess_status` and the wake-up follow it. The evaluation
+  dataset defaults to the source of the split whose training dataset the model saw (`assess_splits`); without
+  a split it is that training dataset itself, and then every image of it is a seen one.
 - **Where the model came from** (`model_origins`) is written by the gateway alone, when a model is created
   from a training container of the chat (`create_model_from_training`). Without such a row the verdict is
   `not measured – origin unknown: the gateway did not see this model being created in this chat`; the agent
@@ -1905,12 +1907,13 @@ report form and the figures are those of the result checks (R0); this section na
   <verdict> (<n> held-out images, accuracy <a>)` directly after the detail that names the model, or — when
   this chat has no finished final check of that model — `Model check: none in this chat` (or `… (interim
   only)` when only interim checks exist). `not measured` reads `Model check: not measured (<first reason>)`
-  (R1.14, L8, L9). The gateway writes the line; the approval reads it from
-  `GET /_agw/assess/models/{id}/latest` — a reading GET the summary reader answers through the virtual
-  doer, like any other read of the gateway's own paths.
+  (R1.14, L8, L9). The last finished check **with `final=true`** decides, so a later interim check does not
+  hide a verdict; a model uploaded from a file of a run is also named by the check of that file (R2.6, W4).
+  The gateway writes the line; the approval reads it from `GET /_agw/assess/models/{id}/latest` — a reading
+  GET the summary reader answers through the virtual doer, like any other read of the gateway's own paths.
 - **State:** tables `assess_splits` (one row per created training dataset: source, train dataset, both
   counts) and `model_origins` (one row per model: chat, source `training`, training container, the datasets
-  it could have seen). Both go with the chat (`ON DELETE CASCADE`). The split is one approved write: the
+  it could have seen; R2 adds `source_sha` for a model uploaded from a file). Both go with the chat (`ON DELETE CASCADE`). The split is one approved write: the
   route carries `Create Dataset` plus `Update Dataset` of the source, because the gateway downloads it (the
   download syncs the CVAT annotations, 1.1). The check is one approved write as well: `Create Assessment`
   plus reading the model and downloading the evaluation dataset. The datasets the model saw come from the
@@ -1996,6 +1999,70 @@ checks (R0); this section names what is R3's own.
   platform fork sets it for the agent gateway
   (`sim-edge-01=${COMPOSE_PROJECT_NAME}-edge_sim_docker-1`). Without it every deployment check answers
   `unavailable`. The skill `result-check` carries the flow in its section *Edge deployments*.
+## Own models (R2)
+
+`assess_model` measures a model the agent wrote itself and had run in the notebook server, **before**
+`upload_model` sends it to the platform (#115). Its second source is `path`: the gateway reads the bytes out
+of the sandbox for that very call, so what it measures is exactly what an upload would send. The rules, the
+report form and the figures are those of the result checks (R0) and the training check (R1); this section
+names what is R2's own.
+
+| Tool (CLI) | Path (virtual) | Action / resource | Class | Approval |
+|---|---|---|---|---|
+| `assess_model` (`assess-model`) with `path` | `POST /_agw/assess/checks` | create assessment + update dataset | `write` | yes, asked synchronously (the call carries the file) |
+| — (the gateway's own read for the approval of an upload) | `GET /_agw/assess/files/{sha256}/latest` | read assessment | `read` | no |
+
+- **The file is the subject, not the path.** `notebook_fetch` remembers every file it hands into the sandbox
+  with the SHA-256 of the bytes it read (table `notebook_fetches`); a check of `path` reads the file again,
+  hashes those bytes and looks them up. Only a file that came out of a run of this chat has an origin —
+  anything else is `not measured – origin unknown: this file was not fetched from a notebook run in this
+  chat` (P2). The subject of a check is `sha:<hex>`, never the path the agent named: a moved or replaced file
+  is another file. `model_id` and `path` exclude each other.
+- **Seen are the datasets of every run of this chat** (R2.3): the notebook server keeps
+  `/home/jovyan/work/datasets/<id>/`, so a later run reads what an earlier one received. The check downloads
+  each of them and keeps every image of the evaluation dataset back whose SHA-256 occurs in one of them —
+  the rule of R1 (P1). By default it measures on the source of the split of a dataset a run received; without
+  such a split it is the dataset the run received itself, and then every image of it is a seen one.
+- **What the agent declares about its model** travels as data with the call (R2.4): `preprocess` (`color`,
+  `size`, `scale`, `mean`, `std`, `layout`) is what the check container feeds the model; without it the
+  templates' preprocessing applies (rgb, the model's image size, 1/255, NCHW, no mean/std) and
+  `figures.preprocess.declared` is false. `class_names` is the order of the model's outputs **as the agent
+  says it is**: the gateway still derives the order itself from the images the model saw (P9) and only
+  compares — a different order is the reason `declared class order differs from the order the model shows on
+  training images`, and `figures.basic.class_order` says whether they match. An invalid declaration is
+  refused before the call goes out (a check cannot feed a model it does not know how to feed).
+- **The basic checks** (`figures.basic`) come out of the same container run (R2.5): whether the file loads in
+  onnxruntime (the error stands in the report instead of failing the check), the input and output shapes,
+  the number of classes, whether four images of the validation set got different answers, and the class order
+  against the declaration. The four are one per class, so that a good model is not called constant. A file
+  that does not load, or a model that does not take exactly one input, is `not measured`; a model that
+  answers the same for different images is `questionable` (`the model returns the same output for different
+  images`).
+- **The figures** (`assess.OwnModelFigures`): `file {name, sha256, run_id, path}`, `model {id, name}` (only
+  when the file was uploaded already), `eval_dataset`, `seen_datasets`, `measured_images`, `per_class`,
+  `overall`, `baseline`, `seen_sample`, `mapping`, `preprocess`, `basic` and, like R1, `previous`/`delta`.
+  There is no platform figure: an own model has no training log.
+- **After the upload** the model keeps the origin of its file: the gateway writes `model_origins` with the
+  source `notebook` and the SHA-256 of the bytes it read (`model_origins.source_sha`), and a file it never
+  handed over records nothing (P2). Its hook is asked after every successful `POST /models`, never the agent.
+  A check of the model therefore finds the check of its file and the other way round (W4): the row keeps its
+  subject `sha:<hex>`, and `GET /api/chats/{id}/assessments` adds `uploaded_model {id, name}` to such a row
+  (the name only when the check read the model itself — the route never calls the platform).
+- **The approval of an upload** carries the line `Model check of this file: <verdict> (<n> held-out images,
+  accuracy <a>)` directly after the file it belongs to; without a finished final check of the file it is
+  `Model check of this file: none in this chat` (`… (interim only)` with only interim checks, `not measured
+  (<first reason>)` otherwise; R2.7, L8, L9). The gateway writes the wording and reads it from
+  `GET /_agw/assess/files/{sha}/latest` through the summary reader. A questionable check does not block the
+  upload: that stays the user's decision.
+- **State:** table `notebook_fetches` (chat, run, path, SHA-256, size) and the column
+  `model_origins.source_sha`; both go with the chat (`ON DELETE CASCADE`).
+- **The skills:** `result-check`, section *Own models*, carries the flow (check the file before the upload,
+  train on a training dataset of `split-dataset`, never on the dataset that is checked on); the skill
+  `notebook` points at it before `upload-model`.
+- **Boundary of the observation:** the gateway sees which datasets a run received, never what the code read
+  of them, and it measures the file, never the training. What the user puts into the sandbox itself
+  (`/workspace/inputs/`) is invisible to it — only platform datasets and the files of a run can be held
+  against a model.
 
 ## Tool executions (E9)
 

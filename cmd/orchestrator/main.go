@@ -282,6 +282,15 @@ func run() error {
 				slog.Error("model origin not recorded", "chat", chatID, "model", modelID, "error", err)
 			}
 		})
+		// R2 — a model uploaded from a file of the sandbox keeps its origin when the gateway had handed
+		// that file out of a notebook run of this chat (R2.6): so the check of the file stays the check of
+		// the model, and the approval of an image build names either of them. A file the agent brought
+		// along itself records nothing (P2); assess.RecordUploadedModel decides that.
+		platform.SetOnModelUploaded(func(ctx context.Context, chatID string, modelID int64, sha256 string) {
+			if err := assess.RecordUploadedModel(ctx, st, chatID, modelID, sha256); err != nil {
+				slog.Error("model origin of an upload not recorded", "chat", chatID, "model", modelID, "error", err)
+			}
+		})
 	}
 
 	if err := m.Recover(ctx); err != nil {

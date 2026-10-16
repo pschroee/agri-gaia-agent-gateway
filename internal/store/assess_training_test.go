@@ -197,6 +197,59 @@ func TestLastFinishedCheck(t *testing.T) {
 	}
 }
 
+// The last **final** check of a subject is what the lines of the approvals rest on (W4): an interim check
+// that ran afterwards does not hide the verdict, and without a final one the answer stays empty.
+func TestLastFinishedFinalCheck(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	c := testChatRow(t, s, "final check")
+	report := json.RawMessage(`{"verdict":"usable","measured_images":24,"figures":{"overall":{"accuracy":0.92}}}`)
+	if _, found, err := s.LastFinishedFinalCheck(ctx, c.ID, "sha:x"); err != nil || found {
+		t.Fatalf("without a check: %v %v", found, err)
+	}
+	interim, err := s.CreateAssessment(ctx, Assessment{ChatID: c.ID, Kind: "own_model", Subject: "sha:x", Final: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.FinishAssessment(ctx, c.ID, interim.ID, AssessFinished, report, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, found, err := s.LastFinishedFinalCheck(ctx, c.ID, "sha:x"); err != nil || found {
+		t.Fatalf("an interim check is no final one: %v %v", found, err)
+	}
+	final, err := s.CreateAssessment(ctx, Assessment{ChatID: c.ID, Kind: "own_model", Subject: "sha:x",
+		EvalDatasetID: 7, Final: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.FinishAssessment(ctx, c.ID, final.ID, AssessFinished, report, ""); err != nil {
+		t.Fatal(err)
+	}
+	got, found, err := s.LastFinishedFinalCheck(ctx, c.ID, "sha:x")
+	if err != nil || !found || !got.Final || got.ID != final.ID {
+		t.Fatalf("the final check: %+v %v %v", got, found, err)
+	}
+	// A second interim check afterwards does not change what the line names (W4).
+	again, err := s.CreateAssessment(ctx, Assessment{ChatID: c.ID, Kind: "own_model", Subject: "sha:x", Final: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.FinishAssessment(ctx, c.ID, again.ID, AssessFinished, report, ""); err != nil {
+		t.Fatal(err)
+	}
+	if got, found, _ := s.LastFinishedFinalCheck(ctx, c.ID, "sha:x"); !found || got.ID != final.ID {
+		t.Errorf("the newer interim check hides the final one: %+v", got)
+	}
+	// A final check of another subject and of another chat is none of this one.
+	if _, found, _ := s.LastFinishedFinalCheck(ctx, c.ID, "sha:y"); found {
+		t.Error("another subject counts")
+	}
+	other := testChatRow(t, s, "elsewhere")
+	if _, found, _ := s.LastFinishedFinalCheck(ctx, other.ID, "sha:x"); found {
+		t.Error("another chat counts")
+	}
+}
+
 // testChatRow creates a chat for the tests of this file.
 func testChatRow(t *testing.T, s *Store, title string) Chat {
 	t.Helper()

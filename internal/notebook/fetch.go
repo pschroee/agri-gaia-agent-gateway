@@ -6,6 +6,8 @@ package notebook
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/http"
@@ -58,6 +60,15 @@ func (n *Notebooks) Fetch(ctx context.Context, chatID, runID, path string) (stri
 	}
 	if len(out) > execproto.MaxFileBytes {
 		return "", nil, fmt.Errorf("%s is larger than %d MB", path, execproto.MaxFileBytes>>20)
+	}
+	// R2.1: the gateway remembers the file it handed out, with the SHA-256 of the bytes it read. A check
+	// of a file of the sandbox is measured against this row; only a file of a run of this chat has an
+	// origin the gateway saw (P2). A store that fails fails the fetch — without the row the file would
+	// look like one the agent brought along itself.
+	sum := sha256.Sum256(out)
+	if err := n.store.RecordNotebookFetch(ctx, store.NotebookFetch{ChatID: chatID, RunID: runID,
+		Path: path, SHA256: hex.EncodeToString(sum[:]), Size: int64(len(out))}); err != nil {
+		return "", nil, fmt.Errorf("remembering the fetched file: %w", err)
 	}
 	return baseName(path), out, nil
 }

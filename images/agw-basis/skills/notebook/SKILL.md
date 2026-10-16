@@ -76,11 +76,14 @@ make the code faster or ask for a longer limit with a new run.
 
 ```bash
 agw-platform notebook-fetch <run_id> model.onnx     # lands in /workspace/notebook/<run_id>/
+agw-platform assess-model --path /workspace/notebook/<run_id>/model.onnx   # check it, then follow assess-status
 agw-platform upload-model --name mnist_cnn --description "..." --format onnx \
   --model_file /workspace/notebook/<run_id>/model.onnx
 ```
 
-The upload is the usual writing call: the user approves it and sees the SHA-256 of the file. For an inference
+Before `upload-model`, check the file with `assess-model` (skill `result-check`); never pass the dataset you
+will check on to a notebook run. The upload is the usual writing call: the user approves it and sees the
+SHA-256 of the file and what the check of this file said. For an inference
 container the model must be ONNX **with tensor metadata** - export it that way in the script:
 
 ```python
