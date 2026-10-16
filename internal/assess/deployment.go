@@ -311,6 +311,11 @@ func (s *Service) runDeploymentCheck(ctx context.Context, chatID string, depID, 
 	if why != "" {
 		return in.report(NotMeasured, []string{why}), nil
 	}
+	// Only an ONNX model can be run the same way on both sides (R0.13); the platform's record says what
+	// the file is (R1.9 uses the same reason).
+	if m.Format != "onnx" {
+		return in.report(NotMeasured, []string{ReasonNotONNX + " (format " + m.Format + ")"}), nil
+	}
 	model, _, err := s.modelFile(ctx, chatID, modelID)
 	if err != nil {
 		return in.report(NotMeasured, nil), err

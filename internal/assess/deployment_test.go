@@ -727,6 +727,26 @@ func TestEdgeCheckConstantAnswers(t *testing.T) {
 	}
 }
 
+// A model the platform saved without an ONNX export cannot be run on both sides: the check says so
+// (R1.9 uses the same reason) and sends nothing.
+func TestEdgeCheckNotONNX(t *testing.T) {
+	d := deploymentSetup(t, func(d *deploymentService) {
+		f := d.fp.models[5]
+		f.format = "pt"
+		d.fp.models[5] = f
+	})
+	ctx := context.Background()
+	c := testChat(t, d.svg.St, "deployment")
+	a := d.check(t, ctx, c.ID, "5")
+	rep, fig := report(t, a)
+	if rep.Verdict != NotMeasured || !hasText(rep.Reasons, ReasonNotONNX) || !hasText(rep.Reasons, "format pt") {
+		t.Fatalf("verdict %q: %v", rep.Verdict, rep.Reasons)
+	}
+	if fig.Requests != 0 || len(d.run.inputs()) != 0 {
+		t.Errorf("the model file was run: %d requests, %d runs", fig.Requests, len(d.run.inputs()))
+	}
+}
+
 // The limit of the chat holds for a synchronous check as well, and a failed one does not count (P7).
 func TestEdgeCheckLimit(t *testing.T) {
 	d := deploymentSetup(t)
