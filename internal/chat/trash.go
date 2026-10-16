@@ -82,8 +82,9 @@ func (m *Manager) Trash(ctx context.Context, chatID string) (ChatView, error) {
 	l := m.live[chatID]
 	m.mu.Unlock()
 	if l != nil {
-		// The running turn stops; Abort also holds back queued messages (none can come in now).
-		if _, err := m.Abort(ctx, chatID); err != nil {
+		// The running turn stops; the abort also holds back queued messages (none can come in now). Its reason is the
+		// trash, not the user: the UI says "stopped (moved to trash)" afterwards (issue #120, L3).
+		if _, err := m.abortWith(ctx, chatID, AbortTrash); err != nil {
 			slog.Warn("abort before the trash failed", "chat", chatID, "error", err)
 		}
 	}
