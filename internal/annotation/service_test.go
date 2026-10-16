@@ -44,6 +44,15 @@ type fakePlatform struct {
 	login      string // the answer of POST /cvat/auth/login; empty: HTTP 500
 	taskID     int64  // the id POST /cvat/tasks/{id} answers
 	operators  []string
+
+	// V2: the models of the platform, the file of one of them, the background tasks of the platform
+	// and the builds of a function (POST /datasets/auto-annotation, multipart).
+	models     map[int64]string
+	modelFile  string
+	tasks      map[string]string
+	taskLoc    string // the Location of POST /datasets/auto-annotation
+	builds     int    // how many function archives were uploaded
+	buildBytes []int64
 }
 
 // datasetAnswer, loginAnswer and tasksAnswer are set before a call goes out; the mutex is the one the
@@ -52,11 +61,42 @@ func (f *fakePlatform) setDataset(s string) { f.mu.Lock(); defer f.mu.Unlock(); 
 func (f *fakePlatform) setLogin(s string)   { f.mu.Lock(); defer f.mu.Unlock(); f.login = s }
 func (f *fakePlatform) setTaskID(n int64)   { f.mu.Lock(); defer f.mu.Unlock(); f.taskID = n }
 
+// V2: the model of the platform, its file, the background task of a build and the Location the
+// archive upload answers.
+func (f *fakePlatform) setModel(id int64, answer string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.models == nil {
+		f.models = map[int64]string{}
+	}
+	f.models[id] = answer
+}
+func (f *fakePlatform) setModelFile(s string) { f.mu.Lock(); defer f.mu.Unlock(); f.modelFile = s }
+func (f *fakePlatform) setTask(id, answer string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.tasks == nil {
+		f.tasks = map[string]string{}
+	}
+	f.tasks[id] = answer
+}
+func (f *fakePlatform) setTaskLocation(s string) { f.mu.Lock(); defer f.mu.Unlock(); f.taskLoc = s }
+
+// buildsOf reports how often a function archive was uploaded and how large it was.
+func (f *fakePlatform) buildsOf() (int, []int64) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.builds, append([]int64(nil), f.buildBytes...)
+}
+
 var (
-	datasetRe    = regexp.MustCompile(`^/datasets/\d+$`)
-	annotateRe   = regexp.MustCompile(`^/datasets/\d+/annotate$`)
-	downloadRe   = regexp.MustCompile(`^/datasets/\d+/download$`)
-	taskCreateRe = regexp.MustCompile(`^/cvat/tasks/\d+$`)
+	datasetRe       = regexp.MustCompile(`^/datasets/\d+$`)
+	annotateRe      = regexp.MustCompile(`^/datasets/\d+/annotate$`)
+	downloadRe      = regexp.MustCompile(`^/datasets/\d+/download$`)
+	taskCreateRe    = regexp.MustCompile(`^/cvat/tasks/\d+$`)
+	modelRe         = regexp.MustCompile(`^/models/\d+$`)
+	modelDownloadRe = regexp.MustCompile(`^/models/\d+/download$`)
+	taskGetRe       = regexp.MustCompile(`^/tasks/\d+$`)
 )
 
 func (f *fakePlatform) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -99,6 +139,35 @@ func (f *fakePlatform) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		fmt.Fprint(w, f.dataset)
+	case r.Method == http.MethodGet && modelRe.MatchString(r.URL.Path):
+		answer, ok := f.models[parseID(strings.TrimPrefix(r.URL.Path, "/models/"))]
+		if !ok {
+			w.WriteHeader(http.StatusNotFound)
+			fmt.Fprint(w, `{"detail":"no model"}`)
+			return
+		}
+		fmt.Fprint(w, answer)
+	case r.Method == http.MethodGet && modelDownloadRe.MatchString(r.URL.Path):
+		w.Header().Set("Content-Type", "application/octet-stream")
+		fmt.Fprint(w, f.modelFile)
+	case r.Method == http.MethodGet && taskGetRe.MatchString(r.URL.Path):
+		answer, ok := f.tasks[strings.TrimPrefix(r.URL.Path, "/tasks/")]
+		if !ok {
+			w.WriteHeader(http.StatusNotFound)
+			fmt.Fprint(w, `{"detail":"no task"}`)
+			return
+		}
+		fmt.Fprint(w, answer)
+	case r.Method == http.MethodPost && r.URL.Path == "/datasets/auto-annotation":
+		f.builds++
+		f.buildBytes = append(f.buildBytes, int64(len(readBody(r))))
+		if f.taskLoc == "" {
+			w.WriteHeader(http.StatusInternalServerError)
+			fmt.Fprint(w, `{"detail":"no task"}`)
+			return
+		}
+		w.Header().Set("Location", f.taskLoc)
+		w.WriteHeader(http.StatusAccepted)
 	default:
 		w.WriteHeader(http.StatusNotFound)
 		fmt.Fprint(w, `{"detail":"not in the fake"}`)
@@ -288,7 +357,9 @@ func newTestEnv(t *testing.T, operator ...string) *testEnv {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &testEnv{svc: New(p, st, c, operator, "https://cvat.example"), st: st, pf: pf, fc: fc}
+	// The two bounds of V2 stay unset here: a test that needs one sets it on the service
+	// (MaxFunctions, ModelMaxMB) before its call.
+	return &testEnv{svc: New(p, st, c, operator, "https://cvat.example", 0, 0), st: st, pf: pf, fc: fc}
 }
 
 // chat creates the chat the calls belong to and returns its id.

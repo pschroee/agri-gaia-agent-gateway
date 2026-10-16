@@ -35,8 +35,13 @@ func init() {
 			a.Effect = EffectIrreversible
 		}
 	})
+	// Building a function from a model (V2): publishing it for every CVAT user, and the agent cannot
+	// take it back, so it is irreversible and always needs its own approval (E9).
+	function := r(http.MethodPost, platform.AnnotationPrefix+`/functions`, Create, AnnotationFunction, 0).
+		as(EffectIrreversible).refine(functionModel)
 	routes = append(routes,
 		r(http.MethodGet, platform.AnnotationPrefix+`/functions`, Read, AnnotationFunction, 0),
+		function,
 		tasks,
 		runs,
 		r(http.MethodGet, platform.AnnotationPrefix+`/runs/`+seg, Read, AnnotationRun, 1),
@@ -53,7 +58,15 @@ func init() {
 		re     *regexp.Regexp
 		fields []string
 	}{http.MethodPost, regexp.MustCompile(`^` + platform.AnnotationPrefix + `/runs$`),
-		[]string{"dataset_id", "function", "min_confidence", "mapping", "existing"}})
+		[]string{"dataset_id", "function", "min_confidence", "mapping", "existing"}},
+		// A function is built from a model, so its body carries only these four fields: the code of
+		// the function comes from the gateway, never from the agent (E9, E10).
+		struct {
+			method string
+			re     *regexp.Regexp
+			fields []string
+		}{http.MethodPost, regexp.MustCompile(`^` + platform.AnnotationPrefix + `/functions$`),
+			[]string{"model_id", "kind", "labels", "input_size"}})
 	registerConformance(
 		Case{Name: "pre-annotate another user's dataset", Group: "action",
 			Req: annotationRunCall(`{"dataset_id":5,"function":"agw-x","min_confidence":50,"mapping":{},"existing":"keep"}`)},
@@ -69,6 +82,12 @@ func init() {
 // dataset is not part of their path).
 func datasetFromBody(a *Access, req platform.Request) {
 	a.ID = bodyIDOr(req.Body, "dataset_id")
+}
+
+// functionModel names the model a function is built from (V2): the call reads the model of the body,
+// and the function then carries its file, so the delegation needs the read of that model as well.
+func functionModel(a *Access, req platform.Request) {
+	a.Also = append(a.Also, Access{Action: Read, Resource: Model, ID: bodyIDOr(req.Body, "model_id")})
 }
 
 // annotationRunCall builds the call of a pre-annotation run with the given body.

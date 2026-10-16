@@ -24,3 +24,28 @@ CREATE TABLE IF NOT EXISTS annotation_runs (
     ended_at       timestamptz
 );
 CREATE INDEX IF NOT EXISTS annotation_runs_chat ON annotation_runs (chat_id, created_at);
+
+-- Pre-annotation functions the agent built from a model of the platform (V2). The name is the
+-- identifier: it is built from the user, the model and the hash of the model file, and it is what
+-- CVAT and nuclio use. The register holds the build and how it ended; CVAT's catalogue is the truth
+-- about a function that runs (state ready), and the listing of the agent compares the two.
+--
+-- The function itself belongs to the user, not to the chat (it is visible to every CVAT user and
+-- cannot be removed by the agent, E14); chat_id says where it was built. The gateway never deletes a
+-- function, so the row stays after the chat is gone only if somebody deletes it by hand.
+
+CREATE TABLE IF NOT EXISTS annotation_functions (
+    name             text PRIMARY KEY,
+    chat_id          uuid NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+    username         text NOT NULL,
+    model_id         bigint NOT NULL,
+    model_sha256     text NOT NULL,
+    kind             text NOT NULL,
+    labels           text NOT NULL DEFAULT '[]',      -- JSON array, in the order of the output
+    input_size       integer NOT NULL,
+    template_version integer NOT NULL,
+    platform_task    text NOT NULL DEFAULT '',        -- the build task of the platform, '' when unknown
+    state            text NOT NULL DEFAULT 'deploying', -- deploying | ready | failed | missing
+    created_at       timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS annotation_functions_user ON annotation_functions (username, created_at);

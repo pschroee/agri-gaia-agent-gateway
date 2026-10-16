@@ -35,6 +35,11 @@ type Service struct {
 	// PublicURL is the address of CVAT for the user's browser (AGW_CVAT_PUBLIC_URL); the links in the
 	// answers point there.
 	PublicURL string
+	// MaxFunctions is how many functions one user may have built from their own models
+	// (AGW_ANNOTATION_MAX_FUNCTIONS, E14); ModelMaxMB bounds the model file such a function is built
+	// from (AGW_ANNOTATION_MODEL_MAX_MB). Both are enforced by V2.
+	MaxFunctions int
+	ModelMaxMB   int64
 
 	mu       sync.Mutex
 	sessions map[string]session // the CVAT session per user, in memory only (E2)
@@ -71,9 +76,11 @@ const (
 // or a plain number.
 var runIDRe = regexp.MustCompile(`^[A-Za-z0-9-]{1,64}$`)
 
-// New builds the service. p and c must be wired; the store keeps the runs of a chat.
-func New(p *platform.Client, st *store.Store, c *CVAT, operator []string, publicURL string) *Service {
-	return &Service{P: p, C: c, St: st, Operator: operator, PublicURL: publicURL, sessions: map[string]session{}}
+// New builds the service. p and c must be wired; the store keeps the runs of a chat and the
+// functions a user built (V2). maxFunctions and modelMaxMB bound the function build of V2.
+func New(p *platform.Client, st *store.Store, c *CVAT, operator []string, publicURL string, maxFunctions int, modelMaxMB int64) *Service {
+	return &Service{P: p, C: c, St: st, Operator: operator, PublicURL: publicURL,
+		MaxFunctions: maxFunctions, ModelMaxMB: modelMaxMB, sessions: map[string]session{}}
 }
 
 // WatchKindName is the kind of an observed pre-annotation run (G1.7, autonomy A-E2).
@@ -85,9 +92,13 @@ var RunRoutePath = regexp.MustCompile(`^` + regexp.QuoteMeta(platform.Annotation
 // RegisterWatch registers the kind annotation_run and the route of a started run with internal/watch
 // (G1.7). The loop that polls the jobs belongs to the autonomy plan (A-E2); without it nothing polls,
 // and this service answers annotation_run from CVAT itself.
+//
+// The build of a function (V2) is observed with the kind platform_task of that plan: this service
+// brings only the route, no kind and no polling of its own.
 func (s *Service) RegisterWatch() {
 	watch.Register(watch.Kind{Name: WatchKindName, Poll: s.poll})
 	watch.RegisterRoute(http.MethodPost, RunRoutePath, WatchKindName, RunRef)
+	watch.RegisterRoute(http.MethodPost, FunctionRoutePath, WatchKindPlatformTask, FunctionRef)
 }
 
 // RunRef reads the run id out of the answer of a started run.
@@ -106,6 +117,8 @@ func (s *Service) Do(ctx context.Context, chatID string, req platform.Request) (
 	switch {
 	case req.Method == http.MethodGet && path == platform.AnnotationPrefix+"/functions":
 		return s.functions(ctx, chatID)
+	case req.Method == http.MethodPost && path == platform.AnnotationPrefix+"/functions":
+		return s.createFunction(ctx, chatID, req)
 	case req.Method == http.MethodPost && path == platform.AnnotationPrefix+"/tasks":
 		return s.task(ctx, chatID, req)
 	case req.Method == http.MethodPost && path == platform.AnnotationPrefix+"/runs":
@@ -380,11 +393,12 @@ type functionsAnswer struct {
 }
 
 // functionStateReady is the state of a function CVAT lists: it runs. V2 adds deploying, failed and
-// missing from its own register.
-const functionStateReady = "ready"
+// missing from the gateway's own register (store.AnnotationFunction*).
+const functionStateReady = store.AnnotationFunctionReady
 
 // functions lists the functions the agent may run (E7): the user's own and the operator's. Everything
-// else is counted in hidden.
+// else is counted in hidden. The functions the user built from a model (V2) come from the gateway's
+// register, which is compared with CVAT's list right here: only what CVAT lists runs.
 func (s *Service) functions(ctx context.Context, chatID string) (platform.Result, error) {
 	r := &recorder{chatID: chatID}
 	user, err := s.user(ctx, chatID)
@@ -402,6 +416,7 @@ func (s *Service) functions(ctx context.Context, chatID string) (platform.Result
 	}
 	out := functionsAnswer{Functions: []functionInfo{}}
 	prefix := FunctionNamePrefix(user)
+	live := map[string]bool{}
 	for _, f := range all {
 		info := functionInfo{ID: f.ID, Name: f.Name, Kind: f.Kind, Labels: f.Labels, State: functionStateReady}
 		if info.Name == "" {
@@ -412,6 +427,7 @@ func (s *Service) functions(ctx context.Context, chatID string) (platform.Result
 			info.Source = "operator"
 		case strings.HasPrefix(f.ID, prefix):
 			info.Source = "yours"
+			live[f.ID] = true
 		default:
 			// A function of another user is not usable: it receives every image of the run.
 			out.Hidden++
@@ -421,6 +437,26 @@ func (s *Service) functions(ctx context.Context, chatID string) (platform.Result
 			info.Labels = []string{}
 		}
 		out.Functions = append(out.Functions, info)
+	}
+	// The own functions of the register that CVAT does not list (yet): they are building, failed or
+	// gone. Their state is what the agent needs to know.
+	rows, err := s.St.AnnotationFunctionsOf(ctx, user)
+	if err != nil {
+		return platform.Result{}, err
+	}
+	if err := s.syncFunctionStates(ctx, r, rows, live); err != nil {
+		return failed(err)
+	}
+	for _, row := range rows {
+		if live[row.Name] {
+			continue
+		}
+		labels := row.Labels
+		if labels == nil {
+			labels = []string{}
+		}
+		out.Functions = append(out.Functions, functionInfo{ID: row.Name, Name: row.Name,
+			Kind: "detector", Labels: labels, Source: "yours", State: row.State})
 	}
 	out.stepList = r.steps()
 	return okAnswer(out)
@@ -676,6 +712,13 @@ func (s *Service) preAnnotate(ctx context.Context, chatID string, req platform.R
 	if err != nil {
 		return failed(err)
 	}
+	// A function the user built from a model (V2) is usable once it is ready: while it builds CVAT
+	// does not list it at all, and a failed or vanished one must not run over the images.
+	rows, err := s.St.AnnotationFunctionsOf(ctx, user)
+	if err != nil {
+		return platform.Result{}, err
+	}
+	row, mine := findFunction(rows, body.Function)
 	var fn *Function
 	prefix := FunctionNamePrefix(user)
 	for i := range all {
@@ -686,6 +729,10 @@ func (s *Service) preAnnotate(ctx context.Context, chatID string, req platform.R
 			fn = &all[i]
 		}
 		break
+	}
+	if mine && row.State != store.AnnotationFunctionReady && fn == nil {
+		return failed(deny("function %q is %s; annotation_functions follows the build, a run needs state %s",
+			body.Function, row.State, store.AnnotationFunctionReady))
 	}
 	if fn == nil {
 		return failed(deny("function %q is not usable: only your own functions (annotation_function) and functions installed by the operator; a function receives every image of the run", body.Function))

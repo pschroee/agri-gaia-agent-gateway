@@ -1199,9 +1199,75 @@ capability entry `annotation` says that this setup does not have it.
   autonomy plan; until it exists, `annotation_run` reads CVAT itself.
 - **Configuration (V1):** `AGW_CVAT_API_URL`, `AGW_CVAT_PUBLIC_URL`, `AGW_ANNOTATION_FUNCTIONS` (comma separated,
   default none). `AGW_ANNOTATION_MAX_FUNCTIONS` (default 3) and `AGW_ANNOTATION_MODEL_MAX_MB` (default 300) are read
-  here and enforced by V2.
+  here and enforced by V2 (see below).
 - **The skill `pre-annotation`** is loaded for the cli binding only; its description names both ways — the CVAT
   functions here and manual annotation in CVAT — and points at `capabilities`.
+
+## Pre-annotation functions from a platform model (V2)
+
+The agent builds a pre-annotation function from **its own ONNX model** of the platform (issue #107). The code never
+comes from the agent: the gateway packs a fixed, versioned template of this repository with the model and hands the
+archive to the platform, which calls `nuctl` with its file name. The function then belongs to the user — every CVAT
+user sees and may run it, and the agent cannot take it back.
+
+- **Tool** `annotation_function` (`annotation-function`, effect `irreversible`) as a virtual path under
+  `/_agw/annotation`, answered in the gateway (E4). Arguments: `model_id` (required), `kind`
+  (`classification`|`detection`), `labels` (class names **in the order the model outputs them**), `input_size`
+  (32 to 2048 pixels). The body carries only these four fields (field rule).
+- **Delegation:** `create annotation_function`, and the refinement of the route adds `read model <model_id>` — the call
+  reads the model, and the function then carries its file. `irreversible` means its own approval, also inside a plan;
+  the preview names the visibility for every CVAT user and that the agent cannot remove the function.
+- **The name** is built by the gateway: `agw-<user>-m<model id>-<first 8 hex digits of the model file>`, `<user>` in
+  lower case with everything outside `[a-z0-9]` as dashes, at most 20 characters, whole name `^[a-z0-9-]{1,56}$`. It is
+  the folder of the archive, the id of the function in CVAT, and the prefix that marks a function as the user's own
+  (V1, E7). No name the agent chose reaches the shell of the backend (`POST /datasets/auto-annotation` passes the file
+  name into it, Review 5, K1).
+- **Classes:** `labels`, else the `output_labels` of the model, else, for a classification model, `class_0 …
+  class_{n-1}` with `n` from `output_shape[-1]`. Names match `^[A-Za-z0-9 _.\-]{1,64}$`, are unique, at most 1000. A
+  detector without class names is refused (`detection needs the class names in output order (labels or the model's
+  output_labels)`).
+- **Input side:** `input_size`, else the side of an `input_shape` `[1,3,S,S]`, else 224 (classification) or 640
+  (detection). A model with another input shape is refused — the templates feed one RGB square image.
+- **Only ONNX, from bytes** (E10): the model must have `format: onnx` and a file ending in `.onnx`; the file is read
+  with `GET /models/{id}/download` (E5) and loaded in the function from bytes, so external data of a model is not
+  followed. A PyTorch model answers
+  `model %d has format %s; only ONNX models can become a function (PyTorch files are code)`.
+- **Own model and size:** the owner is checked in the gateway (`model %d belongs to %s; only your own models`), and the
+  file must stay within `AGW_ANNOTATION_MODEL_MAX_MB` (default 300 MiB). An answer that is empty or larger than the
+  bound is refused instead of packed.
+- **Bound per user:** `AGW_ANNOTATION_MAX_FUNCTIONS` (default 3). At the bound:
+  `you already have %d agent functions (at most %d); ask the operator to remove one`. There is no tool for removing a
+  function (E14); the operator does it (`nuctl delete function <name> --platform local` in the nuclio container).
+- **The archive** carries `<name>/main.py` (the template), `<name>/function.yaml`, `<name>/config.json` (kind, classes,
+  input size, template version) and `<name>/model.onnx`; the folder must be named like the archive (the backend calls
+  `nuctl` with the file name without its extension). `function.yaml` holds only the agreed fields: `metadata.name` and
+  `namespace: cvat`, the annotations with `type: detector`, `framework: onnx` and the classes as JSON, `spec` with
+  `runtime: "python:3.11"`, `handler: main:handler`, `eventTimeout: 30s`, `build.image: cvat.<name>`,
+  `baseImage: python:3.11-slim`, `postCopy: RUN pip install --no-cache-dir onnxruntime==1.20.1 numpy==1.26.4
+  pillow==10.4.0` (pinned: an unpinned build breaks with the next release of a package), the trigger `myHttpTrigger`
+  with `maxWorkers: 1` and `maxRequestBodySize`, `restartPolicy: always` and `mountMode: volume`.
+- **The templates** live under `internal/annotation/templates/{classification,detection}/main.py` (own code, MIT,
+  `//go:embed`). Classification resizes to SxS, scales to 0..1, softmaxes and returns one tag when the best class
+  reaches the threshold; detection letterboxes (fill 114), reads the YOLOv5 (`5+nc`) and YOLOv8/v11 (`4+nc`) output
+  layouts, suppresses per class (IoU 0.45, at most 300 boxes) and returns rectangles in image coordinates. Both return
+  `confidence`, `raw_label` and (classification) `scores`, which CVAT ignores in a batch run and V3 reads.
+- **Answer** of the build: `{"function", "state": "deploying", "platform_task", "reused", "note"}`; `platform_task` is
+  the id from the `Location` of the platform's background task (`/tasks/<id>`). The same model gives the same name: a
+  function that is `ready` and listed by CVAT answers `"reused": true` instead of being deployed again.
+- **States** of the register `annotation_functions`: `deploying` (built, not listed yet), `ready` (CVAT lists it),
+  `failed` (the build task of the platform ended with `failed`) and `missing` (it was `ready` and CVAT no longer lists
+  it — the catalogue is volatile, V1 1.3). `annotation_functions` brings the register together with CVAT's list on
+  every call and writes what changed; a task that cannot be read changes nothing.
+- **Running** a function needs its state `ready`: `pre_annotate` refuses a function of the user's own register that is
+  not ready.
+- **Observation:** the service registers the route `POST ^/_agw/annotation/functions$` with the kind `platform_task`
+  of the autonomy plan (A-E2, `ref` = `platform_task` of the answer) and brings no kind and no polling of its own.
+- **Storage:** table `annotation_functions` (`name` is the primary key, `chat_id` cascades with the chat). The function
+  belongs to the user, not to the chat, so the listing and the bound ask by `username`.
+- **Configuration (V2):** `AGW_ANNOTATION_MAX_FUNCTIONS` and `AGW_ANNOTATION_MODEL_MAX_MB`; without a value the
+  defaults 3 and 300 hold.
+- **The skill `pre-annotation`** carries the way of the own model in its description and in an own section; the
+  description stays a plain YAML scalar on one line.
 
 ## Summaries by the gateway
 
