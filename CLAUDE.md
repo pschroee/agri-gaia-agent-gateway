@@ -444,6 +444,29 @@ refer to this repository.
   from there.
 - **`cvat_url` of the answer is `AGW_CVAT_PUBLIC_URL`** and every link of a card begins with it; the UI opens no other
   link. Without that address the field and the task links stay empty.
+## Deployment checks (R3)
+
+- `deployment_check` tests the container of a deployment of this chat on a **simulated** edge device: six
+  fixed requests to the device against the same inputs through the model file
+  (`internal/assess/deployment.go`). The rules are in `CompareOutputs` (a pure function) and in
+  `deploymentRun.judged`; the way to the device is in `deviceGate` and `deviceCall`.
+- **Only the operator's list reaches a device** (`AGW_EDGE_SIM_DEVICES`, `name=container`, wired in
+  `main.go` as `checks.EdgeDevices` and `checks.Devices`): the device of the deployment has to be in it by
+  name, carry the platform's tag `simulated`, and its container has to run with the label
+  `agri-gaia.simulated=true`. `sandbox.Runtime.ContainerByName` matches the name **exactly** (Docker's name
+  filter matches substrings, and "edge_sim_docker-1" must not answer for "…-10"); a real device is out of
+  reach on purpose (RF1 of the planning, D2.6).
+- The commands are built in `deviceCall` and nowhere else (`wget` with a time limit, the port from the
+  deployment's binding to port 8000, and a model name that `platform.TritonNameRe` accepted). **Unverified
+  until the live test:** whether BusyBox-`wget` in `docker:27.5.1-dind-rootless` knows `--post-file` and
+  `--header`, and whether the user of that image is really called `rootless`. If not: report it, do **not**
+  fall back to `sh -c`.
+- **A synchronous check writes its own row** (`Service.Record`, no semaphore, `AGW_ASSESS_MAX_PER_CHAT`):
+  the deployment check takes seconds, so the tool answers the report itself instead of a `queued` id (L3 of
+  the design check). A check that broke keeps its figures without verdict and header (L5).
+- **The route action is `run`, the effect class is `read`** (`internal/delegation/assess_edge.go`): the
+  guard of the edge feature (D-E1) lets reads through and holds only non-read actions to the deployments of
+  this chat, so a foreign deployment is refused before the check service sees the call.
 
 ## Testing
 
