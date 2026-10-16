@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"agw/internal/config"
 	"agw/internal/platform"
 	"agw/internal/store"
 	"agw/internal/watch"
@@ -40,6 +41,15 @@ type Service struct {
 	// from (AGW_ANNOTATION_MODEL_MAX_MB). Both are enforced by V2.
 	MaxFunctions int
 	ModelMaxMB   int64
+	// Cat is the model catalog of the orchestrator and VisionPattern the datasets whose images may go to
+	// a cloud model (AGW_VISION_DATASET_PATTERN); both belong to the image review (V3d, R0.9). Without
+	// them no picture leaves the gateway: the review reports why instead.
+	Cat           *config.Catalog
+	VisionPattern *regexp.Regexp
+	// Aux records one model call the image review made as an auxiliary call of the chat (V3d), the way the
+	// title call is recorded; the manager wires it. Without it the call is neither billed nor visible in
+	// the chat's cost.
+	Aux func(ctx context.Context, call store.AuxCall)
 
 	mu       sync.Mutex
 	sessions map[string]session // the CVAT session per user, in memory only (E2)
@@ -357,6 +367,20 @@ func (s *Service) user(ctx context.Context, chatID string) (string, error) {
 		return "", fmt.Errorf("the platform user of this chat is not readable: %w", err)
 	}
 	return name, nil
+}
+
+// chatModel is the model the chat works with ("provider/model"); the image review runs with it and with
+// no other (V3d): what the user chose is what looks at the images. A chat without a model or a store that
+// does not answer leaves it empty, and the review then reports why it did not look at anything.
+func (s *Service) chatModel(ctx context.Context, chatID string) string {
+	if s.St == nil {
+		return ""
+	}
+	c, err := s.St.GetChat(ctx, chatID)
+	if err != nil {
+		return ""
+	}
+	return c.Model
 }
 
 // currentSession returns the user's CVAT session, logging in through the platform when none is held
