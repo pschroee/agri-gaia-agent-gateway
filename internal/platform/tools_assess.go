@@ -34,7 +34,7 @@ func init() {
 func AssessCallRefusal(r Request) string {
 	p := strings.ToLower(r.Path)
 	if p == AssessPrefix || strings.HasPrefix(p, AssessPrefix+"/") {
-		return "check calls go through the assess tools (assess_status, split_dataset, assess_model)"
+		return "check calls go through the assess tools (assess_status, split_dataset, assess_model, deployment_check)"
 	}
 	return ""
 }

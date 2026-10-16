@@ -9,12 +9,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"regexp"
 	"strings"
 	"sync"
 	"time"
 
+	"agw/internal/config"
 	"agw/internal/platform"
 	"agw/internal/store"
 )
@@ -40,10 +42,29 @@ type Service struct {
 	// split); the manager wires it like the notebook service's logger.
 	LogCall func(ctx context.Context, chatID, detail, result string)
 
+	// R3 — the deployment check: the simulated devices the gateway may send test requests to
+	// (AGW_EDGE_SIM_DEVICES, the operator's list) and the container runtime that reaches their
+	// containers. Either missing: the deployment tool answers that this setup cannot probe a
+	// deployment (G1.13).
+	EdgeDevices []config.EdgeSimDevice
+	Devices     DeviceRuntime
+
 	mu       sync.Mutex
 	handlers []handler
 	sem      chan struct{}
 	now      func() time.Time
+}
+
+// DeviceRuntime is what the deployment check needs from the container runtime (R3): the running
+// container behind a name the operator configured and one command in it (sandbox.Runtime; a fake in
+// tests). Every request to a device goes through these two calls and nothing else.
+type DeviceRuntime interface {
+	// ContainerByName answers the id of the running container with exactly this name and its labels;
+	// ok is false when no such container runs.
+	ContainerByName(ctx context.Context, name string) (id string, labels map[string]string, ok bool, err error)
+	// ExecAs runs one command in that container as the given user; exit is its exit code (negative when
+	// the command could not be started at all).
+	ExecAs(ctx context.Context, id, user string, cmd []string, stdin io.Reader) (out []byte, exit int, err error)
 }
 
 // handler is one registered path of the check prefix.
@@ -73,6 +94,7 @@ func New(run *Runner, st *store.Store, max int) *Service {
 	// The id is the first capture group: the handler reads it from there (groups[1]).
 	s.Handle(http.MethodGet, regexp.MustCompile(`^`+regexp.QuoteMeta(platform.AssessPrefix)+`/checks/(`+checkIDPattern+`)$`), s.status)
 	s.registerTraining()
+	s.registerDeployment()
 	return s
 }
 
@@ -249,20 +271,79 @@ func (s *Service) work(id, chatID string, run func(ctx context.Context) (Report,
 	_ = s.St.FinishAssessment(ctx, chatID, id, store.AssessFinished, raw, "")
 }
 
+// Record runs one check at once and answers its report (R3, L3). It lays the row down as running, runs
+// the check and writes finished or failed; there is no semaphore, because a check that takes seconds
+// (the test requests to a deployment) must not queue behind one that takes minutes. It counts against
+// AGW_ASSESS_MAX_PER_CHAT like every other check. The answer has the form of assess_status, so that the
+// check card finds the row through the check id.
+func (s *Service) Record(ctx context.Context, chatID, kind, subject, toolCallID string,
+	run func(ctx context.Context) (Report, error)) (StatusAnswer, error) {
+	if !s.Configured() {
+		return StatusAnswer{}, errors.New("checks are not configured on this instance")
+	}
+	used, err := s.St.CountAssessments(ctx, chatID)
+	if err != nil {
+		return StatusAnswer{}, err
+	}
+	if used >= s.Max {
+		return StatusAnswer{}, fmt.Errorf("check limit reached: this chat has used %d of %d checks (AGW_ASSESS_MAX_PER_CHAT)", used, s.Max)
+	}
+	row, err := s.St.CreateAssessment(ctx, store.Assessment{
+		ChatID: chatID, Kind: kind, Subject: subject, State: store.AssessQueued, ToolCallID: toolCallID,
+	})
+	if err != nil {
+		return StatusAnswer{}, err
+	}
+	// running sets started_at; the card shows the duration of the check from it (L13).
+	if err := s.St.SetAssessmentState(ctx, chatID, row.ID, store.AssessRunning); err != nil {
+		return StatusAnswer{}, err
+	}
+	rep, rerr := run(ctx)
+	if rerr != nil {
+		// A check that broke keeps the figures it read until then (L5): without verdict and header,
+		// which stand for a measurement that was not made.
+		raw := partialJSON(rep)
+		if err := s.St.FinishAssessment(ctx, chatID, row.ID, store.AssessFailed, raw, rerr.Error()); err != nil {
+			return StatusAnswer{}, err
+		}
+		return StatusAnswer{CheckID: row.ID, Kind: kind, State: store.AssessFailed, Report: raw, Error: rerr.Error()}, nil
+	}
+	rep.Finish()
+	raw, merr := json.Marshal(rep)
+	if merr != nil {
+		text := "the report is not writable: " + merr.Error()
+		if err := s.St.FinishAssessment(ctx, chatID, row.ID, store.AssessFailed, nil, text); err != nil {
+			return StatusAnswer{}, err
+		}
+		return StatusAnswer{CheckID: row.ID, Kind: kind, State: store.AssessFailed, Error: text}, nil
+	}
+	if err := s.St.FinishAssessment(ctx, chatID, row.ID, store.AssessFinished, raw, ""); err != nil {
+		return StatusAnswer{}, err
+	}
+	return StatusAnswer{CheckID: row.ID, Kind: kind, State: store.AssessFinished, Report: raw}, nil
+}
+
 // fail ends a check as failed. A partial report (with figures) is kept, without verdict and header:
 // there is no verdict behind a check that broke (L5).
 func (s *Service) fail(id, chatID string, rep Report, errText string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	var raw json.RawMessage
-	if rep.Figures != nil {
-		rep.Verdict = ""
-		rep.Header = ""
-		if b, err := json.Marshal(rep); err == nil {
-			raw = b
-		}
+	_ = s.St.FinishAssessment(ctx, chatID, id, store.AssessFailed, partialJSON(rep), errText)
+}
+
+// partialJSON is what a check that broke keeps of its report: the figures it read until then, without
+// verdict and header (L5). nil when there is nothing to keep.
+func partialJSON(rep Report) json.RawMessage {
+	if rep.Figures == nil {
+		return nil
 	}
-	_ = s.St.FinishAssessment(ctx, chatID, id, store.AssessFailed, raw, errText)
+	rep.Verdict = ""
+	rep.Header = ""
+	b, err := json.Marshal(rep)
+	if err != nil {
+		return nil
+	}
+	return b
 }
 
 // jsonResult is the answer of a check tool: one JSON value.

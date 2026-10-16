@@ -384,6 +384,12 @@ type Env struct {
 	// (AGW_VISION_DATASET_PATTERN, default ^(mnist|test)[-_]). A self hosted model may see all (P14).
 	VisionDatasetPattern string
 
+	// R3 (deployment check). EdgeSimDevices are the simulated edge devices whose deployments the
+	// gateway may probe with test requests (AGW_EDGE_SIM_DEVICES, "name=container" pairs). The list is
+	// the operator's: a device that is not in it is out of reach, whatever the platform says about it,
+	// and a real device can never be reached this way (RF1 of the planning). Empty: no test requests.
+	EdgeSimDevices []EdgeSimDevice
+
 	AllowedHosts []string
 	// Background tasks: at most BgMax at a time per slot (AGW_BG_MAX), at most
 	// BgWakesPerHour wake-ups per chat and hour (AGW_BG_WAKES_PER_HOUR, 0 = never); running tasks
@@ -594,6 +600,9 @@ func FromEnv() Env {
 		AssessDownloadMaxMB:  max(1, num("AGW_ASSESS_DOWNLOAD_MAX_MB", DefaultAssessDownloadMaxMB)),
 		VisionDatasetPattern: str("AGW_VISION_DATASET_PATTERN", DefaultVisionDatasetPattern),
 
+		// R3 (deployment check): the simulated edge devices the gateway may send test requests to.
+		EdgeSimDevices: edgeSimDevices("AGW_EDGE_SIM_DEVICES"),
+
 		AllowedHosts:         strings.Split(str("AGW_ALLOWED_HOSTS", "127.0.0.1:18480,localhost:18480"), ","),
 		BgMax:                max(1, num("AGW_BG_MAX", 5)),
 		BgWakesPerHour:       wakes(num("AGW_BG_WAKES_PER_HOUR", 10)),
@@ -748,6 +757,13 @@ func num(k string, def int) int {
 	return def
 }
 
+// EdgeSimDevice is one simulated edge device the gateway may send test requests to (R3): the name the
+// platform knows the device by and the container that runs it on the platform host.
+type EdgeSimDevice struct {
+	Name      string
+	Container string
+}
+
 // commaList reads a comma-separated list (V1: the function ids of the operator); spaces are trimmed
 // and empty entries dropped, so a value that is only spaces gives an empty list.
 func commaList(k string) []string {
@@ -756,6 +772,22 @@ func commaList(k string) []string {
 		if p := strings.TrimSpace(part); p != "" {
 			out = append(out, p)
 		}
+	}
+	return out
+}
+
+// edgeSimDevices reads AGW_EDGE_SIM_DEVICES: "name=container" pairs, comma separated (R3). An entry
+// without "=" or with an empty side is dropped — a name the operator mistyped must not become a device
+// the gateway may exec into.
+func edgeSimDevices(k string) []EdgeSimDevice {
+	var out []EdgeSimDevice
+	for _, part := range commaList(k) {
+		name, container, ok := strings.Cut(part, "=")
+		name, container = strings.TrimSpace(name), strings.TrimSpace(container)
+		if !ok || name == "" || container == "" {
+			continue
+		}
+		out = append(out, EdgeSimDevice{Name: name, Container: container})
 	}
 	return out
 }

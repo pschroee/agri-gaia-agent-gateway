@@ -175,11 +175,21 @@ func run() error {
 	// service cannot check anything: the capability "checks" says so and every check tool answers
 	// "not configured on this instance" (G1.13).
 	checks := assess.New(assess.NewRunner(rt, env.Image), st, env.AssessMaxPerChat)
+	// R3 — the deployment check: the gateway may send test requests to the containers of the simulated
+	// edge devices of the operator's list (AGW_EDGE_SIM_DEVICES) and to no other container. Without the
+	// list the tool answers that this setup cannot probe a deployment (G1.13).
+	checks.Devices = rt
+	checks.EdgeDevices = env.EdgeSimDevices
 	if checks.Configured() {
 		slog.Info("result checks on", "image", env.Image, "max_per_chat", env.AssessMaxPerChat,
 			"download_max_mb", env.AssessDownloadMaxMB, "vision_dataset_pattern", env.VisionDatasetPattern)
 	} else {
 		slog.Info("result checks off (no container runtime or AGW_IMAGE)")
+	}
+	if n := len(env.EdgeSimDevices); n > 0 {
+		slog.Info("deployment checks on simulated edge devices", "devices", n)
+	} else {
+		slog.Info("deployment checks off (AGW_EDGE_SIM_DEVICES empty)")
 	}
 	m := chat.NewManager(st, p, cat, blobs, artifacts.NewBroker(), chat.Options{
 		IdleTimeout: env.IdleTimeout, ApprovalTimeout: env.ApprovalTimeout,
