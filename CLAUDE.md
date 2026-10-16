@@ -293,6 +293,28 @@ refer to this repository.
 - One run at a time per chat; every run counts against `AGW_COMPUTE_MAX_PER_CHAT`. Rules, limits and paths in `API.md`,
   *Notebook tools*.
 
+## Result checks (R0)
+
+- The gateway checks the result of a long step itself: `internal/assess` runs the model in a **container of its own**
+  (never in the agent's sandbox and never in the agent's notebook server — the agent must not see the model run, the
+  measured images or the script) and works out the figures, the baseline and the verdict in Go. The container comes
+  from the execution image (`AGW_IMAGE`), has no network, no socket, no volume, a read-only root and the `tmpfs` from
+  `assess.CheckTmpfs`; the script `/opt/agw/check/predict.py` is part of the image, and the gateway alone decides what
+  goes in (model and images as one tar on stdin, one JSON line back, strictly parsed with `DisallowUnknownFields`).
+- **`sandbox.Spec.Entrypoint` had to be added for this** (R0): the execution image's entrypoint is `agw-exec idle`,
+  which ignores arguments and never ends, so a check that set only `Args` would hang until its time limit. An empty
+  `Entrypoint` keeps the image's one, as pi's container and the execution sandbox need.
+- **One check at a time** (`Service.sem`, a channel of one; `Service.Start` waits for it in a goroutine): the model runs
+  with 1 CPU, and several checks at once would starve the chat. `Start` answers at once with the check id (the row is
+  `queued`) — a tool call must not wait for minutes; `assess_status` and the check card follow the row. A check that
+  broke may keep a partial report (figures without verdict), and a check that was running when the gateway stopped ends
+  as `failed` (`RecoverAssessments`, called from `Manager.Recover`).
+- The paths are **virtual** (`/_agw/assess…`, `RegisterVirtual` G1.5) with the resource `assessment`; `platform_request`
+  and the REST binding refuse them (`platform.AssessCallRefusal`), so only the check tools reach them. R1–R3 add their
+  tools, paths, routes and handlers in their own files (`Service.Handle`, the delegation's `routes`). Rules, limits and
+  fields in `API.md`, *Result checks*; the plan with its decisions is `planung/ergebnispruefung.md` of the thesis
+  repository.
+
 ## Testing
 
 - `./dev.sh test` is the everyday check, before every commit and before every push: Go with Postgres (with Go's

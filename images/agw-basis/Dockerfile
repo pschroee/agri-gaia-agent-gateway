@@ -105,8 +105,13 @@ RUN apt-get update \
 # matplotlib draws without a display (Agg); the agent saves charts as PNG and shows
 # them via Markdown (skill charts). The font cache is created on the first import in
 # ~/.cache/matplotlib (tmpfs, writable, about 0.5 s).
+# onnxruntime pinned (R0.15): the result checks run a model in a container of this image with it, and a
+# rebuild must not pull another version (unpinned broke the build once, see CLAUDE.md). Side effect: the
+# agent can load ONNX models in its sandbox as well.
 RUN pip3 install --no-cache-dir --break-system-packages numpy pandas matplotlib jinja2 plotly kaleido openpyxl \
- && MPLBACKEND=Agg python3 -c "import numpy, pandas, matplotlib.pyplot"
+    onnxruntime==1.20.1 \
+ && MPLBACKEND=Agg python3 -c "import numpy, pandas, matplotlib.pyplot" \
+ && python3 -c "import onnxruntime, PIL; print('onnxruntime', onnxruntime.__version__)"
 ENV MPLBACKEND=Agg
 # Typst (pinned version) and a fixed selection of packages. The packages are
 # loaded at build time into a cache that is read-only at runtime: exactly these
@@ -190,6 +195,11 @@ COPY --from=build /out/agw-exec /usr/local/bin/agw-exec
 RUN ln -s agw-artifact /usr/local/bin/agw-internet \
  && ln -s agw-artifact /usr/local/bin/agw-platform
 COPY images/agw-basis/skills /opt/agw/skills
+# The check script of the result checks (R0): the gateway runs it in a sealed container of this image,
+# with the model and the inputs on stdin. It is part of the image, so the agent can read it but not
+# change it; the gateway alone decides what goes in.
+COPY images/agw-basis/check /opt/agw/check
+RUN chmod 0644 /opt/agw/check/predict.py
 # Runtime for workflowScript (pi-subagents worker in its own Node process) together with the parser
 # the worker loads (acorn from the copy of pi-subagents, so in the same version).
 COPY images/agw-basis/workflow /opt/agw/workflow

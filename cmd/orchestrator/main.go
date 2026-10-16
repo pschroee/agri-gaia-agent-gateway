@@ -19,6 +19,7 @@ import (
 	"agw/internal/annotation"
 	"agw/internal/api"
 	"agw/internal/artifacts"
+	"agw/internal/assess"
 	"agw/internal/chat"
 	"agw/internal/config"
 	"agw/internal/llmproxy"
@@ -169,6 +170,17 @@ func run() error {
 	// both, …) get a slot on demand when they resume.
 	p := pool.New[chat.Agent](fac.Create, fac.Destroy, map[string]int{toolsets.Key(): env.PoolSize})
 	p.SetKnown(toolset.Valid)
+	// R0 — result checks: the gateway runs a model in a sealed container of its own and reports the
+	// figures and the verdict (internal/assess). Without a container runtime or without AGW_IMAGE the
+	// service cannot check anything: the capability "checks" says so and every check tool answers
+	// "not configured on this instance" (G1.13).
+	checks := assess.New(assess.NewRunner(rt, env.Image), st, env.AssessMaxPerChat)
+	if checks.Configured() {
+		slog.Info("result checks on", "image", env.Image, "max_per_chat", env.AssessMaxPerChat,
+			"download_max_mb", env.AssessDownloadMaxMB, "vision_dataset_pattern", env.VisionDatasetPattern)
+	} else {
+		slog.Info("result checks off (no container runtime or AGW_IMAGE)")
+	}
 	m := chat.NewManager(st, p, cat, blobs, artifacts.NewBroker(), chat.Options{
 		IdleTimeout: env.IdleTimeout, ApprovalTimeout: env.ApprovalTimeout,
 		ArtifactMaxBytes: env.ArtifactMaxBytes, InternetDefault: env.InternetDefault, ImageMaxBytes: env.ImageMaxBytes,
@@ -182,6 +194,7 @@ func run() error {
 		BgWakesPerHour: env.BgWakesPerHour, BgKeepAlive: env.BgKeepAlive, AutoTurnsMax: env.AutoTurnsMax,
 		Titler: newTitler(cat, env.TitleModel), Platform: plat, Toolsets: toolsets,
 		Notebook: notebooker,
+		Checks:   checks, // R0: answers the capability "checks"
 	})
 	fac.Backend = m
 	plat.SetOnExchange(m.PlatformExchanged)
@@ -215,6 +228,16 @@ func run() error {
 		method, path := notebook.RunRoute()
 		watch.RegisterRoute(method, path, notebook.KindName, notebook.RunIDFrom)
 		watch.Register(nb.WatchKind())
+	}
+
+	// R0 — the check paths are answered by the gateway itself (G1.5): delegation, effect class and log
+	// run as for every other call, and the gateway decides what a check runs on. Checks are observed like
+	// runs, so the job line of the watcher shows their state (R0.21); one check runs at a time (R0.20).
+	m.RegisterVirtual(platform.AssessPrefix, checks)
+	{
+		method, path := assess.CheckRoute()
+		watch.RegisterRoute(method, path, assess.KindName, assess.RunIDFrom)
+		watch.Register(checks.WatchKind())
 	}
 
 	if err := m.Recover(ctx); err != nil {

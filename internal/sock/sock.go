@@ -880,6 +880,12 @@ func (h *handler) platformAPI(w http.ResponseWriter, r *http.Request) {
 			fail(http.StatusBadRequest, why)
 			return
 		}
+		// The check paths belong to the check tools (R0): the gateway decides what a check runs on.
+		if why := platform.AssessCallRefusal(req); why != "" {
+			h.logCall(ctx, chat, via, "platform", r.Method+" "+path, "refused: "+why)
+			fail(http.StatusBadRequest, why)
+			return
+		}
 		norm, nerr := platform.Normalize(req)
 		if nerr != nil {
 			h.logCall(ctx, chat, via, "platform", r.Method+" "+path, "refused: "+nerr.Error())

@@ -41,6 +41,9 @@ type Model struct {
 	// models that read images (G1.12). Empty or without "image" means: text only. Nothing is guessed
 	// from the model's name; the capabilities overview reports this field.
 	Input []string `json:"input,omitempty"`
+	// SelfHosted: the model runs on the user's own hardware (R0.9). Only then may it look at any
+	// dataset's images; a cloud model only at the public ones (AGW_VISION_DATASET_PATTERN, P14).
+	SelfHosted bool `json:"self_hosted,omitempty"`
 }
 
 // ReadsImages reports whether the model accepts images. Without the field it does not: a model the
@@ -369,6 +372,18 @@ type Env struct {
 	// (AGW_NOTEBOOK_IDLE_MIN, 0 = never; the files stay).
 	NotebookIdleMin int
 
+	// R0 (result checks). The check itself needs no URL: without AGW_IMAGE or the container runtime
+	// the capability "checks" is not available and every check tool answers so.
+	// AssessMaxPerChat: how many checks one chat may use (AGW_ASSESS_MAX_PER_CHAT, default 12). A check
+	// does not count against the compute calls (P7); failed checks do not count at all.
+	AssessMaxPerChat int
+	// AssessDownloadMaxMB: the largest dataset archive a check unpacks for its held-out images
+	// (AGW_ASSESS_DOWNLOAD_MAX_MB, default 2048). R1 uses it when it downloads a dataset.
+	AssessDownloadMaxMB int
+	// VisionDatasetPattern: the names of the datasets whose images may go to a cloud model
+	// (AGW_VISION_DATASET_PATTERN, default ^(mnist|test)[-_]). A self hosted model may see all (P14).
+	VisionDatasetPattern string
+
 	AllowedHosts []string
 	// Background tasks: at most BgMax at a time per slot (AGW_BG_MAX), at most
 	// BgWakesPerHour wake-ups per chat and hour (AGW_BG_WAKES_PER_HOUR, 0 = never); running tasks
@@ -463,6 +478,19 @@ const (
 	DefaultNotebookTimeoutMaxMin = 480
 	DefaultNotebookDatasetMaxMB  = 2048
 	DefaultNotebookIdleMin       = 60
+)
+
+// R0 (result checks): the defaults of AGW_ASSESS_* and the image review.
+const (
+	// DefaultAssessMaxPerChat: 12 checks per chat. The whole way through the work needs six compute
+	// calls (P7); a check repeats a few times while a model is being improved, and the limit stops a
+	// loop that checks without end.
+	DefaultAssessMaxPerChat = 12
+	// DefaultAssessDownloadMaxMB: the largest dataset archive a check unpacks (2048 MB, as for a
+	// notebook run).
+	DefaultAssessDownloadMaxMB = 2048
+	// DefaultVisionDatasetPattern: public example sets, whose images may go to a cloud model (P14).
+	DefaultVisionDatasetPattern = `^(mnist|test)[-_]`
 )
 
 // Login modes of the API (AGW_AUTH_MODE).
@@ -560,21 +588,27 @@ func FromEnv() Env {
 		NotebookTimeoutMaxMin: max(1, num("AGW_NOTEBOOK_TIMEOUT_MAX_MIN", DefaultNotebookTimeoutMaxMin)),
 		NotebookDatasetMaxMB:  max(1, num("AGW_NOTEBOOK_DATASET_MAX_MB", DefaultNotebookDatasetMaxMB)),
 		NotebookIdleMin:       max(0, num("AGW_NOTEBOOK_IDLE_MIN", DefaultNotebookIdleMin)),
-		AllowedHosts:          strings.Split(str("AGW_ALLOWED_HOSTS", "127.0.0.1:18480,localhost:18480"), ","),
-		BgMax:                 max(1, num("AGW_BG_MAX", 5)),
-		BgWakesPerHour:        wakes(num("AGW_BG_WAKES_PER_HOUR", 10)),
-		BgKeepAlive:           keepAlive(dur("AGW_BG_KEEPALIVE", time.Hour)),
-		AutoTurnsMax:          wakes(num("AGW_AUTO_TURNS_MAX", 5)),
-		TrashRetentionDays:    max(0, num("AGW_TRASH_RETENTION_DAYS", 0)),
-		PlatformAPIURL:        str("AGW_PLATFORM_API_URL", ""),
-		PlatformTokenURL:      str("AGW_PLATFORM_TOKEN_URL", ""),
-		PlatformClientID:      str("AGW_PLATFORM_CLIENT_ID", "frontend"),
-		PlatformUser:          str("AGW_PLATFORM_USER", ""),
-		PlatformPassword:      str("AGW_PLATFORM_PASSWORD", ""),
-		PlatformClientSecret:  str("AGW_PLATFORM_CLIENT_SECRET", ""),
-		PlatformExchange:      str("AGW_PLATFORM_TOKEN_EXCHANGE", "false") == "true",
-		PlatformAudiences:     strings.Split(str("AGW_PLATFORM_AUDIENCES", "backend,minio"), ","),
-		PlatformTokenMaxAge:   dur("AGW_PLATFORM_TOKEN_MAX_AGE", 5*time.Minute),
+
+		// R0 (result checks).
+		AssessMaxPerChat:     max(1, num("AGW_ASSESS_MAX_PER_CHAT", DefaultAssessMaxPerChat)),
+		AssessDownloadMaxMB:  max(1, num("AGW_ASSESS_DOWNLOAD_MAX_MB", DefaultAssessDownloadMaxMB)),
+		VisionDatasetPattern: str("AGW_VISION_DATASET_PATTERN", DefaultVisionDatasetPattern),
+
+		AllowedHosts:         strings.Split(str("AGW_ALLOWED_HOSTS", "127.0.0.1:18480,localhost:18480"), ","),
+		BgMax:                max(1, num("AGW_BG_MAX", 5)),
+		BgWakesPerHour:       wakes(num("AGW_BG_WAKES_PER_HOUR", 10)),
+		BgKeepAlive:          keepAlive(dur("AGW_BG_KEEPALIVE", time.Hour)),
+		AutoTurnsMax:         wakes(num("AGW_AUTO_TURNS_MAX", 5)),
+		TrashRetentionDays:   max(0, num("AGW_TRASH_RETENTION_DAYS", 0)),
+		PlatformAPIURL:       str("AGW_PLATFORM_API_URL", ""),
+		PlatformTokenURL:     str("AGW_PLATFORM_TOKEN_URL", ""),
+		PlatformClientID:     str("AGW_PLATFORM_CLIENT_ID", "frontend"),
+		PlatformUser:         str("AGW_PLATFORM_USER", ""),
+		PlatformPassword:     str("AGW_PLATFORM_PASSWORD", ""),
+		PlatformClientSecret: str("AGW_PLATFORM_CLIENT_SECRET", ""),
+		PlatformExchange:     str("AGW_PLATFORM_TOKEN_EXCHANGE", "false") == "true",
+		PlatformAudiences:    strings.Split(str("AGW_PLATFORM_AUDIENCES", "backend,minio"), ","),
+		PlatformTokenMaxAge:  dur("AGW_PLATFORM_TOKEN_MAX_AGE", 5*time.Minute),
 
 		// V1 — pre-annotation with CVAT.
 		CVATAPIURL:          strings.TrimRight(str("AGW_CVAT_API_URL", ""), "/"),
