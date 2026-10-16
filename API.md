@@ -1199,6 +1199,41 @@ user's token.
   token and is logged as `socket_calls` with `via: "user"`. A kind without a stop call and a job that is not running are
   409.
 
+## Autonomy over hours (A-E3)
+
+An autonomous plan runs for hours, usually long after the user closed the browser. The sessions of the gateway live in
+memory only (`internal/oidc`) and a restart loses them, so the plan is kept alive in two ways instead of storing a token
+with hours of validity.
+
+- **The login is kept fresh (D3.1):** while at least one autonomous plan of a user is `approved`, the loop
+  `Manager.RunPlanEndurance` (one goroutine, ticker 4 min) calls `oidc.Service.KeepFresh` for that user. It renews the
+  access token when it expires within five minutes, which keeps the Keycloak session behind it alive although no browser
+  is open. Who these users are is `Store.AutonomousPlanOwners` (the plans joined onto `chats.owner`); a chat of the token
+  mode has no owner and no login to keep. Only users with an approved autonomous plan are renewed, and only while one is
+  approved. The loop is off in the token mode (`AGW_AUTH_MODE` ≠ `oidc`): `chat.Options.Sessions` is nil then.
+- **A lost login pauses the plan (D3.5):** without a live session the renewal answers `oidc.ErrNoSession`. The plan is
+  then paused with `pause_reason` `login`, an SSE `attention` event names it, and the agent is told why — instead of a
+  failed step and a failed plan. The same happens when a platform call of the chat comes back with `oidc.ErrNoSession`:
+  the call fails as before, but a step that was claimed goes back to `open` **without** counting against
+  `max_attempts` (`Store.ReleasePlanStep`), because the call never reached the platform.
+- **A login continues those plans by itself (D3.6):** every successful login is reported to the manager
+  (`oidc.Service.OnSession`); the plans of **that** user that are paused for `login` return to `approved`, get a note
+  and wake their chat. Plans paused for any other reason (`restart`, `user`, `abort`, `budget_…`) keep waiting for the
+  user. The owner is part of the store's query, so a login never continues a foreign plan.
+- **A restart pauses instead of failing (D3.4):** at startup `Store.RecoverPlans` still fails the step that was `running`
+  (its call may or may not have reached the platform; the result text says so), but an autonomous plan is paused with
+  `pause_reason` `restart` and keeps its `ended_at` empty — also when it was paused already (`login`) while a step was on
+  its way: the failed step blocks it, so the user decides here too. An interactive plan fails with its step, as before.
+  Steps in state `waiting` are untouched: their platform job runs on and the watcher picks the observation up again.
+  Resuming such a plan puts its failed steps back to `open` (`Store.ReopenFailedPlanSteps`, attempts kept): a failed step
+  would block the plan, and the resume is the repeat D3.4 asks the user for.
+- **The login session bounds the plan (D3.3):** at the moment of the proposal the gateway reads when the owner's session
+  ends (`oidc.Service.SessionEnds`, `created + MaxSession`) and caps the plan one hour before that. The preview names
+  the end as a time; a session that ends within the hour leaves the proposal refused instead of approved and expired at
+  once. Without a session (token mode) the duration from `AGW_PLAN_MAX_DURATION` is the only bound. No refresh token is
+  stored: a restart without a login in the browser pauses the plan until the user opens a page of the platform again
+  (D3.2, the silent login creates a new session).
+
 ## Pre-annotation with CVAT (V1)
 
 The agent prepares one of the user's image datasets in CVAT, runs a pre-annotation function over it, follows the run,

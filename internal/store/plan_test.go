@@ -129,8 +129,190 @@ func TestRecoverPlans(t *testing.T) {
 	if err != nil || r.State != "failed" {
 		t.Fatalf("running plan after restart: %+v %v", r, err)
 	}
-	if st := r.Steps[0]; st.State != "failed" || st.Result != "orchestrator restarted" {
+	// A-E3 (D3.4): the text says that the interrupted call may have reached the platform.
+	if st := r.Steps[0]; st.State != "failed" || st.Result != "orchestrator restarted during the call; check the platform before retrying" {
 		t.Fatalf("running step after restart: %+v", st)
+	}
+}
+
+// A-E3 (D3.4): after a restart an autonomous plan is paused with reason "restart" instead of failing, so
+// hours of work are not thrown away; an interactive plan keeps failing as before, and a "waiting" step is
+// not stuck (its platform job runs on and its row in watch_jobs survives, D2.2).
+func TestRecoverAutonomousPausesNotFails(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	c := newPlanChat(t, s)
+	approved := func(id string) {
+		exp := expiresAt()
+		if ok, err := s.DecidePlan(ctx, id, "approved", &exp); err != nil || !ok {
+			t.Fatalf("decide %s: %v %v", id, ok, err)
+		}
+	}
+	autonomous := func() Plan {
+		p, err := s.CreatePlan(ctx, Plan{ChatID: c.ID, Title: "Auto", Session: "main", Via: "cli", Mode: "autonomous",
+			Budget: PlanBudget{MaxDurationS: 28800, MaxLLMCost: 1, MaxAutoTurns: 20},
+			Grant:  json.RawMessage(`{"rules":[]}`),
+			Steps: []PlanStep{
+				{Idx: 1, Method: "PATCH", Path: "/models/5", Effect: "write"},
+				{Idx: 2, Method: "GET", Path: "/train/containers/7", Effect: "write"},
+			}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		approved(p.ID)
+		return p
+	}
+	running := autonomous()
+	if ok, err := s.ClaimPlanStep(ctx, running.ID, 1); err != nil || !ok {
+		t.Fatalf("claim: %v %v", ok, err)
+	}
+	waiting := autonomous()
+	if _, err := s.pool.Exec(ctx, `UPDATE plan_steps SET state='waiting' WHERE plan_id=$1 AND idx=1`, waiting.ID); err != nil {
+		t.Fatal(err)
+	}
+	// Paused because the login was gone, with a step still on its way: the restart makes it a restart pause.
+	pausedRunning := autonomous()
+	if ok, err := s.ClaimPlanStep(ctx, pausedRunning.ID, 1); err != nil || !ok {
+		t.Fatalf("claim: %v %v", ok, err)
+	}
+	if ok, err := s.PausePlan(ctx, pausedRunning.ID, PauseLogin); err != nil || !ok {
+		t.Fatalf("pause: %v %v", ok, err)
+	}
+	ia, err := s.CreatePlan(ctx, twoStepPlan(c.ID, "main"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	approved(ia.ID)
+	if ok, err := s.ClaimPlanStep(ctx, ia.ID, 1); err != nil || !ok {
+		t.Fatalf("claim: %v %v", ok, err)
+	}
+	if err := s.RecoverPlans(ctx); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.GetPlan(ctx, running.ID)
+	if err != nil || got.State != "paused" || got.PauseReason != PauseRestart || got.EndedAt != nil {
+		t.Fatalf("autonomous plan after restart: %+v %v", got, err)
+	}
+	if st := got.Steps[0]; st.State != "failed" {
+		t.Fatalf("the interrupted step fails: %+v", st)
+	}
+	if w, err := s.GetPlan(ctx, waiting.ID); err != nil || w.State != "approved" || w.Steps[0].State != "waiting" {
+		t.Fatalf("a waiting step keeps its plan approved: %+v %v", w, err)
+	}
+	if paused, err := s.GetPlan(ctx, pausedRunning.ID); err != nil || paused.State != "paused" ||
+		paused.PauseReason != PauseRestart || paused.Steps[0].State != "failed" || paused.EndedAt != nil {
+		t.Fatalf("a paused plan with an interrupted step takes the reason restart: %+v %v", paused, err)
+	}
+	if i, err := s.GetPlan(ctx, ia.ID); err != nil || i.State != "failed" {
+		t.Fatalf("an interactive plan keeps failing: %+v %v", i, err)
+	}
+}
+
+// expiresAt is an expiry for the plans of the recover tests.
+func expiresAt() time.Time { return time.Now().Add(time.Hour) }
+
+// A-E3 (D3.5): a step whose call never went out because the login was gone goes back to open and keeps its
+// attempt; only a claimed (running) step can be released.
+func TestReleasePlanStep(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	c := newPlanChat(t, s)
+	p, err := s.CreatePlan(ctx, twoStepPlan(c.ID, "main"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := s.ReleasePlanStep(ctx, p.ID, 1, "user login expired"); err != nil || ok {
+		t.Fatalf("an open step is not released: %v %v", ok, err)
+	}
+	if ok, err := s.ClaimPlanStep(ctx, p.ID, 1); err != nil || !ok {
+		t.Fatalf("claim: %v %v", ok, err)
+	}
+	if ok, err := s.ReleasePlanStep(ctx, p.ID, 1, "user login expired"); err != nil || !ok {
+		t.Fatalf("release: %v %v", ok, err)
+	}
+	got, err := s.GetPlan(ctx, p.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st := got.Steps[0]; st.State != "open" || st.Attempts != 0 || st.DoneAt != nil || st.Result != "user login expired" {
+		t.Fatalf("released step: %+v", st)
+	}
+	// The claim is really given back: the step can be claimed again.
+	if ok, err := s.ClaimPlanStep(ctx, p.ID, 1); err != nil || !ok {
+		t.Fatalf("claim after release: %v %v", ok, err)
+	}
+}
+
+// A-E3 (D3.1/D3.6): the endurance loop and the login callback work per owner — the queries return the owners
+// of approved autonomous plans and the plans paused for a lost login, and nothing else.
+func TestAutonomousPlanOwners(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	anna, err := s.CreateChat(ctx, NewChat{Title: "Anna", Model: "deepseek/deepseek-flash", Variant: "cli", Owner: "sub-anna"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bert, err := s.CreateChat(ctx, NewChat{Title: "Bert", Model: "deepseek/deepseek-flash", Variant: "cli", Owner: "sub-bert"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	anon := newPlanChat(t, s) // a chat of the token mode: no owner
+	mk := func(chatID, mode string) Plan {
+		p, err := s.CreatePlan(ctx, Plan{ChatID: chatID, Title: "Auto", Session: "main", Via: "cli", Mode: mode,
+			Grant: json.RawMessage(`{"rules":[]}`),
+			Steps: []PlanStep{{Idx: 1, Method: "PATCH", Path: "/models/5", Effect: "write"}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		exp := expiresAt()
+		if ok, err := s.DecidePlan(ctx, p.ID, "approved", &exp); err != nil || !ok {
+			t.Fatalf("decide: %v %v", ok, err)
+		}
+		return p
+	}
+	annaRun := mk(anna.ID, "autonomous")
+	annaPaused := mk(anna.ID, "autonomous")
+	bertRun := mk(bert.ID, "autonomous")
+	bertPaused := mk(bert.ID, "autonomous")
+	restartPaused := mk(bert.ID, "autonomous")
+	mk(bert.ID, ModeInteractive)
+	mk(anon.ID, "autonomous")
+	for _, p := range []Plan{annaPaused, bertPaused} {
+		if ok, err := s.PausePlan(ctx, p.ID, PauseLogin); err != nil || !ok {
+			t.Fatalf("pause: %v %v", ok, err)
+		}
+	}
+	if ok, err := s.PausePlan(ctx, restartPaused.ID, PauseRestart); err != nil || !ok {
+		t.Fatalf("pause: %v %v", ok, err)
+	}
+	owners, err := s.AutonomousPlanOwners(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(owners) != 2 || owners[0].Owner != "sub-anna" || owners[1].Owner != "sub-bert" {
+		t.Fatalf("owners: %+v", owners)
+	}
+	if len(owners[0].Plans) != 1 || owners[0].Plans[0] != annaRun.ID {
+		t.Fatalf("anna's running plans: %+v", owners[0])
+	}
+	if len(owners[1].Plans) != 1 || owners[1].Plans[0] != bertRun.ID {
+		t.Fatalf("bert's running plans: %+v", owners[1])
+	}
+	// The paused plans are the ones of the owner the query was asked for — a login of one user never reaches
+	// the plans of another.
+	login, err := s.LoginPausedPlans(ctx, "sub-anna")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(login) != 1 || login[0].Owner != "sub-anna" || len(login[0].Plans) != 1 || login[0].Plans[0] != annaPaused.ID {
+		t.Fatalf("plans of anna paused for a lost login: %+v", login)
+	}
+	other, err := s.LoginPausedPlans(ctx, "sub-bert")
+	if err != nil || len(other) != 1 || len(other[0].Plans) != 1 || other[0].Plans[0] != bertPaused.ID {
+		t.Fatalf("plans of bert paused for a lost login: %+v %v", other, err)
+	}
+	if none, err := s.LoginPausedPlans(ctx, ""); err != nil || len(none) != 0 {
+		t.Fatalf("without an owner: %+v %v", none, err)
 	}
 }
 
