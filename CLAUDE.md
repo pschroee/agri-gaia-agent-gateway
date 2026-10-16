@@ -369,6 +369,28 @@ refer to this repository.
   fields in `API.md`, *Result checks*; the plan with its decisions is `planung/ergebnispruefung.md` of the thesis
   repository.
 
+## Training checks (R1)
+
+- A training check measures a model from a training of this chat on images the training did not see.
+  `split_dataset` creates the training dataset before the training (per class, by SHA-256, 70 % into the
+  new dataset), `assess_model` measures afterwards. The rules are in `internal/assess/training.go`
+  (`JudgeClassification` is a pure function: verdict, reasons, hints and suggestions come from there and
+  nowhere else), the log parsing in `trainlog.go`, the split in `split_dataset.go`.
+- **The gateway alone says what is "seen"** (`model_origins`, written through `platform.OnModelCreated`
+  when a model is created from a training container). The chat of a tool call reaches that callback through
+  `platform.WithChat`, which the socket sets when it runs a tool with steps; a raw call carries no chat and
+  records nothing. Without an origin row every check answers `not measured – origin unknown`.
+- **The agent never names the measured set:** the check downloads the datasets itself (with the user's
+  token through `Client.Stream`, temp file, `AGW_ASSESS_DOWNLOAD_MAX_MB`) and decides the split. The report
+  carries figures, the mapping and the baseline, never a file name or a SHA-256 of the measured set.
+- **The platform's own figure** is read out of `train.log` right after the model download, before every
+  `not measured` exit except "origin unknown" (L6 of the check card), and always named as the platform's
+  figure — the templates measure on their own internal test split.
+- The approval of an image build adds the line `Model check: …` (`registerDescriber` in
+  `internal/platform/tools_assess_training.go`). It reads `GET /_agw/assess/models/{id}/latest`; the
+  summary reader (`internal/chat/plan.go`) answers a path under a virtual prefix through its doer, because
+  `platform.Client.Do` would send it to the platform. Without a readable answer the line is left out.
+
 ## Testing
 
 - `./dev.sh test` is the everyday check, before every commit and before every push: Go with Postgres (with Go's

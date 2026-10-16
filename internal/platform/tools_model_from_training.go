@@ -76,6 +76,13 @@ func modelFromTrainingSteps(ctx context.Context, a Args, final Request, do Doer)
 	res, err = do(ctx, final)
 	if err == nil && res.Status == "ok" && res.HTTPStatus >= 200 && res.HTTPStatus < 300 {
 		res = modelSummary(res)
+		// R1.6: the gateway notes where this model came from (which training, which dataset), so that a
+		// later check knows which images the model saw. The agent cannot write this.
+		var dsID int64
+		if n, cerr := tc.DatasetID.Int64(); cerr == nil {
+			dsID = n
+		}
+		notifyModelCreated(ctx, modelIDOf(res), id, dsID)
 	}
 	return res, "", err
 }
@@ -107,7 +114,7 @@ func modelSummary(res Result) Result {
 		warnings = append(warnings, "ONNX model without complete tensor metadata; set them with platform_update_model before a container build")
 	}
 	if strings.Contains(name, "None ") {
-		warnings = append(warnings, "the platform did not recognise the score (None in the name); read the accuracy with platform_training_logs and put it into the name with platform_update_model")
+		warnings = append(warnings, "the platform did not recognise the score (None in the name); check the model with platform_assess_model: the gateway reads the platform figure from the training log and measures the model on held-out images")
 	}
 
 	out, err := json.Marshal(map[string]any{

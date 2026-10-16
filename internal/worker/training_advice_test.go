@@ -57,6 +57,7 @@ func TestTrainingAdviceSkillBody(t *testing.T) {
 		"<tag>",
 		"<box>",
 		"Wait for consent",
+		"split-dataset",
 	} {
 		if !strings.Contains(content, want) {
 			t.Errorf("skill text lacks %q", want)

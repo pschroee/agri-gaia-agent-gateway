@@ -30,6 +30,15 @@ type Service struct {
 	St  *store.Store
 	// Max is AGW_ASSESS_MAX_PER_CHAT: how many checks one chat may use. Failed checks do not count.
 	Max int
+	// Plat talks to the platform as the user of the chat: the training check (R1) downloads the model
+	// and the datasets and creates the training dataset with it. Without it those tools answer
+	// "unavailable" (R0 itself needs no platform).
+	Plat *platform.Client
+	// MaxDownloadBytes is AGW_ASSESS_DOWNLOAD_MAX_MB: the largest archive a check unpacks (R1.4).
+	MaxDownloadBytes int64
+	// LogCall records one call the service made on its own (R1.3: the download and the upload of a
+	// split); the manager wires it like the notebook service's logger.
+	LogCall func(ctx context.Context, chatID, detail, result string)
 
 	mu       sync.Mutex
 	handlers []handler
@@ -63,6 +72,7 @@ func New(run *Runner, st *store.Store, max int) *Service {
 	s := &Service{Run: run, St: st, Max: max, sem: make(chan struct{}, 1), now: time.Now}
 	// The id is the first capture group: the handler reads it from there (groups[1]).
 	s.Handle(http.MethodGet, regexp.MustCompile(`^`+regexp.QuoteMeta(platform.AssessPrefix)+`/checks/(`+checkIDPattern+`)$`), s.status)
+	s.registerTraining()
 	return s
 }
 

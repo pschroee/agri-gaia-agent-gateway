@@ -528,6 +528,9 @@ func (h *handler) doPlatform(ctx context.Context, chat, via string, tool platfor
 	if tool.HasSteps() {
 		// The invocation lets an approved plan recognise the tool call (issue #70); a raw request has none.
 		ctx = platform.WithInvocation(ctx, tool.Name, raw)
+		// The chat goes with the call, so that a step that creates an object can record where it came
+		// from (R1.6: the origin of a model); a raw request carries no chat.
+		ctx = platform.WithChat(ctx, chat)
 		// Every step goes through runPlatform like a single call: delegation, approval and log.
 		res, refused, err := tool.Run(ctx, raw, func(ctx context.Context, r platform.Request) (platform.Result, error) {
 			n, err := platform.Normalize(r)

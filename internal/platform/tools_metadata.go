@@ -75,8 +75,9 @@ var updateModel = Tool{
 		"of the body and would clear the others, so the tool first reads the model, merges the changes and sends all fields " +
 		"(format stays as it is; it cannot be changed here). Give only the fields to change. Needs approval; the approval " +
 		"shows the whole body. The catalogue entry in the triplestore keeps the old name. Score in the name: if the name " +
-		"shows \"None Acc.\" (the platform's score pattern does not match Lightning output), read the accuracy with " +
-		"platform_training_logs and replace \"None Acc.\" in the name, for example with \"0.67 Acc.\". For a Triton container " +
+		"shows \"None Acc.\" (the platform's score pattern does not match Lightning output), check the model with " +
+		"platform_assess_model: the gateway reads the platform figure from the training log and measures the model on " +
+		"held-out images (platform_assess_status has the report; put the figure into the name once it is known). For a Triton container " +
 		"use only letters, digits, _ . - (for example mnist_efficientnet). The answer is the model after the change.",
 	Params: []Param{
 		{Name: "model_id", Type: "integer", Desc: "id of the model", Required: true},
