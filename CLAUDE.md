@@ -366,6 +366,16 @@ refer to this repository.
 - **`sandbox.Spec.Entrypoint` had to be added for this** (R0): the execution image's entrypoint is `agw-exec idle`,
   which ignores arguments and never ends, so a check that set only `Args` would hang until its time limit. An empty
   `Entrypoint` keeps the image's one, as pi's container and the execution sandbox need.
+- **The one-shot container has two rules, both paid for in the live test of R0** (`sandbox.Runtime.RunOnce`): one
+  hijacked connection carries stdin *and* stdout, so the gateway must not half-close it — an early EOF ends the whole
+  stream, the answer is lost, and the exit code of a container that is still running then looks like a clean "0". The
+  write side therefore stays open until the answer has arrived, and a container that is still running when its output
+  ends is an error. Consequence: **the command has to stop reading its input at the end of the input, not at EOF.**
+  That is also why `assess.BuildTar` pads the archive to whole `assess.TarRecord`s (10 240 bytes, as `tar(1)` does):
+  python's `tarfile` reads 10 240 bytes at a time and would otherwise wait for the rest of its last record — with the
+  write side open, forever (the check hung after its inputs had arrived). Both are covered by the Docker tests in
+  `internal/sandbox/runonce_test.go` (`AGW_DOCKER_TESTS=1`), which the everyday run does not execute: **change `RunOnce`
+  or `BuildTar` only with those tests run.**
 - **One check at a time** (`Service.sem`, a channel of one; `Service.Start` waits for it in a goroutine): the model runs
   with 1 CPU, and several checks at once would starve the chat. `Start` answers at once with the check id (the row is
   `queued`) — a tool call must not wait for minutes; `assess_status` and the check card follow the row. A check that
