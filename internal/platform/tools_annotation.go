@@ -243,3 +243,198 @@ func annotationDatasetPath(op string) func(Args) (Request, error) {
 		return Request{Method: method, Path: fmt.Sprintf("%s/datasets/%d/%s", AnnotationPrefix, id, op)}, nil
 	}
 }
+
+// ---------------------------------------------------------------------------
+// V3 — checks and fills
+// ---------------------------------------------------------------------------
+
+// Limits of the check and the fill tool. The service checks them again: a raw call over the request
+// tool reaches the same paths without this table.
+const (
+	checkModeCalibrate  = "calibrate"
+	checkModeUncertain  = "uncertain"
+	checkLimitCalibrate = 50
+	checkLimitUncertain = 200
+	// jobLimitMax is the highest number of images one job takes.
+	jobLimitMax           = 1000
+	fillLimitDefault      = 1000
+	uncertainBelowDefault = 60
+	uncertainBelowLow     = 1
+	uncertainBelowHigh    = 99
+)
+
+// V3 adds its three tools in an init of its own, so that the tools of V1 and V2 stay as they are.
+func init() { Tools = append(Tools, annotationCheck, annotationFill, annotationJob) }
+
+var annotationCheck = Tool{
+	Name: "annotation_check", CLI: "annotation-check",
+	Desc: `Measures a pre-annotation function before it runs over all images, or names the images whose answer is weak. mode=calibrate asks the function about the images the user annotated by hand (source != "auto"), counts the confusion between the classes it answers and the manual classes and proposes the mapping plus a threshold; mode=uncertain asks about the images of the task and lists the ones under uncertain_below with their CVAT link. Limit 1 to 1000 images (default 50 for calibrate, 200 for uncertain). Without mapping the calls map every class of the function onto the first class of the dataset, so that CVAT drops nothing and the check reads the classes of the function (a function that answers no raw_label needs mapping). Effect compute; the user must approve. Runs as a background job (annotation_jobs): the answer carries job_id, follow it with annotation-job.`,
+	Params: []Param{
+		{Name: "dataset_id", Type: "integer", Desc: "id of your own dataset of type AgriImageDataResource with classes and a CVAT task", Required: true},
+		{Name: "function", Type: "string", Desc: "id of the pre-annotation function (platform_annotation_functions)", Required: true},
+		{Name: "mode", Type: "string", Desc: "calibrate (measure on the manually annotated images) or uncertain (list the images with the weakest answers)", Required: true},
+		{Name: "limit", Type: "integer", Desc: "how many images to measure, 1 to 1000 (default 50 for calibrate, 200 for uncertain)"},
+		{Name: "mapping", Type: "object", Desc: `function label to dataset class, e.g. {"cow": "Rind"}; with one the check measures through it, without one it reads the classes the function answers`},
+		{Name: "uncertain_below", Type: "integer", Desc: "confidence in percent under which an answer counts as uncertain, 1 to 99 (default 60; only mode uncertain)"},
+	},
+	Write: true,
+	build: buildAnnotationCheck,
+}
+
+func buildAnnotationCheck(a Args) (Request, error) {
+	id, err := requiredInt(a, "dataset_id")
+	if err != nil {
+		return Request{}, err
+	}
+	fn, err := requiredStr(a, "function")
+	if err != nil {
+		return Request{}, err
+	}
+	mode, err := requiredStr(a, "mode")
+	if err != nil {
+		return Request{}, err
+	}
+	if mode != checkModeCalibrate && mode != checkModeUncertain {
+		return Request{}, fmt.Errorf("mode must be %s or %s", checkModeCalibrate, checkModeUncertain)
+	}
+	limit, ok, err := a.int("limit")
+	if err != nil {
+		return Request{}, err
+	}
+	if !ok {
+		limit = checkLimitCalibrate
+		if mode == checkModeUncertain {
+			limit = checkLimitUncertain
+		}
+	}
+	if limit < 1 || limit > jobLimitMax {
+		return Request{}, fmt.Errorf("limit must be between 1 and %d images", jobLimitMax)
+	}
+	below, ok, err := a.int("uncertain_below")
+	if err != nil {
+		return Request{}, err
+	}
+	if !ok {
+		below = uncertainBelowDefault
+	}
+	if below < uncertainBelowLow || below > uncertainBelowHigh {
+		return Request{}, fmt.Errorf("uncertain_below must be between %d and %d percent", uncertainBelowLow, uncertainBelowHigh)
+	}
+	mapping, err := annotationMapping(a)
+	if err != nil {
+		return Request{}, err
+	}
+	body := map[string]any{"dataset_id": id, "function": fn, "mode": mode, "limit": limit,
+		"uncertain_below": below, "mapping": json.RawMessage(mapping)}
+	b, err := json.Marshal(body)
+	if err != nil {
+		return Request{}, err
+	}
+	return Request{Method: http.MethodPost, Path: AnnotationPrefix + "/checks", Body: b}, nil
+}
+
+var annotationFill = Tool{
+	Name: "annotation_fill", CLI: "annotation-fill",
+	Desc: `Asks a pre-annotation function about the images of the CVAT task of the dataset that carry no annotation at all and writes what it answers into exactly those images (source "auto", in batches of 20). Images that already carry an annotation stay untouched, also when the user annotates one while the job runs; nothing is deleted. min_confidence in percent (default 50). mapping maps function labels to dataset classes ({"cow": "Rind"}); without one only equal names are used. limit 1 to 1000 images (default 1000). Effect compute; the user must approve. Runs as a background job (annotation_jobs): the answer carries job_id, follow it with annotation-job.`,
+	Params: []Param{
+		{Name: "dataset_id", Type: "integer", Desc: "id of your own dataset of type AgriImageDataResource with classes and a CVAT task", Required: true},
+		{Name: "function", Type: "string", Desc: "id of the pre-annotation function (platform_annotation_functions)", Required: true},
+		{Name: "min_confidence", Type: "integer", Desc: "confidence threshold in percent, 1 to 99 (default 50)"},
+		{Name: "mapping", Type: "object", Desc: `function label to dataset class, e.g. {"cow": "Rind"}`},
+		{Name: "limit", Type: "integer", Desc: "at most this many images, 1 to 1000 (default 1000)"},
+	},
+	Write: true,
+	build: buildAnnotationFill,
+}
+
+func buildAnnotationFill(a Args) (Request, error) {
+	id, err := requiredInt(a, "dataset_id")
+	if err != nil {
+		return Request{}, err
+	}
+	fn, err := requiredStr(a, "function")
+	if err != nil {
+		return Request{}, err
+	}
+	conf, ok, err := a.int("min_confidence")
+	if err != nil {
+		return Request{}, err
+	}
+	if !ok {
+		conf = minConfidenceDefault
+	}
+	if conf < minConfidenceLow || conf > minConfidenceHigh {
+		return Request{}, fmt.Errorf("min_confidence must be between %d and %d percent", minConfidenceLow, minConfidenceHigh)
+	}
+	limit, ok, err := a.int("limit")
+	if err != nil {
+		return Request{}, err
+	}
+	if !ok {
+		limit = fillLimitDefault
+	}
+	if limit < 1 || limit > jobLimitMax {
+		return Request{}, fmt.Errorf("limit must be between 1 and %d images", jobLimitMax)
+	}
+	mapping, err := annotationMapping(a)
+	if err != nil {
+		return Request{}, err
+	}
+	body := map[string]any{"dataset_id": id, "function": fn, "min_confidence": conf, "limit": limit,
+		"mapping": json.RawMessage(mapping)}
+	b, err := json.Marshal(body)
+	if err != nil {
+		return Request{}, err
+	}
+	return Request{Method: http.MethodPost, Path: AnnotationPrefix + "/fills", Body: b}, nil
+}
+
+var annotationJob = Tool{
+	Name: "annotation_job", CLI: "annotation-job",
+	Desc: `State of a background job of the pre-annotation of this chat (a check or a fill): queued, running, finished or failed, with done and total images and the result of a finished job. The result of mode=uncertain is a list of images and is answered page by page (50 images per page; page is the argument).`,
+	Params: []Param{
+		{Name: "job_id", Type: "string", Desc: "job_id from platform_annotation_check or platform_annotation_fill", Required: true},
+		{Name: "page", Type: "integer", Desc: "page of the list of uncertain images, 50 per page (default 1)"},
+	},
+	build: func(a Args) (Request, error) {
+		id, ok, err := a.str("job_id")
+		if err != nil {
+			return Request{}, err
+		}
+		if !ok || !annotationJobIDRe.MatchString(id) {
+			return Request{}, errors.New("job_id missing or not a valid job id")
+		}
+		r := Request{Method: http.MethodGet, Path: AnnotationPrefix + "/jobs/" + id}
+		page, ok, err := a.int("page")
+		if err != nil {
+			return Request{}, err
+		}
+		if ok {
+			if page < 1 {
+				return Request{}, errors.New("page must be 1 or higher")
+			}
+			r.Query = map[string]string{"page": strconv.FormatInt(page, 10)}
+		}
+		return r, nil
+	},
+}
+
+// annotationJobIDRe is the shape of a job id: the uuid the table of the gateway gives it.
+var annotationJobIDRe = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+
+// annotationMapping reads the mapping of a check or a fill; empty means "no mapping given", and the
+// service then decides which classes it maps (V3).
+func annotationMapping(a Args) (json.RawMessage, error) {
+	mapping, has, err := a.object("mapping")
+	if err != nil {
+		return nil, err
+	}
+	if !has {
+		return json.RawMessage(`{}`), nil
+	}
+	var pairs map[string]string
+	if err := json.Unmarshal(mapping, &pairs); err != nil {
+		return nil, errors.New(`mapping must be an object of strings (function label to dataset class), e.g. {"cow": "Rind"}`)
+	}
+	return mapping, nil
+}

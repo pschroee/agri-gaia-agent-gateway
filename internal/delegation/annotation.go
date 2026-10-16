@@ -39,12 +39,22 @@ func init() {
 	// take it back, so it is irreversible and always needs its own approval (E9).
 	function := r(http.MethodPost, platform.AnnotationPrefix+`/functions`, Create, AnnotationFunction, 0).
 		as(EffectIrreversible).refine(functionModel)
+	// A check and a fill (V3) run as a background job of the gateway; both are compute (CPU time of the
+	// instance) and both act on the dataset named in their body (E9). The state of a job is read on the
+	// resource of the run: a job belongs to the same feature and cannot be reached by another chat.
+	check := r(http.MethodPost, platform.AnnotationPrefix+`/checks`, Run, Dataset, 0).
+		as(EffectCompute).refine(datasetFromBody)
+	fill := r(http.MethodPost, platform.AnnotationPrefix+`/fills`, Run, Dataset, 0).
+		as(EffectCompute).refine(datasetFromBody)
 	routes = append(routes,
 		r(http.MethodGet, platform.AnnotationPrefix+`/functions`, Read, AnnotationFunction, 0),
 		function,
 		tasks,
 		runs,
 		r(http.MethodGet, platform.AnnotationPrefix+`/runs/`+seg, Read, AnnotationRun, 1),
+		check,
+		fill,
+		r(http.MethodGet, platform.AnnotationPrefix+`/jobs/`+seg, Read, AnnotationRun, 1),
 		r(http.MethodGet, platform.AnnotationPrefix+`/datasets/`+seg+`/summary`, Read, Dataset, 1),
 		r(http.MethodPost, platform.AnnotationPrefix+`/datasets/`+seg+`/sync`, Update, Dataset, 1),
 	)
@@ -66,7 +76,21 @@ func init() {
 			re     *regexp.Regexp
 			fields []string
 		}{http.MethodPost, regexp.MustCompile(`^` + platform.AnnotationPrefix + `/functions$`),
-			[]string{"model_id", "kind", "labels", "input_size"}})
+			[]string{"model_id", "kind", "labels", "input_size"}},
+		// The bodies of V3 carry what a check and a fill decide; everything else is refused before the
+		// delegation check (Review 5, K1).
+		struct {
+			method string
+			re     *regexp.Regexp
+			fields []string
+		}{http.MethodPost, regexp.MustCompile(`^` + platform.AnnotationPrefix + `/checks$`),
+			[]string{"dataset_id", "function", "mode", "limit", "mapping", "uncertain_below"}},
+		struct {
+			method string
+			re     *regexp.Regexp
+			fields []string
+		}{http.MethodPost, regexp.MustCompile(`^` + platform.AnnotationPrefix + `/fills$`),
+			[]string{"dataset_id", "function", "min_confidence", "mapping", "limit"}})
 	registerConformance(
 		Case{Name: "pre-annotate another user's dataset", Group: "action",
 			Req: annotationRunCall(`{"dataset_id":5,"function":"agw-x","min_confidence":50,"mapping":{},"existing":"keep"}`)},
@@ -74,6 +98,13 @@ func init() {
 		// check that refuses everything would pass as correct.
 		Case{Name: "pre-annotate an own dataset (control)", Group: "action", Allowed: true,
 			Req:   annotationRunCall(`{"dataset_id":12,"function":"agw-x","min_confidence":50,"mapping":{},"existing":"keep"}`),
+			Rules: `{"rules":[{"action":"run","resource":"dataset","ids":["own"]}],"confirm":"none"}`},
+		// V3: a check reads the images of a dataset and costs compute time, so it is bound to the same
+		// right as a run, and the control shows that the route is reachable at all.
+		Case{Name: "calibrate on another user's dataset", Group: "action",
+			Req: annotationCall(http.MethodPost, "/checks", `{"dataset_id":5,"function":"agw-x","mode":"calibrate"}`)},
+		Case{Name: "calibrate on an own dataset (control)", Group: "action", Allowed: true,
+			Req:   annotationCall(http.MethodPost, "/checks", `{"dataset_id":12,"function":"agw-x","mode":"calibrate"}`),
 			Rules: `{"rules":[{"action":"run","resource":"dataset","ids":["own"]}],"confirm":"none"}`},
 	)
 }
@@ -93,4 +124,10 @@ func functionModel(a *Access, req platform.Request) {
 // annotationRunCall builds the call of a pre-annotation run with the given body.
 func annotationRunCall(body string) platform.Request {
 	return platform.Request{Method: http.MethodPost, Path: platform.AnnotationPrefix + "/runs", Body: json.RawMessage(body)}
+}
+
+// annotationCall builds a call of the pre-annotation feature with the given method, operation and body
+// (V3: a check).
+func annotationCall(method, op, body string) platform.Request {
+	return platform.Request{Method: method, Path: platform.AnnotationPrefix + op, Body: json.RawMessage(body)}
 }
