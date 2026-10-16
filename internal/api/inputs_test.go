@@ -92,7 +92,8 @@ func TestRemoveInputRoute(t *testing.T) {
 		return nil, errors.New("no slot in the test")
 	}, func(context.Context, chat.Agent) {}, map[string]int{"cli": 0})
 	blobs := &testBlobs{m: map[string][]byte{}}
-	m := chat.NewManager(st, p, cat, blobs, artifacts.NewBroker(), chat.Options{AcquireTimeout: 100 * time.Millisecond, MaxSubagents: 5})
+	m := chat.NewManager(st, p, cat, blobs, artifacts.NewBroker(), chat.Options{AcquireTimeout: 100 * time.Millisecond,
+		MaxSubagents: 5, ArtifactMaxBytes: 1 << 20})
 	srv, is := oidcServer(t, m, p, cat, nil)
 	a := loggedIn(t, srv, is, anna)
 	b := loggedIn(t, srv, is, bert)

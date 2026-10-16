@@ -143,12 +143,18 @@ func TestApprovalDataEscapesForDisplay(t *testing.T) {
 	n := New(Config{}, nil, nil, nil)
 	rlo := string(rune(0x202e)) // RIGHT-TO-LEFT OVERRIDE
 	read := &namedDatasets{names: map[int64]string{17: "mnist" + rlo + "mini"}}
-	req := approvalReq(t, platform.RunBody{Entry: "tra" + rlo + "in.py", DatasetIDs: []int64{17}},
+	// The entry is held to the rule of the tool here as well (ParseRunForm, C-E4): a name with a bidi
+	// character is refused before it can reach the card. Escaped are the texts that do come through.
+	if _, err := n.ApprovalData(context.Background(),
+		approvalReq(t, platform.RunBody{Entry: "tra" + rlo + "in.py", DatasetIDs: []int64{17}}), read.read); err == nil {
+		t.Error("an entry with a bidi character was not refused")
+	}
+	req := approvalReq(t, platform.RunBody{Entry: "train.py", DatasetIDs: []int64{17}},
 		platform.Upload{Field: "file", Name: "tra" + rlo + "in.py",
 			Data: []byte("# hidden" + rlo + " code\n"), SHA256: "aa11"})
 
 	data := approvalDataOf(t, n, req, read.read)
-	if data.Entry != "tra\\u202ein.py" {
+	if data.Entry != "train.py" {
 		t.Errorf("entry: %q", data.Entry)
 	}
 	if len(data.Files) != 1 || data.Files[0].Name != "tra\\u202ein.py" || data.Files[0].Text == nil ||
