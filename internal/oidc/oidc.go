@@ -58,6 +58,9 @@ const (
 	stateTTL   = 10 * time.Minute
 	refreshAt  = 30 * time.Second // renew the access token earlier
 	leeway     = 60 * time.Second // clock skew for exp
+	// keepFreshLead: KeepFresh renews an access token that expires within this window, so that the
+	// Keycloak session stays alive although nobody has a browser open (A-E3, D3.1).
+	keepFreshLead = 5 * time.Minute
 )
 
 // ErrNoSession: the user has no valid session (any more) at the orchestrator. The text goes to the
@@ -90,10 +93,12 @@ type Service struct {
 
 	mu       sync.Mutex
 	sessions map[string]*session
-	disc     *discovery
-	discAt   time.Time
-	keys     map[string]*rsa.PublicKey
-	keysAt   time.Time
+	// onSession: called with the user's sub after every successful login (A-E3); nil without one.
+	onSession func(sub string)
+	disc      *discovery
+	discAt    time.Time
+	keys      map[string]*rsa.PublicKey
+	keysAt    time.Time
 }
 
 type discovery struct {
@@ -194,6 +199,44 @@ func (s *Service) AccessToken(ctx context.Context, sub string) (string, error) {
 		}
 		// This session has been discarded; an older one may still be valid.
 	}
+}
+
+// KeepFresh renews the user's newest session when its access token expires within keepFreshLead, and does
+// nothing while it is valid longer (A-E3, D3.1): a running autonomous plan calls this every few minutes, so
+// both the access token and the Keycloak session behind it stay alive without an open browser tab. Without a
+// live session (or when Keycloak refuses the renewal): ErrNoSession.
+func (s *Service) KeepFresh(ctx context.Context, sub string) error {
+	id, ss := s.newestSession(sub)
+	if ss == nil {
+		return ErrNoSession
+	}
+	ss.mu.Lock()
+	due := !s.cfg.Now().Add(keepFreshLead).Before(ss.expiresAt)
+	ss.mu.Unlock()
+	if !due {
+		return nil
+	}
+	_, err := s.fresh(ctx, id, ss)
+	return err
+}
+
+// SessionEnds reports at which time the user's newest session ends (created + MaxSession, A-E3, D3.3); ok
+// is false without a live session. Renewing the access token does not move it: MaxSession is absolute.
+func (s *Service) SessionEnds(sub string) (time.Time, bool) {
+	_, ss := s.newestSession(sub)
+	if ss == nil {
+		return time.Time{}, false
+	}
+	return ss.created.Add(MaxSession), true
+}
+
+// OnSession registers the callback that the service calls with the user's sub after every successful login
+// (A-E3, D3.6); it replaces a previously registered one. The callback runs in the login's request, after the
+// session exists, so a callback may read that session.
+func (s *Service) OnSession(f func(sub string)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onSession = f
 }
 
 func (s *Service) newestSession(sub string) (string, *session) {
@@ -366,8 +409,14 @@ func (s *Service) callback(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.sessions[id] = &session{user: user, access: t.Access, refresh: t.Refresh, expiresAt: s.expiry(t, access), created: now}
+	onSession := s.onSession
 	s.mu.Unlock()
 	slog.Info("user logged in", "user", user.Username, "sub", user.Sub)
+	// A new login is reported to the manager (A-E3, D3.6): autonomous plans that a lost login had paused
+	// continue. Outside the lock, so the callback may read this session (SessionEnds, KeepFresh).
+	if onSession != nil {
+		onSession(user.Sub)
+	}
 	http.SetCookie(w, &http.Cookie{Name: SessionCookie, Value: id, Path: s.base + "/", MaxAge: int(MaxSession.Seconds()),
 		HttpOnly: true, Secure: s.secure, SameSite: http.SameSiteLaxMode})
 	w.Header().Set("Cache-Control", "no-store")

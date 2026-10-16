@@ -289,3 +289,104 @@ func TestPromptNoneUnderPrefixLinksToPrefixedLogin(t *testing.T) {
 		t.Fatalf("prompt=none under /agent: %d %s", code, body)
 	}
 }
+
+// A-E3 (D3.1): the manager keeps the login of plan owners fresh. A token that expires within the lead is
+// renewed, a long-lived one is left alone (no call to Keycloak at all).
+func TestKeepFreshRenewsEarly(t *testing.T) {
+	ctx := context.Background()
+	// The access token lives shorter than the lead: KeepFresh must renew it.
+	soon := oidctest.New(t)
+	soon.AccessTTL = 4 * time.Minute
+	svcSoon, srvSoon := gateway(t, soon, nil)
+	bSoon := oidctest.NewBrowser(t)
+	soon.Login(&anna)
+	get(t, bSoon, srvSoon.URL+"/oidc/login")
+	if err := svcSoon.KeepFresh(ctx, "sub-anna"); err != nil {
+		t.Fatalf("KeepFresh: %v", err)
+	}
+	if soon.Refreshes != 1 {
+		t.Fatalf("refreshes = %d, want 1: a token expiring within the lead is renewed", soon.Refreshes)
+	}
+	// A token that is valid long enough is not renewed.
+	late := oidctest.New(t)
+	late.AccessTTL = 30 * time.Minute
+	svcLate, srvLate := gateway(t, late, nil)
+	bLate := oidctest.NewBrowser(t)
+	late.Login(&anna)
+	get(t, bLate, srvLate.URL+"/oidc/login")
+	if err := svcLate.KeepFresh(ctx, "sub-anna"); err != nil {
+		t.Fatalf("KeepFresh: %v", err)
+	}
+	if late.Refreshes != 0 {
+		t.Fatalf("refreshes = %d, want 0: a long-lived token is left alone", late.Refreshes)
+	}
+}
+
+// A-E3: without a live session KeepFresh says so (the caller pauses the plan); a session Keycloak revoked
+// counts as gone as well.
+func TestKeepFreshNoSession(t *testing.T) {
+	ctx := context.Background()
+	is := oidctest.New(t)
+	svc, srv := gateway(t, is, nil)
+	if err := svc.KeepFresh(ctx, "sub-anna"); !errors.Is(err, oidc.ErrNoSession) {
+		t.Fatalf("without a session: %v", err)
+	}
+	if err := svc.KeepFresh(ctx, ""); !errors.Is(err, oidc.ErrNoSession) {
+		t.Fatalf("without a sub: %v", err)
+	}
+	b := oidctest.NewBrowser(t)
+	is.Login(&anna)
+	get(t, b, srv.URL+"/oidc/login")
+	if err := svc.KeepFresh(ctx, "sub-anna"); err != nil {
+		t.Fatalf("with a session: %v", err)
+	}
+	is.Revoke("sub-anna")
+	if err := svc.KeepFresh(ctx, "sub-anna"); !errors.Is(err, oidc.ErrNoSession) {
+		t.Fatalf("after a revocation: %v", err)
+	}
+}
+
+// A-E3 (D3.6): the service reports a new login to the callback, and a second registration replaces the
+// first. The callback may read the session it belongs to (SessionEnds).
+func TestOnSessionCalled(t *testing.T) {
+	is := oidctest.New(t)
+	svc, srv := gateway(t, is, nil)
+	var got []string
+	var ends []time.Time
+	svc.OnSession(func(sub string) {
+		got = append(got, sub)
+		if end, ok := svc.SessionEnds(sub); ok {
+			ends = append(ends, end)
+		}
+	})
+	b := oidctest.NewBrowser(t)
+	is.Login(&anna)
+	get(t, b, srv.URL+"/oidc/login")
+	if len(got) != 1 || got[0] != "sub-anna" {
+		t.Fatalf("the login was not reported: %q", got)
+	}
+	if len(ends) != 1 || time.Until(ends[0]) < 11*time.Hour {
+		t.Fatalf("SessionEnds for the new session: %v", ends)
+	}
+	// A second registration replaces the first: only the new callback runs.
+	var second []string
+	svc.OnSession(func(sub string) { second = append(second, sub) })
+	other := oidctest.User{Sub: "sub-bert", Username: "bert", Name: "Bert B."}
+	is.Login(&other)
+	get(t, b, srv.URL+"/oidc/login")
+	if len(second) != 1 || second[0] != "sub-bert" {
+		t.Fatalf("second callback: %q", second)
+	}
+	if len(got) != 1 {
+		t.Fatalf("the first callback kept running: %q", got)
+	}
+}
+
+// A-E3 (D3.3): SessionEnds names the absolute end of a session; without one the answer is "no".
+func TestSessionEndsWithoutSession(t *testing.T) {
+	is := oidctest.New(t)
+	svc, _ := gateway(t, is, nil)
+	if _, ok := svc.SessionEnds("sub-anna"); ok {
+		t.Fatal("SessionEnds without a session")
+	}
+}
