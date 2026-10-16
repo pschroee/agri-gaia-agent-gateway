@@ -50,8 +50,14 @@ type Progress struct {
 	Next *Job
 }
 
-// Output is an object a job produced.
-type Output struct{ Resource, ID, Label string }
+// Output is an object a job produced. Size is its size in bytes when the kind knows it (the result files
+// of a notebook run, own code C-E4) and 0 for the kinds that do not.
+type Output struct {
+	Resource string
+	ID       string
+	Label    string
+	Size     int64
+}
 
 // Job is a row of watch_jobs: what is observed, for which chat, by which kind.
 type Job struct{ ID, ChatID, Kind, Ref string }

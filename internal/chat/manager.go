@@ -2334,6 +2334,9 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 		// No plan step: a started job is only observed for the cards (A-E2.2, no note, no wake-up).
 		m.recordJobOutsidePlan(ctx, chatID, access, req, res)
 	}
+	// A call that stops a job (own code C-E4): the job records the agent as the one who stopped it, and the
+	// user's own route does the same in StopJob.
+	m.stopJobByTheAgent(ctx, chatID, req, res)
 	if reserved && (err != nil || res.Status != "ok") {
 		if rerr := m.st.ReleaseCompute(context.WithoutCancel(ctx), chatID); rerr != nil {
 			slog.Error("compute call not given back", "chat", chatID, "error", rerr)

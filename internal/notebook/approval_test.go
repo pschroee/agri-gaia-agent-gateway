@@ -69,7 +69,7 @@ func TestApprovalDataFilesDatasetsLimits(t *testing.T) {
 	read := &namedDatasets{names: map[int64]string{17: "mnist-mini", 18: "trainset"}}
 	code := "import torch\nprint('hello')\n"
 	req := approvalReq(t, platform.RunBody{Entry: "train.py", Args: []string{"--epochs", "1"}, DatasetIDs: []int64{17, 18},
-		TimeoutMinutes: 30},
+		TimeoutMinutes: 30, Note: "trains the baseline for the next step"},
 		platform.Upload{Field: "file", Name: "train.py", Data: []byte(code), SHA256: "aa11"},
 		platform.Upload{Field: "file", Name: "weights.bin", Data: []byte{0x00, 0xff, 0xfe}, SHA256: "bb22"})
 
@@ -79,6 +79,15 @@ func TestApprovalDataFilesDatasetsLimits(t *testing.T) {
 	}
 	if l := data.Limits; l.CPUs != 2 || l.MemGB != 8 || l.TimeoutMin != 30 || l.Internet {
 		t.Errorf("limits: %+v", l)
+	}
+	// The agent's own note travels along, unchanged: the card shows it as the agent's text.
+	if data.Note != "trains the baseline for the next step" {
+		t.Errorf("note: %q", data.Note)
+	}
+	// Without a note the field stays away.
+	if plain := approvalDataOf(t, n, approvalReq(t, platform.RunBody{Entry: "train.py"},
+		platform.Upload{Field: "file", Name: "train.py", Data: []byte("print(1)\n"), SHA256: "aa11"}), nil); plain.Note != "" {
+		t.Errorf("a run without a note carries one: %q", plain.Note)
 	}
 	if len(data.Files) != 2 {
 		t.Fatalf("files: %+v", data.Files)
@@ -148,6 +157,12 @@ func TestApprovalDataEscapesForDisplay(t *testing.T) {
 	}
 	if len(data.Datasets) != 1 || data.Datasets[0].Name != "mnist\\u202emini" {
 		t.Errorf("dataset: %+v", data.Datasets)
+	}
+	// The agent's note is escaped like every other text the card shows (Review W1).
+	noted := approvalReq(t, platform.RunBody{Entry: "train.py", Note: "hidden" + rlo + " text"},
+		platform.Upload{Field: "file", Name: "train.py", Data: []byte("print(1)\n"), SHA256: "aa11"})
+	if d := approvalDataOf(t, n, noted, nil); d.Note != "hidden\\u202e text" {
+		t.Errorf("note: %q", d.Note)
 	}
 }
 

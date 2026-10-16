@@ -32,6 +32,20 @@ func TestSummaryNotebookRun(t *testing.T) {
 	if len(f.got) != 1 || f.got[0] != "GET /datasets/17" {
 		t.Errorf("reads of the summary: %v", f.got)
 	}
+	// The agent's own note is named, not quoted: the summary states what the gateway read itself, and the
+	// note is the agent's text (issue #72).
+	noted := summarize(t, nil, SummaryCall{Method: http.MethodPost, Path: NotebookPrefix + "/runs",
+		Form: map[string][]string{"entry": {"train.py"}, "note": {"trains the baseline"}}})
+	if !strings.Contains(noted, "The agent's own note to the user (not verified) stands in the approval.") {
+		t.Errorf("summary without the note line:\n%s", noted)
+	}
+	if strings.Contains(noted, "trains the baseline") {
+		t.Errorf("the summary quotes the agent's own text:\n%s", noted)
+	}
+	if strings.Contains(noted, "Also sends") {
+		t.Errorf("the summary hides the note field:\n%s", noted)
+	}
+
 	// Without a reader the dataset is named by its id alone.
 	bare := summarize(t, nil, SummaryCall{Method: http.MethodPost, Path: NotebookPrefix + "/runs",
 		Form: map[string][]string{"entry": {"train.py"}, "dataset_ids": {"17", "18"}}})

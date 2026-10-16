@@ -23,7 +23,7 @@ CREATE TABLE IF NOT EXISTS watch_jobs (
     message      text NOT NULL DEFAULT '',         -- one line from the platform
     eta          timestamptz,                      -- estimated end, NULL while unknown (D2.4)
     log_tail     text NOT NULL DEFAULT '',          -- at most 20 lines / 4000 runes (D2.5)
-    outputs      text NOT NULL DEFAULT '[]',        -- JSON [{resource,id,label}]
+    outputs      text NOT NULL DEFAULT '[]',        -- JSON [{resource,id,label,size}]; size 0 while the kind knows none
     fail_reads   integer NOT NULL DEFAULT 0,        -- reading calls that failed in a row (D2.3)
     started_at   timestamptz NOT NULL DEFAULT now(),
     checked_at   timestamptz,
@@ -35,3 +35,8 @@ CREATE INDEX IF NOT EXISTS watch_jobs_chat ON watch_jobs (chat_id, started_at DE
 -- The address the user can open for a job (own code C-E4): the kind notebook_run fills it with the run in the
 -- user's JupyterHub, every other kind leaves it empty. It appears with the first poll of the job.
 ALTER TABLE watch_jobs ADD COLUMN IF NOT EXISTS link text NOT NULL DEFAULT '';
+
+-- Who stopped a job (own code C-E4, the words of the aborts of issue #120/L3): "user" for the user's stop route,
+-- "agent" for a stop of the agent's own tools, empty while nobody stopped it. Written once, by the call that
+-- stops; a progress update leaves it alone.
+ALTER TABLE watch_jobs ADD COLUMN IF NOT EXISTS stopped_by text NOT NULL DEFAULT '';

@@ -37,6 +37,10 @@ const (
 	// installed setup configures a lower one (AGW_NOTEBOOK_TIMEOUT_MAX_MIN).
 	NotebookTimeoutMinutes = 120
 	NotebookTimeoutMax     = 480
+	// NotebookNoteMax is how long the agent's own note to a run may be (own code C-E4). The note is the
+	// agent's text: the user sees it as such, marked as not verified, and the gateway never states it as
+	// something it checked.
+	NotebookNoteMax = 500
 )
 
 // notebookExtensions are the endings a run accepts: code and small configuration, no data (that
@@ -59,6 +63,10 @@ type RunBody struct {
 	Args           []string
 	DatasetIDs     []int64
 	TimeoutMinutes int
+	// Note is the agent's own short note to the user about what the run is for (own code C-E4). It is
+	// shown as the agent's text and marked as not verified; it is not part of what the run does and the
+	// gateway never mixes it into what it states itself.
+	Note string
 }
 
 func init() {
@@ -76,9 +84,9 @@ func ParseRunForm(form map[string][]string, maxTimeoutMin int) (RunBody, error) 
 	}
 	for k, vs := range form {
 		switch k {
-		case "entry", "args", "dataset_ids", "timeout_minutes":
+		case "entry", "args", "dataset_ids", "timeout_minutes", "note":
 		default:
-			return b, fmt.Errorf("unknown field %q (entry, args, dataset_ids, timeout_minutes)", k)
+			return b, fmt.Errorf("unknown field %q (entry, args, dataset_ids, timeout_minutes, note)", k)
 		}
 		if k != "args" && k != "dataset_ids" && len(vs) != 1 {
 			return b, fmt.Errorf("field %q given %d times", k, len(vs))
@@ -123,6 +131,18 @@ func ParseRunForm(form map[string][]string, maxTimeoutMin int) (RunBody, error) 
 		}
 		b.TimeoutMinutes = n
 	}
+	if note := form["note"]; len(note) > 0 {
+		// The agent's own words: no regexp, only what is safe to show and store (valid UTF-8, and short
+		// enough for the card). Whitespace around it and a note that is only whitespace stay nothing.
+		if !utf8.ValidString(note[0]) {
+			return b, errors.New("note: not valid UTF-8")
+		}
+		noteText := strings.TrimSpace(note[0])
+		if n := utf8.RuneCountInString(noteText); n > NotebookNoteMax {
+			return b, fmt.Errorf("note: at most %d characters, %d given", NotebookNoteMax, n)
+		}
+		b.Note = noteText
+	}
 	return b, nil
 }
 
@@ -145,6 +165,9 @@ func RunForm(b RunBody) map[string][]string {
 	}
 	if b.TimeoutMinutes > 0 {
 		form["timeout_minutes"] = []string{strconv.Itoa(b.TimeoutMinutes)}
+	}
+	if b.Note != "" {
+		form["note"] = []string{b.Note}
 	}
 	return form
 }
@@ -222,7 +245,8 @@ var notebookRun = Tool{
 	Desc: "Runs your own code in this chat's notebook server in JupyterHub (2 CPUs, 8 GB, no internet, no platform access). " +
 		"Effect compute: the user approves every run and sees all code; a plan never covers it. Platform datasets in dataset_ids are unpacked to " +
 		"/home/jovyan/work/datasets/<id>/ before the run. Test the code in the sandbox on a small sample first. " +
-		"One run at a time; returns the run id and a link for the user.",
+		"One run at a time; returns the run id and a link for the user. A note of yours (optional) is shown to the user " +
+		"as your own text, marked as not verified.",
 	Params: []Param{
 		{Name: "files", Type: "array", Required: true, Path: true, Desc: "files from the sandbox, copied flat into a new run directory: code and small config files " +
 			"(.py .ipynb .txt .json .yaml .yml .csv .md .cfg .toml), at most 50 files and 4 MB"},
@@ -230,6 +254,8 @@ var notebookRun = Tool{
 		{Name: "args", Type: "array", Desc: "command line arguments for a .py entry, letters, digits and _.,=:/+- only"},
 		{Name: "dataset_ids", Type: "array", Desc: "ids of platform datasets to unpack before the run, at most 3"},
 		{Name: "timeout_minutes", Type: "integer", Desc: "at most this many minutes for the run (default 120)"},
+		{Name: "note", Type: "string", Desc: "your own short note to the user about what this run is for (at most 500 characters). " +
+			"They see it as your note and it is marked as not verified; keep facts you claim out of it"},
 	},
 	Write: true,
 	build: func(a Args) (Request, error) {
@@ -256,7 +282,11 @@ var notebookRun = Tool{
 		if err != nil {
 			return Request{}, err
 		}
-		body := RunBody{Entry: entry, Args: args}
+		note, _, err := a.str("note")
+		if err != nil {
+			return Request{}, err
+		}
+		body := RunBody{Entry: entry, Args: args, Note: note}
 		for _, v := range ids {
 			id, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64)
 			if err != nil || id < 0 {

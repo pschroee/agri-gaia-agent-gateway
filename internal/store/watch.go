@@ -29,6 +29,13 @@ const (
 	JobFailed  = "failed"
 )
 
+// Who stopped a job (own code C-E4): the values of watch_jobs.stopped_by — the same two words the aborts of
+// issue #120/L3 use. Empty means nobody stopped the job.
+const (
+	StoppedByUser  = "user"
+	StoppedByAgent = "agent"
+)
+
 // WatchJob is a row of watch_jobs: a platform job the gateway observes (autonomy A-E2). Inside a plan
 // the plan step names it (plan_steps.watch_job) and waits in state "waiting" until it ends; outside a
 // plan it is only shown (no note, no wake-up).
@@ -50,6 +57,9 @@ type WatchJob struct {
 	// Link is the address the user can open for the job (own code C-E4); empty for the kinds that know
 	// none, and the card never builds one of its own.
 	Link string `json:"link,omitempty"`
+	// StoppedBy: who ended this job (own code C-E4) — StoppedByUser or StoppedByAgent, empty for a job
+	// nobody stopped. Set once, when the stop happens; a progress update never touches it.
+	StoppedBy string `json:"stopped_by,omitempty"`
 	// FailReads counts reading calls that failed in a row (D2.3).
 	FailReads int        `json:"fail_reads,omitempty"`
 	StartedAt time.Time  `json:"started_at"`
@@ -57,11 +67,14 @@ type WatchJob struct {
 	EndedAt   *time.Time `json:"ended_at,omitempty"`
 }
 
-// WatchOutput is an object a job produced ({Resource, ID, Label} of watch.Output).
+// WatchOutput is an object a job produced ({Resource, ID, Label, Size} of watch.Output). Size is the
+// size in bytes when the kind knows it (the result files of a notebook run, own code C-E4), 0 for the
+// kinds that do not.
 type WatchOutput struct {
 	Resource string `json:"resource"`
 	ID       string `json:"id"`
 	Label    string `json:"label,omitempty"`
+	Size     int64  `json:"size,omitempty"`
 }
 
 // WatchProgress is what one poll found; every field is written to the job's row.
@@ -76,13 +89,13 @@ type WatchProgress struct {
 	ReadFail bool // the reading call failed: the row keeps its state and counts the failure
 }
 
-const watchJobCols = `id, chat_id::text, plan_id, step_idx, tool_call_id, kind, ref, state, progress, message, eta, log_tail, outputs, link, fail_reads, started_at, checked_at, ended_at`
+const watchJobCols = `id, chat_id::text, plan_id, step_idx, tool_call_id, kind, ref, state, progress, message, eta, log_tail, outputs, link, stopped_by, fail_reads, started_at, checked_at, ended_at`
 
 func scanWatchJob(row interface{ Scan(...any) error }) (WatchJob, error) {
 	var j WatchJob
 	var outputs string
 	err := row.Scan(&j.ID, &j.ChatID, &j.PlanID, &j.StepIdx, &j.ToolCallID, &j.Kind, &j.Ref, &j.State,
-		&j.Progress, &j.Message, &j.ETA, &j.LogTail, &outputs, &j.Link, &j.FailReads, &j.StartedAt, &j.CheckedAt, &j.EndedAt)
+		&j.Progress, &j.Message, &j.ETA, &j.LogTail, &outputs, &j.Link, &j.StoppedBy, &j.FailReads, &j.StartedAt, &j.CheckedAt, &j.EndedAt)
 	if err != nil {
 		return j, err
 	}
@@ -211,12 +224,28 @@ func (s *Store) SetJobMessage(ctx context.Context, jobID, message string) error 
 	return err
 }
 
+// SetJobStoppedBy records who stopped the running job of a chat and kind (own code C-E4): StoppedByUser for
+// the user's stop route, StoppedByAgent for a stop of the agent's own tools. It is written once — a job that
+// already names a stopper keeps it —, so the call that stops is the only one that may set it; empty by is an
+// error, and ok reports whether a running job was marked at all.
+func (s *Store) SetJobStoppedBy(ctx context.Context, chatID, kind, by string) (bool, error) {
+	if by == "" {
+		return false, errors.New("stopped_by must not be empty")
+	}
+	tag, err := s.pool.Exec(ctx, `UPDATE watch_jobs SET stopped_by=$3
+WHERE chat_id=$1 AND kind=$2 AND state='running' AND stopped_by=''`, chatID, kind, by)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
 // ReArmWatchJob replaces the kind and the reference of a running job (the chain of a started training:
 // the task ends when the container is up, the run is then observed itself) and clears what the first
 // kind reported.
 func (s *Store) ReArmWatchJob(ctx context.Context, jobID, kind, ref string) (bool, error) {
 	tag, err := s.pool.Exec(ctx, `UPDATE watch_jobs SET kind=$2, ref=$3, progress=NULL, message='', eta=NULL, log_tail='',
-outputs='[]', link='', fail_reads=0, checked_at=NULL WHERE id=$1 AND state='running'`, jobID, kind, ref)
+outputs='[]', link='', stopped_by='', fail_reads=0, checked_at=NULL WHERE id=$1 AND state='running'`, jobID, kind, ref)
 	return tag.RowsAffected() > 0, err
 }
 

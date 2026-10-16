@@ -61,6 +61,43 @@ func TestParseRunForm(t *testing.T) {
 	}
 }
 
+// The agent's own note to a run (own code C-E4): free text, but bounded and only what is safe to store and
+// show; the form the tool builds is the form the runner reads.
+func TestParseRunFormNote(t *testing.T) {
+	b, err := ParseRunForm(map[string][]string{"entry": {"train.py"}, "note": {"  trains the baseline for the next step\n"}}, 0)
+	if err != nil || b.Note != "trains the baseline for the next step" {
+		t.Fatalf("note: %+v %v", b, err)
+	}
+	if got := RunForm(b); got["note"][0] != b.Note {
+		t.Errorf("RunForm: %v", got)
+	}
+	// A note of whitespace alone, or none at all, stays nothing.
+	for _, note := range []string{"   ", "\n"} {
+		if b, err := ParseRunForm(map[string][]string{"entry": {"train.py"}, "note": {note}}, 0); err != nil || b.Note != "" {
+			t.Errorf("note %q: %+v %v", note, b, err)
+		}
+	}
+	if b, err := ParseRunForm(map[string][]string{"entry": {"train.py"}}, 0); err != nil || b.Note != "" {
+		t.Errorf("without a note: %+v %v", b, err)
+	}
+	if got := RunForm(RunBody{Entry: "train.py"}); len(got["note"]) != 0 {
+		t.Errorf("an empty note must not be a form field: %v", got)
+	}
+	// The length and the encoding are the limits: at most NotebookNoteMax characters, valid UTF-8.
+	if _, err := ParseRunForm(map[string][]string{"entry": {"train.py"},
+		"note": {strings.Repeat("ä", NotebookNoteMax+1)}}, 0); err == nil {
+		t.Error("a note above the limit must be refused")
+	}
+	if _, err := ParseRunForm(map[string][]string{"entry": {"train.py"},
+		"note": {strings.Repeat("ä", NotebookNoteMax)}}, 0); err != nil {
+		t.Errorf("a note of the limit itself must be allowed: %v", err)
+	}
+	if _, err := ParseRunForm(map[string][]string{"entry": {"train.py"},
+		"note": {string([]byte{0xff, 0xfe})}}, 0); err == nil {
+		t.Error("a note that is not UTF-8 must be refused")
+	}
+}
+
 // The seven notebook tools stand in the table with their command line names, and notebook_run builds a
 // multipart call that carries its files as sandbox paths.
 func TestNotebookToolsInTable(t *testing.T) {
@@ -93,7 +130,7 @@ func TestNotebookToolsInTable(t *testing.T) {
 		t.Fatalf("files: %+v", files)
 	}
 	req, err := tool.Build(json.RawMessage(`{"files":["/workspace/train.py","/workspace/data.json"],"entry":"train.py",
-		"args":["--epochs","3"],"dataset_ids":["17"],"timeout_minutes":90}`))
+		"args":["--epochs","3"],"dataset_ids":["17"],"timeout_minutes":90,"note":"trains the baseline"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,6 +139,10 @@ func TestNotebookToolsInTable(t *testing.T) {
 	}
 	if req.Form["entry"][0] != "train.py" || len(req.Form["args"]) != 2 || req.Form["dataset_ids"][0] != "17" || req.Form["timeout_minutes"][0] != "90" {
 		t.Errorf("run form: %v", req.Form)
+	}
+	// The agent's own note travels with the call (the approval shows it as the agent's text, own code C-E4).
+	if req.Form["note"][0] != "trains the baseline" {
+		t.Errorf("note in the run form: %v", req.Form)
 	}
 	if len(req.Files) != 2 || req.Files[0].Field != "file" || req.Files[0].Path != "/workspace/train.py" {
 		t.Errorf("run files: %+v", req.Files)

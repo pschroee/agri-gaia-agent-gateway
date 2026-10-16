@@ -279,6 +279,9 @@ func (n *Notebooks) stopResult(ctx context.Context, chatID, user, server string)
 	if err := n.hub.Stop(ctx, user, server); err != nil {
 		return unavailableHub(err), nil
 	}
+	// Who stopped it is recorded where the caller is known (own code C-E4): the user's own stop route marks the
+	// job in Manager.StopJob, the agent's own call in Manager.PlatformCall — this call cannot tell the two apart
+	// (the invocation is set for the tools with steps, the tool call id is a header the client sets).
 	return jsonResult(map[string]any{"server": server, "state": "stopped",
 		"note": "the files of earlier runs stay in the server; a new run starts it again"})
 }

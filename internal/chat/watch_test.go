@@ -911,6 +911,18 @@ func TestConfirmEachStepParked(t *testing.T) {
 	}
 }
 
+// The outputs of a poll reach the stored form with their size (own code C-E4): the card shows the size of a
+// result file, and the kinds that name none leave the field away.
+func TestStoreOutputsCarriesTheSize(t *testing.T) {
+	got := storeOutputs([]watch.Output{{Resource: "notebook_file", ID: "r1/model.onnx", Label: "model.onnx", Size: 1234}})
+	if len(got) != 1 || got[0].Size != 1234 || got[0].Resource != "notebook_file" || got[0].ID != "r1/model.onnx" {
+		t.Fatalf("outputs: %+v", got)
+	}
+	if plain := storeOutputs([]watch.Output{{Resource: "container_image", ID: "u/i:1"}}); len(plain) != 1 || plain[0].Size != 0 {
+		t.Errorf("a kind without a size: %+v", plain)
+	}
+}
+
 // A-E2 (D2.8, exception): a step whose call carries files of the sandbox is not parked — the gateway
 // cannot repeat it without the running sandbox, and the approval has to show the bytes that were read.
 func TestStepWithFilesAsksSynchronously(t *testing.T) {
