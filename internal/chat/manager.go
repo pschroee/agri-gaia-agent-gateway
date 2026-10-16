@@ -89,8 +89,9 @@ type ChatEvent struct {
 	Event
 }
 
-// crossChatKinds: event kinds that also go to the subscribers of all chats.
-var crossChatKinds = map[string]bool{"approval": true}
+// crossChatKinds: event kinds that also go to the subscribers of all chats. "plan_alert" (A-E4, D4.3) is
+// carried by the same stream as an approval and filtered by the same owner check (GET /api/events).
+var crossChatKinds = map[string]bool{"approval": true, "plan_alert": true}
 
 type ChatView struct {
 	store.Chat
@@ -314,6 +315,9 @@ type Manager struct {
 	// planCache: the active autonomous plan of a chat, held in memory for planCacheTTL so that the
 	// guard and the LLM proxy's budget do not put a query behind every call (A-E1).
 	planCache map[string]planCacheEntry
+	// planAlertMarks: the state each autonomous plan was last published in, so that its alert goes out
+	// once per state change (A-E4, D4.3); by plan id.
+	planAlertMarks map[string]string
 }
 
 func NewManager(st *store.Store, p *pool.Pool[Agent], cat *config.Catalog, blobs Blobs, broker *artifacts.Broker, opt Options) *Manager {

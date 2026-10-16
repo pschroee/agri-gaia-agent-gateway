@@ -598,6 +598,7 @@ Each event is a `data:` line with JSON `{"kind": …, "data": …}`. Every 15 s 
 | `queue` | `{entries: QueueEntry[], change: "queued" \| "removed" \| "delivered" \| "restored" \| "dropped", ids?: string[], text?: string, origin?, sources?}`: new state of the queue. `delivered`: handed to pi, `text` is the instruction as it goes to pi, with `origin` and `sources` as on `StoredMessage`; `restored`: delivery failed or aborted before delivery, open again; `dropped`: chat ended |
 | `user_meta` | `{turn_id, trigger, origin, sources}`: origin of the user message that follows as the next `pi` event (`message_end`, role user); the UI assigns it to that message |
 | `auto_held` | `{reason: "wake_limit" \| "auto_turns", limit, count}`: notes stay queued because a limit on turns without the user has been reached (wake-ups per hour or in a row); they go with the next message or via `POST …/queue/send` |
+| `plan_alert` | `PlanAlert` (A-E4): an autonomous plan of this chat reached a state the user has to know about. `kind` is `completed`, `failed`, `paused`, `needs_input` or `attention`; `step` and `reason` name the step and the cause where there is one. Also carried by *Events across chats* |
 | `error` | `{message: string}`; also notes about the workspace: starts with "Workspace not saved" (above the limit, once per state; the UI shows a warning) or "Workspace could not be restored" |
 
 **Assembling the stream:** `message_start` with `message.role == "assistant"` starts a response.
@@ -619,6 +620,7 @@ reconnects after 2 s.
 |---|---|
 | `approvals` | `Approval[]`: the pending approvals of the user's chats, oldest first. Always the first event, also after every reconnect: it replaces whatever the client held. |
 | `approval` | `Approval` (new or decided, with `chat_id`): `state: "pending"` adds it, any other state (`approved`, `rejected`, `expired`) removes it. |
+| `plan_alert` | `PlanAlert` (A-E4): an autonomous plan of one of the user's chats reached a state that needs attention (`kind`: `completed`, `failed`, `paused`, `needs_input`, `attention`). Carries `chat_id`, `plan_id`, the plan's `title` and, where there is one, `step` and `reason`. Unlike the snapshot above it is not repeated after a reconnect: a client that was away for the state change does not get it again. |
 
 The subscription starts before the snapshot is read, so an approval decided in between is never lost; an event may
 repeat a state the snapshot already has, so applying it must be idempotent (keyed by `id`). Approvals expired by a

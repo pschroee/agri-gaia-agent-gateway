@@ -210,6 +210,12 @@ func (m *Manager) jobReadFailed(ctx context.Context, j store.WatchJob, err error
 	if j.PlanID != "" {
 		// The plan step keeps waiting; the user should see that the gateway cannot look right now.
 		m.publish(j.ChatID, Event{Kind: "attention", Data: map[string]string{"chat_id": j.ChatID, "job_id": j.ID, "message": msg}})
+		if fails == watchFailReads {
+			// Once per run of failures (A-E4, D4.3): the read loop calls this on every further attempt,
+			// and a notification for each one would be noise. The counter starts over after a readable
+			// answer, so a second outage reports again.
+			m.publishPlanAttention(j.ChatID, j.PlanID, msg)
+		}
 	}
 }
 

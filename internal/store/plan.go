@@ -42,7 +42,24 @@ type Plan struct {
 	ExpiresAt *time.Time `json:"expires_at,omitempty"`
 	// EndedAt marks the end of an autonomous plan (completed, failed, cancelled).
 	EndedAt *time.Time `json:"ended_at,omitempty"`
-	Steps   []PlanStep `json:"steps"`
+	// Usage: what the plan has used of its budget (A-E4, D4.5). Not stored; filled when a plan is read for
+	// the API. Nil for an interactive plan and while the usage could not be read.
+	Usage *PlanUsage `json:"usage,omitempty"`
+	Steps []PlanStep `json:"steps"`
+}
+
+// PlanUsage is what an autonomous plan has used of its budget (A-E4, D4.5). It is not stored: it is read
+// along with the plan, from llm_calls (the model cost since the plan was approved), plans.auto_turns and
+// the chat's compute calls. ComputeMax is the gateway's limit for the chat, not a value of the plan.
+type PlanUsage struct {
+	// LLMCost: model cost of the chat since the plan was approved, in US dollars.
+	LLMCost float64 `json:"llm_cost"`
+	// AutoTurns: turns the plan took without the user.
+	AutoTurns int `json:"auto_turns"`
+	// ComputeUsed: compute calls the chat has used so far.
+	ComputeUsed int `json:"compute_used"`
+	// ComputeMax: how many compute calls the gateway allows the chat (AGW_COMPUTE_MAX_PER_CHAT).
+	ComputeMax int `json:"compute_max"`
 }
 
 // PlanBudget is the budget of an autonomous plan (A-E1): wall-clock seconds it may run, the model cost
@@ -578,6 +595,27 @@ func (s *Store) PlanLLMCost(ctx context.Context, chatID string, since time.Time)
 	var sum float64
 	err := s.pool.QueryRow(ctx, `SELECT COALESCE(SUM(cost),0) FROM llm_calls WHERE chat_id=$1 AND started_at >= $2`, chatID, since).Scan(&sum)
 	return sum, err
+}
+
+// PlanUsageOf reads what an autonomous plan has used of its budget (A-E4, D4.5): the model cost of the
+// chat since the plan was approved (a plan that is still proposed has none), the turns it took without
+// the user and the compute calls of the chat. ComputeMax is left at zero — that limit is the manager's,
+// not the store's, and the manager fills it.
+func (s *Store) PlanUsageOf(ctx context.Context, p Plan) (PlanUsage, error) {
+	u := PlanUsage{AutoTurns: p.AutoTurns}
+	if p.DecidedAt != nil {
+		cost, err := s.PlanLLMCost(ctx, p.ChatID, *p.DecidedAt)
+		if err != nil {
+			return u, err
+		}
+		u.LLMCost = cost
+	}
+	n, err := s.ComputeCalls(ctx, p.ChatID)
+	if err != nil {
+		return u, err
+	}
+	u.ComputeUsed = n
+	return u, nil
 }
 
 // RecoverPlans runs at startup: the waiting calls are gone, so proposals expire, and a step that was

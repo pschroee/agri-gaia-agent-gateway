@@ -360,21 +360,46 @@ func allDone(p store.Plan) bool {
 	return true
 }
 
-// publishPlan sends the plan's current state to the subscribers of its chat.
+// publishPlan sends the plan's current state to the subscribers of its chat and, for an autonomous plan,
+// the alert of the state it just reached (A-E4, D4.3). It is the one way a plan's state change is
+// announced, so the cached active plan of the chat and the alert's mark are dropped here (A-E1).
 func (m *Manager) publishPlan(ctx context.Context, planID string) {
 	p, err := m.st.GetPlan(ctx, planID)
 	if err != nil {
 		slog.Error("plan event not published", "plan", planID, "error", err)
 		return
 	}
-	// Every state change goes through here, so the cached active plan of the chat is dropped (A-E1).
 	m.invalidatePlanCache(p.ChatID)
+	m.fillPlanUsage(ctx, &p)
 	m.publish(p.ChatID, Event{Kind: "plan", Data: p})
+	m.publishPlanAlerts(ctx, p)
 }
 
-// Plans lists the plans of a chat, oldest first.
+// fillPlanUsage writes what the plan has used of its budget onto it (A-E4, D4.5). An unreadable usage
+// leaves the field empty instead of failing the plan: the card then shows no budget line.
+func (m *Manager) fillPlanUsage(ctx context.Context, p *store.Plan) {
+	if p.Mode != plan.ModeAutonomous {
+		return
+	}
+	u, err := m.st.PlanUsageOf(ctx, *p)
+	if err != nil {
+		slog.Error("plan usage not readable", "plan", p.ID, "error", err)
+		return
+	}
+	u.ComputeMax = m.computeMax()
+	p.Usage = &u
+}
+
+// Plans lists the plans of a chat, oldest first, with the usage of the autonomous ones (A-E4, D4.5).
 func (m *Manager) Plans(ctx context.Context, chatID string) ([]store.Plan, error) {
-	return m.st.ListPlans(ctx, chatID)
+	list, err := m.st.ListPlans(ctx, chatID)
+	if err != nil {
+		return nil, err
+	}
+	for i := range list {
+		m.fillPlanUsage(ctx, &list[i])
+	}
+	return list, nil
 }
 
 // --- Autonomous plans: proposal checks and the user's controls (A-E1) ---
