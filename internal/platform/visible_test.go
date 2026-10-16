@@ -38,8 +38,9 @@ func TestVisibleControlsJSON(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &nb); err != nil || len(nb.Cells) != 1 {
 		t.Fatalf("the escaped text is no JSON any more: %q %v", out, err)
 	}
-	// Parsing gives the visible sequence, never the character again.
-	if nb.Cells[0].Source != `a‮b` {
+	// Parsing gives the visible sequence, never the character again: the notebook reads the eight characters
+	// a \ u 2 0 2 e b, not a right-to-left override it would take for its own display.
+	if nb.Cells[0].Source != `a\u202eb` {
 		t.Errorf("after parsing the JSON: %q", nb.Cells[0].Source)
 	}
 	// A notebook without such characters is byte for byte the file the user approved.

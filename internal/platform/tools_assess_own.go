@@ -164,6 +164,11 @@ func checkPreprocess(raw json.RawMessage) ([]byte, bool, error) {
 	default:
 		return nil, false, fmt.Errorf("preprocess.layout must be nchw or nhwc, not %q", p.Layout)
 	}
+	// An empty list is a declaration that names nothing: the template's default would apply in silence and the
+	// agent would believe it had set a size. A missing key stays nil and is no declaration at all.
+	if p.Size != nil && len(p.Size) == 0 {
+		return nil, false, errors.New("preprocess.size: give the height or [height, width], not an empty list")
+	}
 	if len(p.Size) > 2 {
 		return nil, false, errors.New("preprocess.size: give the height or [height, width]")
 	}

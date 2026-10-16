@@ -14,8 +14,11 @@ import (
 // The summary of a function the agent builds from a model (V2) lives in its own file: init appends
 // it, so that the switch in summary.go stays what it is. The preview names what the call will do and
 // what the function will be: the code comes from the gateway, the model from the platform, and the
-// function stays for every CVAT user.
-func init() { registerDescriber(describeAnnotationFunction) }
+// function stays for every CVAT user. The rollback of a run or a fill (V3b) is appended beside it.
+func init() {
+	registerDescriber(describeAnnotationFunction)
+	registerDescriber(describeAnnotationRollback)
+}
 
 // functionTemplateVersion is the version of the templates of internal/annotation (its
 // TemplateVersion): the summary names it, so the two must say the same.

@@ -342,7 +342,7 @@ func (s *Store) MarkFinalVerified(ctx context.Context, chatID string, taskID int
 func (s *Store) LastVerifyResult(ctx context.Context, chatID, sourceID string) (string, error) {
 	var result string
 	err := s.pool.QueryRow(ctx, `SELECT result FROM annotation_jobs
-		WHERE chat_id=$1 AND kind=$2 AND state=$3 AND params->>'source_id'=$4
+		WHERE chat_id=$1 AND kind=$2 AND state=$3 AND params::jsonb->>'source_id'=$4
 		ORDER BY created_at DESC LIMIT 1`, chatID, AnnotationJobVerify, AnnotationJobFinished, sourceID).Scan(&result)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", ErrNotFound
