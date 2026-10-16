@@ -139,6 +139,16 @@ online. Without it the way ends at the built image — say that and invent no de
 
 Edge devices, edge groups and applications are read-only for you.
 
+## Taking a deployment back and cleaning up
+
+`agw-platform undeploy <deployment_id>` removes the container and its anonymous volumes from the device; the
+deployment stays and can be started again. It needs **no device online** (the platform sends the removal to
+the device, and the task fails when the device is gone); `agw-platform capabilities` names the device state.
+`agw-platform delete-deployment <deployment_id>` removes the deployment entry afterwards — it asks on its own
+and cannot be undone. An image can only be deleted when no deployment points at it any more; **you delete no
+images** (the user does). A deployment that has no container id means its start failed and a container of that
+name stays on the device, which the platform cannot remove — tell the user.
+
 ## Everything else
 
 `agw-platform request <METHOD> <path> [--query k=v …] [--body JSON|@file|-]` calls any path of the
