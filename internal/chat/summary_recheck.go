@@ -70,7 +70,7 @@ func (m *Manager) platformRecheck(chatID, approvalID, tool string, req platform.
 		rl := &readLog{}
 		s := platform.Summarize(ctx, m.loggedSummaryReader(chatID, rl), platform.SummaryCallOf(tool, req))
 		m.logSummaryReads(ctx, chatID, approvalID, "approval", rl)
-		return []string{visibleControls(s)}, "", rl.failedReads() > 0
+		return []string{platform.VisibleControls(s)}, "", rl.failedReads() > 0
 	}
 }
 
@@ -85,7 +85,7 @@ func (m *Manager) planRecheck(chatID, approvalID, title string, steps []store.Pl
 		fresh := append([]store.PlanStep(nil), base...)
 		for i := range fresh {
 			if i < len(sums) {
-				fresh[i].Summary = visibleControls(sums[i])
+				fresh[i].Summary = platform.VisibleControls(sums[i])
 			}
 		}
 		out := make([]string, len(fresh))
@@ -93,7 +93,7 @@ func (m *Manager) planRecheck(chatID, approvalID, title string, steps []store.Pl
 			out[i] = fresh[i].Summary
 		}
 		m.logSummaryReads(ctx, chatID, approvalID, "approval", rl)
-		return out, visibleControls(plan.Preview(title, fresh, auto)), rl.failedReads() > 0
+		return out, platform.VisibleControls(plan.Preview(title, fresh, auto)), rl.failedReads() > 0
 	}
 }
 
@@ -143,7 +143,7 @@ func (m *Manager) replaceChangedSummary(ctx context.Context, ap store.Approval, 
 			return ap, false, err
 		}
 		if preview == "" {
-			preview = visibleControls(plan.Preview(upd.Title, upd.Steps, autonomyOf(upd)))
+			preview = platform.VisibleControls(plan.Preview(upd.Title, upd.Steps, autonomyOf(upd)))
 		}
 		a, _, err := m.st.ReplaceApprovalSummary(ctx, ap.ID, plan.ApprovalSummary(upd.Steps), preview)
 		if err != nil {

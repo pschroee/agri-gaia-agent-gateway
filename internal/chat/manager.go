@@ -2026,23 +2026,6 @@ func (m *Manager) DisableInternet(ctx context.Context, chatID, slotID, via strin
 	return sock.UploadResult{Status: sock.InternetOff, Name: "internet", Message: "internet access switched off"}, nil
 }
 
-// visibleControls writes control and bidi characters as \u sequences so that the preview of an
-// approval does not visually reorder or hide anything (Review W1). Newline and tab stay.
-func visibleControls(s string) string {
-	var b strings.Builder
-	for _, r := range s {
-		switch {
-		case r == '\n' || r == '\t':
-			b.WriteRune(r)
-		case r < 0x20 || r == 0x7f || (r >= 0x200b && r <= 0x200f) || (r >= 0x202a && r <= 0x202e) || (r >= 0x2066 && r <= 0x2069) || r == 0xfeff:
-			fmt.Fprintf(&b, "\\u%04x", r)
-		default:
-			b.WriteRune(r)
-		}
-	}
-	return b.String()
-}
-
 // maxPlatformPreview limits method, path and indented body of a writing platform call.
 const maxPlatformPreview = 16000
 
@@ -2193,7 +2176,7 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 			}
 		}
 		preview += irreversibleNote(access.Effect, req.Body)
-		preview = visibleControls(preview)
+		preview = platform.VisibleControls(preview)
 		// The user only approves what they see in full: better refuse than truncate (Review W1).
 		if n := len([]rune(preview)); n > limit {
 			if limit == maxNotebookPreview {
@@ -2209,14 +2192,33 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 		}
 		summaryCall := platform.SummaryCallOf(tool, req)
 		rl := &readLog{}
-		summary := visibleControls(platform.Summarize(ctx, m.loggedSummaryReader(chatID, rl), summaryCall))
+		read := m.loggedSummaryReader(chatID, rl)
+		if notebookRun(req) {
+			// One read per path for the summary and the structured data of a run (own code C-E4): the
+			// activity entry of the summary reads names every path once (issue L2/#119).
+			read = cachedReads(read)
+		}
+		summary := platform.VisibleControls(platform.Summarize(ctx, read, summaryCall))
+		// The structured data of the run (own code C-E4): the card shows the files instead of the text
+		// preview. Without data there is no approval — the user must see the code of the run.
+		var notebookData json.RawMessage
+		if notebookRun(req) {
+			if m.opt.Notebook == nil {
+				return platform.Result{Status: "error", Message: platform.RefusedPrefix + "the notebook service of this gateway is not available"}, nil
+			}
+			data, err := m.opt.Notebook.ApprovalData(ctx, req, read)
+			if err != nil {
+				return platform.Result{Status: "error", Message: platform.RefusedPrefix + err.Error()}, nil
+			}
+			notebookData = data
+		}
 		size := int64(len(req.Body))
 		for _, u := range req.Uploads {
 			size += int64(len(u.Data))
 		}
 		ap, err := m.st.CreateApproval(ctx, store.Approval{ChatID: chatID, Kind: "platform_write", Via: via, Name: req.String(), Size: size,
 			ContentType: "application/json", PendingKey: "-", Preview: preview, Session: store.SessionFrom(ctx), ToolCallID: store.ToolCallFrom(ctx),
-			Effect: string(access.Effect), Summary: summary})
+			Effect: string(access.Effect), Summary: summary, Notebook: notebookData})
 		if err != nil {
 			return platform.Result{}, err
 		}
