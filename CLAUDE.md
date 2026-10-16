@@ -264,6 +264,35 @@ refer to this repository.
   and are not logged; tests that count platform calls use `withPlatform`, which leaves reading GETs out. Rules in
   `API.md`, *Summaries by the gateway*.
 
+## Long-running platform jobs (autonomy A-E2)
+
+- A call that starts platform work of its own (`POST /train/config`, `/train/containers/<id>/run`,
+  `/container-images/build`) does not end its plan step: `watch.For(access, req, res)` decides in the gateway which
+  registered route starts which job, the row goes into `watch_jobs`, and the step waits in state `waiting`
+  (`plan_steps.watch_job`). The loop `Manager.RunWatchers` (ticker 5 s, interval by age, at most four reads at a time)
+  polls with the user's token, writes progress, publishes SSE `job` and `plan` and finishes the step at the end.
+  Progress never comes from the agent, and the watcher never writes (`TestWatchReaderRefusesWrites`).
+- **Kinds live in their own file with their own `init()`** (`internal/watch/task.go`, `training.go`, `image.go`; other
+  plans bring `notebook_run`, `annotation_run`, `edge_deployment`), so that parallel plans do not touch each other's
+  files. A kind that only starts another job sets `Progress.Next`, and the same row is observed on under the new kind:
+  the run of a training chains `platform_task` → `training_run` (the task ends when the container is *started*). `Lookup`
+  finds a kind by the name its row carries; a name this build does not know is skipped, never guessed.
+- **`plan_steps.confirm_each` exists because of this:** `delegation.Access.ConfirmEach` is a trait of the route, and
+  without the column a plan loaded from the database treated such a step as covered — it would have run the deploy of a
+  container deployment without asking. Whoever adds a field to a plan step re-checks `scanPlanStep` against `BuildStep`.
+- **The end of a step wakes a resting chat** (`ensureLive` + `deliverQueue`) only for an autonomous plan that was
+  approved while the step ran, and the wake-up counts against the plan's `max_auto_turns` (`planWakeLimit`) instead of
+  `AGW_AUTO_TURNS_MAX`/`AGW_BG_WAKES_PER_HOUR`; over the budget the plan is paused with `budget_turns` and the note stays
+  queued. A job outside a plan is only observed for the cards: no note, no wake-up.
+- **Parked approvals (D2.8) hold no turn:** a non-covered step of an autonomous plan answers `pending_user` at once, and
+  a goroutine of the gateway repeats the stored call through `PlatformCall` when the user decides. The marker
+  `WithParkedApproval` is set only there and counts only for the call that matches that step (`parkedHere`); a step
+  whose call carries files from the sandbox is asked synchronously, because the gateway cannot repeat it without the
+  running sandbox.
+- **"Stop job" is the user's action,** not a tool: `POST …/plans/{plan}/steps/{idx}/stop` and `POST …/jobs/{job}/stop`
+  call the kind's `Stop` with the user's token and log it with `via: "user"`. Rules in `API.md`, *Long-running platform
+  jobs*.
+
 ## Notebook runs (own code, C-E3)
 
 - The agent's own code runs in the chat's notebook server in JupyterHub, one server per chat under the user's account

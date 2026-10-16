@@ -369,6 +369,9 @@ type ActivityPage = { calls: ActivityCall[]; chats: Record<string, { id: string;
 | `POST /api/chats/{id}/plans/{plan}/pause` | `Plan` | pauses a running autonomous plan (`pause_reason` `user`); a running chat is stopped. 404 for a foreign or unknown plan, 409 `{"error":"plan is <state>","state":…}` when it is not `approved`. See *Autonomous plans* |
 | `POST /api/chats/{id}/plans/{plan}/resume` | `Plan` | resumes a `paused` plan and queues a note for the agent (`NotePlan`). 409 when it is not `paused`. Only this route resumes a plan; the agent has no tool for it |
 | `POST /api/chats/{id}/plans/{plan}/cancel` | `Plan` | ends an `approved` or `paused` plan: `cancelled`, its open steps `skipped`, a note queued. 409 otherwise |
+| `GET /api/chats/{id}/jobs` | `WatchJob[]` | observed platform jobs of the chat, newest first (A-E2): state, percent, message, ETA, log tail, outputs and `plan_id`/`step_idx` for the job of a plan step. 404 for foreign and unknown chats. See *Long-running platform jobs* |
+| `POST /api/chats/{id}/plans/{plan}/steps/{idx}/stop` | `Plan` | the user stops the platform job a waiting step observes (`watch_job`): the call runs with the user's token and is logged as `socket_calls` with `via: "user"`. 404 unknown plan, 409 if the step does not wait or its kind cannot be stopped |
+| `POST /api/chats/{id}/jobs/{job}/stop` | `WatchJob` | the same for a single job outside a plan. 404 unknown job, 409 if it is not running or cannot be stopped |
 | `POST /api/chats/{id}/subagents` | 410 | removed: the subagent limit is fixed for the service (see *Limit for subagents*); the answer says so |
 | `POST /api/chats/{id}/messages` `{text, attachments?: string[], context?: PageContext}` | `SendResult` | sends (`context`: see *Page context*; invalid: 400); a dormant chat is resumed in a fresh sandbox (response after resuming, steps beforehand via SSE `resume`). If pi is working, the chat is being resumed or another instruction is in flight, the message is queued (`queued: true`, see *Queue*). Held entries go along |
 | `GET /api/chats/{id}/queue` | `QueueEntry[]` | open entries of the queue |
@@ -1139,6 +1142,62 @@ covers the whole run instead of one question per writing call.
   and every step (steps with `max_attempts > 1` show "up to N attempts"). The answer after the approval carries `mode`,
   `budget` and `grant` (the full `delegation.Summary`), and its note points at the refusal outside the grant and at
   `replaces`. Which state a plan is in is visible in `GET …/plans` and the SSE `plan` event.
+
+## Long-running platform jobs (A-E2)
+
+A platform call that starts work of its own (a training container being built, a training being started, an inference image
+being built) does not end its plan step: the **gateway** observes the job and the step is done when the job is
+(D2.1/D2.2). The agent never reports progress — everything the job's row carries comes from the platform, read with the
+user's token.
+
+- **The table `watch_jobs`** is the one place for every observed job, inside and outside plans: `id` (`w` + 12 hex),
+  `chat_id`, `plan_id` + `step_idx` (empty/0 outside plans), `tool_call_id`, `kind`, `ref`, `state`
+  (`running`/`done`/`failed`), `progress` (percent, NULL while unknown), `message`, `eta`, `log_tail`, `outputs`,
+  `fail_reads`, `started_at`, `checked_at`, `ended_at`. A plan step names its job in `plan_steps.watch_job` and waits in
+  state **`waiting`** — a value of the state column of `plan_steps`, no new type; `plan_steps` also carries
+  `parked_approval` (see below) and, since A-E2, `confirm_each` (the trait of the route at proposal time, so that a
+  reloaded plan never covers a call that has to ask the user every time).
+- **Which call starts a job** is decided by the gateway from the route, never by the agent: `watch.For` matches the call
+  after it succeeded. Today: `POST /train/config` and `POST /containers/{id}/run` → `platform_task`, `POST
+  /container-images/build` → `image_build`, and the run of a container chains on: the task ends when the container is
+  **started** (the task's function only calls `container.start()`), so the same row is observed on as a `training_run`
+  (the kind is `platform_task` with the reference `task:<id>|train:<container>`). Other plans register their own kinds in
+  their own files (`notebook_run`, `annotation_run`, `edge_deployment`).
+- **The loop** (`Manager.RunWatchers`, one goroutine, ticker 5 s) polls every running job of every chat (D2.3): every
+  10 s in the first two minutes, then every 30 s, from 30 minutes on every 60 s, at most four reads at the same time. A
+  poll only uses reading `GET`s of the kind's own paths (a kind that asks for anything else is refused) and never writes
+  (`TestWatchReaderRefusesWrites`). Five failing reads in a row leave the job `running` and write
+  `platform not readable: …` into `message`; a plan step raises SSE `attention` (and keeps waiting).
+- **Percent and ETA (D2.4)** come from the platform's `completion_percentage` alone (Agri-Gaia's tasks keep it as a
+  fraction 0..1, which the gateway turns into 0..100). The ETA exists from the second measurement and a percent of at
+  least 5, linear from the job's start; a training reports no percent — instead the status, the runtime and the last log
+  lines. The log tail is bounded to 20 lines and 4000 runes (D2.5) and never goes to the agent whole: the note carries
+  the last ten lines in a fence with a random marker, like the note at the end of a background task.
+- **SSE:** every poll publishes `job` for the chat (`{change: progress|next|ended, job: WatchJob}`) and, for a plan step,
+  `plan` with the plan as it now is — the step carries `progress`, `progress_msg`, `eta`, `log_tail`, `outputs` and
+  `started_at` of its job.
+- **The end of a job (D2.6/D2.7):** the step is `done` or `failed` (a covered step is repeated while `max_attempts`
+  allows, A-E1), the plan completes or fails, and the agent gets a **note** (`chat_queue.note` `plan_step`, refs the plan
+  and the step; origin `system`). A resting chat is **woken** for such a note: `ensureLive` resumes it and the note is
+  delivered — but only for an autonomous plan that was approved while the step ran. Over `max_auto_turns` the plan is
+  paused (`pause_reason` `budget_turns`), the note stays queued and the SSE event `auto_held` names the budget; a
+  background task's note keeps the gateway's own limits (`AGW_AUTO_TURNS_MAX`, `AGW_BG_WAKES_PER_HOUR`).
+- **Outside a plan** a job is only observed for the cards and the activity: no note, no wake-up — the agent follows such
+  a job itself (`GET …/jobs`, `training_status`), like before.
+- **Parked approvals (D2.8):** a step of an **autonomous** plan that the plan does not cover (irreversible, confirm
+  each) does **not** hold the running turn. The approval is raised as usual, the step carries it in
+  `plan_steps.parked_approval`, and the call answers at once with
+  `{"status":"pending_user","message":"waiting for the user's approval of step N; end your turn, you will be woken when
+  the user decides"}`. The approval stays open until the plan expires; on approval the gateway repeats **exactly** the
+  stored call — through `PlatformCall` again, so delegation, field rules, the compute limit and the plan checks apply a
+  second time — and wakes the agent with the result. The marker that opens this one step exists only in the gateway's
+  own context (no header, no tool) and counts only for the call that matches that step; a call carrying files read from
+  the sandbox is asked **synchronously** as before (the gateway cannot repeat it without the running sandbox, and the
+  approval has to show the bytes that were read). A rejection fails the step and the plan.
+- **Stop (D2.9):** `POST …/plans/{plan}/steps/{idx}/stop` and `POST …/jobs/{job}/stop` are the user's own actions, not
+  tools of the agent: the call of the kind (`POST /train/containers/{id}/stop` for a training) goes out with the user's
+  token and is logged as `socket_calls` with `via: "user"`. A kind without a stop call and a job that is not running are
+  409.
 
 ## Pre-annotation with CVAT (V1)
 
