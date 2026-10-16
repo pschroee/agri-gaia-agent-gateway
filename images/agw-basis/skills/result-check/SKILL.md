@@ -62,4 +62,24 @@ Filled by R2.
 
 ## Edge deployments
 
-Filled by R3.
+After `agw-platform deployment-status <deployment_id>` shows `deployed`, have the gateway test the
+container on the device: `agw-platform deployment-check <deployment_id> <model_id>`. It sends six fixed
+test requests to the device and compares the answers with what the model file computes for the same
+inputs. It only asks the device when the entry `edge` of `agw-platform capabilities` names it under
+"test requests"; a real device is out of reach for the gateway.
+
+Report the answer like every other check:
+
+1. `Result: usable (synthetic test requests)` means the device serves exactly the model you named.
+2. `Result: questionable (…)` names the difference: the deployment serves another model
+   (`the deployment serves <name>, not <other>`), the answers differ from the model file, the device
+   answers the same to every request, or the interface of the device, of the platform's model record and
+   of the model file do not agree. The gateway names a suggestion (`undeploy`, `rebuild_image`); follow it
+   within the compute calls that are left or propose it to the user.
+3. `Result: not measured – …` means nothing was sent: the device is no simulated device the gateway may
+   address, the container does not answer yet (`check again in about a minute`, suggestion
+   `wait_and_recheck`), or the input type of the model cannot be tested this way. Say that instead of
+   claiming the deployment works.
+4. Never write that a deployment "works" without a `usable` verdict, and never claim that the model is
+   good because the device serves it: that is what the model check is for (`assess-model`); the report
+   names it as "model check" when this chat has one.
