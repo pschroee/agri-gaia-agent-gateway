@@ -104,7 +104,10 @@ func ProgressOf(row store.AnnotationJob) watch.Progress {
 		if percent > 100 {
 			percent = 100
 		}
-	} else if store.AnnotationJobFinal(row.State) {
+	}
+	// A finished job is done as a whole: a check samples fewer images than the task holds, and the line
+	// must not stay at that share once the job has ended.
+	if store.AnnotationJobFinal(row.State) {
 		percent = 100
 	}
 	p := watch.Progress{State: watch.StateRunning, Percent: &percent, Message: jobLine(row)}
@@ -277,8 +280,9 @@ func (s *Service) startJob(ctx context.Context, chatID string, r *recorder, spec
 		return failed(err)
 	}
 	// A mapping the agent gave must hold from the start: it decides which classes a fill writes and
-	// which ones a check measures through.
-	if len(spec.Mapping) > 0 {
+	// which ones a check measures through. A fill also needs a mapping that matches at least one class
+	// without one, because it writes what the function answers and nothing else.
+	if len(spec.Mapping) > 0 || spec.Kind == JobFill {
 		if _, err := runMapping(spec.Mapping, fn.Labels, d.AnnotationLabels); err != nil {
 			return failed(err)
 		}
