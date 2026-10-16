@@ -15,13 +15,14 @@ import (
 	"agw/internal/platform"
 )
 
-// The kind edge_deployment (edge D-E2): it observes the task a start (PUT …/deploy) or, from E3, an
-// undeploy (PUT …/undeploy) left behind. Nothing here polls on its own — the loop and the table
+// The kind edge_deployment (edge D-E2): it observes the task a start (PUT …/deploy) or an undeploy
+// (PUT …/undeploy, edge D-E3) left behind. Nothing here polls on its own — the loop and the table
 // watch_jobs come with the autonomy plan (A-E2); the agent asks platform_deployment_status for the
-// state. init registers kind and route, so no wiring in main.go is needed.
+// state. init registers kind and routes, so no wiring in main.go is needed.
 func init() {
 	Register(Kind{Name: EdgeDeploymentKind, Poll: pollEdgeDeployment, Stop: stopEdgeDeployment})
 	RegisterRoute(http.MethodPut, edgeDeployRoute, EdgeDeploymentKind, edgeDeploymentRef)
+	RegisterRoute(http.MethodPut, edgeUndeployRoute, EdgeDeploymentKind, edgeDeploymentRef)
 }
 
 // EdgeDeploymentKind is the name of the kind.
@@ -30,6 +31,8 @@ const EdgeDeploymentKind = "edge_deployment"
 var (
 	// edgeDeployRoute is the call that starts a deployment; the ref names the deployment and the task.
 	edgeDeployRoute = regexp.MustCompile(`^/container-deployments/(\d+)/deploy$`)
+	// edgeUndeployRoute is the call that takes it back (edge E3); it leaves a task behind as well.
+	edgeUndeployRoute = regexp.MustCompile(`^/container-deployments/(\d+)/undeploy$`)
 	// taskLocationRe reads the task id out of "Location: /tasks/<id>" (the backend answers 202 with it,
 	// routers/container_deployments.py:151-158).
 	taskLocationRe = regexp.MustCompile(`/tasks/(\d+)$`)
@@ -39,9 +42,13 @@ var (
 // the platform cannot reach stays on the device.
 const edgeStartFailed = "the start failed; a container named %s may be left on the device and the platform cannot remove it (no container id)"
 
-// edgeDeploymentRef builds "deployment:<id>" and, when the answer carried a task, "|task:<id>".
+// edgeDeploymentRef builds "deployment:<id>" and, when the answer carried a task, "|task:<id>". It
+// serves both routes of the kind, starting a deployment and taking it back.
 func edgeDeploymentRef(req platform.Request, res platform.Result) (string, bool) {
 	m := edgeDeployRoute.FindStringSubmatch(req.Path)
+	if m == nil {
+		m = edgeUndeployRoute.FindStringSubmatch(req.Path)
+	}
 	if m == nil {
 		return "", false
 	}
