@@ -1,6 +1,6 @@
 ---
 name: pre-annotation
-description: Pre-annotate platform datasets with CVAT functions via agw-platform annotation-*. Rules - check capabilities first (entry annotation, and vision for image review); if pre-annotation is unavailable say so and point to manual annotation in CVAT; only the user's own image datasets with classes; first annotation-functions, then annotation-task; propose a mapping from function labels to dataset classes by meaning and show it as a table before pre-annotate, never map a label you are unsure about; existing=keep only on a task without annotations, existing=replace deletes all annotations and needs a clear yes; follow a run with annotation-run in a background loop at least 30 s apart and do not wait in the foreground; afterwards annotation-summary, then offer annotation-sync; never claim the pre-annotation is correct, it is a proposal the user checks in CVAT (give the cvat_url). Own ONNX model via annotation-function (irreversible, visible to all CVAT users, not removable); labels in the model's output order.
+description: Pre-annotate datasets in CVAT with agw-platform annotation-*. Check capabilities first (entry annotation); without it point to manual annotation in CVAT; only your own image datasets; annotation-functions, then annotation-task; propose the mapping from function labels to dataset classes by meaning as a table, never map a label you are unsure about; with manual annotations calibrate with annotation-check and report the sample size, under 80 percent hit rate annotate more by hand; annotation-fill writes only images without annotations; annotation-check uncertain names the weakest images and their cvat_url; follow a run or job (annotation-run, annotation-job) in a background loop, 30 s apart; annotation-summary, then offer annotation-sync; existing=keep only on an empty task, existing=replace deletes all; never claim the pre-annotation is correct, the user corrects it in CVAT; own ONNX model via annotation-function (irreversible, visible to all CVAT users, not removable); labels in the model's output order.
 ---
 
 # Pre-annotation with CVAT
@@ -106,6 +106,60 @@ Runtime on this instance (4 vCPU, no GPU): roughly **0.1 to 1 s per image**, so 
 for a few hundred images and an hour for a few thousand. Say that it is an estimate. Large images and
 detection models take longer.
 
+A **job** of the check and the fill (below) is followed the same way, with `annotation-job <job_id>`. A
+job runs in the gateway and keeps running while the chat is idle; it cannot be stopped. Its answer
+carries `done` and `total` images.
+
+## 5a. Check before you trust
+
+A function that has never seen this dataset is a guess. Measure it first, fill only what is empty, and
+show the user where the answers are weak — that is the loop, not the run over all images.
+
+**1. Measure (calibrate).** Only with manually annotated images of the task (`source != "auto"`); without
+any, say so and ask for some by hand (a handful per class is a start, `annotation-task` creates the task
+they are annotated in).
+
+```bash
+agw-platform annotation-check --dataset-id <id> --function <id> --mode calibrate --mapping '{"class_0":"0"}'
+```
+
+The answer carries `job_id`; follow it in a background loop as in §5. The finished result has `images`
+(how many were measured), `mapping` (what each class of the function answered), `confusion`, `accuracy`,
+`coverage`, `proposed_min_confidence` and a `note`. Show `mapping`, the hit rate and the threshold as a
+table, **name the sample size**, and have the user confirm the mapping before any run: the confusion
+table is the evidence, not your guess.
+
+**2. Decide.** Below 80 percent accuracy, or with a coverage well under the threshold you would use, do
+**not** run the function over all images: recommend more manual annotations instead, and say how many
+more. That is the honest answer, and it is what the calibration is for.
+
+**3. Fill what is empty.**
+
+```bash
+agw-platform annotation-fill --dataset-id <id> --function <id> --min-confidence <proposed> --mapping '{"class_0":"0"}'
+```
+
+`annotation-fill` asks the function about the images of the task that carry **no** annotation at all and
+writes what it answers into exactly those images (`source: "auto"`). Images with an annotation stay
+untouched, also when the user annotates one while the job runs; nothing is deleted. The result names
+`filled`, `skipped_annotated` and `empty_results` — report all three.
+
+**4. Name the weak images.**
+
+```bash
+agw-platform annotation-check --dataset-id <id> --function <id> --mode uncertain --uncertain-below 60
+```
+
+The result lists the images whose answer stays under the threshold, the weakest first, each with its file
+and a `cvat_url` that opens exactly that image. Give the user that list (the links, not the raw JSON) and
+what to look at.
+
+**5. Close the loop.** After the user corrected the images in CVAT: `annotation-summary`, then
+`annotation-sync`, then a new training on the corrected images (skill `training-advice`), a new function
+from the new model (`annotation-function`) and calibrate again — the hit rate should have gone up. If the
+task takes several of these steps, propose them **together** as one plan (`propose-plan`) and say how many
+compute calls it needs.
+
 ## 6. Count, then write back
 
 `agw-platform annotation-summary --dataset-id <id>` counts the annotations of the task: per class manual
@@ -120,5 +174,6 @@ user approves; offer it rather than running it silently.
 
 The pre-annotation is a **proposal**, not a result. Say which function ran, with which threshold and
 mapping, how many annotations and how many images were touched, and that the user checks and corrects
-them in CVAT (`cvat_url`). Never call the annotations correct, never report a metric you did not measure,
-and never train on them without the user's explicit consent.
+them in CVAT (`cvat_url`). Never call the annotations correct, never report a metric you did not measure
+— a calibration over ten images is a tendency, not a property of the model — and never train on them
+without the user's explicit consent.
