@@ -5,6 +5,8 @@
 package sandbox
 
 import (
+	"archive/tar"
+	"bytes"
 	"context"
 	"os"
 	"strings"
@@ -39,18 +41,19 @@ func TestRunOnceRemovesContainer(t *testing.T) {
 
 	name := "agw-check-test-" + time.Now().Format("150405")
 	// The entrypoint of the execution image is `agw-exec idle`, which ignores arguments and never ends:
-	// the check runs its script directly (Spec.Entrypoint).
+	// the check runs its script directly (Spec.Entrypoint). The command reads one line and not to EOF:
+	// the write side of the connection stays open while the answer is read (see RunOnce).
 	spec := Spec{
-		Name: name, Image: image, Entrypoint: []string{"python3", "-c", "import sys; sys.stdout.write(sys.stdin.read().upper())"},
+		Name: name, Image: image, Entrypoint: []string{"python3", "-c", "import sys; print(sys.stdin.readline().strip().upper())"},
 		InternalNet: "none", MemoryMB: 256, CPUs: 1, Pids: 32,
 		Tmpfs:  map[string]string{"/tmp": checkTmpfs},
 		Labels: map[string]string{checkLabel: "1"},
 	}
-	out, exit, stderr, err := rt.RunOnce(ctx, spec, strings.NewReader("hello check"), 1<<20)
+	out, exit, stderr, err := rt.RunOnce(ctx, spec, strings.NewReader("hello check\n"), 1<<20)
 	if err != nil || exit != 0 {
 		t.Fatalf("RunOnce: %v (exit %d, stderr %q)", err, exit, stderr)
 	}
-	if string(out) != "HELLO CHECK" {
+	if string(out) != "HELLO CHECK\n" {
 		t.Fatalf("answer: %q", out)
 	}
 	// The container is gone, whatever happened.
@@ -86,6 +89,100 @@ func TestRunOnceRemovesContainer(t *testing.T) {
 		t.Errorf("too much output: %v", err)
 	}
 }
+
+// The whole answer arrives, also when the command writes it after a pause. Closing the write side of the
+// hijacked connection early ends the whole stream: the live test of R0 got an empty answer with an exit
+// code of 0 and a container that was still running (see RunOnce).
+func TestRunOnceKeepsLateOutput(t *testing.T) {
+	if os.Getenv("AGW_DOCKER_TESTS") != "1" {
+		t.Skip("set AGW_DOCKER_TESTS=1 to test against Docker")
+	}
+	image := os.Getenv("AGW_IMAGE")
+	if image == "" {
+		image = "agwpoc/agw-basis:dev"
+	}
+	rt, err := New("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	out, exit, stderr, err := rt.RunOnce(ctx, Spec{
+		Name: "agw-check-late-" + time.Now().Format("150405"), Image: image,
+		Entrypoint:  []string{"/bin/sh", "-c", "echo EARLY; sleep 2; echo LATE"},
+		InternalNet: "none", MemoryMB: 256, CPUs: 1, Pids: 32,
+		Tmpfs:  map[string]string{"/tmp": checkTmpfs},
+		Labels: map[string]string{checkLabel: "1"},
+	}, strings.NewReader(""), 1<<20)
+	if err != nil || exit != 0 {
+		t.Fatalf("RunOnce: %v (exit %d, stderr %q)", err, exit, stderr)
+	}
+	if string(out) != "EARLY\nLATE\n" {
+		t.Fatalf("the answer lost what was written later: %q", out)
+	}
+}
+
+// The command reads its input to its end, not to EOF: the write side stays open while the answer is read,
+// and /opt/agw/check/predict.py stops at the end-of-archive marker of its tar exactly like this.
+func TestRunOnceTarInputWithoutEOF(t *testing.T) {
+	if os.Getenv("AGW_DOCKER_TESTS") != "1" {
+		t.Skip("set AGW_DOCKER_TESTS=1 to test against Docker")
+	}
+	image := os.Getenv("AGW_IMAGE")
+	if image == "" {
+		image = "agwpoc/agw-basis:dev"
+	}
+	rt, err := New("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	blob := tarWith(t, map[string]string{"job.json": "{}\n", "model.onnx": "onnx", "images/abc.png": "PNG"})
+	out, exit, stderr, err := rt.RunOnce(ctx, Spec{
+		Name: "agw-check-tar-" + time.Now().Format("150405"), Image: image,
+		Entrypoint: []string{"python3", "-c",
+			"import sys, tarfile; tf = tarfile.open(fileobj=sys.stdin.buffer, mode='r|'); print(' '.join(m.name for m in tf))"},
+		InternalNet: "none", MemoryMB: 256, CPUs: 1, Pids: 32,
+		Tmpfs:  map[string]string{"/tmp": checkTmpfs},
+		Labels: map[string]string{checkLabel: "1"},
+	}, bytes.NewReader(blob), 1<<20)
+	if err != nil || exit != 0 {
+		t.Fatalf("RunOnce: %v (exit %d, stderr %q)", err, exit, stderr)
+	}
+	if got := strings.TrimSpace(string(out)); got != "job.json model.onnx images/abc.png" {
+		t.Fatalf("the command read %q", got)
+	}
+}
+
+// tarWith builds a small tar for a test (the same shape assess.BuildTar writes; this package cannot
+// import internal/assess, which uses it).
+func tarWith(t *testing.T, files map[string]string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	for _, name := range []string{"job.json", "model.onnx", "images/abc.png"} {
+		data := files[name]
+		if err := tw.WriteHeader(&tar.Header{Name: name, Mode: 0o644, Size: int64(len(data)), Typeflag: tar.TypeReg}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write([]byte(data)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// Padded to a whole record like tar(1) and assess.BuildTar: a record-oriented reader (tarfile) would
+	// otherwise wait for the rest of its last record, and the write side of the connection stays open.
+	if rest := buf.Len() % tarRecord; rest != 0 {
+		buf.Write(make([]byte, tarRecord-rest))
+	}
+	return buf.Bytes()
+}
+
+// tarRecord is the record size of a tar archive (tar(1)'s blocking factor 20 × 512, tarfile.RECORDSIZE).
+const tarRecord = 20 * 512
 
 // The image of the execution sandbox holds the check script and onnxruntime (R0.15); the agent can read
 // the script but not change it.
