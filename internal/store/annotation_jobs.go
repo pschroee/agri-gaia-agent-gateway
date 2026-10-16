@@ -84,14 +84,38 @@ RETURNING id::text, created_at`,
 
 // AnnotationJob reads a job of one chat; a job of another chat is not found (E8).
 func (s *Store) AnnotationJob(ctx context.Context, chatID, id string) (AnnotationJob, error) {
-	var j AnnotationJob
-	err := s.pool.QueryRow(ctx, `SELECT `+annotationJobCols+` FROM annotation_jobs WHERE chat_id=$1 AND id=$2`, chatID, id).
-		Scan(&j.ID, &j.ChatID, &j.Kind, &j.DatasetID, &j.TaskID, &j.Function, &j.Params, &j.State, &j.Done, &j.Total,
-			&j.Result, &j.Error, &j.CreatedAt, &j.EndedAt)
+	j, err := annotationJobScan(s.pool.QueryRow(ctx, `SELECT `+annotationJobCols+` FROM annotation_jobs WHERE chat_id=$1 AND id=$2`, chatID, id))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return AnnotationJob{}, ErrNotFound
 	}
 	return j, err
+}
+
+// annotationJobScan reads a row of annotation_jobs in the order of annotationJobCols.
+func annotationJobScan(row interface{ Scan(...any) error }) (AnnotationJob, error) {
+	var j AnnotationJob
+	err := row.Scan(&j.ID, &j.ChatID, &j.Kind, &j.DatasetID, &j.TaskID, &j.Function, &j.Params, &j.State, &j.Done,
+		&j.Total, &j.Result, &j.Error, &j.CreatedAt, &j.EndedAt)
+	return j, err
+}
+
+// AnnotationJobs lists the jobs of one chat, oldest first (the check card shows them in this order;
+// the result of a finished job is what it renders).
+func (s *Store) AnnotationJobs(ctx context.Context, chatID string) ([]AnnotationJob, error) {
+	rows, err := s.pool.Query(ctx, `SELECT `+annotationJobCols+` FROM annotation_jobs WHERE chat_id=$1 ORDER BY created_at, id`, chatID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []AnnotationJob{}
+	for rows.Next() {
+		j, err := annotationJobScan(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, j)
+	}
+	return out, rows.Err()
 }
 
 // SetAnnotationJobState moves a job into another state; a state that ends the job also sets ended_at.

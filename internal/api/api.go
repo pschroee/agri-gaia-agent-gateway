@@ -207,6 +207,9 @@ func (s *Server) Handler() http.Handler {
 	chat("GET /api/chats/{id}/plans", s.plans)
 	// R0 (issue #112): the result checks of a chat with their reports, for the check card.
 	chat("GET /api/chats/{id}/assessments", s.assessments)
+	// V4 (issue #112): the runs and jobs of pre-annotation with their results, for the cards in the
+	// history. Own chats only; the route reads the database and never wakes the chat.
+	chat("GET /api/chats/{id}/annotation", s.annotationResults)
 	// A-E1: the user's controls of an autonomous plan; the agent has no tool for them.
 	writes("POST /api/chats/{id}/plans/{plan}/pause", s.planControl(func(ctx context.Context, chatID, planID string) (store.Plan, error) {
 		return s.M.PausePlan(ctx, chatID, planID, "user")
