@@ -155,7 +155,7 @@ name stays on the device, which the platform cannot remove — tell the user.
 REST API, only with a JSON body (no file uploads). Which paths exist is shown by
 `agw-platform api-paths` (one line per operation; `agw-platform api-paths /train` only for training).
 Paths under `/users`, `/urls`, `/service` and `/network` are blocked. Values of passwords, keys
-and tokens appear as `[redacted by the orchestrator]`, downloads only as size and type.
+and tokens appear as `[redacted]`, downloads only as size and type.
 
 So far the platform only distinguishes logged in or not: lists show the objects of **all**
 users. Do not delete or change anything the user has not explicitly asked for.

@@ -375,10 +375,16 @@ func TestOIDCActivityOwnership(t *testing.T) {
 	if code, pg, _ = get(a, "?outcome=error&since=2026-01-01T00:00:00Z"); code != 200 || len(pg.Calls) != 0 || pg.Summary.Total != 2 {
 		t.Fatalf("outcome error: %d %+v", code, pg)
 	}
-	for _, q := range []string{"?since=yesterday", "?until=2026-13-01T00:00:00Z", "?outcome=fine", "?limit=0", "?limit=x", "?before=-1"} {
+	for _, q := range []string{"?since=yesterday", "?until=2026-13-01T00:00:00Z", "?outcome=fine", "?limit=0", "?limit=x", "?before=-1",
+		"?call=%00", "?call=" + strings.Repeat("x", 257)} {
 		if code, _, body := get(a, q); code != 400 {
 			t.Errorf("%s: %d %s", q, code, body)
 		}
+	}
+	// Issue L6/#123: ?call= limits to the platform calls of one tool call. A well-formed id the user has no call
+	// for gives an empty page, not an error.
+	if code, pg, body = get(a, "?call=tc-none"); code != 200 || len(pg.Calls) != 0 || strings.Contains(body, "anna") {
+		t.Fatalf("call filter: %d %s", code, body)
 	}
 	if code, _ := call(t, oidctest.NewBrowser(t), "GET", srv.URL+"/api/activity", ""); code != 401 {
 		t.Fatalf("without login: %d", code)

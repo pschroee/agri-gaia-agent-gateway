@@ -444,3 +444,29 @@ func TestTokenNoRedirect(t *testing.T) {
 		t.Fatal("password sent to the redirect target")
 	}
 }
+
+// Issue L6/#123 (DL6.7): the redaction mark is shown to the user in the step details of the chat, not only to
+// the agent, so it names no part of the infrastructure. It stands where a secret value was.
+func TestRedactedMarkWithoutInfraTerm(t *testing.T) {
+	f := &fakePlatform{respond: func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"name":"x","password":"pw"}`)
+	}}
+	c, _ := newClient(t, f, 0)
+	res, err := c.Do(context.Background(), "", Request{Method: "GET", Path: "/datasets"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(res.Body, `"password":"`+redacted+`"`) || !strings.Contains(res.Body, `"name":"x"`) {
+		t.Fatalf("the mark is missing or too much was redacted: %s", res.Body)
+	}
+	if redacted != "[redacted]" {
+		t.Errorf("the mark is %q, want %q", redacted, "[redacted]")
+	}
+	low := strings.ToLower(redacted)
+	for _, term := range []string{"orchestrator", "agw", "gateway", "sandbox", "proxy", "container", "docker"} {
+		if strings.Contains(low, term) {
+			t.Errorf("the mark %q names %q", redacted, term)
+		}
+	}
+}

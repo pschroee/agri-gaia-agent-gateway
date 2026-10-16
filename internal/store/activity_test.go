@@ -346,3 +346,53 @@ func TestActivityListsSummaryReadsOutsideFigures(t *testing.T) {
 		t.Fatalf("internet kind: %d calls, %v", len(inet.Calls), err)
 	}
 }
+
+// Issue L6/#123: the activity can be limited to one tool call, so the step details of a chat can link to the
+// entries their step produced. One tool call may make several platform calls, and the filter covers the figures
+// of the calls; the runs (chat_turns) carry no tool call id and keep counting.
+func TestActivityFilterToolCall(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	c, err := s.CreateChat(ctx, NewChat{Title: "steps", Model: "p/m", Variant: "mcp", Owner: "sub-anna"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	call := func(detail, toolCall, result string) SocketCall {
+		t.Helper()
+		out, err := s.AddSocketCall(ctx, SocketCall{ChatID: c.ID, SlotID: "p", Via: "mcp", Op: "platform", Detail: detail, Result: result, ToolCallID: toolCall})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	call("GET /datasets", "tc-a", "ok 200")
+	call("POST /datasets", "tc-a", "ok 201")
+	call("GET /models", "tc-b", "ok 200")
+	call("GET /tags", "", "ok 200")
+	if _, err := s.CreateTurn(ctx, c.ID, "user", "user", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	p, err := s.ListActivity(ctx, ActivityFilter{ToolCall: "tc-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p.Calls) != 2 || p.Calls[0].ToolCallID != "tc-a" || p.Calls[1].ToolCallID != "tc-a" {
+		t.Fatalf("tc-a: %+v", p.Calls)
+	}
+	if p.Summary.Total != 2 || p.Summary.Chats != 1 || p.Summary.Runs != 1 {
+		t.Fatalf("figures for tc-a: %+v", p.Summary)
+	}
+	p, err = s.ListActivity(ctx, ActivityFilter{ToolCall: "tc-b"})
+	if err != nil || len(p.Calls) != 1 || p.Calls[0].Detail != "GET /models" {
+		t.Fatalf("tc-b: %v %+v", err, p.Calls)
+	}
+	p, err = s.ListActivity(ctx, ActivityFilter{ToolCall: "tc-unknown"})
+	if err != nil || len(p.Calls) != 0 || p.Summary.Total != 0 || p.Summary.Runs != 1 {
+		t.Fatalf("unknown tool call: %v %+v %+v", err, p.Calls, p.Summary)
+	}
+	p, err = s.ListActivity(ctx, ActivityFilter{})
+	if err != nil || len(p.Calls) != 4 || p.Summary.Total != 4 {
+		t.Fatalf("without the filter: %v %d %+v", err, len(p.Calls), p.Summary)
+	}
+}
