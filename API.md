@@ -933,8 +933,8 @@ other subagents keep running, and the stopped run's result stays where it is. Th
   published as SSE `subagent_run`, so the UI leaves its "stopping …" without a reload. The main agent learns it
   through a passive note in the queue (note `subagent_stop`, summary "The user stopped subagent … ; do not restart it
   unless the user asks."): it never wakes the agent and never starts a turn, it goes with the next message or the next
-  tool step. The call log gets a `subagent_stop` entry (`detail` the run, `result` `ok` or `error: <code>`), which is
-  what the activity table shows.
+  tool step. The call log gets a `subagent_stop` entry (`detail` the run, `via` `ui`, `result` `ok` or
+  `error: <code>`), which is what the activity table shows.
 - **The subagent limit** ends more than one run at once and records it differently: every run that was running at
   that moment gets `stopped_by: "limit"`.
 

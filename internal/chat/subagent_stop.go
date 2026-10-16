@@ -98,7 +98,7 @@ func (m *Manager) StopSubagent(ctx context.Context, chatID, run string) (store.S
 	// The bridge lets through nothing but the run's ID (DL3.1): the stop ends that run, not a single child of it.
 	reply, err := m.relaySubagent(ctx, chatID, l, ref, "stop", map[string]any{"id": rec.PiRunID})
 	if err != nil {
-		m.LogCall(l.slot.ID, chatID, ViaUser, opSubagentStop, rec.RunID, "error: "+err.Error())
+		m.LogCall(l.slot.ID, chatID, viaSubagentUI, opSubagentStop, rec.RunID, "error: "+err.Error())
 		return store.SubagentRun{}, err
 	}
 	if !reply.OK {
@@ -106,23 +106,26 @@ func (m *Manager) StopSubagent(ctx context.Context, chatID, run string) (store.S
 		if code == "" {
 			code = "refused"
 		}
-		m.LogCall(l.slot.ID, chatID, ViaUser, opSubagentStop, rec.RunID, "error: "+code)
+		m.LogCall(l.slot.ID, chatID, viaSubagentUI, opSubagentStop, rec.RunID, "error: "+code)
 		return store.SubagentRun{}, &SubagentRelayError{Code: code, Message: reply.Message}
 	}
 	if err := m.st.SetSubagentStoppedBy(ctx, chatID, rec.RunID, StoppedByUser); err != nil {
 		slog.Warn("stopped_by not stored", "chat", chatID, "run", rec.RunID, "err", err)
 	}
 	rec.StoppedBy = StoppedByUser
-	m.LogCall(l.slot.ID, chatID, ViaUser, opSubagentStop, rec.RunID, "ok")
+	m.LogCall(l.slot.ID, chatID, viaSubagentUI, opSubagentStop, rec.RunID, "ok")
 	m.noteSubagentStopped(ctx, chatID, rec)
 	// Publish the run so the UI leaves "stopping …" without a reload and names the reason.
 	m.publish(chatID, Event{Kind: "subagent_run", Data: rec})
 	return rec, nil
 }
 
-// opSubagentStop is the operation of the socket log entry of a stop (issue #120, L3); the activity shows that the
-// user stopped a subagent.
-const opSubagentStop = "subagent_stop"
+// The socket log entry of a stop (issue #120, L3): the operation, and "ui" as who asked (the user in the interface;
+// the activity names it "UI"). DL3.2 fixes both.
+const (
+	opSubagentStop = "subagent_stop"
+	viaSubagentUI  = "ui"
+)
 
 // noteSubagentStopped tells the main agent that the user stopped a run. Like notePassive (issue #81, L3 DL3.5) it
 // never wakes the agent: the note waits in the queue and goes with the next message or the next tool step.

@@ -115,7 +115,7 @@ func TestStopSubagentSetsStoppedByAndNotes(t *testing.T) {
 	for _, c := range calls {
 		if c.Op == opSubagentStop {
 			found = true
-			if c.Via != ViaUser || c.Detail != "run-1" || c.Result != "ok" {
+			if c.Via != "ui" || c.Detail != "run-1" || c.Result != "ok" {
 				t.Fatalf("socket call: %+v", c)
 			}
 		}
