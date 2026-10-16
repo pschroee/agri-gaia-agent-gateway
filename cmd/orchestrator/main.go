@@ -194,6 +194,7 @@ func run() error {
 		BgWakesPerHour: env.BgWakesPerHour, BgKeepAlive: env.BgKeepAlive, AutoTurnsMax: env.AutoTurnsMax,
 		Titler: newTitler(cat, env.TitleModel), Platform: plat, Toolsets: toolsets,
 		Notebook: notebooker,
+		Checks:   checks, // R0: answers the capability "checks"
 	})
 	fac.Backend = m
 	plat.SetOnExchange(m.PlatformExchanged)
@@ -230,9 +231,14 @@ func run() error {
 	}
 
 	// R0 — the check paths are answered by the gateway itself (G1.5): delegation, effect class and log
-	// run as for every other call, and the gateway decides what a check runs on. One check runs at a
-	// time (R0.20).
+	// run as for every other call, and the gateway decides what a check runs on. Checks are observed like
+	// runs, so the job line of the watcher shows their state (R0.21); one check runs at a time (R0.20).
 	m.RegisterVirtual(platform.AssessPrefix, checks)
+	{
+		method, path := assess.CheckRoute()
+		watch.RegisterRoute(method, path, assess.KindName, assess.RunIDFrom)
+		watch.Register(checks.WatchKind())
+	}
 
 	if err := m.Recover(ctx); err != nil {
 		return err

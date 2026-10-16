@@ -245,6 +245,10 @@ type Options struct {
 	// when AGW_JUPYTERHUB_API_URL is not set. main.go registers it as the doer of the notebook paths.
 	Notebook Notebooker
 
+	// Checks answers the capability "checks" (R0.23): can this setup check a result right now, and how
+	// many checks are left in this chat. nil: the entry says that the gateway does not check results.
+	Checks Checker
+
 	// Toolsets: the bindings every new chat gets (AGW_TOOLSETS, issue #29); empty = toolset.Default.
 	// Stored chats keep the combination they were created with.
 	Toolsets toolset.Set
@@ -2531,6 +2535,12 @@ func (m *Manager) Recover(ctx context.Context) error {
 	}
 	if err := m.st.RecoverPlans(ctx); err != nil {
 		return err
+	}
+	// Result checks of the last run have no container any more; they end as failed (R0.22).
+	if n, err := m.st.RecoverAssessments(ctx); err != nil {
+		return err
+	} else if n > 0 {
+		slog.Info("result checks ended after restart", "count", n)
 	}
 	active, err := m.st.ChatsInState(ctx, store.StateActive)
 	if err != nil {
