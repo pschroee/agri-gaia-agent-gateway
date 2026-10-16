@@ -145,9 +145,28 @@ func TestBuildZipLayout(t *testing.T) {
 	if build["image"] != "cvat."+name || build["baseImage"] != "python:3.11-slim" {
 		t.Errorf("build: %v", build)
 	}
-	// The directives are the shape nuclio reads: a list of {kind, value}, kind the Dockerfile
-	// instruction and value its argument alone (no repeated RUN).
-	post := yamlMap(t, build, "directives")["postCopy"]
+	// The directives are the shape nuclio reads: a map from a phase to a list of {kind, value},
+	// kind the Dockerfile instruction and value its argument alone (no repeated kind).
+	directives := yamlMap(t, build, "directives")
+	if got := yamlKeys(t, directives); !reflect.DeepEqual(got, []string{"postCopy", "preCopy"}) {
+		t.Fatalf("directive phases: %v", got)
+	}
+	pre := directives["preCopy"]
+	preItems, ok := pre.([]any)
+	if !ok || len(preItems) != 1 {
+		t.Fatalf("directives.preCopy is not a one-element list: %v (%T)", pre, pre)
+	}
+	preItem, ok := preItems[0].(map[string]any)
+	if !ok {
+		t.Fatalf("the preCopy directive is not a mapping: %v (%T)", preItems[0], preItems[0])
+	}
+	if got := yamlKeys(t, preItem); !reflect.DeepEqual(got, []string{"kind", "value"}) {
+		t.Errorf("preCopy directive fields: %v", got)
+	}
+	if preItem["kind"] != "WORKDIR" || preItem["value"] != functionWorkdir {
+		t.Errorf("the working directory is not set: %v", preItem)
+	}
+	post := directives["postCopy"]
 	items, ok := post.([]any)
 	if !ok || len(items) != 1 {
 		t.Fatalf("directives.postCopy is not a one-element list: %v (%T)", post, post)
@@ -271,8 +290,12 @@ func TestFunctionYAMLDirectives(t *testing.T) {
 		t.Fatalf("nuctl 1.16.4 would refuse this function.yaml: %v", err)
 	}
 
-	if got := cfg.Spec.Build.Directives; len(got) != 1 || got["postCopy"] == nil {
-		t.Fatalf("directives carry %d phases, want only postCopy: %v", len(got), got)
+	if got := cfg.Spec.Build.Directives; len(got) != 2 || got["postCopy"] == nil || got["preCopy"] == nil {
+		t.Fatalf("directives carry %d phases, want preCopy and postCopy: %v", len(got), got)
+	}
+	pre := cfg.Spec.Build.Directives["preCopy"]
+	if len(pre) != 1 || pre[0].Kind != "WORKDIR" || pre[0].Value != functionWorkdir {
+		t.Errorf("preCopy directives = %+v, want one WORKDIR %s", pre, functionWorkdir)
 	}
 	post := cfg.Spec.Build.Directives["postCopy"]
 	if len(post) != 1 {

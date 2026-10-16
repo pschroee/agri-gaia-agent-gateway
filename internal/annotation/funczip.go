@@ -49,6 +49,10 @@ const (
 // would break with the next release of a package (the lesson of graphql-core, CLAUDE.md).
 const functionPackages = "onnxruntime==1.20.1 numpy==1.26.4 pillow==10.4.0"
 
+// functionWorkdir is where nuclio copies the function's files and where the templates read
+// config.json and model.onnx from; the image needs it as its working directory (see functionYAML).
+const functionWorkdir = "/opt/nuclio"
+
 // classRe is the shape of a class name: it stands in function.yaml and in CVAT, so it stays simple
 // (no quoting and no shell risk).
 var classRe = regexp.MustCompile(`^[A-Za-z0-9 _.\-]{1,64}$`)
@@ -147,10 +151,15 @@ func BuildZip(name, kind string, labels []string, size int, model []byte, modelN
 //
 // The build directives carry the shape nuclio 1.16.4 reads: spec.build.directives is a map from a
 // phase ("preCopy"/"postCopy") to a list of {kind, value}, where kind is the Dockerfile
-// instruction (RUN) and value its argument alone - the builder writes "<kind> <value>" into the
+// instruction and value its argument alone - the builder writes "<kind> <value>" into the
 // Dockerfile (pkg/functionconfig/types.go, pkg/processor/build/builder.go). nuctl refuses a list of
 // bare strings ("cannot unmarshal string into Go struct field ... of type
-// functionconfig.Directive"), so the packages must not repeat the RUN.
+// functionconfig.Directive"), so a value must not repeat its kind.
+//
+// preCopy sets the working directory: nuclio's generated Dockerfile leaves it at "/" (the base
+// image python:3.11-slim sets none, and the onbuild stage does not either), while the template
+// opens config.json and model.onnx next to it - without the WORKDIR the handler dies at its start
+// with "FileNotFoundError: config.json". CVAT's own functions carry the same in their image.
 func functionYAML(name string, labels []string, modelName string, modelID int64) []byte {
 	spec, _ := json.Marshal(classSpecs(labels))
 	var b strings.Builder
@@ -159,8 +168,9 @@ func functionYAML(name string, labels []string, modelName string, modelID int64)
 		strconv.Quote(cvatTitle(modelName, modelID)), strconv.Quote(string(spec)))
 	b.WriteString("spec:\n  runtime: \"python:3.11\"\n  handler: main:handler\n  eventTimeout: 30s\n")
 	fmt.Fprintf(&b, "  build:\n    image: cvat.%s\n    baseImage: python:3.11-slim\n"+
-		"    directives:\n      postCopy:\n        - kind: RUN\n          value: pip install --no-cache-dir %s\n",
-		name, functionPackages)
+		"    directives:\n      preCopy:\n        - kind: WORKDIR\n          value: %s\n"+
+		"      postCopy:\n        - kind: RUN\n          value: pip install --no-cache-dir %s\n",
+		name, functionWorkdir, functionPackages)
 	fmt.Fprintf(&b, "  triggers:\n    myHttpTrigger:\n      maxWorkers: 1\n      kind: \"http\"\n"+
 		"      attributes:\n        maxRequestBodySize: %d\n", maxRequestBodySize)
 	b.WriteString("  platform:\n    attributes:\n      restartPolicy:\n        name: always\n        maximumRetryCount: 3\n" +
