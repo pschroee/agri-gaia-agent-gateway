@@ -34,12 +34,16 @@ const (
 // is gone with the process, so it can never end by itself.
 const AnnotationJobRecovered = "orchestrator restarted"
 
+// AnnotationJobVerify is the kind of the job that checks the result of a run or a fill (V3b). It is the
+// only kind whose params name a source; LastVerifyResult finds the newest one through it.
+const AnnotationJobVerify = "verify"
+
 // AnnotationJob is one background job of a chat (V3).
 type AnnotationJob struct {
 	ID string `json:"job_id"`
 	// ChatID is not part of an answer: a job of another chat is not found (E8).
 	ChatID    string `json:"-"`
-	Kind      string `json:"kind"` // calibrate | uncertain | fill
+	Kind      string `json:"kind"` // calibrate | uncertain | fill | verify
 	DatasetID int64  `json:"dataset_id"`
 	TaskID    int64  `json:"task_id"`
 	Function  string `json:"function"`

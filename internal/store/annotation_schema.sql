@@ -50,7 +50,7 @@ CREATE TABLE IF NOT EXISTS annotation_functions (
 );
 CREATE INDEX IF NOT EXISTS annotation_functions_user ON annotation_functions (username, created_at);
 
--- Background jobs of pre-annotation (V3): a check (calibrate | uncertain) and a fill. The job runs in
+-- Background jobs of pre-annotation (V3): a check (calibrate | uncertain | verify) and a fill. The job runs in
 -- the gateway (minutes of CPU time, one at a time) instead of inside a tool call; params holds the call
 -- the agent made, result the answer of a finished job and done/total what the observation kind
 -- annotation_job reports. A restart ends every job that was queued or running (store.RecoverAnnotationJobs).
@@ -58,7 +58,7 @@ CREATE INDEX IF NOT EXISTS annotation_functions_user ON annotation_functions (us
 CREATE TABLE IF NOT EXISTS annotation_jobs (
     id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     chat_id    uuid NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
-    kind       text NOT NULL,                            -- calibrate | uncertain | fill
+    kind       text NOT NULL,                            -- calibrate | uncertain | fill | verify
     dataset_id bigint NOT NULL,
     task_id    bigint NOT NULL,
     function   text NOT NULL,
@@ -72,3 +72,48 @@ CREATE TABLE IF NOT EXISTS annotation_jobs (
     ended_at   timestamptz
 );
 CREATE INDEX IF NOT EXISTS annotation_jobs_chat ON annotation_jobs (chat_id, created_at DESC);
+
+-- The three sets of manually annotated images of a task (V3b, E22): the calibration set the mapping and
+-- the threshold are chosen on, the validation set the rounds of V3c are compared on, and the held-out
+-- set the verdict falls on. A frame is put into its set when it is first seen and never changes it, so
+-- that a later manual annotation joins without moving the frames that were already measured on. The
+-- task id is unique in CVAT, so it stands alone in the key of the table.
+
+CREATE TABLE IF NOT EXISTS annotation_splits (
+    task_id bigint NOT NULL,
+    chat_id uuid NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+    frame   integer NOT NULL,
+    part    text NOT NULL,                          -- calibration | validation | holdout
+    PRIMARY KEY (task_id, frame)
+);
+
+-- The register of the annotations a run or a fill wrote (V3b, E21). Only what stands here may be taken
+-- back, and only as long as CVAT still carries it unchanged: fingerprint is the SHA-256 over what the
+-- object was written with, so a correction of the user in CVAT shows up as a change and the object is
+-- left alone. kind is what CVAT needs for its delete call (tag | shape | track).
+
+CREATE TABLE IF NOT EXISTS annotation_objects (
+    source_id   text NOT NULL,                      -- the run id of CVAT or the job id of the gateway
+    chat_id     uuid NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+    task_id     bigint NOT NULL,
+    kind        text NOT NULL,                      -- tag | shape | track
+    cvat_id     bigint NOT NULL,
+    frame       integer NOT NULL,
+    label_id    bigint NOT NULL,
+    fingerprint text NOT NULL,
+    PRIMARY KEY (task_id, kind, cvat_id)
+);
+CREATE INDEX IF NOT EXISTS annotation_objects_source ON annotation_objects (chat_id, source_id);
+
+-- Counters and one-off marks of a CVAT task in one chat (V3b, V3c): the rounds and retrains of the
+-- correction loop (V3c) and when the held-out images were used for a final verdict. The held-out set of
+-- a task is measured at most once per chat (E22), so the mark stands per chat and task, not per source.
+
+CREATE TABLE IF NOT EXISTS annotation_tasks (
+    chat_id           uuid NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+    task_id           bigint NOT NULL,
+    rounds            integer NOT NULL DEFAULT 0,
+    retrains          integer NOT NULL DEFAULT 0,
+    final_verified_at timestamptz,
+    PRIMARY KEY (chat_id, task_id)
+);
