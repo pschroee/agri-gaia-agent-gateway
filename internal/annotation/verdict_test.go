@@ -183,7 +183,14 @@ func TestVerifyPerClassBelow(t *testing.T) {
 	if len(class1.Below) != 1 || class1.Below[0] != "recall" {
 		t.Errorf("the figure under its limit is not named: %+v", class1)
 	}
-	if len(rep.Report.Reasons) == 0 || !hasText(rep.Report.Reasons[0], `class "1"`) {
+	// The figure stands first in the reasons, the weak class behind it, so the class is looked for in all of them.
+	named := false
+	for _, reason := range rep.Report.Reasons {
+		if hasText(reason, `class "1"`) {
+			named = true
+		}
+	}
+	if !named {
 		t.Errorf("the weak class is not named in the reasons: %v", rep.Report.Reasons)
 	}
 }
@@ -259,6 +266,8 @@ func TestVerdictThresholdsWithImageReview(t *testing.T) {
 	}
 	// Too many images flagged by the review: questionable even with good figures.
 	in := verifyInput(sameObs(20, 20, KindClassification), true, true)
+	// the share is of the images the review looked at, not of the measured ones (E22)
+	in.ImageReview.Checked = 20
 	in.Flagged = 6 // 0.30 of 20
 	rep = Verify(in)
 	if rep.Report.Verdict != assess.Questionable {
@@ -305,8 +314,14 @@ func TestImageReviewFieldAlwaysSet(t *testing.T) {
 		if rep.ImageReview.Done || rep.ImageReview.Reason == "" {
 			t.Errorf("the report does not say why no model looked at the images: %+v", rep.ImageReview)
 		}
-		if !hasText(rep.Header, "no image review") {
+		// A report that measured something names it in the brackets of its header. A not measured one
+		// carries no brackets at all and names its reason instead (assess.Header, R0.2) — the field above
+		// is what tells the difference there.
+		if rep.Verdict != assess.NotMeasured && !hasText(rep.Header, "no image review") {
 			t.Errorf("the header does not carry it: %q", rep.Header)
+		}
+		if rep.Verdict == assess.NotMeasured && !hasText(rep.Header, "too few held-out images") {
+			t.Errorf("the not measured header does not name its reason: %q", rep.Header)
 		}
 	}
 }

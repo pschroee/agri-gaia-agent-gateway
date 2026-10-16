@@ -302,6 +302,17 @@ func classificationFigures(obs []Observation, mapping map[string]string, thresho
 		pred = append(pred, predictedClass(o, mapping, threshold))
 	}
 	fig := assess.ClassMetrics(truth, pred, classes)
+	// The per-class figures are rounded like the other figures of an answer (decisions), so that the
+	// report the agent reads and the card show the same digits.
+	for class, cf := range fig.PerClass {
+		if cf.Precision != nil {
+			p := round(*cf.Precision)
+			cf.Precision = &p
+		}
+		cf.Recall = round(cf.Recall)
+		cf.F1 = round(cf.F1)
+		fig.PerClass[class] = cf
+	}
 	accuracy, macroF1 := fig.Accuracy, fig.MacroF1
 	return fig.PerClass, Overall{Accuracy: &accuracy, MacroF1: &macroF1}
 }
@@ -385,16 +396,18 @@ func detectionPerClass(obs []Observation, mapping map[string]string, threshold f
 		if count == nil {
 			count = &detCounts{}
 		}
+		// The figures are rounded like every other figure of an answer (decisions), so that the report the
+		// agent reads and the card show the same digits.
 		cf := assess.ClassFigures{Support: count.support}
 		if count.tp+count.fp > 0 {
-			p := float64(count.tp) / float64(count.tp+count.fp)
+			p := round(float64(count.tp) / float64(count.tp+count.fp))
 			cf.Precision = &p
 		}
 		if count.tp+count.fn > 0 {
-			cf.Recall = float64(count.tp) / float64(count.tp+count.fn)
+			cf.Recall = round(float64(count.tp) / float64(count.tp+count.fn))
 		}
 		if cf.Precision != nil && *cf.Precision+cf.Recall > 0 {
-			cf.F1 = 2 * *cf.Precision * cf.Recall / (*cf.Precision + cf.Recall)
+			cf.F1 = round(2 * *cf.Precision * cf.Recall / (*cf.Precision + cf.Recall))
 		}
 		if cf.Support >= assess.BelowMinImages && cf.Recall < assess.BelowRecall {
 			cf.Below = []string{"recall"}

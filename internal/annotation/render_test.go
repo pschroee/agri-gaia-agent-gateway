@@ -94,8 +94,11 @@ func TestRenderBoxes(t *testing.T) {
 	if b := img.Bounds(); b.Dx() != 512 || b.Dy() != 512 {
 		t.Fatalf("the rendered picture is %v, expected 512x512", b)
 	}
-	// The frame sits on the edges of the box: three pixels wide, the corner and its inside are drawn.
-	for _, p := range [][2]int{{50, 50}, {52, 52}, {50, 150}, {150, 250}, {100, 250}} {
+	// The frame sits on the edges of the box: three pixels wide, the corner and its inside are drawn. The very
+	// corner pixel (150,250) is not among them: it shares its chroma block in the JPEG with three white pixels
+	// and comes back grey (measured 121,109,95 against red 230,25,43). The pixels beside it on both edges do
+	// carry the colour, so the frame reaches the corner.
+	for _, p := range [][2]int{{50, 50}, {52, 52}, {50, 150}, {150, 249}, {149, 250}, {100, 250}} {
 		if !near(t, img, p[0], p[1], rgba, jpegTolerance) {
 			t.Errorf("the frame is missing at %d,%d", p[0], p[1])
 		}
