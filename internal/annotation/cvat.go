@@ -273,7 +273,11 @@ func (c *CVAT) do(ctx context.Context, s session, method, path string, query url
 		return nil, err
 	}
 	req.Header.Set("Authorization", "Token "+s.key)
-	req.Header.Set("Accept", "application/json")
+	// CVAT does not serve application/json: its renderers answer only to their own media type
+	// (application/vnd.cvat+json), and a request that asks for application/json alone is refused
+	// with 406 "Could not satisfy the request Accept header" before authentication is looked at.
+	// Asking for both keeps JSON as the preference and still lets CVAT pick its own type.
+	req.Header.Set("Accept", "application/json, */*")
 	if s.csrf != "" {
 		req.Header.Set("X-CSRFToken", s.csrf)
 	}
