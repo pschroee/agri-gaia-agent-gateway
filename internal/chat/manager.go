@@ -2158,6 +2158,12 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 	// approval the step was parked with. Only then does the repeated call not ask again.
 	approvedHere := m.parkedHere(ctx, chatID, req)
 	if needsApproval(access, req.Writes(), del) && (step == nil || !step.Covered) && !approvedHere {
+		// A step that already waits for the user's decision is not asked a second time (A-E2, D2.8): its
+		// approval stays open until the plan expires, and a second one would run the same irreversible call
+		// twice. The same answer as at the first call, so that the agent ends its turn either way.
+		if res, waiting := m.parkedAgain(ctx, step); waiting {
+			return res, nil
+		}
 		if err := m.checkPendingLimit(ctx, chatID); err != nil {
 			return platform.Result{}, err
 		}
@@ -2229,14 +2235,24 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 		// (A-E2, D2.8): the user may decide hours later, the gateway repeats the stored call then. A step
 		// that carries files of the sandbox is asked synchronously — the gateway cannot repeat it without
 		// the running sandbox, and the approval has to show the bytes that were read.
-		if step != nil && len(req.Files) == 0 && m.stepIsParked(ctx, step) {
-			if s, ok := m.pool.Get(slotID); ok {
-				s.SetActivity("tool", "")
+		if m.parkedStep(ctx, step, req) {
+			// The step is marked as parked (D2.8): the approval stays open until the plan expires, and the
+			// gateway repeats the stored call when the user decides. The mark has to be written before the
+			// answer, because that is what finds the step again at the decision.
+			if ok, perr := m.st.ParkApproval(ctx, step.PlanID, step.Idx, ap.ID); perr != nil || !ok {
+				// The step is not open any more (finished or skipped in between): ask as usual instead of
+				// parking it, so that no decision is handed to a step that no longer waits.
+				slog.Warn("step not parked, asking as usual", "chat", chatID, "plan", step.PlanID, "step", step.Idx, "error", perr)
+			} else {
+				if s, ok := m.pool.Get(slotID); ok {
+					s.SetActivity("tool", "")
+				}
+				m.publishChat(ctx, chatID)
+				m.publishPlan(ctx, step.PlanID)
+				m.parkApproval(ctx, chatID, slotID, via, req, step, ap, w)
+				return platform.Result{Status: "pending_user", Message: fmt.Sprintf(
+					"waiting for the user's approval of step %d; end your turn, you will be woken when the user decides", step.Idx)}, nil
 			}
-			m.publishChat(ctx, chatID)
-			m.parkApproval(ctx, chatID, slotID, via, req, step, ap, w)
-			return platform.Result{Status: "pending_user", Message: fmt.Sprintf(
-				"waiting for the user's approval of step %d; end your turn, you will be woken when the user decides", step.Idx)}, nil
 		}
 		approved, werr := w.Wait(ctx, m.opt.ApprovalTimeout)
 		bg := context.WithoutCancel(ctx)
