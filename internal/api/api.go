@@ -205,6 +205,8 @@ func (s *Server) Handler() http.Handler {
 	writes("POST /api/chats/{id}/subagents", s.subagentLimitGone)
 	chat("GET /api/chats/{id}/subagent-runs", s.subagentRuns)
 	writes("POST /api/chats/{id}/subagent-runs/{run}/messages", s.subagentMessage)
+	// Stops one running subagent without stopping the chat (issue #120, L3).
+	writes("POST /api/chats/{id}/subagent-runs/{run}/stop", s.subagentStop)
 	chat("GET /api/chats/{id}/plans", s.plans)
 	// R0 (issue #112): the result checks of a chat with their reports, for the check card.
 	chat("GET /api/chats/{id}/assessments", s.assessments)
@@ -739,6 +741,51 @@ func subagentMessageFail(w http.ResponseWriter, err error) {
 		status, code = http.StatusConflict, "subagents_unavailable"
 	case errors.Is(err, chat.ErrTrashed):
 		status, code = http.StatusConflict, "chat_in_trash"
+	case errors.Is(err, store.ErrNotFound):
+		status = http.StatusNotFound
+	case errors.Is(err, chat.ErrInvalid):
+		status = http.StatusBadRequest
+	default:
+		fail(w, err)
+		return
+	}
+	body := map[string]string{"error": err.Error()}
+	if code != "" {
+		body["code"] = code
+	}
+	writeJSON(w, status, body)
+}
+
+// subagentStop stops a single running subagent (issue #120, L3) and answers 202 with the run and the recorded reason;
+// the answer of pi-subagents arrives later and does not change it. Refusals carry a code for the UI.
+func (s *Server) subagentStop(w http.ResponseWriter, r *http.Request) {
+	run, err := s.M.StopSubagent(r.Context(), r.PathValue("id"), r.PathValue("run"))
+	if err != nil {
+		subagentStopFail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{"run": run})
+}
+
+// subagentStopFail maps the refusals of a stop to status and code. The texts the user sees are the frontend's
+// (src/agent/subagents.ts, subagentStopErrorText); the code is the contract.
+func subagentStopFail(w http.ResponseWriter, err error) {
+	code := ""
+	status := http.StatusInternalServerError
+	var relay *chat.SubagentRelayError
+	switch {
+	case errors.As(err, &relay):
+		// pi-subagents or the bridge refused: its code travels (not_found, invalid_state, execution_failed …)
+		code, status = relay.Code, http.StatusConflict
+		if relay.Code == "not_found" {
+			status = http.StatusNotFound
+		}
+	case errors.Is(err, chat.ErrSubagentNotRunning):
+		status, code = http.StatusConflict, "not_running"
+	case errors.Is(err, chat.ErrTrashed):
+		status, code = http.StatusConflict, "chat_in_trash"
+	case errors.Is(err, chat.ErrSubagentsUnavailable):
+		status, code = http.StatusConflict, "subagents_unavailable"
 	case errors.Is(err, store.ErrNotFound):
 		status = http.StatusNotFound
 	case errors.Is(err, chat.ErrInvalid):
