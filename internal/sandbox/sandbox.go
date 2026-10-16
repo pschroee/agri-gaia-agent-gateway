@@ -34,9 +34,15 @@ const (
 )
 
 type Spec struct {
-	Name          string
-	Image         string
-	Args          []string // arguments for pi (after the entrypoint)
+	Name  string
+	Image string
+	// Args: command of the container; without Entrypoint these are the arguments of the image's
+	// entrypoint (as for pi: agw-exec pi-entry <args>).
+	Args []string
+	// Entrypoint replaces the entrypoint of the image; empty keeps it. The check container (R0) sets it
+	// to the check script: the execution image's entrypoint is `agw-exec idle`, which ignores arguments
+	// and never exits.
+	Entrypoint    []string
 	Env           []string
 	Labels        map[string]string
 	InternalNet   string // always connected, without egress
@@ -275,6 +281,7 @@ func (r *Runtime) Start(ctx context.Context, s Spec) (*Instance, error) {
 	cfg := &container.Config{
 		Image:        s.Image,
 		Cmd:          s.Args,
+		Entrypoint:   s.Entrypoint,
 		Env:          s.Env,
 		User:         agentUID + ":" + agentUID,
 		Labels:       labels,
