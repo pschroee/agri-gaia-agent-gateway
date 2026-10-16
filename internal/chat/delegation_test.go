@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"agw/internal/delegation"
+	"agw/internal/notebook"
 	"agw/internal/platform"
 	"agw/internal/store"
 )
@@ -83,6 +84,10 @@ func TestConformanceThroughManager(t *testing.T) {
 	for _, prefix := range []string{platform.NotebookPrefix, platform.AnnotationPrefix, platform.AssessPrefix} {
 		e.m.RegisterVirtual(prefix, conformanceVirtual{})
 	}
+	// A notebook run is a writing call: its approval carries the code the user approves, and the manager
+	// builds that card from the notebook service (own code C-E4). Without it the call is refused before the
+	// delegation counts — the service belongs to a wired notebook feature just like the doer above.
+	e.m.opt.Notebook = notebook.New(notebook.Config{}, nil, nil, nil)
 	ctx := context.Background()
 	mk := func(raw string) (string, string) {
 		c, err := e.m.Create(ctx, NewChat{Delegation: json.RawMessage(raw)})
@@ -121,6 +126,13 @@ func TestConformanceThroughManager(t *testing.T) {
 				byRules[c.Rules] = pair
 			}
 			id, s = pair[0], pair[1]
+		}
+		// The objects a case counts as created in its chat (a guard outside the delegation goes by them too).
+		for _, o := range c.OwnsOf() {
+			resource, objID, _ := strings.Cut(o, ":")
+			if err := e.st.AddDelegationObject(ctx, id, resource, objID); err != nil {
+				t.Fatal(err)
+			}
 		}
 		req, err := c.Build()
 		allowed := false

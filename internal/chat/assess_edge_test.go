@@ -8,11 +8,21 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"agw/internal/delegation"
 	"agw/internal/platform"
 	"agw/internal/store"
 )
+
+// onlineEdgePlatform gives the manager a platform whose device list carries one online simulated device
+// (D-E0): without a device the edge tools answer unavailable and never reach the guard or their service.
+func onlineEdgePlatform(t *testing.T, e *env) {
+	t.Helper()
+	online := edgeDeviceStateJSON("sim-edge-01", "amd64", []string{"simulated"},
+		time.Now().UTC().Add(-2*time.Minute).Format(edgeHeartbeatLayout), true)
+	withEdgeDevicePlatform(t, e, "["+online+"]")
+}
 
 // assessStub answers the check paths for the tests of this package: the check itself is tested in
 // internal/assess, here only the way to it counts (delegation, guard, approval, compute limit).
@@ -31,6 +41,7 @@ func (s *assessStub) Do(_ context.Context, _ string, req platform.Request) (plat
 func TestClassifyDeploymentCheck(t *testing.T) {
 	e := setup(t)
 	ctx := context.Background()
+	onlineEdgePlatform(t, e)
 	stub := &assessStub{}
 	e.m.RegisterVirtual(platform.AssessPrefix, stub)
 	c, err := e.m.Create(ctx, NewChat{})
@@ -63,6 +74,7 @@ func TestClassifyDeploymentCheck(t *testing.T) {
 func TestEdgeCheckForeignDeploymentRefused(t *testing.T) {
 	e := setup(t)
 	ctx := context.Background()
+	onlineEdgePlatform(t, e)
 	stub := &assessStub{}
 	e.m.RegisterVirtual(platform.AssessPrefix, stub)
 	c, err := e.m.Create(ctx, NewChat{})

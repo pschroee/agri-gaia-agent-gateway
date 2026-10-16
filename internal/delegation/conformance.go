@@ -32,6 +32,17 @@ const ConformanceDelegation = `{
 // OwnInConformance are the objects that were created under the checked delegation.
 var OwnInConformance = []string{"dataset:12", "task:40"}
 
+// OwnsOf is the list of own objects a case runs with: its own list when it names one, otherwise the shared
+// one. A case whose feature is held by a guard outside the delegation names the whole list, so that the
+// guard (the edge guard D-E1 holds every action on a deployment that was not created in this chat) lets the
+// control call through — and the case that checks the refusal names the list without that object.
+func (c Case) OwnsOf() []string {
+	if len(c.Owns) > 0 {
+		return c.Owns
+	}
+	return OwnInConformance
+}
+
 // Case is a test case: either a tool with arguments or a raw call.
 type Case struct {
 	Name    string
@@ -41,7 +52,8 @@ type Case struct {
 	Expired bool // delegation expired
 	Allowed bool // expected
 	Group   string
-	Rules   string // own delegation instead of ConformanceDelegation (empty: that one)
+	Rules   string   // own delegation instead of ConformanceDelegation (empty: that one)
+	Owns    []string // own objects this case runs with (resource:id); empty: OwnInConformance
 }
 
 // ConformanceCases returns the test cases: the base table plus everything features registered
@@ -178,8 +190,9 @@ func Evaluate(c Case, now time.Time) (allowed bool, why string) {
 	if err != nil {
 		return false, "refused while checking the arguments: " + err.Error()
 	}
+	ownList := c.OwnsOf()
 	own := func(res, id string) bool {
-		for _, o := range OwnInConformance {
+		for _, o := range ownList {
 			if o == res+":"+id {
 				return true
 			}

@@ -74,7 +74,9 @@ func TestEdgeCapability(t *testing.T) {
 
 	none := withEdgeDevicePlatform(t, e, `[]`)
 	cap := byName(e.m.Capabilities(ctx, "edge-none"))["edge"]
-	if cap.Available || cap.Detail != "no edge device is registered" || cap.Without != platform.EdgeWithout {
+	// the sentence about the test requests stands behind every answer of this entry (D-E2)
+	if cap.Available || cap.Detail != "no edge device is registered; test requests: "+noneToTest ||
+		cap.Without != platform.EdgeWithout {
 		t.Fatalf("no device: %+v", cap)
 	}
 	if calls := none(); len(calls) != 1 || calls[0] != "GET /edge-devices" {

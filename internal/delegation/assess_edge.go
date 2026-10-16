@@ -88,7 +88,11 @@ func assessEdgeCases() []Case {
 		// The allowed control call: the check of a deployment this delegation may run, with the model it
 		// may read.
 		{Name: "deployment check (control)", Req: check("5"), Allowed: true, Group: "control",
-			Rules: assessEdgeRules},
+			Rules: assessEdgeRules,
+			// The chat owns the deployment it checks: the edge guard (D-E1) refuses a check of a deployment
+			// this chat did not create, and the control call has to pass that guard too. The case that checks
+			// the refusal keeps the shared list, in which deployment 9 is foreign.
+			Owns: append(append([]string{}, OwnInConformance...), "container_deployment:9")},
 
 		// The call itself (R3.1): running the deployment and reading the model.
 		{Name: "deployment check without the right to read the model", Req: check("5"), Group: "resource",
