@@ -345,6 +345,9 @@ type NotebookApprovalData = {
                         //   it (a notebook as its code cells in JSON); missing when the approval shows no text of it
   datasets: { id: number; name?: string }[];  // name: as the platform reports it now; missing when it could not be read
   limits: { cpus: number; mem_gb: number; timeout_min: number; internet: boolean };
+  note?: string;        // the agent's own note to the user about what this run is for (at most 500 characters, escaped for
+                        //   display). It is the agent's text and **not** something the gateway read or checked: the card
+                        //   shows it in a block of its own, marked "not verified", and the summary only names it
 };
 type SocketCall = { id: number; chat_id?: string; slot_id: string; via: "cli" | "mcp" | "api" | "user" /* user: the user's internet switch */; op: string; detail: string; result: string; created_at: string; session?: string; tool_call_id?: string;
   duration_ms?: number /* platform calls: round trip to the platform in ms (token exchange included, approval wait excluded); missing: not measured */;
@@ -387,7 +390,7 @@ type ActivityPage = { calls: ActivityCall[]; chats: Record<string, { id: string;
 | `POST /api/chats/{id}/plans/{plan}/pause` | `Plan` | pauses a running autonomous plan (`pause_reason` `user`); a running chat is stopped. 404 for a foreign or unknown plan, 409 `{"error":"plan is <state>","state":…}` when it is not `approved`. See *Autonomous plans* |
 | `POST /api/chats/{id}/plans/{plan}/resume` | `Plan` | resumes a `paused` plan and queues a note for the agent (`NotePlan`). 409 when it is not `paused`. Only this route resumes a plan; the agent has no tool for it |
 | `POST /api/chats/{id}/plans/{plan}/cancel` | `Plan` | ends an `approved` or `paused` plan: `cancelled`, its open steps `skipped`, a note queued. 409 otherwise |
-| `GET /api/chats/{id}/jobs` | `WatchJob[]` | observed platform jobs of the chat, newest first (A-E2): state, percent, message, ETA, log tail, outputs, `link` (the address the user can open, own code C-E4) and `plan_id`/`step_idx` for the job of a plan step. 404 for foreign and unknown chats. See *Long-running platform jobs* |
+| `GET /api/chats/{id}/jobs` | `WatchJob[]` | observed platform jobs of the chat, newest first (A-E2): state, percent, message, ETA, log tail, outputs (with `size` where the kind knows it), `link` (the address the user can open) and `stopped_by` (who stopped the job; both own code C-E4) and `plan_id`/`step_idx` for the job of a plan step. 404 for foreign and unknown chats. See *Long-running platform jobs* |
 | `POST /api/chats/{id}/plans/{plan}/steps/{idx}/stop` | `Plan` | the user stops the platform job a waiting step observes (`watch_job`): the call runs with the user's token and is logged as `socket_calls` with `via: "user"`. 404 unknown plan, 409 if the step does not wait or its kind cannot be stopped |
 | `POST /api/chats/{id}/jobs/{job}/stop` | `WatchJob` | the same for a single job outside a plan. 404 unknown job, 409 if it is not running or cannot be stopped |
 | `GET /api/chats/{id}/annotation` | `{cvat_url, runs: AnnotationRun[], jobs: AnnotationJob[]}` | runs and jobs of pre-annotation with their results, oldest first, for the cards in the history (V4); reads the database and never wakes the chat. 404 for foreign and unknown chats. See *Annotation cards in the history (V4)* |
@@ -1233,7 +1236,7 @@ user's token.
 - **The table `watch_jobs`** is the one place for every observed job, inside and outside plans: `id` (`w` + 12 hex),
   `chat_id`, `plan_id` + `step_idx` (empty/0 outside plans), `tool_call_id`, `kind`, `ref`, `state`
   (`running`/`done`/`failed`), `progress` (percent, NULL while unknown), `message`, `eta`, `log_tail`, `outputs`,
-  `link`, `fail_reads`, `started_at`, `checked_at`, `ended_at`. A plan step names its job in `plan_steps.watch_job` and waits in
+  `link`, `stopped_by`, `fail_reads`, `started_at`, `checked_at`, `ended_at`. A plan step names its job in `plan_steps.watch_job` and waits in
   state **`waiting`** — a value of the state column of `plan_steps`, no new type; `plan_steps` also carries
   `parked_approval` (see below) and, since A-E2, `confirm_each` (the trait of the route at proposal time, so that a
   reloaded plan never covers a call that has to ask the user every time).
@@ -1241,6 +1244,15 @@ user's token.
   `notebook_run` writes the run in the user's JupyterHub there with its first poll (the run's link, built by the
   gateway), every other kind leaves the field empty — and a card builds no address of its own. It is a field of the job
   in the answer of `GET /api/chats/{id}/jobs` and in the SSE `job` event (`link`, missing while empty).
+- **`stopped_by` (own code C-E4)** says who ended the job, in the words the aborts of issue #120/L3 use: `user` for the
+  stop over `POST /api/chats/{id}/jobs/{job}/stop`, `agent` for a call of the agent's own tools that stops the job,
+  missing while nobody stopped it. The **caller** records it — the user's route in `Manager.StopJob`, the agent's call in
+  `Manager.PlatformCall` —, because the call itself does not say who asked: the invocation is set for the tools with
+  steps only, and the tool call id is a header the client sets. It is written once, by the call that stops, and
+  neither a progress update nor a second stop changes it; the hand-over of a row to another kind clears it. A job whose
+  kind reports no stopper stays without the field.
+- **`outputs`** name what the job produced (`{resource,id,label,size}`); `size` is in bytes and 0 for a kind that does
+  not know it (the result files of a notebook run carry theirs, own code C-E4).
 - **Which call starts a job** is decided by the gateway from the route, never by the agent: `watch.For` matches the call
   after it succeeded. Today: `POST /train/config` and `POST /containers/{id}/run` → `platform_task`, `POST
   /container-images/build` → `image_build`, and the run of a container chains on: the task ends when the container is
@@ -1763,16 +1775,23 @@ user (uid 1000) and reads state, log and results back the same way. The server h
   .cfg .toml`, at most 20 arguments of `A-Za-z0-9_.,=:/+-`, at most 3 datasets. `timeout_minutes` defaults to 120 and
   is capped by `AGW_NOTEBOOK_TIMEOUT_MAX_MIN` (default 480 = the longest an autonomous plan may run). One run at a
   time per chat; a second one is refused. A run counts against `AGW_COMPUTE_MAX_PER_CHAT` like a training.
+- **The agent's own note (own code C-E4).** `notebook_run` takes the optional field `note` (at most 500 characters,
+  valid UTF-8; the runner refuses more): the agent's own words about what the run is for. It is shown to the user as the
+  agent's text and marked as not verified — it is not part of what the run does, the gateway never states it as
+  something it read, and the summary of the call only names it (`The agent's own note to the user (not verified) stands
+  in the approval.`). The preview does not carry it; the card shows it in its own block (`NotebookApprovalData.note`).
 - **Stopping a run (own code C-E4).** The observer kind `notebook_run` is stoppable, and its stop is
   `POST /_agw/notebook/stop` — the one call the notebook paths have for it: a run is not addressable on its own, the
   code runs **in the chat's notebook server**, and stopping that server takes the container with the code in it away
   (`Hub.Stop`: `DELETE /users/<user>/servers/<server>`). The user reaches it through `POST
   /api/chats/{id}/jobs/{job}/stop` (A-E2, D2.9): the call runs with the user's token, is classified as `update
   notebook` (`write`) and appears in the activity as a user call. A chat whose server is not running is no error, the
-  hub answers 404 and the stop counts as done. The run itself then has **no exit code** (nothing was left to write
-  one): its next `notebook_run_status` (and the poll of its job) records its end, reports `failed` and says `the run
-  ended without an exit code: the notebook server of this chat was stopped while it went` — so the run neither blocks
-  the chat's next run nor keeps its card "running".
+  hub answers 404 and the stop counts as done. The call records **who stopped it** in the job of the run
+  (`stopped_by`, `user` or `agent`, see *Long-running platform jobs*): the user's own route and the agent's own
+  `notebook_stop` are marked by their callers, never guessed from the call. The run itself then has **no exit code** (nothing was left to write one):
+  its next `notebook_run_status` (and the poll of its job) records its end, reports `failed` and says `the run ended
+  without an exit code: the notebook server of this chat was stopped while it went` — so the run neither blocks the
+  chat's next run nor keeps its card "running".
 - **Files in the container.** The code runs in a fresh directory `/home/jovyan/work/runs/<run-id>/` (`r<YYYYMMDDhhmmss>`
   plus four hex digits), a `.py` entry with `python -u <entry> [args]`, an `.ipynb` with `jupyter nbconvert --execute`
   (its result is `executed-<entry>`). A run's output goes to `run.log` in that directory, the exit code to
@@ -1797,7 +1816,7 @@ user (uid 1000) and reads state, log and results back the same way. The server h
   browser`). Every notebook tool answers `unavailable` in those cases instead of an error, so the agent works around
   it instead of retrying (G1.13).
 - **The observer kind `notebook_run`** (`internal/watch`, G1.7) follows a run: state, a line with `exit <n> after
-  <duration>`, the last 20 lines of the log and the files of the run directory as its outputs. It records the end of a
+  <duration>`, the last 20 lines of the log and the files of the run directory as its outputs (with their size). It records the end of a
   run in `notebook_runs` like a status call does.
 - **Configuration:** `AGW_JUPYTERHUB_API_URL` (`…/hub/api`), `AGW_JUPYTERHUB_TOKEN`, `AGW_JUPYTERHUB_PUBLIC_URL` (for
   the links), `AGW_NOTEBOOK_PREFIX` (server name, `agw` by default: the spawner hardens only servers whose
