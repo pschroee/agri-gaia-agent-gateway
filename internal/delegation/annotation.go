@@ -136,7 +136,9 @@ func datasetFromBody(a *Access, req platform.Request) {
 // so this is the one thing the classification can decide about the call; what it deletes is decided by
 // the service alone (E21).
 func rollbackBody(a *Access, req platform.Request) {
-	if bodyIDOr(req.Body, "source_id") == "" {
+	// bodyID, not bodyIDOr: a missing source is no identifier at all and must be refused, while an
+	// unknown dataset id would only fail to match a rule.
+	if bodyID(req.Body, "source_id") == "" {
 		a.Problem = "the rollback names no source_id"
 		return
 	}
