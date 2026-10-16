@@ -1765,7 +1765,7 @@ report form and rules.
 
 - **Virtual paths.** The gateway answers `/_agw/assess/…` itself (`RegisterVirtual`, G1.5); delegation, class, log and
   plan apply as for every other call. Raw calls are refused — the REST binding and the `request` tool answer
-  `check calls go through the assess tools (assess_status, split_dataset, assess_model)` — because the gateway decides what a check runs on and the
+  `check calls go through the assess tools (assess_status, split_dataset, assess_model, deployment_check)` — because the gateway decides what a check runs on and the
   agent must not be able to name or read the measured set (P11).
 - **Delegation.** `assessment` is a resource of its own; a delegation without a rule for it forbids every check call.
 - **The check container** (P6, R0.11) is a fresh container of the execution image (`AGW_IMAGE`) with no network
@@ -1917,6 +1917,85 @@ report form and the figures are those of the result checks (R0); this section na
   gateway's own table, so the agent cannot name them.
 - **The skill `result-check`** carries the flow in its section *After a training*; `training-advice` points
   at it before and after the training.
+
+## Deployment checks (R3)
+
+`deployment_check` tests the container of a deployment that was started in this chat on a simulated edge
+device: the gateway sends six fixed requests to it and compares the answers with what the model file
+computes for the same inputs (#116). The rules, the report form and the figures are those of the result
+checks (R0); this section names what is R3's own.
+
+| Tool (CLI) | Path (virtual) | Action / resource | Class | Approval |
+|---|---|---|---|---|
+| `deployment_check` (`deployment-check`) | `GET /_agw/assess/deployments/{id}?model_id={m}` | run container_deployment `{id}` + read model `{m}` | `read` | no |
+
+- **The action is `run`, the class is `read`.** The route carries `Run ContainerDeployment` because the
+  guard of the edge feature holds only non-read actions to the deployments of this chat (D-E1): a check
+  of a foreign deployment is refused before it reaches the service. The effect class is set to `read`
+  (`.as(EffectRead)`, P7): nothing is written, the user approves nothing and the call counts against no
+  compute call — only against `AGW_ASSESS_MAX_PER_CHAT` like every check.
+- **Synchronous, but still a check.** Unlike R1/R2 the check takes seconds, not minutes, so it is not
+  queued: `Service.Record` writes the row as `running` (with `started_at`), runs it and writes
+  `finished` or `failed`. The answer is `{"check_id", "state", "report", "error"}` in the form of
+  `assess_status`, so that the check card finds the row through `check_id` (L3). A check that broke
+  answers `state: failed` with the figures it read until then and no verdict (L5).
+- **The only way to a device is the operator's list** (`AGW_EDGE_SIM_DEVICES`, `name=container` pairs,
+  RF1 of the planning). Before anything goes out, three markings have to agree: the device of the
+  deployment is in that list by name, it carries the platform's tag `simulated`, and the container named
+  for it runs and carries the label `agri-gaia.simulated=true`. Otherwise the verdict is
+  `not measured – the gateway can send test requests only to simulated devices (AGW_EDGE_SIM_DEVICES);
+  the platform offers no way to reach a real device`, and nothing is sent. No container name is ever
+  guessed, and a real device is out of reach: the platform knows no address for it and the gateway has no
+  Portainer access (D2.6).
+- **Every command is fixed and checked.** The commands run with `docker exec` as the user `rootless`
+  (the device runs `docker:dind-rootless`) and are built in one place: `wget -q -O - -T 10` on
+  `http://127.0.0.1:<host_port>/…` with `--header Content-Type: application/json --post-file
+  /dev/stdin` for the requests. `<host_port>` is the host port the deployment binds to the container port
+  8000 and has to lie in the agent's range (18100–18199); the model name goes into the path only after
+  `platform.TritonNameRe` accepted it. One answer may be 8 MiB. Nothing the agent writes reaches these
+  commands.
+- **The way through the check** (R3.4): the deployment and the device are read; `GET /v2/health/ready` on
+  the device decides between `not measured – not ready yet` (with the hint to check again in about a
+  minute and the suggestion `wait_and_recheck`) and going on; the metadata of the served model
+  (`GET /v2/models/<name>`), the platform's model record (`GET /models/<id>`, its `input_*`/`output_*`
+  fields) and the model file (the container run of R0 in mode `tensors`) are compared against each other;
+  then six requests go out. The name the device serves is the name of the model the deployment's image
+  was built from (`container_images.model_id`); it is compared with the model the agent named, and a
+  difference is a reason (`the deployment serves <name>, not <other>`) while the requests still go out
+  under the served name (L17). Only a difference between the three interfaces stops the check before the
+  first request (`requests: 0`, suggestion `rebuild_image`).
+- **The test requests** (R3.5) are fixed and repeatable: the first all zeros, the second 0.5 everywhere,
+  the remaining four drawn uniformly from `[0, 1)` with PCG generators of their own (`math/rand/v2`). A
+  dynamic dimension becomes 1, at most 1 000 000 values per input, and the input has to be `FP32` —
+  otherwise the verdict is `not measured – input type <t> not supported by the test`. A model with more
+  than one input cannot be tested this way (the requests carry one) and says so.
+- **The comparison** (R3.6) is a function of its own, `assess.CompareOutputs`: the same outputs in the
+  same order, the same shapes, every value finite, `|a − b| ≤ 1e-4 + 1e-3·|b|` (b is the value of the
+  model file; the tolerance covers the onnxruntime the device and the check container link) and, for a
+  classification output, the same top class. The verdict is `usable` only when all six requests were
+  answered and everything held; every rule that did not hold becomes a reason and the verdict is
+  `questionable`. Two rules reach over single requests: the answers of the four drawn requests must not
+  all be the same (a model that ignores its input), and fewer than six answers are a reason.
+- **`figures`** of a deployment check (R3.7, L17): `deployment {id, name}`, `device {name, simulated}`,
+  `image`, `model {id, name}`, `ready`, `served_model`, `io {same, triton, platform, file}` with each
+  `{inputs, outputs}` of `{name, shape, type}` (the types are written alike from all three sources,
+  `assess.normalType`), `requests`, `max_abs_diff` (`null` while nothing was compared), `argmax_same`
+  (the count; `null` when the output is no classification) and `roundtrip_ms {median, max}` — the round
+  trip of one request, measured in the gateway around the command, so it includes the `docker exec` into
+  the device (a hint names that). `model_check` is the last finished check of the model in this chat or
+  `null` (L8); whether the model is good is not this check's verdict. `note`: `No real images; whether
+  the model is good comes from the model check (assess_model).`
+- **Suggestions** (R3.8): `wait_and_recheck` (not ready), `undeploy` (another model or differing
+  answers) and `rebuild_image` (interfaces that do not agree); `assess_model` is added whenever the check
+  could read the model. The gateway never takes a deployment back on its own: that is a write and the
+  user decides.
+- **The capability `edge`** (G1.11, R3.9) ends with `; test requests: <names>` or
+  `; test requests: none (no simulated device configured)` — the devices of the list, so that the agent
+  knows before a deployment whether it can check the result on the device afterwards.
+- **Configuration:** `AGW_EDGE_SIM_DEVICES` (`name=container` pairs, comma separated, default none). The
+  platform fork sets it for the agent gateway
+  (`sim-edge-01=${COMPOSE_PROJECT_NAME}-edge_sim_docker-1`). Without it every deployment check answers
+  `unavailable`. The skill `result-check` carries the flow in its section *Edge deployments*.
 
 ## Tool executions (E9)
 

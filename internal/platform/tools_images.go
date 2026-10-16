@@ -32,7 +32,10 @@ var (
 	imageNameRe    = regexp.MustCompile(`^[a-z0-9]+(?:[._-][a-z0-9]+)*$`)
 	repositoryRe   = regexp.MustCompile(`^[a-z0-9]+(?:[._-][a-z0-9]+)*/[a-z0-9]+(?:[._-][a-z0-9]+)*$`)
 	tagRe          = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$`)
-	tritonNameRe   = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`)
+	// TritonNameRe is the shape of a name Triton can address over HTTP. It is exported because the
+	// deployment check (R3) puts a model name into a command that runs on the device and checks it with
+	// the same expression.
+	TritonNameRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`)
 )
 
 const templatesPath = "/inference-container-templates"
@@ -159,7 +162,7 @@ func modelReadiness(m map[string]any) (problems, warnings []string) {
 		problems = append(problems, "tensor metadata missing: "+strings.Join(missing, ", ")+" (set them with platform_update_model)")
 	}
 	name, _ := m["name"].(string)
-	if !tritonNameRe.MatchString(name) {
+	if !TritonNameRe.MatchString(name) {
 		problems = append(problems, fmt.Sprintf("name %q cannot be addressed by Triton over HTTP (spaces, brackets, commas and the like); "+
 			"rename the model with platform_update_model to letters, digits, _ . - only, e.g. mnist_efficientnet", name))
 	}

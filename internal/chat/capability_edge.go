@@ -31,15 +31,46 @@ type edgeDeviceState struct {
 	LastHeartbeat string   `json:"last_heartbeat"`
 }
 
+// EdgeTester names the simulated devices the gateway may send test requests to (R3). The check service
+// (internal/assess) implements it; the entry names what the deployment check can probe afterwards and
+// nothing else.
+type EdgeTester interface {
+	// TestRequestDevices are the devices of the operator's list (AGW_EDGE_SIM_DEVICES), in its order.
+	TestRequestDevices() []string
+}
+
+// noneToTest is what the entry says when no device may be probed (R3.9).
+const noneToTest = "none (no simulated device configured)"
+
+// testRequestsText names what the deployment check can probe (R3.9): the devices of the check service, or
+// that there is none. It stands behind the detail of the entry, so that the agent knows before it plans a
+// deployment whether the result can be checked on the device afterwards.
+func testRequestsText(m *Manager) string {
+	t, ok := m.opt.Checks.(EdgeTester)
+	if !ok {
+		return noneToTest
+	}
+	if names := t.TestRequestDevices(); len(names) > 0 {
+		return strings.Join(names, ", ")
+	}
+	return noneToTest
+}
+
+// withTestRequests adds that to the entry (R3.9).
+func withTestRequests(c Capability, m *Manager) Capability {
+	c.Detail += "; test requests: " + testRequestsText(m)
+	return c
+}
+
 // capabilityEdge: is at least one registered edge device online (heartbeat within
 // platform.EdgeOnlineWindow)? Changeable during a chat, so the platform is read once a minute.
 func capabilityEdge(ctx context.Context, m *Manager, chatID string) Capability {
 	c := Capability{Without: platform.EdgeWithout}
 	if m.opt.Platform == nil {
 		c.Detail = "the platform binding of this gateway is off"
-		return c
+		return withTestRequests(c, m)
 	}
-	return m.cachedCapability(chatID, "edge", func() Capability {
+	return withTestRequests(m.cachedCapability(chatID, "edge", func() Capability {
 		res, err := m.opt.Platform.Do(ctx, chatID, platform.Request{Method: http.MethodGet, Path: "/edge-devices"})
 		if err != nil || res.Status != "ok" || res.HTTPStatus < 200 || res.HTTPStatus >= 300 {
 			c.Detail = "the edge devices are not readable right now"
@@ -75,7 +106,7 @@ func capabilityEdge(ctx context.Context, m *Manager, chatID string) Capability {
 		c.Available = true
 		c.Detail = edgeDeviceSummary(online)
 		return c
-	})
+	}), m)
 }
 
 // edgeDeviceSummary names the online devices: "1 device online: sim-edge-01 (simulated, amd64)".

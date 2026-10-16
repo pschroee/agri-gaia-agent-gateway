@@ -1,0 +1,85 @@
+// SPDX-FileCopyrightText: 2026 Philipp Schröer
+//
+// SPDX-License-Identifier: MIT
+
+package chat
+
+import (
+	"context"
+	"strings"
+	"testing"
+
+	"agw/internal/delegation"
+	"agw/internal/platform"
+	"agw/internal/store"
+)
+
+// assessStub answers the check paths for the tests of this package: the check itself is tested in
+// internal/assess, here only the way to it counts (delegation, guard, approval, compute limit).
+type assessStub struct {
+	calls int
+}
+
+func (s *assessStub) Do(_ context.Context, _ string, req platform.Request) (platform.Result, error) {
+	s.calls++
+	return platform.Result{Status: "ok", HTTPStatus: 200,
+		Body: `{"check_id":"11111111-2222-3333-4444-555555555555","state":"finished"}`}, nil
+}
+
+// The deployment check is a reading call (R3.1, P7): the user approves nothing, the call counts against
+// no compute call, and only a deployment of this chat is reached.
+func TestClassifyDeploymentCheck(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	stub := &assessStub{}
+	e.m.RegisterVirtual(platform.AssessPrefix, stub)
+	c, err := e.m.Create(ctx, NewChat{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	slot := e.m.live[c.ID].slot.ID
+	// The deployment was created in this chat (edge D1.7: the register carries it in every chat).
+	if err := e.st.AddDelegationObject(ctx, c.ID, delegation.ContainerDeployment, "9"); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := invokePlatformTool(e, ctx, c.ID, slot, "deployment_check", `{"deployment_id":9,"model_id":5}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Status != "ok" || stub.calls != 1 {
+		t.Fatalf("the check did not reach its service: %+v (calls %d)", res, stub.calls)
+	}
+	if aps, _ := e.st.ListApprovals(ctx, store.ApprovalPending, c.ID); len(aps) != 0 {
+		t.Fatalf("the user was asked for a reading check: %+v", aps)
+	}
+	if n, _ := e.st.ComputeCalls(ctx, c.ID); n != 0 {
+		t.Fatalf("the check used a compute call: %d", n)
+	}
+}
+
+// A deployment this chat did not create is out of reach: the guard of the edge feature refuses the check
+// before anything reaches its service (edge D-E1).
+func TestEdgeCheckForeignDeploymentRefused(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	stub := &assessStub{}
+	e.m.RegisterVirtual(platform.AssessPrefix, stub)
+	c, err := e.m.Create(ctx, NewChat{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	slot := e.m.live[c.ID].slot.ID
+
+	res, err := invokePlatformTool(e, ctx, c.ID, slot, "deployment_check", `{"deployment_id":9,"model_id":5}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Status != "denied" || !strings.Contains(res.Message, "deployment 9") ||
+		!strings.Contains(res.Message, "was not created in this chat") {
+		t.Fatalf("a foreign deployment was not refused: %+v", res)
+	}
+	if stub.calls != 0 {
+		t.Fatalf("the refused check reached its service %d times", stub.calls)
+	}
+}

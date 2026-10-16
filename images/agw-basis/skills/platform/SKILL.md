@@ -136,6 +136,9 @@ online. Without it the way ends at the built image — say that and invent no de
 5. Follow it with `agw-platform deployment-status <deployment_id> --task_id <id>`; `deployed`, or a
    `hint`. After a failed start do not start again — create a new deployment with another name and port
    and tell the user that the leftover container needs manual removal.
+6. Once it shows `deployed`, have the gateway test the container on the device:
+   `agw-platform deployment-check <deployment_id> <model_id>` — the skill `result-check` says how to
+   report it. This reaches simulated devices only (the entry `edge` names them under "test requests").
 
 Edge devices, edge groups and applications are read-only for you.
 

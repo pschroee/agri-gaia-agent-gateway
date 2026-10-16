@@ -91,7 +91,7 @@ func TestEdgeCapability(t *testing.T) {
 	online := edgeDeviceStateJSON("sim-edge-01", "amd64", []string{"simulated"}, time.Now().UTC().Add(-2*time.Minute).Format(edgeHeartbeatLayout), true)
 	withEdgeDevicePlatform(t, e, "["+online+"]")
 	cap = byName(e.m.Capabilities(ctx, "edge-online"))["edge"]
-	if !cap.Available || cap.Detail != "1 device online: sim-edge-01 (simulated, amd64)" {
+	if !cap.Available || cap.Detail != "1 device online: sim-edge-01 (simulated, amd64); test requests: "+noneToTest {
 		t.Fatalf("online: %+v", cap)
 	}
 	// An unregistered device with a fresh heartbeat does not count (D2.3).
@@ -99,6 +99,39 @@ func TestEdgeCapability(t *testing.T) {
 	withEdgeDevicePlatform(t, e, "["+unregistered+"]")
 	if cap := byName(e.m.Capabilities(ctx, "edge-unregistered"))["edge"]; cap.Available {
 		t.Fatalf("unregistered device counts as online: %+v", cap)
+	}
+}
+
+// fakeEdgeTester is the check service behind the entry edge (R3): it names the devices the gateway may
+// send test requests to.
+type fakeEdgeTester struct{ devices []string }
+
+func (fakeEdgeTester) ChecksState(context.Context, string) (bool, string) { return true, "checks on" }
+func (f fakeEdgeTester) TestRequestDevices() []string                     { return f.devices }
+
+// The entry edge names what the deployment check can probe (R3.9): the configured devices, or that there
+// is none — the agent reads it before it plans a deployment.
+func TestEdgeCapabilityTestRequests(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	online := edgeDeviceStateJSON("sim-edge-01", "amd64", []string{"simulated"}, time.Now().UTC().Add(-2*time.Minute).Format(edgeHeartbeatLayout), true)
+	withEdgeDevicePlatform(t, e, "["+online+"]")
+
+	// Without a check service the entry says that no device may be probed.
+	cap := byName(e.m.Capabilities(ctx, "edge-no-tester"))["edge"]
+	if !strings.HasSuffix(cap.Detail, "; test requests: "+noneToTest) {
+		t.Fatalf("without a check service: %+v", cap)
+	}
+	e.m.opt.Checks = fakeEdgeTester{devices: []string{"sim-edge-01", "sim-edge-02"}}
+	cap = byName(e.m.Capabilities(ctx, "edge-two-devices"))["edge"]
+	if !strings.HasSuffix(cap.Detail, "; test requests: sim-edge-01, sim-edge-02") {
+		t.Fatalf("with two devices: %+v", cap)
+	}
+	// A device list of the operator that names nothing says so as well.
+	e.m.opt.Checks = fakeEdgeTester{}
+	cap = byName(e.m.Capabilities(ctx, "edge-empty-list"))["edge"]
+	if !strings.HasSuffix(cap.Detail, "; test requests: "+noneToTest) {
+		t.Fatalf("with an empty list: %+v", cap)
 	}
 }
 

@@ -13,6 +13,7 @@ import (
 	"io"
 	"log/slog"
 	"net/netip"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -630,6 +631,29 @@ func (r *Runtime) FindByLabels(ctx context.Context, labels map[string]string) ([
 		out = append(out, c.ID)
 	}
 	return out, nil
+}
+
+// ContainerByName returns the id of the running container with exactly this name and its labels; ok is
+// false when no container with this name runs. Docker's name filter matches substrings, so the names are
+// compared here: the gateway must never exec into "edge_sim_docker-10" because "edge_sim_docker-1" was
+// configured (R3, the simulated edge device).
+func (r *Runtime) ContainerByName(ctx context.Context, name string) (id string, labels map[string]string, ok bool, err error) {
+	if name == "" {
+		return "", nil, false, nil
+	}
+	want := "/" + name
+	f := make(client.Filters).Add("name", "^"+want+"$")
+	res, err := r.cli.ContainerList(ctx, client.ContainerListOptions{Filters: f})
+	if err != nil {
+		return "", nil, false, err
+	}
+	for _, c := range res.Items {
+		if !slices.Contains(c.Names, want) {
+			continue
+		}
+		return c.ID, c.Labels, true, nil
+	}
+	return "", nil, false, nil
 }
 
 // TailBuffer keeps the last n bytes (pi's stderr, for error messages).
