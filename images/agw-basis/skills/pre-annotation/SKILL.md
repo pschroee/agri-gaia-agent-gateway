@@ -1,6 +1,6 @@
 ---
 name: pre-annotation
-description: Pre-annotate platform datasets with CVAT functions via agw-platform annotation-*. Rules - check capabilities first (entry annotation, and vision for image review); if pre-annotation is unavailable say so and point to manual annotation in CVAT; only the user's own image datasets with classes; first annotation-functions, then annotation-task; propose a mapping from function labels to dataset classes by meaning and show it as a table before pre-annotate, never map a label you are unsure about; existing=keep only on a task without annotations, existing=replace deletes all annotations and needs a clear yes; follow a run with annotation-run in a background loop at least 30 s apart and do not wait in the foreground; afterwards annotation-summary, then offer annotation-sync; never claim the pre-annotation is correct, it is a proposal the user checks in CVAT (give the cvat_url).
+description: Pre-annotate platform datasets with CVAT functions via agw-platform annotation-*. Rules - check capabilities first (entry annotation, and vision for image review); if pre-annotation is unavailable say so and point to manual annotation in CVAT; only the user's own image datasets with classes; first annotation-functions, then annotation-task; propose a mapping from function labels to dataset classes by meaning and show it as a table before pre-annotate, never map a label you are unsure about; existing=keep only on a task without annotations, existing=replace deletes all annotations and needs a clear yes; follow a run with annotation-run in a background loop at least 30 s apart and do not wait in the foreground; afterwards annotation-summary, then offer annotation-sync; never claim the pre-annotation is correct, it is a proposal the user checks in CVAT (give the cvat_url). Own ONNX model via annotation-function (irreversible, visible to all CVAT users, not removable); labels in the model's output order.
 ---
 
 # Pre-annotation with CVAT
@@ -24,6 +24,37 @@ checks them in CVAT and corrects them; the models of the platform then train on 
 irreversible) and those the operator installed. Each entry has `id`, `name`, `kind`, `labels`, `source`
 and `state`. Only `kind: detector` runs over all images of a task on its own. A function of another user
 is never usable — it receives every image of the run.
+
+## 1a. Your own model as a function
+
+A model the user trained on the platform (or uploaded) becomes a function as well:
+
+```bash
+agw-platform annotation-function <model_id> classification --labels class_0 --labels class_1
+agw-platform annotation-function <model_id> detection --labels pig --labels cow --input-size 640
+```
+
+Only an **ONNX** model of the user's own works; a PyTorch file is refused (it is code, not data). The
+gateway packs the fixed template of the gateway — you write no code — with the model, its classes and
+its input size, and the platform builds the function from it. `--labels` are the class names **in the
+order the model outputs them** (repeat the option); without them the gateway takes the `output_labels`
+of the model, and for a classification model the names `class_0 … class_{n-1}`. A detector without
+class names is refused — its output carries numbers only, and the mapping would have nothing to hold
+on.
+
+**This call is `irreversible`**, so it always needs its own approval (a plan does not cover it): the
+function is visible to and usable by **every CVAT user of the platform**, it receives every image of a
+run over which it is started, and you cannot remove it — only the operator can. At most three
+functions per user; at that bound, ask the user to have one removed instead of trying again.
+
+The build takes **several minutes**. `agw-platform annotation-functions` shows the state:
+`deploying` until CVAT lists it, `ready` (then it can be run), `failed` when the build failed, and
+`missing` when the function has disappeared from CVAT. Follow the build in a background loop like a
+run, or simply ask again later. Run a function only in state `ready`.
+
+**The order of the classes is the crux**: a wrong order puts every image into the wrong class. If you
+do not know the order the model was trained with, say so and have the user confirm the mapping before
+the run; never guess.
 
 ## 2. Prepare the dataset
 
