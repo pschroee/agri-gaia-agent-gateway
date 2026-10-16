@@ -86,11 +86,31 @@ type Owner struct {
 
 // Task is the part of a CVAT task the service needs.
 type Task struct {
-	ID     int64   `json:"id"`
-	Name   string  `json:"name"`
-	Size   int     `json:"size"`
-	Owner  Owner   `json:"owner"`
-	Labels []Label `json:"labels"`
+	ID     int64     `json:"id"`
+	Name   string    `json:"name"`
+	Size   int       `json:"size"`
+	Owner  Owner     `json:"owner"`
+	Labels labelList `json:"labels"`
+}
+
+// labelList is the "labels" field of a task. CVAT 2.4.2 answers a page of the label list there
+// ({"url": ..., "count": n}) instead of the labels themselves, and reading that object into a list
+// makes the whole task unreadable - which is what broke annotation-summary on the instance on
+// 16.10.2026. Both forms are accepted: with a page the list stays empty, and Labels() then fetches
+// the classes from GET /api/labels.
+type labelList []Label
+
+func (l *labelList) UnmarshalJSON(raw []byte) error {
+	if trimmed := bytes.TrimSpace(raw); len(trimmed) > 0 && trimmed[0] == '[' {
+		var arr []Label
+		if err := json.Unmarshal(trimmed, &arr); err != nil {
+			return err
+		}
+		*l = arr
+		return nil
+	}
+	*l = nil // a page or null: no class in the task itself
+	return nil
 }
 
 // Annotations is the annotation of a task in CVAT's JSON form.
