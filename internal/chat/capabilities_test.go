@@ -78,10 +78,10 @@ func TestCapabilitiesBuiltIn(t *testing.T) {
 	if b := got["bindings"]; !b.Available || !strings.Contains(b.Detail, "cli") {
 		t.Errorf("bindings: %+v", b)
 	}
-	// edge names no feature yet, so it is reported as not part of this gateway version. notebook (own code
-	// C-E3) and annotation (V1) are registered and report that this setup has no service for them (their
-	// own tests are in capability_test.go and capability_annotation_test.go).
-	if f := got["edge"]; f.Available || f.Detail != missingCapability {
+	// edge (edge D-E2), notebook (own code C-E3) and annotation (V1) are registered and report that this
+	// setup has no service for them; their own tests are in capability_edge_test.go, notebook_test.go and
+	// capability_annotation_test.go.
+	if f := got["edge"]; f.Available || !strings.Contains(f.Detail, "platform binding") || f.Without == "" {
 		t.Errorf("edge: %+v", f)
 	}
 	if f := got["notebook"]; f.Available || !strings.Contains(f.Detail, "not configured on this instance") {
@@ -170,13 +170,22 @@ func TestCapabilitiesCached(t *testing.T) {
 	e := setup(t)
 	ctx := context.Background()
 	var calls int64
+	// edge is registered by its own feature (edge D-E2), so the fake has to be restored, not just
+	// deleted: otherwise the feature's registration would be gone for the rest of the package.
+	prevFunc, hadFunc := capabilityFuncs["edge"]
 	registerCapability("edge", func(_ context.Context, m *Manager, chatID string) Capability {
 		return m.cachedCapability(chatID, "edge", func() Capability {
 			atomic.AddInt64(&calls, 1)
 			return Capability{Available: true, Detail: "1 edge device online"}
 		})
 	})
-	t.Cleanup(func() { delete(capabilityFuncs, "edge") })
+	t.Cleanup(func() {
+		if hadFunc {
+			capabilityFuncs["edge"] = prevFunc
+		} else {
+			delete(capabilityFuncs, "edge")
+		}
+	})
 	c, err := e.m.Create(ctx, NewChat{})
 	if err != nil {
 		t.Fatal(err)
@@ -237,9 +246,22 @@ func TestCapabilitiesAllBindings(t *testing.T) {
 	if n, _ := e.st.ComputeCalls(ctx, c.ID); n != 0 {
 		t.Fatalf("the overview used a compute call: %d", n)
 	}
-	if n := got(); len(n) != 0 {
+	if n := withoutEdgeReads(got()); len(n) != 0 {
 		t.Fatalf("the overview reached the platform: %v", n)
 	}
+}
+
+// withoutEdgeReads drops the device read of the capability edge (G1.11, edge D-E2): an entry that
+// reads platform state may do so, everything else of the overview may not.
+func withoutEdgeReads(calls []string) []string {
+	out := make([]string, 0, len(calls))
+	for _, c := range calls {
+		if c == "GET /edge-devices" {
+			continue
+		}
+		out = append(out, c)
+	}
+	return out
 }
 
 // TestCapabilitiesNoApproval: the overview is reading and asks nobody, also with a delegation that
@@ -259,7 +281,7 @@ func TestCapabilitiesNoApproval(t *testing.T) {
 	if aps, _ := e.st.ListApprovals(ctx, store.ApprovalPending, c.ID); len(aps) != 0 {
 		t.Fatalf("asked the user: %+v", aps)
 	}
-	if n := got(); len(n) != 0 {
+	if n := withoutEdgeReads(got()); len(n) != 0 {
 		t.Fatalf("reached the platform: %v", n)
 	}
 }
