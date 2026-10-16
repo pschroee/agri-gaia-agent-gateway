@@ -311,7 +311,7 @@ type SubagentRunSummary = { run_id: string; agent: string; label?: string; state
 
 type Command = { name: string /* without "/" */; description?: string; source: "builtin" | "extension" | "prompt" | "skill"; args?: string /* hint about arguments */ };
 
-type Artifact = { chat_id: string; kind: "input" | "output"; name: string; size: number; sha256: string; content_type: string; created_at: string; via: "cli" | "mcp" | "ui"; tool_call_id?: string /* tool call that uploaded the result (display only) */; preview?: "image" | "pdf" | "table" | "text" | "none" /* kind for the file preview, decided from the bytes when stored (issue #74); absent for artifacts from before; a hint only, inline=1 decides again */ };
+type Artifact = { chat_id: string; kind: "input" | "output"; name: string; size: number; sha256: string; content_type: string; created_at: string; via: "cli" | "mcp" | "ui"; tool_call_id?: string /* tool call that uploaded the result (display only) */; preview?: "image" | "pdf" | "table" | "text" | "none" /* kind for the file preview, decided from the bytes when stored (issue #74); absent for artifacts from before; a hint only, inline=1 decides again */; sent_at?: string /* inputs only, issue L4/#121: when the file went with a message; absent while it is only staged in the field and may still be removed (DELETE /api/chats/{id}/inputs/{name}) */ };
 type Approval = {
   // artifact_upload: name/size/sha256/preview describe the file. Only in chats from before issue #62; the gateway
   //   creates none any more (files the agent sends need no approval), stored ones stay readable.
@@ -405,7 +405,8 @@ type ActivityPage = { calls: ActivityCall[]; chats: Record<string, { id: string;
 | `GET /api/chats/{id}/artifacts/{name}?kind=input\|output` | file | download (default `output`), always `Content-Disposition: attachment` |
 | `GET /api/chats/{id}/artifacts/{name}?kind=input\|output&inline=1` | file | preview in the UI (issue #74). The kind comes from the first 512 bytes (`image`: PNG, JPEG, GIF, WebP signature; `pdf`: `%PDF-`; `table`: `.csv`/`.tsv` and UTF-8; `text`: `txt md json jsonl log yaml yml xml py ts js sh ipynb` and UTF-8; HTML, HTM and SVG are always `text`, never rendered). Responses: `Content-Disposition: inline`, `X-Content-Type-Options: nosniff`, `Cache-Control: private, no-store`; `image` and `table`/`text` with `Content-Security-Policy: sandbox; default-src 'none'`, `pdf` with `Content-Security-Policy: default-src 'none'; object-src 'self'; plugin-types application/pdf`; `table`/`text` as `text/plain; charset=utf-8`. Any other file answers `415` with the text `no preview for this file type` |
 | `GET /api/chats/{id}/images?path=<path>&msg=<id>` | image | display image of a response (see below); 400 for an invalid path or ID, 404 if not available |
-| `POST /api/chats/{id}/files` (multipart, field `file`, may repeat) | `Artifact[]` (201) | user uploads files for the agent; for an active chat mirrored to `/workspace/inputs/` immediately, for a dormant one on resume. Limit `AGW_ARTIFACT_MAX_MB` per file |
+| `POST /api/chats/{id}/files` (multipart, field `file`, may repeat) | `Artifact[]` (201) | user uploads files for the agent; for an active chat mirrored to `/workspace/inputs/` immediately, for a dormant one on resume. Limit `AGW_ARTIFACT_MAX_MB` per file. The file starts with `sent_at` unset and may still be removed |
+| `DELETE /api/chats/{id}/inputs/{name}` | 204 | takes back an uploaded input that was **not** sent with a message (issue L4/#121): row, file in the object store and the mirror in the sandbox; the chat's subscribers get the SSE event `artifact_removed`. `404` for an unknown name, `409 {"error":"input already sent","code":"already_sent"}` for a file that went with a message — that one belongs to the history. The same 409 for a chat in the trash is `{"code":"chat_in_trash"}` |
 | `GET /api/approvals?state=pending` | `Approval[]` | open approvals of all chats |
 | `GET /api/events` | SSE | approvals across all the user's chats, see *SSE `GET /api/events`* |
 | `GET /api/activity?kind=&since=&until=&outcome=&chat=&limit=&before=` | `ActivityPage` | platform calls (with `kind=internet\|all` also the internet switches) of the user's chats across all chats, newest first, with a summary of the period; see *Activity across chats* |
@@ -585,6 +586,7 @@ Each event is a `data:` line with JSON `{"kind": …, "data": …}`. Every 15 s 
 | `chat` | `Chat` (on every change of state) |
 | `approval` | `Approval` (new or decided) |
 | `artifact` | `Artifact` (newly stored: a file the agent sends, at once without approval, or a file the user attached) |
+| `artifact_removed` | `{kind: "input", name: string}`: an input the user took back before sending it (issue L4/#121); subscribers drop their card |
 | `socket_call` | `SocketCall` (op also `agent_limit`, `subagent_limit`, `extension_ui`, `internet`, `internet_off`, `internet_set`) |
 | `llm_call` | `LLMCall` (every model call, including subagents) |
 | `subagent` | `SubagentEntry` (new entries from the subagent sessions, about every 2 s) |
@@ -1013,6 +1015,14 @@ of the message, so the agent knows the files:
 The stored user message contains this block; the UI recognises it by the header
 `[Attachments in /workspace/inputs/]` at the end of the message and shows the files as attachments. Without text,
 "See attachments." is sent.
+
+An uploaded file is first only staged for the message being written. Sending (or queueing) an input sets its
+`sent_at`, and from then on it belongs to the history: it cannot be removed any more, and it is mirrored again into
+the sandbox of a resumed chat like every other input. What the user takes back before sending — the cross on the
+tile, or an upload the UI cancelled — goes away for good with `DELETE /api/chats/{id}/inputs/{name}`, so the agent
+does not see files the user discarded. A file uploaded again under a name that was already sent keeps its `sent_at`
+(safe error: the attachment of the earlier message stays), so it is not removable until it goes out with a new
+message.
 
 Any file type may be uploaded; the server does not check types, only the size: more than `AGW_ARTIFACT_MAX_MB`
 (default 50) per file answers 413 with `<name> is larger than <n> MB` (`artifact_max_mb` of `GET /api/config` names

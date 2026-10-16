@@ -73,6 +73,8 @@ var (
 	ErrVariantFixed = errors.New("the bindings of new chats are fixed by the gateway (AGW_TOOLSETS)")
 	ErrNoSlot       = pool.ErrNoIdleSlot
 	ErrNotFound     = store.ErrNotFound
+	// ErrAlreadySent: the input went with a message and is not removed any more (issue L4/#121, RemoveInput).
+	ErrAlreadySent = store.ErrAlreadySent
 )
 
 // Event is distributed to a chat's SSE subscribers.
