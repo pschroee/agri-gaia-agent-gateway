@@ -1,6 +1,6 @@
 ---
 name: pre-annotation
-description: Pre-annotate datasets in CVAT with annotation-*. Check capabilities first (entry annotation); without it point to manual annotation in CVAT; only own image datasets; annotation-functions, annotation-task; propose the mapping by meaning as a table, never map a label you are unsure about; calibrate before a fill; annotation-fill writes only images without annotations; annotation-check uncertain names the weakest images and their cvat_url; after every run or fill verify (annotation-check) and report the verdict (usable/questionable), whether images were reviewed (entry vision), per-class figures and the sample size; never call a pre-annotation done without a final verdict usable; annotation-rollback takes back only unchanged automatic annotations; follow a run or job in a background loop, 30 s apart; annotation-summary, then annotation-sync; existing=keep only on an empty task, existing=replace deletes all; never claim a pre-annotation is correct, the user corrects it in CVAT.
+description: Pre-annotate the user's own image datasets via agw-platform annotation-*. Check capabilities first (entries annotation and vision) and take the path it allows; if pre-annotation is unavailable, point to manual annotation in CVAT. Show a label mapping by meaning as a table before any run. Own ONNX models become functions with annotation-function (irreversible, visible to all CVAT users). Calibrate before filling, fill only images without annotations, follow long jobs in a background loop 30 s apart. After every run or fill run annotation-check verify and report first the verdict usable or questionable, whether images were reviewed or statistics only, per-class figures and sample sizes; never call it done without a final verdict usable. If questionable you may correct it with the gateway's suggestions (rollback, threshold, mapping, fill), at most 3 rounds and only while the validation figures improve; report before and after each round.
 ---
 
 # Pre-annotation with CVAT
@@ -224,6 +224,49 @@ agw-platform annotation-rollback --source-id <run_id or job_id> --scope suspicio
 answer names `deleted`, `changed_kept` (corrected by the user, left alone), `missing` (no longer in
 CVAT) and `frames_emptied`. After a rollback, fill again with the corrected setting — what was taken
 back comes again from the same function.
+
+## 5c. Correct and stop
+
+A questionable interim verdict is not the end: you correct the result yourself, and the gateway counts
+how often. Every step is one of the tools above with its own effect class — there is no tool of its own
+for the loop, and no step skips the check the others go through.
+
+**What a round is, and when it is refused.** Every `pre-annotate` or `annotation-fill` on a task after
+the first one in this chat is a **correction round**. At most **3** of them per task and chat, at most
+**1** with a retraining. A round also has to be earned: it goes on only while the round before it made
+the figure on the validation images (`overall.accuracy` of a classification, `overall.macro_f1` of a
+detector) at least **0.02** better, and it is refused while the task has fewer than 5 validation images
+and the user did not annotate any more. The gateway decides that and answers with the reason
+(`no improvement on the validation images in round …`, `too few validation images …`, `at most 3
+correction rounds …`, `no correction round after the final verdict …`). **Report that sentence and
+stop** — do not try another setting after it, do not call the result done, and never ask for a second
+`--final true`.
+
+**Order of the corrections** — the cheap ones first, and only the suggestions the report of §5b named:
+
+1. **Threshold or mapping.** `other_threshold` and `remap` come from the calibration set. Take the
+   automatic annotations back (`annotation-rollback --source-id <id> --scope suspicious`, or `--scope
+   all` when the mapping was wrong as a whole) and fill again with the confirmed mapping and the
+   proposed `--min-confidence`. Both scopes are `write` and the fill is `compute`: one `propose-plan`
+   covers the round, and the images the user annotated himself stay untouched either way.
+2. **The uncertain images to the user.** `annotation-check --mode uncertain` lists the images the
+   function is least sure about, the weakest first, each with a `cvat_url`. Give the user those links
+   and end your turn there: this is a waiting step, and it is the only way the validation images grow.
+   Come back when the user says they annotated.
+3. **Retraining.** Only when the setting is right and the model is the weak part. Have the user confirm
+   the class order, train on the corrected images (skill `training-advice`), take the model over, build
+   a function from it (`annotation-function` — `irreversible`, so a plan never covers it and the user
+   approves exactly this call), calibrate again and fill.
+
+**Report each round with both columns.** The interim report of a correction carries `round`, `previous`
+(the figures of the round before) and `delta` (the change of the figure and per class). Name them:
+
+| Round | Measured on | Figure | Before | Change |
+|---|---|---|---|---|
+| 2 | 5 validation images | accuracy 0.80 | 0.60 | +0.20 |
+
+Say plainly whether the correction helped — a round that changed nothing is a result as well. Then
+`--final true` on the held-out images, once, and report that verdict as the end of the loop.
 
 ## 6. Count, then write back
 

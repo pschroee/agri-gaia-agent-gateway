@@ -12,10 +12,12 @@ import (
 )
 
 // The description of the skill is the part pi puts into the context before any command runs, so the
-// rules the agent must know before it starts a run stay there (issue #59; V1). It names both ways:
-// the functions of CVAT and the manual annotation, which is what remains when nothing is available.
-// V3b adds the rule that a run or a fill is judged and reported before it counts as a result; the
-// description stays under 1024 characters, so V1 rules were shortened for it (E24).
+// rules the agent must know before it starts a run stay there (issue #59; V1). It names both ways: the
+// functions of CVAT and the manual annotation, which is what remains when nothing is available. V3b adds
+// the rule that a run or a fill is judged and reported before it counts as a result, V3c the rules of the
+// correction loop. The description is the end version of V3c (E24, 948 characters): V1 to V3b wrote
+// interim versions, and the description is replaced, not appended to, because five appendices would have
+// grown it to about 1900 characters.
 func TestPreAnnotationSkillDescription(t *testing.T) {
 	content := repoFile(t, "images/agw-basis/skills/pre-annotation/SKILL.md")
 	m := regexp.MustCompile(`(?s)\A---\nname: pre-annotation\ndescription: ([^\n]+)\n---\n`).FindStringSubmatch(content)
@@ -31,26 +33,16 @@ func TestPreAnnotationSkillDescription(t *testing.T) {
 	}
 	for _, want := range []string{
 		"capabilities",
-		"manual annotation in CVAT",
-		"annotation-functions",
-		"annotation-task",
+		"vision",
 		"mapping",
-		"table",
-		"never map a label you are unsure about",
-		"existing=keep",
-		"existing=replace",
-		"background loop",
-		"30 s",
-		"annotation-summary",
-		"annotation-sync",
-		"cvat_url",
-		"never claim the pre-annotation is correct",
-		// V3b: the result is judged and reported, and taking it back is named.
+		"irreversible",
+		"only images without annotations",
 		"verify",
-		"usable/questionable",
+		"statistics only",
 		"final verdict usable",
-		"annotation-rollback",
-		"entry vision",
+		// V3c: the loop and its bound stand in the description as well, because the agent has to know
+		// before its first fill that a further one is a round.
+		"at most 3 rounds",
 	} {
 		if !strings.Contains(desc, want) {
 			t.Errorf("description lacks %q", want)
@@ -58,7 +50,8 @@ func TestPreAnnotationSkillDescription(t *testing.T) {
 	}
 }
 
-// The body carries the steps, the loop for a long run and the estimate of the runtime.
+// The body carries the steps, the loop for a long run, the estimate of the runtime and — since V3c — the
+// correction of a questionable result with its order and its bound.
 func TestPreAnnotationSkillBody(t *testing.T) {
 	content := repoFile(t, "images/agw-basis/skills/pre-annotation/SKILL.md")
 	for _, want := range []string{
@@ -80,6 +73,14 @@ func TestPreAnnotationSkillBody(t *testing.T) {
 		"agw-platform annotation-rollback",
 		"changed_kept",
 		"Never call a pre-annotation done without a final verdict",
+		// V3c: the correction loop, its order, its bound and the figures of a round.
+		"## 5c. Correct and stop",
+		"correction round",
+		"0.02",
+		"no improvement on the validation images in round",
+		"too few validation images",
+		"`previous`",
+		"`delta`",
 	} {
 		if !strings.Contains(content, want) {
 			t.Errorf("skill text lacks %q", want)
