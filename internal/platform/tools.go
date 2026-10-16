@@ -545,6 +545,11 @@ var Tools = []Tool{
 			if why := NotebookCallRefusal(r); why != "" {
 				return r, errors.New(why)
 			}
+			// The check paths belong to the check tools (R0): the gateway decides what a check runs on,
+			// and the agent must not name or read the measured set.
+			if why := AssessCallRefusal(r); why != "" {
+				return r, errors.New(why)
+			}
 			return r, nil
 		}},
 }

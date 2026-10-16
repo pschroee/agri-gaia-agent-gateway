@@ -205,6 +205,8 @@ func (s *Server) Handler() http.Handler {
 	chat("GET /api/chats/{id}/subagent-runs", s.subagentRuns)
 	writes("POST /api/chats/{id}/subagent-runs/{run}/messages", s.subagentMessage)
 	chat("GET /api/chats/{id}/plans", s.plans)
+	// R0 (issue #112): the result checks of a chat with their reports, for the check card.
+	chat("GET /api/chats/{id}/assessments", s.assessments)
 	// A-E1: the user's controls of an autonomous plan; the agent has no tool for them.
 	writes("POST /api/chats/{id}/plans/{plan}/pause", s.planControl(func(ctx context.Context, chatID, planID string) (store.Plan, error) {
 		return s.M.PausePlan(ctx, chatID, planID, "user")
