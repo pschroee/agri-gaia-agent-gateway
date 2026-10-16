@@ -12,8 +12,10 @@ import (
 )
 
 // The way of the user's own model (V2) stands in the description of the skill: the tool
-// annotation-function, its irreversibility with the visibility for every CVAT user, and the order of
-// the classes — the rule the agent must know before it acts (issue #59).
+// annotation-function, its irreversibility with the visibility for every CVAT user — the rule the agent
+// must know before it acts (issue #59). V3c replaced the description (948 characters, the plan of #110);
+// the order of the classes and the fact that the agent cannot remove the function stand in the text,
+// where the second loop below guards them.
 func TestPreAnnotationSkillOwnModel(t *testing.T) {
 	content := repoFile(t, "images/agw-basis/skills/pre-annotation/SKILL.md")
 	m := regexp.MustCompile(`(?s)\A---\nname: pre-annotation\ndescription: ([^\n]+)\n---\n`).FindStringSubmatch(content)
@@ -22,14 +24,12 @@ func TestPreAnnotationSkillOwnModel(t *testing.T) {
 	}
 	desc := m[1]
 	if n := utf8.RuneCountInString(desc); n > 1024 {
-		t.Errorf("description has %d characters, at most 1024 (V2 lengthens it; V3c replaces it)", n)
+		t.Errorf("description has %d characters, at most 1024 (the plan of #110 allows 948)", n)
 	}
 	for _, want := range []string{
 		"annotation-function",
 		"irreversible",
 		"visible to all CVAT users",
-		"not removable",
-		"labels in the model's output order",
 	} {
 		if !strings.Contains(desc, want) {
 			t.Errorf("description lacks %q", want)

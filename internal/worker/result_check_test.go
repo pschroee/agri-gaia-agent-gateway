@@ -65,7 +65,9 @@ func TestResultCheckSkillBody(t *testing.T) {
 		"assess-model --path",
 		"Model check of this file",
 		"origin unknown",
-		"Filled by R3",
+		// R0 left the placeholder "Filled by R3" in this section; R3 replaced it with the section of the
+		// edge deployment (issue #116).
+		"agw-platform deployment-check",
 		"Never describe the checked set itself",
 	} {
 		if !strings.Contains(content, want) {
