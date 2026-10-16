@@ -44,6 +44,9 @@ const (
 	CheckLabel = "agw.check"
 	// ScaleToUnit is the default preprocessing of the training templates: byte values times 1/255.
 	ScaleToUnit = 0.00392156862745098
+	// TarRecord is the record size of a tar archive (tar(1)'s blocking factor 20 × 512 bytes, python's
+	// tarfile.RECORDSIZE). BuildTar pads the archive to a whole number of records; see there.
+	TarRecord = 20 * 512
 )
 
 // Runtime is what the runner needs from the container runtime: one command in a fresh, sealed
@@ -312,6 +315,15 @@ func BuildTar(j Job) ([]byte, error) {
 	}
 	if err := tw.Close(); err != nil {
 		return nil, err
+	}
+	// Pad to a whole record, as tar(1) does: Go's tar.Writer ends the archive with its end-of-archive
+	// marker but stops there, so a small archive is only a few blocks long. A reader that works in
+	// records — python's tarfile reads TarRecord bytes at a time — would then wait for the rest of its last
+	// record, and with the write side of the connection left open (see sandbox.RunOnce) that wait never
+	// ends: the check hung after its inputs had arrived (found in the live test of R0, together with the
+	// lost output). With the padding every record is complete and the reader stops at the marker.
+	if rest := buf.Len() % TarRecord; rest != 0 {
+		buf.Write(make([]byte, TarRecord-rest))
 	}
 	return buf.Bytes(), nil
 }

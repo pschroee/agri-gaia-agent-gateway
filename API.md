@@ -1587,6 +1587,13 @@ report form and rules.
   the run the entrypoint of the image is replaced, because it is `agw-exec idle`, which ignores arguments and never
   ends. One check runs at a time (a semaphore of one); a leftover container carries the label `agw.check=1` and is
   collected by the next start.
+- **The two rules of the one-shot container** (`sandbox.Runtime.RunOnce`, both from the live test of R0): one hijacked
+  connection carries stdin and stdout, so the gateway does **not** half-close it (an early EOF ends the whole stream and
+  the answer is lost — that showed up as an empty answer with an exit code of 0); and the command has to stop reading
+  its input at the end of the input, not at EOF. The tar therefore ends with its end-of-archive marker **inside a whole
+  record** (`assess.TarRecord`, 10 240 bytes, as `tar(1)` pads): a record-oriented reader — python's `tarfile` reads
+  10 240 bytes at a time — would otherwise wait for the rest of a record that never comes. A container that is still
+  running when its output ends is an error, never an exit code of 0.
 - **What the script does** (R0.13, R0.14): it loads the model with `onnxruntime` (`CPUExecutionProvider`, one thread),
   converts every image like the training templates (`Resize` bilinear, `ToTensor` with 1/255) and answers the top class
   and the probabilities per image (softmax if the output is not already a distribution, tolerance 1e-3). A non-finite

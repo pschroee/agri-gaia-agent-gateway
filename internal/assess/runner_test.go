@@ -51,6 +51,43 @@ func runOf(t *testing.T, answer string) (*Runner, *fakeRuntime) {
 	return NewRunner(f, "agw-basis:dev"), f
 }
 
+// The tar is padded to a whole number of records, so that a reader that works in records (python's
+// tarfile) stops at the end-of-archive marker instead of waiting for the rest of its last record. That
+// wait hung a live check after its inputs had arrived (see BuildTar).
+func TestBuildTarPaddedToRecord(t *testing.T) {
+	blob, err := BuildTar(Job{Model: []byte("m"), Images: []Image{{ID: "abc", Data: []byte("PNG")}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(blob)%TarRecord != 0 {
+		t.Fatalf("%d bytes are not a whole number of %d-byte records", len(blob), TarRecord)
+	}
+	// The padding hides nothing: every member is there and the reader ends after the last one.
+	var names []string
+	tr := tar.NewReader(bytes.NewReader(blob))
+	for {
+		hdr, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		names = append(names, hdr.Name)
+	}
+	if strings.Join(names, ",") != "job.json,model.onnx,images/abc.png" {
+		t.Fatalf("members: %v", names)
+	}
+	// A large archive is a whole number of records as well.
+	big, err := BuildTar(Job{Model: bytes.Repeat([]byte("x"), 3*TarRecord), Images: []Image{{ID: "abc", Data: []byte("PNG")}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(big)%TarRecord != 0 {
+		t.Fatalf("a large archive: %d bytes", len(big))
+	}
+}
+
 // The check container is sealed and gets exactly its inputs: no network, no volume, the limits of R0.11,
 // and a tar with the job, the model and the images.
 func TestRunnerTarAndSpec(t *testing.T) {
