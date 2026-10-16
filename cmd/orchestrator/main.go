@@ -193,6 +193,7 @@ func run() error {
 		AutoCompactDefault: env.AutoCompactDefault, CompactReserveTokens: env.CompactReserveTokens, CompactKeepRecent: env.CompactKeepRecent,
 		BgWakesPerHour: env.BgWakesPerHour, BgKeepAlive: env.BgKeepAlive, AutoTurnsMax: env.AutoTurnsMax,
 		Titler: newTitler(cat, env.TitleModel), Platform: plat, Toolsets: toolsets,
+		Sessions: sessionKeeper(auth), // A-E3: keeps the login of plan owners fresh
 		Notebook: notebooker,
 		Checks:   checks, // R0: answers the capability "checks"
 	})
@@ -247,6 +248,10 @@ func run() error {
 	p.Start(poolCtx)
 	// Chats in the trash past AGW_TRASH_RETENTION_DAYS are deleted for good (off by default; issue #76).
 	go m.RunTrashRetention(poolCtx)
+	// A-E3: the endurance loop of autonomous plans. It renews the login of plan owners ahead of time and
+	// continues their plans when a login comes back. Without a login through the platform (AGW_AUTH_MODE
+	// != oidc) there is no session to keep, and the loop says so and returns.
+	go m.RunPlanEndurance(poolCtx)
 	// A-E2: the watcher of observed platform jobs. It polls the platform with the user's token until a
 	// job ends, writes its progress into watch_jobs, distributes it and wakes the agent when a plan step
 	// is through. Without a platform binding (AGW_PLATFORM_API_URL empty) it says so and returns. The
@@ -316,6 +321,16 @@ func run() error {
 	_ = proxySrv.Shutdown(sctx)
 	_ = webSrv.Shutdown(sctx)
 	return nil
+}
+
+// sessionKeeper hands the OIDC service to the manager as the login side of A-E3. In the token mode there is
+// no service, and nil is passed on: a nil *oidc.Service in the interface would not be nil, and the endurance
+// loop would then keep asking an empty service for sessions.
+func sessionKeeper(auth *oidc.Service) chat.SessionKeeper {
+	if auth == nil {
+		return nil
+	}
+	return auth
 }
 
 // ownerToken returns, per chat, the access token of its owner from the owner's session at the orchestrator.

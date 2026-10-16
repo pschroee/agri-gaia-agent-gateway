@@ -241,6 +241,11 @@ type Options struct {
 	// Platform talks to the Agri-Gaia platform (nil: binding off).
 	Platform *platform.Client
 
+	// Sessions is the login side of the gateway (A-E3): while an autonomous plan of a user is approved, the
+	// endurance loop renews that user's session, and plans a lost login had paused continue with the next
+	// login. nil in the token mode: there is no session to keep fresh and none to continue a plan with.
+	Sessions SessionKeeper
+
 	// Notebook runs the chat's own code in its notebook server in JupyterHub (own code C-E3); nil
 	// when AGW_JUPYTERHUB_API_URL is not set. main.go registers it as the doer of the notebook paths.
 	Notebook Notebooker
@@ -2291,6 +2296,14 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 		}
 	}
 	if err != nil {
+		// D3.5: the user's login was gone when the call went out. That is no failure of the step (the call
+		// never reached the platform) and no reason to let the rest of an autonomous plan fail as well: the
+		// step keeps its claim back (planFinish above) and the plan pauses until the login is back (D3.6).
+		if loginGone(err) {
+			if ap, aerr := m.activeAutonomousPlan(ctx, chatID); aerr == nil && ap.State == plan.StateApproved {
+				m.pausePlanForLogin(ctx, ap.ID)
+			}
+		}
 		return platform.Result{Status: "error", Message: err.Error(), Violation: violation, Duration: took}, nil
 	}
 	res.Violation = violation

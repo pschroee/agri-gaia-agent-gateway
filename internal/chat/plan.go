@@ -74,6 +74,17 @@ func (m *Manager) ProposePlan(ctx context.Context, chatID, slotID, via string, r
 		cost, _ := m.replacedCost(ctx, chatID, p.Replaces)
 		auto = &plan.Autonomy{Budget: *p.Budget, Rights: del.SummaryLine(), ComputeNeeded: need,
 			ComputeLeft: max(0, left-need), Replaces: p.Replaces, ReplacedCostUSD: cost}
+		// D3.3: an autonomous plan must not run into the end of the login session that carries its calls.
+		// That end is fixed the moment the session was created, so it is read once, here: the approval's
+		// waiting time eats into it, and the preview names it (Autonomy.EndsAt).
+		if ends, ok := m.planSessionEnd(ctx, chatID); ok {
+			if !ends.After(planNow()) {
+				return platform.Result{Status: "error", Message: "the login session ends within the hour; an autonomous plan would not get anywhere. Log in to the platform again and propose it once more"}, nil
+			}
+			if own := planNow().Add(time.Duration(p.Budget.MaxDurationMinutes) * time.Minute); ends.Before(own) {
+				auto.EndsAt = timePtr(ends)
+			}
+		}
 	}
 	if err := m.checkPendingLimit(ctx, chatID); err != nil {
 		return platform.Result{}, err
@@ -140,6 +151,10 @@ func (m *Manager) ProposePlan(ctx context.Context, chatID, slotID, via string, r
 	if p.Autonomous() {
 		// The plan's own duration bounds it (A-E1, D1.8); the validity of an interactive plan does not apply.
 		expires = planNow().Add(time.Duration(p.Budget.MaxDurationMinutes) * time.Minute)
+		if auto.EndsAt != nil {
+			// D3.3: the login session of the owner ends earlier than the plan's own duration.
+			expires = *auto.EndsAt
+		}
 	}
 	ok, err := m.st.DecidePlan(bg, pl.ID, plan.StateApproved, &expires)
 	if err != nil {
@@ -252,7 +267,8 @@ func (m *Manager) planMatch(ctx context.Context, chatID string, req platform.Req
 // planFinish records the outcome of a step. A created object enters the provenance register, so a
 // later step can name it. A call that started a platform job the gateway observes (A-E2) does not
 // finish the step: it waits until that job ends (StepWaiting). A failed step fails the plan; when every
-// step is done the plan completes.
+// step is done the plan completes. A call that never went out because the user's login was gone (A-E3,
+// D3.5) is not a failure at all: the step keeps its claim back and stays open.
 func (m *Manager) planFinish(ctx context.Context, chatID string, st *store.PlanStep, access delegation.Access, req platform.Request, res platform.Result, callErr error) {
 	if st == nil {
 		return
@@ -261,6 +277,19 @@ func (m *Manager) planFinish(ctx context.Context, chatID string, st *store.PlanS
 	from := plan.StepOpen
 	if st.Covered {
 		from = plan.StepRunning
+	}
+	if loginGone(callErr) {
+		// D3.5: the user's login was gone, so the call never went out. That is no failure of the step and no
+		// reason to fail the plan: a claimed step goes back to open without counting against max_attempts (its
+		// claim is given back), an unclaimed one stays open as it was. The caller pauses the plan.
+		if from == plan.StepRunning {
+			ok, err := m.st.ReleasePlanStep(bg, st.PlanID, st.Idx, callErr.Error())
+			if err != nil || !ok {
+				slog.Error("claimed plan step not released after a lost login", "chat", chatID, "plan", st.PlanID, "step", st.Idx, "ok", ok, "error", err)
+			}
+		}
+		m.publishPlan(bg, st.PlanID)
+		return
 	}
 	to, resource, id := plan.StepFailed, "", ""
 	result := fmt.Sprintf("%s %d", res.Status, res.HTTPStatus)
@@ -510,6 +539,16 @@ func (m *Manager) ResumePlan(ctx context.Context, chatID, planID string) (store.
 			return p, gerr
 		}
 		return fresh, &PlanStateError{State: fresh.State}
+	}
+	if p.Mode == plan.ModeAutonomous {
+		// D3.4: a step a restart failed stays failed while the plan is paused, and a failed step blocks the
+		// plan (the agent may only run its next open step). The user's resume is exactly the repeat the
+		// message of that failure asks for — they checked on the platform whether the call arrived.
+		if n, rerr := m.st.ReopenFailedPlanSteps(ctx, planID); rerr != nil {
+			slog.Error("failed plan steps not reopened", "chat", chatID, "plan", planID, "error", rerr)
+		} else if n > 0 {
+			slog.Info("failed plan steps reopened by the user's resume", "chat", chatID, "plan", planID, "steps", n)
+		}
 	}
 	m.publishPlan(ctx, planID)
 	note := fmt.Sprintf("The user resumed plan %q. Continue with step %d.", planID, nextStepIdx(p))
