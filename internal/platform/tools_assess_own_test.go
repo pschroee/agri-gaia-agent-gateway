@@ -5,6 +5,7 @@
 package platform
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -137,5 +138,74 @@ func TestCheckClassNames(t *testing.T) {
 	}
 	if _, err := body("[" + strings.Join(many, ",") + "]"); err == nil {
 		t.Errorf("accepted %d class names", len(many))
+	}
+}
+
+// The approval of an upload names the check of the file it sends (R2.7): the line follows the file it
+// belongs to, so that the file and its verdict stand together (L9).
+func TestUploadApprovalShowsFileCheck(t *testing.T) {
+	sha := strings.Repeat("ab", 32)
+	call := SummaryCall{Tool: "upload_model", Method: http.MethodPost, Path: "/models",
+		Form:  map[string][]string{"name": {"mnist_cnn"}, "format": {"onnx"}},
+		Files: []SummaryFile{{Field: "modelfile", Name: "/workspace/notebook/r1/model.onnx", Size: 4096, SHA256: sha}}}
+	read := func(_ context.Context, r Request) (Result, error) {
+		if r.Path == AssessPrefix+"/files/"+sha+"/latest" {
+			return okBody(`{"sha256":"` + sha + `","line":"usable (24 held-out images, accuracy 0.92)"}`), nil
+		}
+		return okBody("{}"), nil
+	}
+	lines := strings.Split(Summarize(context.Background(), read, call), "\n")
+	file, check := -1, -1
+	for i, l := range lines {
+		if strings.HasPrefix(l, "File (") {
+			file = i
+		}
+		if strings.HasPrefix(l, "Model check of this file:") {
+			check = i
+		}
+	}
+	if file < 0 || check != file+1 {
+		t.Fatalf("the check line does not follow the file line:\n%s", strings.Join(lines, "\n"))
+	}
+	if !strings.Contains(lines[check], "usable (24 held-out images, accuracy 0.92)") {
+		t.Errorf("the line: %q", lines[check])
+	}
+	// Without a finished check of the file the line says so, and a not measured check names its reason
+	// (R2.7, L8).
+	read = func(_ context.Context, r Request) (Result, error) {
+		return okBody(`{"sha256":"` + sha + `","line":"none in this chat"}`), nil
+	}
+	if got := Summarize(context.Background(), read, call); !strings.Contains(got, "Model check of this file: none in this chat") {
+		t.Errorf("without a check of the file:\n%s", got)
+	}
+	read = func(_ context.Context, r Request) (Result, error) {
+		return okBody(`{"sha256":"` + sha + `","line":"not measured (origin unknown: this file was not fetched from a notebook run in this chat)"}`), nil
+	}
+	if got := Summarize(context.Background(), read, call); !strings.Contains(got,
+		"Model check of this file: not measured (origin unknown: this file was not fetched from a notebook run in this chat)") {
+		t.Errorf("a not measured check:\n%s", got)
+	}
+	// An unreadable answer leaves the line out instead of writing a wrong one.
+	read = func(_ context.Context, r Request) (Result, error) {
+		return Result{Status: "error", Message: "check not found in this chat"}, nil
+	}
+	if got := Summarize(context.Background(), read, call); strings.Contains(got, "Model check") {
+		t.Errorf("an unreadable answer still writes a line:\n%s", got)
+	}
+	// A file that was not read yet (a plan step) was not checked either: the route is not even asked.
+	asked := false
+	read = func(_ context.Context, r Request) (Result, error) {
+		if strings.HasPrefix(r.Path, AssessPrefix) {
+			asked = true
+		}
+		return okBody("{}"), nil
+	}
+	unread := call
+	unread.Files = []SummaryFile{{Field: "modelfile", Name: "/workspace/model.onnx", Size: -1}}
+	if got := Summarize(context.Background(), read, unread); !strings.Contains(got, "Model check of this file: none in this chat") {
+		t.Errorf("a file that was not read:\n%s", got)
+	}
+	if asked {
+		t.Error("the check of a file that was not read was asked for")
 	}
 }

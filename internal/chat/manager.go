@@ -2342,6 +2342,13 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 	if ref, ok := delegation.CreatedImage(access, req, res); ok {
 		m.recordDelegationObject(ctx, chatID, delegation.ContainerImage, ref)
 	}
+	// A model uploaded from a file of the sandbox keeps its origin when the gateway had handed that file out
+	// of a notebook run of this chat (R2.6): the hook records it, so that a later check of the model names
+	// the check of its file. Only here do the uploads of the call and the created model come together; the
+	// hook itself lives in the platform package (platform.SetOnModelUploaded).
+	if req.Method == http.MethodPost && req.Path == "/models" && len(req.Uploads) > 0 {
+		platform.NotifyModelUploaded(ctx, chatID, res, req.Uploads)
+	}
 	// A read of an image this chat knows answers with the number the platform gave it; the number is
 	// what POST /container-deployments carries, while the build only knows repo:tag (D1.9).
 	if ref, ids, ok := delegation.ImageRead(access, res); ok {

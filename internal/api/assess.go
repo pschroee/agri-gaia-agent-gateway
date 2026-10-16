@@ -5,10 +5,12 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"time"
 
+	"agw/internal/assess"
 	"agw/internal/store"
 )
 
@@ -36,6 +38,17 @@ type assessmentRow struct {
 	CreatedAt  time.Time  `json:"created_at"`
 	StartedAt  *time.Time `json:"started_at,omitempty"`
 	EndedAt    *time.Time `json:"ended_at,omitempty"`
+	// UploadedModel: for a check of a file (subject sha:<hex>) the model this file was uploaded as, once the
+	// chat uploaded it (R2.6, L14): the card shows which model stands behind a check of a file. The route
+	// reads it from the gateway's own table and never from the platform, so the name is only there when the
+	// check itself read the model — a check that ran before the upload names the id alone.
+	UploadedModel *uploadedModelRef `json:"uploaded_model,omitempty"`
+}
+
+// uploadedModelRef names the model a check's file was uploaded as (R2.6).
+type uploadedModelRef struct {
+	ID   int64  `json:"id"`
+	Name string `json:"name,omitempty"`
 }
 
 // assessments is GET /api/chats/{id}/assessments: the checks of one chat, oldest first.
@@ -52,9 +65,43 @@ func (s *Server) assessments(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]assessmentRow, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, assessmentLine(row))
+		line := assessmentLine(row)
+		line.UploadedModel = s.uploadedModelOf(r.Context(), id, row)
+		out = append(out, line)
 	}
 	writeJSON(w, 200, map[string]any{"checks": out})
+}
+
+// uploadedModelOf answers the model behind a check of a file (R2.6, L14): a row whose subject is sha:<hex>
+// is a check of a file the agent may have uploaded as a model afterwards. Without such a model the field
+// stays away; the name comes from the report, which read it when the check ran after the upload.
+func (s *Server) uploadedModelOf(ctx context.Context, chatID string, row store.Assessment) *uploadedModelRef {
+	sha, ok := assess.SHAFromSubject(row.Subject)
+	if !ok {
+		return nil
+	}
+	o, found, err := s.M.UploadedModelOfFile(ctx, chatID, sha)
+	if err != nil || !found {
+		return nil
+	}
+	return &uploadedModelRef{ID: o.ModelID, Name: modelNameOf(row.Report, o.ModelID)}
+}
+
+// modelNameOf reads the name of one model out of a stored report (figures.model, R2.6); empty when the
+// report does not name this model.
+func modelNameOf(raw json.RawMessage, modelID int64) string {
+	var rep struct {
+		Figures struct {
+			Model struct {
+				ID   int64  `json:"id"`
+				Name string `json:"name"`
+			} `json:"model"`
+		} `json:"figures"`
+	}
+	if len(raw) == 0 || modelID <= 0 || json.Unmarshal(raw, &rep) != nil || rep.Figures.Model.ID != modelID {
+		return ""
+	}
+	return rep.Figures.Model.Name
 }
 
 // assessmentLine turns a stored check into the line of the route.

@@ -11,6 +11,8 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net/http"
+	"slices"
 	"strings"
 )
 
@@ -43,6 +45,57 @@ func NotifyModelUploaded(ctx context.Context, chatID string, res Result, uploads
 	if modelID := modelIDOf(res); modelID > 0 {
 		onModelUploaded(ctx, chatID, modelID, uploads[0].SHA256)
 	}
+}
+
+// --- the line about the check in the approval of an upload (R2.7) ---
+
+func init() { registerDescriber(describeUploadModelWithCheck) }
+
+// describeUploadModelWithCheck writes the summary of POST /models (an upload of a model, upload_model) and
+// adds the line about the check of the file that is uploaded (R2.7). The text of the built-in template is
+// the base; the line follows the file it belongs to, so that the file and its verdict stand together (L9).
+func describeUploadModelWithCheck(c SummaryCall, s *summarizer) (string, []string, bool) {
+	if c.Method != http.MethodPost || c.Path != "/models" || (len(c.Form) == 0 && len(c.Files) == 0) {
+		return "", nil, false
+	}
+	head, details := s.uploadModel()
+	line, ok := s.fileCheckLine(c)
+	if !ok {
+		return head, details, true
+	}
+	for i, d := range details {
+		if strings.HasPrefix(d, "File (") {
+			return head, slices.Insert(details, i+1, line), true
+		}
+	}
+	return head, append(details, line), true
+}
+
+// fileCheckLine asks the gateway what the last finished check of the file this call uploads says (R2.7) and
+// renders it in one line. ok is false when the answer cannot be read: then the approval carries no such
+// line instead of a wrong one. The SHA-256 is the one the socket read for this upload; a call whose file was
+// not read yet (a plan step) says that nothing was checked.
+func (s *summarizer) fileCheckLine(c SummaryCall) (string, bool) {
+	sha := ""
+	if len(c.Files) > 0 {
+		sha = strings.ToLower(c.Files[0].SHA256)
+	}
+	if sha == "" {
+		return "Model check of this file: none in this chat", true
+	}
+	v, errText := s.get(AssessPrefix+"/files/"+sha+"/latest", nil)
+	if errText != "" {
+		return "", false
+	}
+	m, ok := v.(map[string]any)
+	if !ok {
+		return "", false
+	}
+	line, _ := m["line"].(string)
+	if line == "" {
+		return "Model check of this file: none in this chat", true
+	}
+	return "Model check of this file: " + line, true
 }
 
 // --- what an own model declares about itself (R2.4) ---
