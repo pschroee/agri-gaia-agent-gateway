@@ -60,7 +60,10 @@ func (m *Manager) publishPlanAlerts(ctx context.Context, p store.Plan) {
 	prev, seen := m.planAlertMarks[p.ID]
 	m.planAlertMarks[p.ID] = mark
 	m.mu.Unlock()
-	if !seen || prev == mark {
+	// An empty kind means the user has nothing to see or decide (a plan that runs on, a resumed one): the
+	// state is marked, so that the next change is measured against it, but no alert goes out — an alert
+	// without a kind is nothing the stream can show.
+	if kind == "" || !seen || prev == mark {
 		return
 	}
 	m.sendPlanAlert(p, PlanAlert{Kind: kind, Step: step, Reason: reason})

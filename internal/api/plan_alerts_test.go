@@ -66,8 +66,17 @@ func TestPlanAlertCrossChatOwnerOnly(t *testing.T) {
 	snapshotOf(t, nextEvent(t, evA, "Anna's snapshot"))
 	snapshotOf(t, nextEvent(t, evB, "Bert's snapshot"))
 
+	// The plan was approved with the store, so no publish has marked its state yet: the first publish of a
+	// plan reports nothing for the state it already had (publishPlanAlerts, A-E4). The pause below is that
+	// first publish; the alert is expected for the round after it.
 	if code, body := call(t, a, "POST", srv.URL+"/api/chats/"+chatA.ID+"/plans/"+planA.ID+"/pause", ""); code != 200 {
 		t.Fatalf("pause: %d %s", code, body)
+	}
+	if code, body := call(t, a, "POST", srv.URL+"/api/chats/"+chatA.ID+"/plans/"+planA.ID+"/resume", ""); code != 200 {
+		t.Fatalf("resume: %d %s", code, body)
+	}
+	if code, body := call(t, a, "POST", srv.URL+"/api/chats/"+chatA.ID+"/plans/"+planA.ID+"/pause", ""); code != 200 {
+		t.Fatalf("second pause: %d %s", code, body)
 	}
 	al := planAlertOf(t, nextEvent(t, evA, "Anna's plan alert"))
 	if al.Kind != chat.AlertPaused || al.ChatID != chatA.ID || al.PlanID != planA.ID {
@@ -82,9 +91,16 @@ func TestPlanAlertCrossChatOwnerOnly(t *testing.T) {
 	case <-time.After(200 * time.Millisecond):
 	}
 
-	// Bert's own plan: his alert arrives, and Anna's stream stays quiet.
+	// Bert's own plan: his alert arrives, and Anna's stream stays quiet. The same two rounds as above, so
+	// that the plan's state is marked before the pause the alert belongs to.
 	if code, body := call(t, b, "POST", srv.URL+"/api/chats/"+chatB.ID+"/plans/"+planB.ID+"/pause", ""); code != 200 {
 		t.Fatalf("pause: %d %s", code, body)
+	}
+	if code, body := call(t, b, "POST", srv.URL+"/api/chats/"+chatB.ID+"/plans/"+planB.ID+"/resume", ""); code != 200 {
+		t.Fatalf("resume: %d %s", code, body)
+	}
+	if code, body := call(t, b, "POST", srv.URL+"/api/chats/"+chatB.ID+"/plans/"+planB.ID+"/pause", ""); code != 200 {
+		t.Fatalf("second pause: %d %s", code, body)
 	}
 	if got := planAlertOf(t, nextEvent(t, evB, "Bert's plan alert")); got.PlanID != planB.ID || got.ChatID != chatB.ID {
 		t.Fatalf("Bert's alert: %+v", got)
