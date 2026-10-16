@@ -261,24 +261,45 @@ type JobEvent struct {
 	Job    store.WatchJob `json:"job"`
 }
 
-// startWatching records the job a plan step started and moves the step to "waiting". It returns false
-// when the job could not be stored: then the caller finishes the step as done, so that a plan never
-// hangs on a row that does not exist.
-func (m *Manager) startWatching(ctx context.Context, chatID string, st *store.PlanStep, from, kind, ref, result, resource, id string) bool {
+// startWatching records the job a plan step started and moves the step to "waiting". It returns the id
+// of the job the step now waits for; "" when the job could not be stored — then the caller finishes the
+// step as done, so that a plan never hangs on a row that does not exist.
+func (m *Manager) startWatching(ctx context.Context, chatID string, st *store.PlanStep, from, kind, ref, result, resource, id string) string {
 	jobID, err := m.st.AddWatchJob(ctx, store.WatchJob{ChatID: chatID, PlanID: st.PlanID, StepIdx: st.Idx,
 		ToolCallID: store.ToolCallFrom(ctx), Kind: kind, Ref: ref})
 	if err != nil {
 		slog.Error("the job a plan step started is not observed", "chat", chatID, "plan", st.PlanID, "step", st.Idx, "kind", kind, "error", err)
-		return false
+		return ""
 	}
 	ok, err := m.st.WaitPlanStep(ctx, st.PlanID, st.Idx, jobID, result, resource, id)
 	if err != nil || !ok {
 		slog.Error("plan step does not wait for its job", "chat", chatID, "plan", st.PlanID, "step", st.Idx, "job", jobID, "error", err)
-		return false
+		return ""
 	}
 	slog.Info("plan step waits for a platform job", "chat", chatID, "plan", st.PlanID, "step", st.Idx, "job", jobID, "kind", kind, "ref", ref)
 	m.publishPlan(ctx, st.PlanID)
-	return true
+	return jobID
+}
+
+// watchNote is the sentence the answer of a call that started an observed job adds (A-E2, D2.1): the
+// gateway watches the job with the user's token, so the agent does not have to hold its turn open for it
+// and poll the platform itself — the live run of 16.10.2026 showed that it does exactly that without a
+// word, which keeps the sandbox alive and the chat active for the whole job.
+//
+// The promise "you will be woken" is only made when it is kept (D2.6): an autonomous plan that is
+// approved wakes the agent when its step ends, any other plan does not, and then the agent keeps
+// following the job itself like before A-E2.
+func (m *Manager) watchNote(ctx context.Context, st *store.PlanStep, jobID string) string {
+	woken := false
+	if p, err := m.st.GetPlan(ctx, st.PlanID); err == nil {
+		woken = p.Mode == plan.ModeAutonomous && p.State == plan.StateApproved
+	}
+	if woken {
+		return fmt.Sprintf("The gateway observes this platform job (job %s) for step %d and wakes you when it ends; "+
+			"do not poll the job yourself — end your turn.", jobID, st.Idx)
+	}
+	return fmt.Sprintf("The gateway observes this platform job (job %s) for step %d; its state and the step's are in "+
+		"GET /api/chats/<chat>/jobs. This plan does not wake you, so keep an eye on it yourself.", jobID, st.Idx)
 }
 
 // recordJobOutsidePlan observes a call that started a job without a plan (A-E2.2): the row is there for

@@ -1169,8 +1169,18 @@ user's token.
   poll only uses reading `GET`s of the kind's own paths (a kind that asks for anything else is refused) and never writes
   (`TestWatchReaderRefusesWrites`). Five failing reads in a row leave the job `running` and write
   `platform not readable: …` into `message`; a plan step raises SSE `attention` (and keeps waiting).
+- **The answer says that the job is observed** (D2.1): a call whose plan step starts being watched adds
+  `note` to its answer (`platform.Result.Note`, rendered by CLI and MCP as the last line, carried by the REST binding
+  as JSON), e.g. `The gateway observes this platform job (job w1) for step 1 and wakes you when it ends; do not poll the
+  job yourself — end your turn.` Without it the agent held its turn open and polled the platform itself (seen live on
+  16.10.2026), which kept the sandbox alive and the chat `active` for the whole job and suppressed the wake-up. The
+  promise is only made for an autonomous plan that is approved (D2.6); any other plan gets "this plan does not wake
+  you, so keep an eye on it yourself" — and a job outside a plan gets no note at all (E2.2).
 - **Percent and ETA (D2.4)** come from the platform's `completion_percentage` alone (Agri-Gaia's tasks keep it as a
-  fraction 0..1, which the gateway turns into 0..100). The ETA exists from the second measurement and a percent of at
+  fraction 0..1, which the gateway turns into 0..100). **The platform reports no intermediate percent for the tasks of
+  this instance** (checked 16.10.2026: `routers/train.py` takes `on_progress_change` but never calls it for the build and
+  the run of a training container, and its tasks go 0.0 → 1.0), so the job shows none while it runs and 100 at its end;
+  the honest answer is no ETA then. The ETA exists from the second measurement and a percent of at
   least 5, linear from the job's start; a training reports no percent — instead the status, the runtime and the last log
   lines. The log tail is bounded to 20 lines and 4000 runes (D2.5) and never goes to the agent whole: the note carries
   the last ten lines in a fence with a random marker, like the note at the end of a background task.

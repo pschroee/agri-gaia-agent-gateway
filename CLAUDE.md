@@ -280,6 +280,14 @@ refer to this repository.
 - **`plan_steps.confirm_each` exists because of this:** `delegation.Access.ConfirmEach` is a trait of the route, and
   without the column a plan loaded from the database treated such a step as covered — it would have run the deploy of a
   container deployment without asking. Whoever adds a field to a plan step re-checks `scanPlanStep` against `BuildStep`.
+- **The answer of a call that starts a watched job tells the agent to end its turn** (`Result.Note`, set in
+  `PlatformCall` from `watchNote`): otherwise the agent holds its turn open and polls `/tasks/<id>` itself, which keeps
+  the sandbox alive and the chat `active` for the whole job — seen live on 16.10.2026, with no wake-up entry in the log
+  at all and `state=active` throughout. The wording promises a wake-up only for an autonomous, approved plan (D2.6);
+  every other plan is told to keep an eye on the job itself. `Result.Text` also renders `StatusPendingUser`
+  (`pending_user`), which used to come out as "HTTP 0" with the message dropped.
+- **The platform reports no intermediate percent** for the tasks of this instance (`completion_percentage` 0.0 until the
+  end), so a waiting job showing no percent is the platform's answer, not a gateway bug.
 - **The end of a step wakes a resting chat** (`ensureLive` + `deliverQueue`) only for an autonomous plan that was
   approved while the step ran, and the wake-up counts against the plan's `max_auto_turns` (`planWakeLimit`) instead of
   `AGW_AUTO_TURNS_MAX`/`AGW_BG_WAKES_PER_HOUR`; over the budget the plan is paused with `budget_turns` and the note stays

@@ -12,6 +12,12 @@ import "fmt"
 // approval. The tool capabilities says what this setup offers.
 const StatusUnavailable = "unavailable"
 
+// StatusPendingUser is the status of a call that waits for the user's decision and that the agent may
+// leave: a step of an autonomous plan that the plan does not cover is parked instead of holding the
+// turn (A-E2, D2.8), and the gateway repeats the call when the user decides. Not an error: the call was
+// accepted, only its execution waits.
+const StatusPendingUser = "pending_user"
+
 // UnavailableText is the fixed wording of such an answer (G1.13):
 // "<capability> is not available in this setup: <reason>. <what to do instead>. capabilities shows what this setup offers."
 func UnavailableText(capability, reason, instead string) string {
