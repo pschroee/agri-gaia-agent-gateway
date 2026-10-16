@@ -342,7 +342,8 @@ func suggestions(in JudgeInput, verdict Verdict) []Suggestion {
 	if in.Counted > 0 && in.SeenImages > 0 && in.SeenAccuracy < GoodAccuracy {
 		out = append(out, suggestionMoreEpochs)
 	}
-	if in.Counted > 0 && verdict == Questionable && in.SeenImages > 0 && in.SeenAccuracy-in.Accuracy > MaxSeenGap {
+	// The gap decides (R1.11), also for a usable result: the hint names the overfitting either way.
+	if in.Counted > 0 && in.SeenImages > 0 && in.SeenAccuracy-in.Accuracy > MaxSeenGap {
 		out = append(out, suggestionRegularize)
 	}
 	if in.Counted > 0 && in.PlatformFigure != nil && abs(in.PlatformFigure.Value-in.Accuracy) > MaxPlatformGap {
