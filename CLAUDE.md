@@ -467,6 +467,40 @@ refer to this repository.
 - **The route action is `run`, the effect class is `read`** (`internal/delegation/assess_edge.go`): the
   guard of the edge feature (D-E1) lets reads through and holds only non-read actions to the deployments of
   this chat, so a foreign deployment is refused before the check service sees the call.
+## Own-model checks (R2)
+
+- An own-model check measures a file the agent wrote itself **before** it uploads it: `assess_model` with
+  `path` (the same tool as R1, the second source). The bytes come out of the sandbox as the upload of that
+  call, so what is measured is what `upload_model` would send — `internal/platform/platform.go`,
+  `bodyWithFile`: a call may carry a body **and** one file only under the check prefix, because the gateway
+  answers those paths itself and never builds a multipart request from them. Everywhere else the old
+  "either body or form" rule stands (a body would be dropped, Review K2).
+- **The SHA-256 of the bytes is the subject** (`sha:<hex>`, never the path): `notebook_fetch` remembers every
+  file it hands into the sandbox (`notebook_fetches`, `internal/notebook/fetch.go` + `internal/store/
+  assess_notebook.go`), and a check of a file without such a row answers `not measured – origin unknown`
+  (P2). Seen are the datasets of **all** runs of the chat (R2.3), which is why `internal/store/
+  assess_notebook.go` reads `notebook_runs.dataset_ids` across runs: the server keeps the unpacked datasets.
+- **One rule set, two kinds of figures:** `judgeReport` in `internal/assess/training.go` carries the verdict
+  rules, the hints and the suggestions for both kinds; `JudgeClassification` (R1, `*TrainingFigures`) and
+  `JudgeOwnModel` (R2, `*OwnModelFigures`, `internal/assess/own_model.go`) only build their figures and hand
+  them in. R2's additions to the input: `DeclaredClassNames` (the order the agent declares is compared with
+  the derived one, one reason when they differ), `NotMeasuredReason` (the file does not load, or it takes no
+  single input: `Job.KeepLoadError` lets the runner answer such a file instead of failing the check),
+  `ConstantOutput` (the probe of four validation images — one per class — got the same answers) and
+  `NoHeldOutReason`.
+- **After the upload** the model keeps the origin of its file: `platform.SetOnModelUploaded` (wired in
+  `main.go` to `assess.RecordUploadedModel`) is called by `Manager.PlatformCall` after a successful
+  `POST /models` with uploads; the origin row carries `model_origins.source_sha`, and a file the gateway did
+  not hand over records nothing. Every line about a check (`GET /_agw/assess/models/{id}/latest`,
+  `…/files/{sha}/latest`) goes through `Service.checkOfSubjects` (W4: the newest finished check **with
+  final=true** decides, an interim one only says `interim only`), so a model and its file are two keys to the
+  same check. The approval of an upload names it (`Model check of this file: …`,
+  `internal/platform/tools_assess_own.go`), and `GET /api/chats/{id}/assessments` adds `uploaded_model` to a
+  row with a `sha:` subject (`internal/api/assess.go`, L14 — database only, no platform read).
+- The class names and the preprocessing the agent declares are checked in the tool
+  (`checkClassNames`, `checkPreprocess`), not in the service: an invalid declaration never reaches the check.
+  The skill `result-check` (section *Own models*) and one sentence in `notebook` carry the flow; skill
+  changes need both slot images rebuilt.
 
 ## Testing
 
