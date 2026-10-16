@@ -14,8 +14,8 @@ import (
 
 // The register of the verification of a pre-annotation result (V3b): the three sets of manually
 // annotated images of a task (annotation_splits), the annotations a run or a fill wrote
-// (annotation_objects) and the one-off marks of a task in a chat (annotation_tasks). The rules that
-// fill these tables live in internal/annotation; here stands only what is written and read.
+// (annotation_objects) and the counters and one-off marks of a task in a chat (annotation_tasks). The
+// rules that fill these tables live in internal/annotation; here stands only what is written and read.
 
 // Parts of a manually annotated image of a task (table annotation_splits, E22).
 const (
@@ -197,6 +197,124 @@ func (s *Store) DeleteAnnotationObjects(ctx context.Context, chatID string, refs
 		}
 	}
 	return nil
+}
+
+// The counters of the correction loop of a task in one chat (table annotation_tasks, V3b/V3c): how many
+// rounds it had, how many retrainings, and whether the held-out images were already measured. The rules
+// over these numbers live in internal/annotation (rounds.go); here stands only what is read and written.
+
+// AnnotationTaskCounters are the counters of one task in one chat (V3c).
+type AnnotationTaskCounters struct {
+	// TaskID is the CVAT task the row belongs to.
+	TaskID int64 `json:"task_id"`
+	// Rounds is how many correction rounds the task had in this chat: every fill and every run after the
+	// initial pre-annotation (V3c).
+	Rounds int `json:"rounds"`
+	// Retrains is how many retrainings the loop of this task had (V3c).
+	Retrains int `json:"retrains"`
+	// Final: the held-out images of the task were measured in this chat, so no round may follow (E22).
+	Final bool `json:"final_verified"`
+}
+
+// AnnotationTaskCountersOf reads the counters of one task in one chat (V3c). A task without a row has no
+// rounds and no retraining; that is no error (the row appears with the first round).
+func (s *Store) AnnotationTaskCountersOf(ctx context.Context, chatID string, taskID int64) (AnnotationTaskCounters, error) {
+	c := AnnotationTaskCounters{TaskID: taskID}
+	err := s.pool.QueryRow(ctx, `SELECT rounds, retrains, final_verified_at IS NOT NULL
+		FROM annotation_tasks WHERE chat_id=$1 AND task_id=$2`, chatID, taskID).
+		Scan(&c.Rounds, &c.Retrains, &c.Final)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return c, nil
+	}
+	return c, err
+}
+
+// AnnotationTaskCountersOfChat lists the counters of every task of a chat, by task id (V3c). The
+// retraining rule is stated per task, and this reads them all in one call.
+func (s *Store) AnnotationTaskCountersOfChat(ctx context.Context, chatID string) ([]AnnotationTaskCounters, error) {
+	rows, err := s.pool.Query(ctx, `SELECT task_id, rounds, retrains, final_verified_at IS NOT NULL
+		FROM annotation_tasks WHERE chat_id=$1 ORDER BY task_id`, chatID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []AnnotationTaskCounters{}
+	for rows.Next() {
+		var c AnnotationTaskCounters
+		if err := rows.Scan(&c.TaskID, &c.Rounds, &c.Retrains, &c.Final); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+// AddCorrectionRound counts one correction round of a task in a chat (V3c) and returns the new number.
+// The caller decides whether the round may start; this only counts it.
+func (s *Store) AddCorrectionRound(ctx context.Context, chatID string, taskID int64) (int, error) {
+	var rounds int
+	err := s.pool.QueryRow(ctx, `INSERT INTO annotation_tasks (chat_id, task_id, rounds) VALUES ($1, $2, 1)
+		ON CONFLICT (chat_id, task_id) DO UPDATE SET rounds = annotation_tasks.rounds + 1
+		RETURNING rounds`, chatID, taskID).Scan(&rounds)
+	return rounds, err
+}
+
+// AddRetrain counts one retraining on the named tasks of a chat (V3c). A task whose correction loop does
+// not run is not among them: a function built without a loop is the normal way of V2.
+func (s *Store) AddRetrain(ctx context.Context, chatID string, taskIDs []int64) error {
+	if len(taskIDs) == 0 {
+		return nil
+	}
+	batch := &pgx.Batch{}
+	for _, id := range taskIDs {
+		batch.Queue(`UPDATE annotation_tasks SET retrains = retrains + 1 WHERE chat_id=$1 AND task_id=$2`,
+			chatID, id)
+	}
+	br := s.pool.SendBatch(ctx, batch)
+	defer br.Close()
+	for range taskIDs {
+		if _, err := br.Exec(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// PreAnnotated counts the pre-annotation runs and fills of a task in one chat (V3c): the first one is the
+// initial pre-annotation and no correction round, every further one is a round. Both kinds count, because
+// a correction is either (a detector runs over the whole task, a fill works on the images without one).
+func (s *Store) PreAnnotated(ctx context.Context, chatID string, taskID int64) (int, error) {
+	var n int
+	err := s.pool.QueryRow(ctx, `SELECT
+		(SELECT count(*) FROM annotation_runs WHERE chat_id=$1 AND task_id=$2)
+		+ (SELECT count(*) FROM annotation_jobs WHERE chat_id=$1 AND task_id=$2 AND kind=$3)`,
+		chatID, taskID, AnnotationJobFill).Scan(&n)
+	return n, err
+}
+
+// VerifyResultsOfTask lists the result of the newest finished verifications of a task in one chat, newest
+// first (V3c): the correction loop compares a round with the one before it through them.
+func (s *Store) VerifyResultsOfTask(ctx context.Context, chatID string, taskID int64, limit int) ([]string, error) {
+	if limit < 1 {
+		return nil, nil
+	}
+	rows, err := s.pool.Query(ctx, `SELECT result FROM annotation_jobs
+		WHERE chat_id=$1 AND task_id=$2 AND kind=$3 AND state=$4
+		ORDER BY created_at DESC, id DESC LIMIT $5`,
+		chatID, taskID, AnnotationJobVerify, AnnotationJobFinished, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []string{}
+	for rows.Next() {
+		var result string
+		if err := rows.Scan(&result); err != nil {
+			return nil, err
+		}
+		out = append(out, result)
+	}
+	return out, rows.Err()
 }
 
 // MarkFinalVerified marks the held-out images of a task as used in this chat and reports whether they

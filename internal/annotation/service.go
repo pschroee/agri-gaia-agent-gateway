@@ -737,6 +737,11 @@ func (s *Service) preAnnotate(ctx context.Context, chatID string, req platform.R
 	if err != nil {
 		return failed(err)
 	}
+	// A run is a correction round of the task (V3c) once the task was pre-annotated in this chat; the loop
+	// decides whether it may start.
+	if err := s.beginRound(ctx, chatID, taskID); err != nil {
+		return failed(err)
+	}
 	ses, err := s.currentSession(ctx, chatID, r)
 	if err != nil {
 		return failed(err)

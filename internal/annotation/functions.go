@@ -204,6 +204,15 @@ func (s *Service) createFunction(ctx context.Context, chatID string, req platfor
 		}
 	}
 
+	// A retraining of the correction loop (V3c) is counted here, before a new function is built — not when
+	// a function that already stands in the register is used again or rebuilt: the loop may take one newly
+	// trained model into a result, and a build without a loop is the normal way of V2 and no retraining.
+	if _, known := findFunction(rows, name); !known {
+		if err := s.beginRetrain(ctx, chatID); err != nil {
+			return failed(err)
+		}
+	}
+
 	archive, err := BuildZip(name, body.Kind, labels, size, raw, m.Name, body.ModelID)
 	if err != nil {
 		return failed(err)

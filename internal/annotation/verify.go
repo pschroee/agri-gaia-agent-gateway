@@ -758,11 +758,21 @@ func sortedShares(shares map[string]float64) []string {
 type verifyAnswer struct {
 	stepList
 	assess.Report
+	// SourceID is the run or the fill this measurement judged (V3c): the report names it, so that the
+	// round after it knows what it compares itself with.
+	SourceID          string                         `json:"source_id"`
 	CalibrationImages int                            `json:"calibration_images"`
 	PerClass          map[string]assess.ClassFigures `json:"per_class"`
 	Overall           Overall                        `json:"overall"`
 	Plausibility      Plausibility                   `json:"plausibility"`
 	Suspicious        []SuspiciousImage              `json:"suspicious"`
+	// Round is the correction round this measurement belongs to (V3c): 0 is the initial pre-annotation,
+	// every further number a round after it. Previous and Delta carry the round before this one and what
+	// changed; both stand in an interim report only, because a final verdict rests on the held-out images
+	// and comparing those with the validation figures of the loop would say nothing.
+	Round    int              `json:"round,omitempty"`
+	Previous *RoundComparison `json:"previous,omitempty"`
+	Delta    *RoundDelta      `json:"delta,omitempty"`
 }
 
 // sourceSpec is the setting a judged run or fill used (V3b). A verification measures with exactly this
@@ -923,8 +933,22 @@ func (s *Service) runVerify(ctx context.Context, jobID, chatID string, spec jobS
 	}
 	res := Verify(in)
 	s.linkSuspicious(ctx, r, ses, taskID, res.Suspicious)
-	return verifyAnswer{stepList: r.steps(), Report: res.Report, CalibrationImages: in.CalibrationImages,
-		PerClass: res.PerClass, Overall: res.Overall, Plausibility: res.Plausibility, Suspicious: res.Suspicious}, nil
+	answer := verifyAnswer{stepList: r.steps(), Report: res.Report, SourceID: spec.SourceID,
+		CalibrationImages: in.CalibrationImages, PerClass: res.PerClass, Overall: res.Overall,
+		Plausibility: res.Plausibility, Suspicious: res.Suspicious}
+	// The round of the loop this measurement belongs to and the round before it (V3c): an interim report
+	// carries both, so that the user sees whether a correction helped. A final verdict names the round
+	// only — it rests on the held-out images, and those are compared with nothing.
+	round, prev, prevClasses, err := s.roundReport(ctx, chatID, taskID)
+	if err != nil {
+		return nil, err
+	}
+	answer.Round = round
+	if !spec.Final {
+		answer.Previous = prev
+		answer.Delta = roundDelta(prev, prevClasses, res.PerClass, res.Overall)
+	}
+	return answer, nil
 }
 
 // automaticObjects is the automatic side of a task as the plausibility rules read it (V3b): exactly the
