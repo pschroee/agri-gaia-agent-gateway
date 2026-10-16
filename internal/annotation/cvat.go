@@ -107,13 +107,15 @@ type Tag struct {
 	Source  string `json:"source"`
 }
 
-// Shape is one object annotation of a frame.
+// Shape is one object annotation of a frame. Points is the box [x1,y1,x2,y2] of a rectangle; V3 reads
+// it to compare the manual annotation of the user with what a function answers.
 type Shape struct {
-	Frame   int    `json:"frame"`
-	LabelID int64  `json:"label_id"`
-	Type    string `json:"type"`
-	Source  string `json:"source"`
-	Outside bool   `json:"outside"`
+	Frame   int       `json:"frame"`
+	LabelID int64     `json:"label_id"`
+	Type    string    `json:"type"`
+	Source  string    `json:"source"`
+	Outside bool      `json:"outside"`
+	Points  []float64 `json:"points"`
 }
 
 // Track is a sequence of shapes of one object over several frames.

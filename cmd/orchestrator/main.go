@@ -218,6 +218,13 @@ func run() error {
 		slog.Info("pre-annotation off (AGW_CVAT_API_URL or the platform binding is empty)")
 	}
 
+	// V3 — the checks and the fills of pre-annotation are background jobs of the gateway (one at a
+	// time, minutes of CPU time). Their observer reads only the row in annotation_jobs and never the
+	// platform: the closure below gets the store, and the kind is registered with its route here
+	// (G1.7) next to the kinds of V1 (which the service registers itself).
+	watch.Register(annotation.JobWatch(st))
+	watch.RegisterRoute(http.MethodPost, annotation.JobRoutePath(), annotation.JobKindName, annotation.JobRef)
+
 	if nb != nil {
 		// The notebook paths are answered by the gateway itself (G1.5); classification, approval,
 		// compute limit and log run unchanged in PlatformCall. The dataset archives the runner
