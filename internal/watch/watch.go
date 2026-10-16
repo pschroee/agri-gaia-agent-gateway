@@ -4,9 +4,10 @@
 
 // Package watch holds the skeleton for observing long-running jobs on the platform (G1.7): the types
 // and the two registrations the other plans (own code C-E3, edge D-E2, pre-annotation V1/V3, autonomy
-// A-E2) use, so that their kinds can grow next to each other in their own files. This package holds
-// **no** loop, no table and no kind: the loop, the table watch_jobs and the first kinds come with the
-// autonomy plan (A-E2). Progress never comes from the agent.
+// A-E2) use, so that their kinds can grow next to each other in their own files. It holds **no** loop
+// and no table: the loop and the table watch_jobs come with the autonomy plan (A-E2). The first kind
+// that lives in the package itself is edge_deployment (edge.go, D-E2); the others register their kind
+// from their own package (notebook, pre-annotation). Progress never comes from the agent.
 package watch
 
 import (
