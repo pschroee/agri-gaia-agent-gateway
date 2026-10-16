@@ -19,6 +19,20 @@ import (
 	"agw/internal/platform"
 )
 
+// States of a job, as its row in watch_jobs keeps them (store.JobRunning, JobDone, JobFailed).
+const (
+	StateRunning = "running"
+	StateDone    = "done"
+	StateFailed  = "failed"
+)
+
+// Limits of what one poll writes down (D2.4, D2.5).
+const (
+	MaxMessage  = 200  // runes of the platform's message
+	MaxLogLines = 20   // lines of the log tail
+	MaxLogRunes = 4000 // runes of the log tail
+)
+
 // Progress is the state of an observed job as the watcher works it out from the platform.
 type Progress struct {
 	State   string   // "running" | "done" | "failed"
@@ -26,6 +40,10 @@ type Progress struct {
 	Message string   // one line, from the platform, at most 200 runes
 	LogTail string   // at most 20 lines / 4000 runes
 	Outputs []Output // objects the job produced: {Resource, ID, Label}
+	// Next (A-E2) replaces the kind and the reference of the running job: the observed task only
+	// started another job (a started training container, a built image), and the same row is observed
+	// on as that job. nil for every kind that follows its job to its end.
+	Next *Job
 }
 
 // Output is an object a job produced.
@@ -60,6 +78,15 @@ type route struct {
 	path   *regexp.Regexp
 	kind   string
 	ref    Ref
+}
+
+// Lookup returns the kind registered under a name (the loop of A-E2 polls by the name its row carries);
+// ok is false for a name this build does not know.
+func Lookup(name string) (Kind, bool) {
+	mu.Lock()
+	defer mu.Unlock()
+	k, ok := kinds[name]
+	return k, ok
 }
 
 // Register registers a kind (G1.7). A kind of the same name replaces the previous one.

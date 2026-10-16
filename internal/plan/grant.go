@@ -142,6 +142,73 @@ func SampleStep(st store.PlanStep) (platform.Request, error) {
 	return req, nil
 }
 
+// StepCall rebuilds the exact call of a stored step with every placeholder replaced by what resolve
+// gives (A-E2, D2.8): the gateway repeats a step the user approved later on, and the repeated call runs
+// through the whole check again. A tool step is built by its tool, a raw step from method, path, query,
+// body and form; files are not part of it, because a step that carries files is never parked (D2.8).
+// args is the resolved argument object of a tool step (nil for a raw step), so that the caller can put
+// it into the context as the invocation and the step matches again.
+func StepCall(st store.PlanStep, resolve Resolve) (platform.Request, json.RawMessage, error) {
+	if IsToolStep(st) {
+		args, ok := substJSON(string(st.Args), resolve, false)
+		if !ok {
+			return platform.Request{}, nil, fmt.Errorf("step %d: arguments with an unresolved placeholder", st.Idx)
+		}
+		tool, ok := platform.Lookup(st.Tool)
+		if !ok {
+			return platform.Request{}, nil, fmt.Errorf("step %d: unknown tool %q", st.Idx, st.Tool)
+		}
+		req, err := tool.Build(json.RawMessage(args))
+		if err != nil {
+			return platform.Request{}, nil, fmt.Errorf("step %d: %w", st.Idx, err)
+		}
+		return req, json.RawMessage(args), nil
+	}
+	if st.Method == "" {
+		return platform.Request{}, nil, fmt.Errorf("step %d: a step needs a tool or a method", st.Idx)
+	}
+	path, ok := substPath(st.Path, resolve)
+	if !ok {
+		return platform.Request{}, nil, fmt.Errorf("step %d: path with an unresolved placeholder", st.Idx)
+	}
+	query, ok := substJSON(string(st.Query), resolve, false)
+	if !ok {
+		return platform.Request{}, nil, fmt.Errorf("step %d: query with an unresolved placeholder", st.Idx)
+	}
+	body, ok := substJSON(string(st.Body), resolve, true)
+	if !ok {
+		return platform.Request{}, nil, fmt.Errorf("step %d: body with an unresolved placeholder", st.Idx)
+	}
+	req := platform.Request{Method: st.Method, Path: path, Body: rawOrEmpty(body)}
+	if query != "" {
+		var q map[string]string
+		if json.Unmarshal([]byte(query), &q) != nil {
+			return platform.Request{}, nil, fmt.Errorf("step %d: query is not a map", st.Idx)
+		}
+		req.Query = q
+	}
+	if len(st.Form) > 0 {
+		var f map[string][]string
+		if json.Unmarshal(st.Form, &f) != nil {
+			return platform.Request{}, nil, fmt.Errorf("step %d: form is not readable", st.Idx)
+		}
+		req.Form = f
+	}
+	req, err := platform.Normalize(req)
+	if err != nil {
+		return platform.Request{}, nil, fmt.Errorf("step %d: %w", st.Idx, err)
+	}
+	return req, nil, nil
+}
+
+// rawOrEmpty keeps a call without a body free of JSON.
+func rawOrEmpty(s string) json.RawMessage {
+	if s == "" || s == "null" {
+		return nil
+	}
+	return json.RawMessage(s)
+}
+
 // ComputeSteps counts the compute calls a plan may spend: the compute steps times their max_attempts
 // (A-E1, D1.7), the figure checked against the chat's remaining compute quota.
 func ComputeSteps(steps []store.PlanStep) int {
