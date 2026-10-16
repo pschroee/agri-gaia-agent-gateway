@@ -79,13 +79,37 @@ func (s *Store) AddAnnotationRun(ctx context.Context, r AnnotationRun) (Annotati
 
 // AnnotationRun reads a run of one chat; a run of another chat is not found (E8).
 func (s *Store) AnnotationRun(ctx context.Context, chatID, id string) (AnnotationRun, error) {
-	var r AnnotationRun
-	err := s.pool.QueryRow(ctx, `SELECT `+annotationRunCols+` FROM annotation_runs WHERE chat_id=$1 AND id=$2`, chatID, id).
-		Scan(&r.ID, &r.ChatID, &r.DatasetID, &r.TaskID, &r.Function, &r.MinConfidence, &r.Mapping, &r.Existing, &r.State, &r.Error, &r.CreatedAt, &r.EndedAt)
+	r, err := annotationRunScan(s.pool.QueryRow(ctx, `SELECT `+annotationRunCols+` FROM annotation_runs WHERE chat_id=$1 AND id=$2`, chatID, id))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return AnnotationRun{}, ErrNotFound
 	}
 	return r, err
+}
+
+// annotationRunScan reads a row of annotation_runs in the order of annotationRunCols.
+func annotationRunScan(row interface{ Scan(...any) error }) (AnnotationRun, error) {
+	var r AnnotationRun
+	err := row.Scan(&r.ID, &r.ChatID, &r.DatasetID, &r.TaskID, &r.Function, &r.MinConfidence, &r.Mapping,
+		&r.Existing, &r.State, &r.Error, &r.CreatedAt, &r.EndedAt)
+	return r, err
+}
+
+// AnnotationRuns lists the runs of one chat, oldest first (the run card shows them in this order).
+func (s *Store) AnnotationRuns(ctx context.Context, chatID string) ([]AnnotationRun, error) {
+	rows, err := s.pool.Query(ctx, `SELECT `+annotationRunCols+` FROM annotation_runs WHERE chat_id=$1 ORDER BY created_at, id`, chatID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []AnnotationRun{}
+	for rows.Next() {
+		r, err := annotationRunScan(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
 }
 
 // UpdateAnnotationRun writes state and error of a run of this chat; a final state also sets ended_at.
