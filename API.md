@@ -409,7 +409,7 @@ type ActivityPage = { calls: ActivityCall[]; chats: Record<string, { id: string;
 | `DELETE /api/chats/{id}/inputs/{name}` | 204 | takes back an uploaded input that was **not** sent with a message (issue L4/#121): row, file in the object store and the mirror in the sandbox; the chat's subscribers get the SSE event `artifact_removed`. `404` for an unknown name, `409 {"error":"input already sent","code":"already_sent"}` for a file that went with a message — that one belongs to the history. The same 409 for a chat in the trash is `{"code":"chat_in_trash"}` |
 | `GET /api/approvals?state=pending` | `Approval[]` | open approvals of all chats |
 | `GET /api/events` | SSE | approvals across all the user's chats, see *SSE `GET /api/events`* |
-| `GET /api/activity?kind=&since=&until=&outcome=&chat=&limit=&before=` | `ActivityPage` | platform calls (with `kind=internet\|all` also the internet switches) of the user's chats across all chats, newest first, with a summary of the period; see *Activity across chats* |
+| `GET /api/activity?kind=&since=&until=&outcome=&chat=&call=&limit=&before=` | `ActivityPage` | platform calls (with `kind=internet\|all` also the internet switches) of the user's chats across all chats, newest first, with a summary of the period; see *Activity across chats* |
 | `POST /api/approvals/{id}` `{approve: boolean}` | `Approval` | approve or reject; approving re-reads the platform first (see *Summaries by the gateway*): on a change **409** with `{error, code: "summary_changed", approval}` and the approval stays open |
 | `GET /api/chats/{id}/events` | SSE | live events of the chat |
 | `POST /api/chats/{id}/trash` | `Chat` | moves the chat into the trash (see *Chat trash*): stops the work, rejects open approvals and expires open plans, returns the sandbox; idempotent; 404 for foreign and unknown chats |
@@ -478,6 +478,7 @@ count. The per-chat log in `GET /api/chats/{id}` (`socket_calls`) and the SSE ev
 | `since`, `until` | period as RFC 3339 times (`2026-10-06T00:00:00+02:00`); `since` inclusive, `until` exclusive; 400 otherwise |
 | `outcome` | `ok`, `error`, `blocked` (violation blocked by the delegation), `logged` (violation let through and logged), `rejected` (by the user or no decision in time), `refused` (by the gateway before it went out); filters `calls` only, not `summary`; it belongs to platform calls, so with `kind=all` it leaves out the internet entries |
 | `chat` | one chat of the user |
+| `call` | one tool call id: only the platform calls it produced, so the step details of a chat can link to their entries (issue L6/#123). The id has the shape it has in the socket log (printable, valid UTF-8, at most 256 bytes), 400 otherwise; an id without calls gives an empty page. It narrows `calls` and the figures of the calls, but not `runs` — `chat_turns` carry no tool call id |
 | `limit` | page size, default 100, at most 500 (larger values are capped), 400 below 1 |
 | `before` | cursor: `next_before` of the previous page; only calls with a smaller id |
 

@@ -74,11 +74,13 @@ type ActivityFilter struct {
 	// Kind: KindPlatform (also ""), KindInternet or KindAll.
 	Kind string
 	// Owner limits to the chats of this user; nil: all chats (token mode).
-	Owner   *string
-	ChatID  string
-	Since   time.Time // inclusive
-	Until   time.Time // exclusive
-	Outcome string
+	Owner  *string
+	ChatID string
+	// ToolCall limits to the calls of one tool call (the step details link to them, issue L6/#123).
+	ToolCall string
+	Since    time.Time // inclusive
+	Until    time.Time // exclusive
+	Outcome  string
 	// Before: only calls with a smaller id (cursor of the previous page).
 	Before int64
 	Limit  int
@@ -173,6 +175,11 @@ func activityWhere(f ActivityFilter, t, owner string, args *[]any) []string {
 		} else {
 			w = append(w, t+".chat_id::text = "+add(f.ChatID))
 		}
+	}
+	if f.ToolCall != "" && t == "sc" {
+		// Only the socket calls carry a tool call id; the runs (t = "t", chat_turns) cannot be limited to one, so
+		// they keep counting, while the owner and the period apply to them as always.
+		w = append(w, "sc.tool_call_id = "+add(f.ToolCall))
 	}
 	if !f.Since.IsZero() {
 		w = append(w, t+".created_at >= "+add(f.Since))

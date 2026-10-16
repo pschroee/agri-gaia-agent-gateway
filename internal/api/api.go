@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"agw/internal/artifacts"
 	"agw/internal/bgtask"
@@ -1355,6 +1356,15 @@ const (
 func (s *Server) activity(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	f := store.ActivityFilter{Kind: q.Get("kind"), ChatID: q.Get("chat"), Outcome: q.Get("outcome"), Limit: activityDefaultLimit}
+	if v := q.Get("call"); v != "" {
+		// Same shape as a tool call id in the socket log (sock.validToolCallID): the step details of a chat link
+		// here with the id of their step (issue L6/#123).
+		if !validToolCallParam(v) {
+			writeErr(w, http.StatusBadRequest, "call: a tool call id (at most 256 bytes, no control characters)")
+			return
+		}
+		f.ToolCall = v
+	}
 	if f.Kind != "" && !slices.Contains(store.ActivityKinds, f.Kind) {
 		writeErr(w, http.StatusBadRequest, "kind: one of "+strings.Join(store.ActivityKinds, ", "))
 		return
@@ -1403,6 +1413,20 @@ func (s *Server) activity(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, page)
+}
+
+// validToolCallParam mirrors sock.validToolCallID for the ?call= filter of the activity: a tool call id is
+// printable, valid UTF-8 and at most 256 bytes.
+func validToolCallParam(id string) bool {
+	if id == "" || len(id) > 256 || !utf8.ValidString(id) {
+		return false
+	}
+	for _, r := range id {
+		if r < 0x21 || r == 0x7f {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Server) decide(w http.ResponseWriter, r *http.Request) {
