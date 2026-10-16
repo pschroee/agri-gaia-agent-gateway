@@ -268,6 +268,12 @@ func TestSeenAllNotebookDatasets(t *testing.T) {
 	f := newFakePlatform(t)
 	older := classImages(3) // the dataset of the first run
 	newer := classImages(2) // the dataset of the run that fetched the file
+	// classImages names its images by class and index, so classImages(2) would be a subset of classImages(3)
+	// and the second dataset could not be told apart from the first. Both runs hold their own images.
+	for i := range newer {
+		newer[i].Name = "second-" + newer[i].Name
+		newer[i].Data = "second-" + newer[i].Data
+	}
 	source := classImages(30)
 	for i := range source {
 		source[i].Name = "fresh-" + source[i].Name
@@ -610,6 +616,19 @@ func TestOwnModelNamesUploadedModel(t *testing.T) {
 	}
 }
 
+// finishedCheck stores a check that is already over, its report included: CreateAssessment opens a check
+// and carries no report, FinishAssessment writes it and moves the row to AssessFinished.
+func finishedCheck(t *testing.T, st *store.Store, a store.Assessment, report string) {
+	t.Helper()
+	row, err := st.CreateAssessment(context.Background(), a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.FinishAssessment(context.Background(), a.ChatID, row.ID, store.AssessFinished, []byte(report), ""); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // The line about the check of a file follows one wording for every verdict (R2.7, L8), and it rests on the
 // last finished check with final=true (W4): an interim one does not decide, and it is not hidden by one
 // that came after it.
@@ -622,35 +641,23 @@ func TestFileCheckLine(t *testing.T) {
 	if c, err := svc.FileCheckOf(ctx, chat.ID, sha); err != nil || c.Found {
 		t.Fatalf("without a check: %+v %v", c, err)
 	}
-	interim := store.Assessment{ChatID: chat.ID, Kind: KindOwnModel, Subject: FileSubject(sha), Final: false,
-		State:  store.AssessFinished,
-		Report: []byte(`{"verdict":"usable","measured_images":12,"figures":{"overall":{"accuracy":0.75}}}`)}
-	if _, err := st.CreateAssessment(ctx, interim); err != nil {
-		t.Fatal(err)
-	}
+	interim := store.Assessment{ChatID: chat.ID, Kind: KindOwnModel, Subject: FileSubject(sha), Final: false}
+	finishedCheck(t, st, interim, `{"verdict":"usable","measured_images":12,"figures":{"overall":{"accuracy":0.75}}}`)
 	c, err := svc.FileCheckOf(ctx, chat.ID, sha)
 	if err != nil || !c.Found || c.Final || c.Text() != "none in this chat (interim only)" {
 		t.Fatalf("an interim check: %+v %v", c, err)
 	}
-	final := store.Assessment{ChatID: chat.ID, Kind: KindOwnModel, Subject: FileSubject(sha), Final: true,
-		State:  store.AssessFinished,
-		Report: []byte(`{"verdict":"usable","measured_images":24,"figures":{"overall":{"accuracy":0.92}}}`)}
-	if _, err := st.CreateAssessment(ctx, final); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := st.CreateAssessment(ctx, interim); err != nil {
-		t.Fatal(err)
-	}
+	final := store.Assessment{ChatID: chat.ID, Kind: KindOwnModel, Subject: FileSubject(sha), Final: true}
+	finishedCheck(t, st, final, `{"verdict":"usable","measured_images":24,"figures":{"overall":{"accuracy":0.92}}}`)
+	finishedCheck(t, st, interim, `{"verdict":"usable","measured_images":12,"figures":{"overall":{"accuracy":0.75}}}`)
 	c, err = svc.FileCheckOf(ctx, chat.ID, sha)
 	if err != nil || c.Text() != "usable (24 held-out images, accuracy 0.92)" {
 		t.Fatalf("the final check decides (W4): %+v %v", c, err)
 	}
 	// A not measured check names its first reason (L8).
-	if _, err := st.CreateAssessment(ctx, store.Assessment{ChatID: chat.ID, Kind: KindOwnModel,
-		Subject: FileSubject(strings.Repeat("cd", 32)), Final: true, State: store.AssessFinished,
-		Report: []byte(`{"verdict":"not_measured","reasons":["origin unknown: this file was not fetched from a notebook run in this chat"],"figures":{"per_class":{}}}`)}); err != nil {
-		t.Fatal(err)
-	}
+	finishedCheck(t, st, store.Assessment{ChatID: chat.ID, Kind: KindOwnModel,
+		Subject: FileSubject(strings.Repeat("cd", 32)), Final: true},
+		`{"verdict":"not_measured","reasons":["origin unknown: this file was not fetched from a notebook run in this chat"],"figures":{"per_class":{}}}`)
 	if c, err := svc.FileCheckOf(ctx, chat.ID, strings.Repeat("cd", 32)); err != nil ||
 		c.Text() != "not measured (origin unknown: this file was not fetched from a notebook run in this chat)" {
 		t.Fatalf("a not measured check: %+v %v", c, err)
@@ -725,11 +732,9 @@ func TestModelCheckOfUploadedModel(t *testing.T) {
 		Source: store.OriginNotebook, SourceSHA: ownModelSHA, SeenDatasetIDs: []int64{7}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.CreateAssessment(ctx, store.Assessment{ChatID: chat.ID, Kind: KindOwnModel,
-		Subject: FileSubject(ownModelSHA), Final: true, State: store.AssessFinished,
-		Report: []byte(`{"verdict":"questionable","measured_images":24,"reasons":["the accuracy 0.55 is not at least 0.10 above the majority baseline 0.50"],"figures":{"overall":{"accuracy":0.55}}}`)}); err != nil {
-		t.Fatal(err)
-	}
+	finishedCheck(t, st, store.Assessment{ChatID: chat.ID, Kind: KindOwnModel,
+		Subject: FileSubject(ownModelSHA), Final: true},
+		`{"verdict":"questionable","measured_images":24,"reasons":["the accuracy 0.55 is not at least 0.10 above the majority baseline 0.50"],"figures":{"overall":{"accuracy":0.55}}}`)
 	c, err := svc.ModelCheckOf(ctx, chat.ID, 21)
 	if err != nil {
 		t.Fatal(err)
@@ -742,11 +747,9 @@ func TestModelCheckOfUploadedModel(t *testing.T) {
 		t.Fatalf("a model without a check: %+v %v", c, err)
 	}
 	// The check of the model itself decides when it is newer.
-	if _, err := st.CreateAssessment(ctx, store.Assessment{ChatID: chat.ID, Kind: KindTrainingModel,
-		Subject: "model:21", Final: true, State: store.AssessFinished,
-		Report: []byte(`{"verdict":"usable","measured_images":40,"figures":{"overall":{"accuracy":0.97}}}`)}); err != nil {
-		t.Fatal(err)
-	}
+	finishedCheck(t, st, store.Assessment{ChatID: chat.ID, Kind: KindTrainingModel,
+		Subject: "model:21", Final: true},
+		`{"verdict":"usable","measured_images":40,"figures":{"overall":{"accuracy":0.97}}}`)
 	if c, err := svc.ModelCheckOf(ctx, chat.ID, 21); err != nil || c.Text() != "usable (40 held-out images, accuracy 0.97)" {
 		t.Fatalf("the newer check of the model: %+v %v", c, err)
 	}
