@@ -113,7 +113,7 @@ func Verify(in VerifyInput) VerifyResult {
 	rep := assess.NewReport(JobVerify, set, counted)
 	rep.Final = in.Final
 	rep.ImageReview = in.ImageReview
-	rep.Note = verifyNote(in.Final, len(in.Measured), in.CalibrationImages, in.ValidationImages, in.HoldoutImages)
+	rep.Note = verifyNote(in.Final, counted, in.CalibrationImages, in.ValidationImages, in.HoldoutImages)
 
 	scoreLimit := MinScoreWithoutReview
 	if in.ImageReview.Done {
@@ -173,8 +173,8 @@ func Verify(in VerifyInput) VerifyResult {
 			reasons = append(reasons, areaReason(plausibility.MedianRelAreaRatio))
 		}
 	}
-	if in.ImageReview.Done && len(in.Measured) > 0 && float64(in.Flagged)/float64(len(in.Measured)) > MaxFlaggedShare {
-		reasons = append(reasons, flaggedReason(in.Flagged, len(in.Measured)))
+	if in.ImageReview.Done && counted > 0 && float64(in.Flagged)/float64(counted) > MaxFlaggedShare {
+		reasons = append(reasons, flaggedReason(in.Flagged, counted))
 	}
 
 	if len(reasons) == 0 {
