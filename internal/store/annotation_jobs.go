@@ -38,6 +38,10 @@ const AnnotationJobRecovered = "orchestrator restarted"
 // only kind whose params name a source; LastVerifyResult finds the newest one through it.
 const AnnotationJobVerify = "verify"
 
+// AnnotationJobFill is the kind of the job that writes the automatic annotations (V3). Together with the
+// runs of annotation_runs it is what the correction loop of V3c counts its rounds from.
+const AnnotationJobFill = "fill"
+
 // AnnotationJob is one background job of a chat (V3).
 type AnnotationJob struct {
 	ID string `json:"job_id"`

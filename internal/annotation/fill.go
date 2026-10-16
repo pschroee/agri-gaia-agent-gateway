@@ -98,6 +98,12 @@ func (s *Service) runFill(ctx context.Context, jobID, chatID string, spec jobSpe
 		empty = append(empty, frame)
 	}
 	res.SkippedAnnotated = len(annotated)
+	// The manually annotated images of the task are recorded where they are seen (V3b, E22). A fill looks
+	// at them anyway, and the correction loop of V3c gates its rounds on the validation set of that record
+	// — so the set has to stand before the first round is asked for, not only after a check.
+	if _, err := s.splitOf(ctx, chatID, taskID, manualObjects(ann, classesOf(labels))); err != nil {
+		return res, err
+	}
 	if spec.Limit > 0 && len(empty) > spec.Limit {
 		empty = empty[:spec.Limit]
 	}

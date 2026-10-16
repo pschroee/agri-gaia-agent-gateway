@@ -29,7 +29,9 @@ import (
 const (
 	JobCalibrate = "calibrate"
 	JobUncertain = "uncertain"
-	JobFill      = "fill"
+	// JobFill is the kind of the job that writes the automatic annotations (V3); it is the kind the store
+	// knows, so that the two cannot drift apart.
+	JobFill = store.AnnotationJobFill
 	// JobVerify judges the result of a run or a fill (V3b); it is also the kind of the report the job
 	// leaves behind (assess.Report.Kind) and the name the store knows (store.AnnotationJobVerify).
 	JobVerify = store.AnnotationJobVerify
@@ -325,6 +327,14 @@ func (s *Service) startJob(ctx context.Context, chatID string, r *recorder, spec
 	}
 	if len(d.AnnotationLabels) == 0 {
 		return failed(fmt.Errorf("dataset %d has no classes (annotation_labels); a check and a fill need the classes of the dataset", d.ID))
+	}
+	// A fill is a correction round of the task (V3c) once the task was pre-annotated in this chat; the
+	// loop decides whether it may start. A check (calibrate, uncertain) and a verification measure, they
+	// change nothing, so no round stands against them.
+	if spec.Kind == JobFill {
+		if err := s.beginRound(ctx, chatID, taskID); err != nil {
+			return failed(err)
+		}
 	}
 	ses, err := s.currentSession(ctx, chatID, r)
 	if err != nil {
