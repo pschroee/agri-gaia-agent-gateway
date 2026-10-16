@@ -1387,6 +1387,78 @@ user (uid 1000) and reads state, log and results back the same way. The server h
 - **Boundary of the observation:** the code runs in the container with the same uid as the status files `.agw/`; it can
   fake its exit code and its log. That only affects what the agent is told, never a decision of the gateway.
 
+## Result checks (R0)
+
+The gateway checks the result of a long step — the training of a model, a model from the agent's own code, a deployment
+— itself: it runs the model in a container of its own, measures the raw predictions against images or test requests it
+holds back, and works out the figures, the baseline and the verdict in Go (`internal/assess`). The agent reports the
+verdict, it never computes one (P5). R1–R3 (training, own model, deployment, #114–#116) use the same types, figures,
+report form and rules.
+
+| Tool (CLI) | Path (virtual) | Action / resource | Class | Approval |
+|---|---|---|---|---|
+| `assess_status` (`assess-status`) | `GET /_agw/assess/checks/{id}` | read assessment | `read` | no |
+
+- **Virtual paths.** The gateway answers `/_agw/assess/…` itself (`RegisterVirtual`, G1.5); delegation, class, log and
+  plan apply as for every other call. Raw calls are refused — the REST binding and the `request` tool answer
+  `check calls go through the assess tools (assess_status)` — because the gateway decides what a check runs on and the
+  agent must not be able to name or read the measured set (P11).
+- **Delegation.** `assessment` is a resource of its own; a delegation without a rule for it forbids every check call.
+- **The check container** (P6, R0.11) is a fresh container of the execution image (`AGW_IMAGE`) with no network
+  (`InternalNet: "none"`), no socket, no volume, a read-only root, a 1 GB `tmpfs` on `/tmp`, 1 CPU, 2 GB and 64
+  processes. It runs `python3 /opt/agw/check/predict.py` with the model, the images and the job as one tar on stdin and
+  answers one JSON line (at most 8 MiB). The script is part of the image (the agent can read it, not change it); for
+  the run the entrypoint of the image is replaced, because it is `agw-exec idle`, which ignores arguments and never
+  ends. One check runs at a time (a semaphore of one); a leftover container carries the label `agw.check=1` and is
+  collected by the next start.
+- **What the script does** (R0.13, R0.14): it loads the model with `onnxruntime` (`CPUExecutionProvider`, one thread),
+  converts every image like the training templates (`Resize` bilinear, `ToTensor` with 1/255) and answers the top class
+  and the probabilities per image (softmax if the output is not already a distribution, tolerance 1e-3). A non-finite
+  output, a missing image or more than `max_classes` (1000) class values is a per-image error, not a figure. Detectors
+  and segmentations are not measured (P8): their output is no `[1, C]` classification, so the verdict is `not_measured`
+  and the agent reports the platform's own figure from the training log.
+- **The report** (`assess.Report`) is the shell of the pre-annotation's `verify` answer: `kind, verdict, final, set,
+  measured_images, image_review, reasons, hints, suggestions, figures, note, header`. `verdict` is `usable`,
+  `questionable` or `not_measured`; `set` names what was measured (`holdout`, `validation`, `synthetic`); `final` says
+  whether the hold-out set was measured. **`header` is the line the agent starts its reply with**
+  (`Result: usable (held-out images, statistics only, no image review)`); `assess.Header` writes it and the agent takes
+  it over word for word. Reasons begin small; a `not_measured` header names the first reason and carries no brackets.
+- **Figures** (`assess.ClassMetrics`): accuracy, macro F1, the confusion table and per class precision (null when the
+  model never predicted the class), recall, F1, support and `below` — the names of the figures under their limit
+  (`recall` under 0.50 with at least three images of the class), which the check card paints red. The majority baseline
+  of the seen data (`assess.Majority`) stands next to them, and `assess.BinomialTail` answers whether the model beats
+  it with less than five percent probability by chance (P10).
+- **Rules of the module** (shared with R1–R3): the split of the held-out images per class (within a class every third
+  image, sorted by SHA-256, is a validation image, P3), the mapping of the model's outputs to the classes of the data
+  (majority over the seen images, only with a share of at least 0.6, at least five images per class and a bijection,
+  P9) and the stop rule of a round (`assess.MayContinue`: another round only with an improvement of at least 0.02 on the
+  validation images).
+- **Image review** (P14, #111): whether a chat model may look at a dataset's images. A model with `self_hosted: true`
+  in the catalog may see all datasets; a cloud model only those whose name matches `AGW_VISION_DATASET_PATTERN`
+  (`^(mnist|test)[-_]` by default); a model whose `input` does not name `image` may see none.
+  `assess.ImageReviewAllowed` names the reason. The checks of R0–R3 themselves never send images to a language model;
+  their report says `no image review`.
+- **State and limits.** Table `assessments` (one row per check: chat, kind, subject, evaluation dataset, final, state,
+  progress, report, error, tool call, created/started/ended). The states are `queued`, `running`, `finished`, `failed`.
+  A final check of one dataset happens **once per chat** (`final=true`); the unique partial index
+  `(chat_id, eval_dataset_id) WHERE final AND state <> 'failed'` carries the rule into the database as well (P4). A
+  check that failed does not count against the limit and does not block the dataset. At most `AGW_ASSESS_MAX_PER_CHAT`
+  (default 12) checks per chat; a check never counts against `AGW_COMPUTE_MAX_PER_CHAT` (P7). A check that broke may
+  keep a partial report (the figures without verdict and header). After a restart, `queued` and `running` rows end as
+  `failed` — their containers are gone.
+- **`GET /api/chats/{id}/assessments`** (own chats only) answers `{"checks":[{check_id, kind, subject, final, state,
+  report, progress, error, tool_call_id, created_at, started_at, ended_at}]}`, oldest first: the check card loads the
+  whole reports of a chat from here, not only the head line of the watcher. `progress` is filled only while a check
+  runs. The report goes through as the gateway wrote it; the route adds nothing and never names the checked set.
+- **The observer kind `assessment`** (`internal/watch`, G1.7) follows a check: `queued` and `running` are `running`, a
+  finished one is `done` with the head of its report as its line, a failed one names the error.
+- **The capability `checks`** (G1.11) answers whether this setup can check a result right now and how many checks this
+  chat still has (`…; <n> of <max> checks left in this chat`); without a container runtime or `AGW_IMAGE` it is not
+  available and the agent reports the platform's own figure as an unchecked one.
+- **Configuration:** `AGW_ASSESS_MAX_PER_CHAT` (default 12), `AGW_ASSESS_DOWNLOAD_MAX_MB` (the largest dataset archive
+  a check unpacks, default 2048), `AGW_VISION_DATASET_PATTERN` (default `^(mnist|test)[-_]`) and the catalog field
+  `self_hosted` per model (default false). The skill `result-check` (cli binding) carries the rules of the report.
+
 ## Tool executions (E9)
 
 The orchestrator executes the tools `bash`, `read`, `write`, `edit`, `grep`, `find` and `ls` of the main agent and
