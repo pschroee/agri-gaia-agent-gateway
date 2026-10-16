@@ -166,14 +166,20 @@ func (s *Service) createFunction(ctx context.Context, chatID string, req platfor
 	if res.Status != "ok" || res.HTTPStatus < 200 || res.HTTPStatus >= 300 {
 		return failed(platformAnswered{req: download.String(), status: res.HTTPStatus})
 	}
-	if int64(len(raw)) == 0 || int64(len(raw)) > s.modelMaxBytes() {
-		return failed(fmt.Errorf("the model file of model %d is empty or larger than %d MiB (AGW_ANNOTATION_MODEL_MAX_MB)",
+	if int64(len(raw)) == 0 {
+		return failed(fmt.Errorf("the model file of model %d is empty", body.ModelID))
+	}
+	// The platform answers the bytes of the file only when the model holds one object; several objects
+	// come as an archive (backend, routers/models.py). A model from a training is such a bundle — it
+	// carries the ONNX file and the training log —, so the ONNX file is taken out of the archive. The
+	// bound applies to that file, not to the archive around it.
+	if !bytes.HasPrefix(raw, zipMagic) && int64(len(raw)) > s.modelMaxBytes() {
+		return failed(fmt.Errorf("the model file of model %d is larger than %d MiB (AGW_ANNOTATION_MODEL_MAX_MB)",
 			body.ModelID, s.modelMaxMB()))
 	}
-	// The platform answers the bytes of the file only when the model holds one object; several
-	// objects come as an archive (backend, routers/models.py), and an archive is no model file.
-	if bytes.HasPrefix(raw, zipMagic) {
-		return failed(fmt.Errorf("the download of model %d came as an archive; the function needs a model with a single ONNX file", body.ModelID))
+	raw, err = onnxFromBundle(raw, s.modelMaxBytes())
+	if err != nil {
+		return failed(fmt.Errorf("model %d: %v", body.ModelID, err))
 	}
 	sum := sha256.Sum256(raw)
 	digest := hex.EncodeToString(sum[:])

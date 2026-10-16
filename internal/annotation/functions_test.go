@@ -293,17 +293,51 @@ func TestFunctionOwnerAndFormat(t *testing.T) {
 			t.Errorf("%s: a row was written: %+v", tc.name, rows)
 		}
 	}
-	// Several objects under a model come as an archive: an archive is no model file.
+	// A model from a training comes as a bundle (the ONNX file and the training log): the function is
+	// built from the ONNX file inside it, and the name carries the hash of that file (V2).
 	e := newTestEnv(t)
 	chatID := e.chat(t)
 	e.pf.setModel(5, modelOf(5, nil))
-	e.pf.setModelFile("PK\x03\x04model.onnx and a second file")
+	e.pf.setModelFile(string(zipOf(t,
+		[2]string{"models/5/model.onnx", "ONNX-MODEL"},
+		[2]string{"models/5/train.log", "epoch 1"})))
+	e.pf.setTaskLocation("/tasks/7")
 	res := e.do(t, chatID, http.MethodPost, platform.AnnotationPrefix+"/functions", `{"model_id":5,"kind":"classification"}`)
-	if res.Status != "error" || !strings.Contains(res.Message, "came as an archive") {
-		t.Errorf("an archive as a model: %+v", res)
+	var built functionAnswer
+	if err := json.Unmarshal([]byte(res.Body), &built); err != nil {
+		t.Fatal(err)
 	}
-	if builds, _ := e.pf.buildsOf(); builds != 0 {
-		t.Error("an archive was packed as a model")
+	if res.Status != "ok" || built.Function != FunctionName("test", 5, digestOf("ONNX-MODEL")) {
+		t.Errorf("a bundle with one ONNX file: %+v", res)
+	}
+	rows := functionsOf(t, e, "test")
+	if len(rows) != 1 || rows[0].ModelSHA256 != digestOf("ONNX-MODEL") {
+		t.Errorf("the hash is not the one of the ONNX file in the bundle: %+v", rows)
+	}
+
+	// A bundle without an ONNX file, and one with several, are refused; nothing is uploaded.
+	for _, tc := range []struct {
+		name string
+		file []byte
+		want string
+	}{
+		{"no ONNX file", zipOf(t, [2]string{"models/5/model.pt", "PICKLE"}), "without an ONNX file"},
+		{"two ONNX files", zipOf(t, [2]string{"a.onnx", "A"}, [2]string{"b.onnx", "B"}), "with 2 ONNX files"},
+	} {
+		e = newTestEnv(t)
+		chatID = e.chat(t)
+		e.pf.setModel(5, modelOf(5, nil))
+		e.pf.setModelFile(string(tc.file))
+		res = e.do(t, chatID, http.MethodPost, platform.AnnotationPrefix+"/functions", `{"model_id":5,"kind":"classification"}`)
+		if res.Status != "error" || !strings.Contains(res.Message, tc.want) {
+			t.Errorf("%s: %+v", tc.name, res)
+		}
+		if builds, _ := e.pf.buildsOf(); builds != 0 {
+			t.Errorf("%s: an archive was packed as a model", tc.name)
+		}
+		if rows := functionsOf(t, e, "test"); len(rows) != 0 {
+			t.Errorf("%s: a row was written: %+v", tc.name, rows)
+		}
 	}
 
 	// The model of another user is never read; a denied call leaves CVAT alone.
