@@ -116,6 +116,9 @@ const (
 	NoteContext    = "page_context" // page of the platform UI the user sent the message from (issue #13)
 	// NoteSubagentUser: the user wrote directly to a subagent (issue #81). Passive: it never wakes the agent.
 	NoteSubagentUser = "subagent_user"
+	// NoteSubagentStop: the user stopped a subagent (issue #120). Like NoteSubagentUser passive: the agent learns it
+	// with its next message or tool step, and such a note never wakes a resting chat.
+	NoteSubagentStop = "subagent_stop"
 	// NotePlan: the user paused, resumed or cancelled an autonomous plan (A-E1); queued so the agent learns it.
 	NotePlan = "plan"
 	// NotePlanStep: a step of an autonomous plan ended — its observed platform job finished or failed, or

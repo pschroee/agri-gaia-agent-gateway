@@ -411,15 +411,22 @@ func (m *Manager) relaySubagent(ctx context.Context, chatID string, l *live, ref
 	}
 }
 
-// SubagentRelayResult takes the reply of a relay command from the socket of the chat's sandbox. Only a reply
-// for an open ref of this chat is accepted, once; anything else is ErrNotFound and changes nothing.
+// SubagentRelayResult takes the reply of a relay command from the socket of the chat's sandbox. Only a reply for an
+// open ref of this chat is accepted, once: a stored message of the chat (issue #81) or an open stop (issue #120,
+// DL3.3 — a stop has no message, its record is the socket call). Anything else is ErrNotFound and changes nothing.
 func (m *Manager) SubagentRelayResult(ctx context.Context, chatID string, res sock.SubagentRelayResult) error {
-	if _, err := m.st.SubagentMessageByRef(ctx, chatID, res.Ref); err != nil {
-		return err
+	m.mu.Lock()
+	stop := m.stopRefs[res.Ref] == chatID && chatID != ""
+	m.mu.Unlock()
+	if !stop {
+		if _, err := m.st.SubagentMessageByRef(ctx, chatID, res.Ref); err != nil {
+			return err
+		}
 	}
 	m.mu.Lock()
 	ch := m.relayWait[res.Ref]
 	delete(m.relayWait, res.Ref)
+	delete(m.stopRefs, res.Ref)
 	m.mu.Unlock()
 	if ch == nil {
 		return ErrNotFound
@@ -554,13 +561,14 @@ func (m *Manager) notePassive(ctx context.Context, chatID string, rec store.Suba
 	m.publishQueue(ctx, chatID, "queued", []string{e.ID}, "")
 }
 
-// onlyPassive reports whether the open queue entries are passive notes about messages to subagents only.
+// onlyPassive reports whether the open queue entries are passive notes about subagents only: a message of the user
+// to one (issue #81) or the news that the user stopped one (issue #120). Such notes never wake a resting chat.
 func onlyPassive(es []store.QueueEntry) bool {
 	if len(es) == 0 {
 		return false
 	}
 	for _, e := range es {
-		if e.Kind != store.QueueSystem || e.Note != store.NoteSubagentUser {
+		if e.Kind != store.QueueSystem || (e.Note != store.NoteSubagentUser && e.Note != store.NoteSubagentStop) {
 			return false
 		}
 	}

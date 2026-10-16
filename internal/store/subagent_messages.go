@@ -135,9 +135,9 @@ func (s *Store) SubagentRunOf(ctx context.Context, chatID, runID string) (Subage
 	if !isUUID(chatID) {
 		return r, ErrNotFound
 	}
-	err := s.pool.QueryRow(ctx, `SELECT agent, label, state, pi_run_id, parent_run_id, continues_run_id, started_at, ended_at, updated_at
+	err := s.pool.QueryRow(ctx, `SELECT agent, label, state, pi_run_id, parent_run_id, continues_run_id, started_at, ended_at, updated_at, stopped_by
 FROM subagent_runs WHERE chat_id = $1 AND run_id = $2`, chatID, runID).
-		Scan(&r.Agent, &r.Label, &r.State, &r.PiRunID, &r.ParentRunID, &r.ContinuesRunID, &r.StartedAt, &r.EndedAt, &r.UpdatedAt)
+		Scan(&r.Agent, &r.Label, &r.State, &r.PiRunID, &r.ParentRunID, &r.ContinuesRunID, &r.StartedAt, &r.EndedAt, &r.UpdatedAt, &r.StoppedBy)
 	if err == nil {
 		return r, nil
 	}

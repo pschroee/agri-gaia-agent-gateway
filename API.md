@@ -225,6 +225,8 @@ type StoredMessage = {
   trigger?: "user" | "queue" | "wake";      // trigger of the turn, on all messages of a turn
   origin?: "user" | "system" | "mixed";    // user message only: origin of the instruction to pi
   sources?: MessageSource[];               // user message only: parts in order
+  abort_reason?: "user" | "trash" | "time_limit" | "turn_limit" | "subagent_limit";
+                                           // on every message of an aborted turn (issue #120); missing: not aborted
 };
 // Part of an instruction to pi. kind "user": text of the user (queue_id, if queued); kind "system":
 // orchestrator note (type "background" | "sandbox" | "language" | "page_context", refs, queue_id, marker: marker of
@@ -295,6 +297,7 @@ type SubagentEntry = { chat_id: string; run_id: string; entry_id: string; agent:
 // Name and state of a subagent run according to pi-subagents' status files (sandbox, hence not tamper-proof).
 type SubagentRun = { chat_id: string; run_id: string; agent: string; label?: string /* name in the workflow */;
   state?: string /* pi-subagents' state, e.g. running, complete, failed */; pi_run_id?: string; parent_run_id?: string;
+  stopped_by?: "user" | "limit" /* who stopped the run (issue #120); missing: not stopped, or no reason recorded */;
   message_state?: MessageState /* set when served or published, never stored (issue #82) */;
   started_at?: string; ended_at?: string; updated_at: string };
 
@@ -307,7 +310,8 @@ type SubagentRunSummary = { run_id: string; agent: string; label?: string; state
   task_head?: string /* first lines of the first task: at most 8 lines and 500 bytes */;
   started_at?: string /* first activity */; ended_at?: string /* only from the status file */;
   last_at?: string /* newest entry or end */; last_kind?: SubagentEntry["kind"] /* kind of the newest entry */;
-  entries: number; message_state: MessageState /* issue #82, see "Messages to subagents" */ };
+  entries: number; message_state: MessageState /* issue #82, see "Messages to subagents" */;
+  stopped_by?: "user" | "limit" /* issue #120, see "Stopping a subagent" */ };
 
 type Command = { name: string /* without "/" */; description?: string; source: "builtin" | "extension" | "prompt" | "skill"; args?: string /* hint about arguments */ };
 
@@ -378,6 +382,7 @@ type ActivityPage = { calls: ActivityCall[]; chats: Record<string, { id: string;
 | `GET /api/chats/{id}/tool_executions` | `{calls: ReconciledCall[], summary: Record<ReconciledCall["state"], number>, executions: ToolExecution[], executed_tools: string[]}` | tool executions of the orchestrator and reconciliation with the calls requested at the proxy (E9), sorted by time |
 | `GET /api/chats/{id}/subagent-runs` | `SubagentRunSummary[]` | short list of the chat's subagent runs in the order they started, from the database alone: does not wake the chat and takes no slot; 404 for foreign and unknown chats. See *Subagent runs without opening a chat* |
 | `POST /api/chats/{id}/subagent-runs/{run}/messages` `{text}` | 202 `{message: SubagentMessage, mode: "steer"\|"resume"\|"restart"}` | a message of the user to a subagent (`{run}` URL-encoded, `#` as `%23`); the stored message goes on at once with status `sending`, then `sent` or `failed` (SSE `subagent_message`). Refusals: 400 empty, longer than 8000 characters or `/agw-…`, 404 foreign, unknown or unsafe run, 409 with `code` `chat_in_trash`, `run_starting`, `foreground_run`, `message_pending`, `subagent_limit`, `not_resumable` or `subagents_unavailable`, 429 `rate_limited`. See *Messages to subagents* |
+| `POST /api/chats/{id}/subagent-runs/{run}/stop` | 202 `{run: SubagentRun}` | stops one running subagent without stopping the chat (`{run}` URL-encoded, `#` as `%23`); the run comes back with `stopped_by: "user"` and is published as SSE `subagent_run`. Refusals: 404 foreign, unknown or unsafe run, 409 with `code` `not_running`, `chat_in_trash` or `subagents_unavailable` (or the code pi-subagents answered with, e.g. `not_found`, `invalid_state`). See *Stopping a subagent* |
 | `GET /api/chats/{id}/plans` | `Plan[]` | plans of the chat, oldest first, with their steps; 404 for foreign and unknown chats. See *Plans with one approval* |
 | `POST /api/chats/{id}/plans/{plan}/pause` | `Plan` | pauses a running autonomous plan (`pause_reason` `user`); a running chat is stopped. 404 for a foreign or unknown plan, 409 `{"error":"plan is <state>","state":…}` when it is not `approved`. See *Autonomous plans* |
 | `POST /api/chats/{id}/plans/{plan}/resume` | `Plan` | resumes a `paused` plan and queues a note for the agent (`NotePlan`). 409 when it is not `paused`. Only this route resumes a plan; the agent has no tool for it |
@@ -907,6 +912,48 @@ the message as a hint after its current step, a finished one a follow-up questio
 
 `SubagentMessage`: `{id, chat_id, run_id, target_run_id?, ref, mode, text, status, error?, created_at, delivered_at?}`.
 
+## Stopping a subagent
+
+Issue #120. The user stops **one** running subagent without stopping the chat: the main agent keeps working, the
+other subagents keep running, and the stopped run's result stays where it is. The chat's own stop
+(`POST /api/chats/{id}/abort`) is a different action and does not name a run.
+
+- **Who may stop:** the owner of the chat only (404 for others); a chat in the trash takes no stop (409
+  `chat_in_trash`). The run must belong to the chat and be in the short list or its entries (404 otherwise). A chat
+  that rests takes no stop (409 `subagents_unavailable`): nothing runs there, and a stop must not wake a chat — the
+  same rule as for a message. A binding without `cli` (no subagents) answers the same. A run that is not running any
+  more answers 409 `not_running`.
+- **How it runs:** the gateway sends the relay command `/agw-subagent-relay` to pi like a message to a subagent does,
+  with the method `stop` and nothing but the run's ID (pi-subagents' in-process RPC; `interrupt` would only pause and
+  leave the run open). The reply comes back over the socket (`POST /subagent-relay/result`): a stop has no stored
+  message, so its ref is vouched for by the gateway's memory alongside the open relays. The bridge lets `stop`
+  through with the fixed parameter list; a refusal of pi-subagents (its code, e.g. `not_found` or `invalid_state`, or
+  the bridge's `refused`/`timeout`) is answered 409 (404 for `not_found`) with that `code`.
+- **Result:** `subagent_runs.stopped_by` is `user` (only the gateway writes it; the first writer wins) and the run is
+  published as SSE `subagent_run`, so the UI leaves its "stopping …" without a reload. The main agent learns it
+  through a passive note in the queue (note `subagent_stop`, summary "The user stopped subagent … ; do not restart it
+  unless the user asks."): it never wakes the agent and never starts a turn, it goes with the next message or the next
+  tool step. The call log gets a `subagent_stop` entry (`detail` the run, `via` `ui`, `result` `ok` or
+  `error: <code>`), which is what the activity table shows.
+- **The subagent limit** ends more than one run at once and records it differently: every run that was running at
+  that moment gets `stopped_by: "limit"`.
+
+### Why a turn was aborted
+
+Issue #120, F9. The gateway aborts a turn in five situations, and the UI names which one it was instead of always
+claiming that the user stopped: `user` (`POST …/abort`), `trash` (the chat moved to the trash),
+`time_limit` (longer than 30 minutes), `turn_limit` (too many turns in a row without the user) and
+`subagent_limit` (more subagents at the same time than allowed). The reason is stored on the turn
+(`chat_turns.abort_reason`, the first one wins) and travels with **every** stored message of that turn as
+`abort_reason`, so a reloaded chat still shows why a step was stopped. Rows from before this change and turns that
+were not aborted carry nothing, and the UI then says just "stopped".
+
+### Subagent entries are clipped
+
+For storage, task, answer, argument and result texts of a subagent entry are cut at 4 000 bytes. A cut text ends with
+exactly ` … [truncated]` (space, ellipsis, space, marker): that ending is the contract, not a decoration — the UI
+shows such a result as an excerpt ("Excerpt – first 4,000 characters") and drops the marker.
+
 ## Bindings of new chats
 
 Which bindings a chat has is fixed for the gateway, not chosen per chat (issue #29). `AGW_TOOLSETS` is a
@@ -1059,6 +1106,11 @@ schemes); it shows `data:image/(png|jpeg|gif|webp);base64` directly, SVG never.
 
 Display images are not artifacts: they need no approval, do not appear in `artifacts` and only go to the logged-in
 UI.
+
+Since issue #120 the gateway saves them **also for answers of subagents**: the tools of a subagent run in the same
+execution sandbox (E9), so the paths are the same, and a response ID is unique across the chat. The subagent view
+loads the image of its answer with the same `msg` (`message.responseId` of the entry in `subagent_entries`, i.e. its
+`response_id`) and the chat as `chatId`.
 
 ## Files the agent sends
 

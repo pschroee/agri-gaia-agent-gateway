@@ -144,6 +144,9 @@ type Message struct {
 	Trigger string   `json:"trigger,omitempty"`
 	Origin  string   `json:"origin,omitempty"`
 	Sources []Source `json:"sources,omitempty"`
+	// AbortReason: why the turn this message belongs to was aborted (issue #120, L3), from chat_turns. Empty for
+	// turns that were not aborted and for rows from before this change.
+	AbortReason string `json:"abort_reason,omitempty"`
 }
 
 // Billing is the cost of a reply as computed by the orchestrator.
@@ -719,9 +722,13 @@ RETURNING seq`, chatID, role.Role, []byte(msg), cost, peak, turn, trigger, origi
 	return seq, err
 }
 
+// Messages returns the stored messages of a chat. Every message carries the abort reason of its turn (issue #120,
+// L3), so a reloaded chat still shows why a step was stopped.
 func (s *Store) Messages(ctx context.Context, chatID string) ([]Message, error) {
-	rows, err := s.pool.Query(ctx, `SELECT seq, role, message, cost, peak, created_at, turn_id, COALESCE(trigger,''), COALESCE(origin,''), sources
-FROM chat_messages WHERE chat_id=$1 ORDER BY seq`, chatID)
+	rows, err := s.pool.Query(ctx, `SELECT m.seq, m.role, m.message, m.cost, m.peak, m.created_at, m.turn_id,
+       COALESCE(m.trigger,''), COALESCE(m.origin,''), m.sources, COALESCE(t.abort_reason,'')
+FROM chat_messages m LEFT JOIN chat_turns t ON t.id = m.turn_id
+WHERE m.chat_id=$1 ORDER BY m.seq`, chatID)
 	if err != nil {
 		return nil, err
 	}
@@ -730,7 +737,7 @@ FROM chat_messages WHERE chat_id=$1 ORDER BY seq`, chatID)
 	for rows.Next() {
 		var m Message
 		var raw, src []byte
-		if err := rows.Scan(&m.Seq, &m.Role, &raw, &m.Cost, &m.Peak, &m.CreatedAt, &m.TurnID, &m.Trigger, &m.Origin, &src); err != nil {
+		if err := rows.Scan(&m.Seq, &m.Role, &raw, &m.Cost, &m.Peak, &m.CreatedAt, &m.TurnID, &m.Trigger, &m.Origin, &src, &m.AbortReason); err != nil {
 			return nil, err
 		}
 		m.Message = raw
@@ -1146,6 +1153,10 @@ type SubagentRun struct {
 	StartedAt      *time.Time `json:"started_at,omitempty"`
 	EndedAt        *time.Time `json:"ended_at,omitempty"`
 	UpdatedAt      time.Time  `json:"updated_at"`
+	// StoppedBy: who stopped this run (issue #120, L3): "user" or "limit" (subagent limit). Empty when the run was
+	// not stopped, or when it ended in a way that records no reason (the chat's abort, the trash). Set by the
+	// gateway only; UpsertSubagentRun never changes it.
+	StoppedBy string `json:"stopped_by,omitempty"`
 	// MessageState: what a message to the run would meet now (issue #82). Set by the chat layer when the run is
 	// served or published, never stored.
 	MessageState string `json:"message_state,omitempty"`
@@ -1165,14 +1176,14 @@ ON CONFLICT (chat_id, run_id) DO UPDATE SET
   started_at = COALESCE(EXCLUDED.started_at, subagent_runs.started_at),
   ended_at = COALESCE(EXCLUDED.ended_at, subagent_runs.ended_at),
   updated_at = now()
-RETURNING agent, label, state, pi_run_id, parent_run_id, started_at, ended_at, updated_at`,
+RETURNING agent, label, state, pi_run_id, parent_run_id, started_at, ended_at, updated_at, stopped_by`,
 		r.ChatID, r.RunID, r.Agent, r.Label, r.State, r.PiRunID, r.ParentRunID, r.StartedAt, r.EndedAt,
-	).Scan(&r.Agent, &r.Label, &r.State, &r.PiRunID, &r.ParentRunID, &r.StartedAt, &r.EndedAt, &r.UpdatedAt)
+	).Scan(&r.Agent, &r.Label, &r.State, &r.PiRunID, &r.ParentRunID, &r.StartedAt, &r.EndedAt, &r.UpdatedAt, &r.StoppedBy)
 	return r, err
 }
 
 func (s *Store) ListSubagentRuns(ctx context.Context, chatID string) ([]SubagentRun, error) {
-	rows, err := s.pool.Query(ctx, `SELECT run_id, agent, label, state, pi_run_id, parent_run_id, continues_run_id, started_at, ended_at, updated_at
+	rows, err := s.pool.Query(ctx, `SELECT run_id, agent, label, state, pi_run_id, parent_run_id, continues_run_id, started_at, ended_at, updated_at, stopped_by
 FROM subagent_runs WHERE chat_id=$1 ORDER BY started_at NULLS LAST, run_id`, chatID)
 	if err != nil {
 		return nil, err
@@ -1181,12 +1192,37 @@ FROM subagent_runs WHERE chat_id=$1 ORDER BY started_at NULLS LAST, run_id`, cha
 	out := []SubagentRun{}
 	for rows.Next() {
 		r := SubagentRun{ChatID: chatID}
-		if err := rows.Scan(&r.RunID, &r.Agent, &r.Label, &r.State, &r.PiRunID, &r.ParentRunID, &r.ContinuesRunID, &r.StartedAt, &r.EndedAt, &r.UpdatedAt); err != nil {
+		if err := rows.Scan(&r.RunID, &r.Agent, &r.Label, &r.State, &r.PiRunID, &r.ParentRunID, &r.ContinuesRunID, &r.StartedAt, &r.EndedAt, &r.UpdatedAt, &r.StoppedBy); err != nil {
 			return nil, err
 		}
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+// SetSubagentStoppedBy records who stopped a run: "user" over the stop route, "limit" for the runs the orchestrator
+// ended when too many ran at the same time (issue #120, L3). The first writer wins ("user" before a later "limit",
+// and the other way round): a run stopped once says by whom. Only the gateway calls it.
+func (s *Store) SetSubagentStoppedBy(ctx context.Context, chatID, runID, by string) error {
+	if !isUUID(chatID) {
+		return ErrNotFound
+	}
+	if by == "" {
+		return errors.New("stopped_by must not be empty")
+	}
+	_, err := s.pool.Exec(ctx, `UPDATE subagent_runs SET stopped_by=$3, updated_at=now()
+WHERE chat_id=$1 AND run_id=$2 AND stopped_by=''`, chatID, runID, by)
+	return err
+}
+
+// SetTurnAbortReason records why a turn was aborted (issue #120, L3): user, trash, time_limit, turn_limit or
+// subagent_limit. The first reason wins; a later call for the same turn changes nothing. Only the gateway calls it.
+func (s *Store) SetTurnAbortReason(ctx context.Context, turnID int64, reason string) error {
+	if turnID == 0 || reason == "" {
+		return nil
+	}
+	_, err := s.pool.Exec(ctx, `UPDATE chat_turns SET abort_reason=$2 WHERE id=$1 AND abort_reason IS NULL`, turnID, reason)
+	return err
 }
 
 // SubagentRunSummary is one line of the short list of a chat's subagent runs (GET /api/chats/{id}/subagent-runs,
@@ -1208,6 +1244,9 @@ type SubagentRunSummary struct {
 	Entries  int        `json:"entries"`
 	// ContinuesRunID: the run this one continues after a message of the user (issue #81).
 	ContinuesRunID string `json:"continues_run_id,omitempty"`
+	// StoppedBy: who stopped the run (issue #120, L3): "user" or "limit". The history needs it to tell "stopped
+	// by you" from "ended" without opening the chat.
+	StoppedBy string `json:"stopped_by,omitempty"`
 	// MessageState: what a message to the run would meet now (ok, starting, foreground, ended, unavailable; issue #82).
 	MessageState string `json:"message_state,omitempty"`
 }
@@ -1244,7 +1283,8 @@ WITH e AS (
 ), r AS (SELECT * FROM subagent_runs WHERE chat_id = $1)
 SELECT COALESCE(r.run_id, e.run_id), COALESCE(NULLIF(r.agent, ''), e.agent, ''), COALESCE(r.label, ''),
        COALESCE(r.state, ''), COALESCE(e.task, ''), LEAST(r.started_at, e.first_at), r.ended_at,
-       GREATEST(e.last_at, r.ended_at), COALESCE(e.last_kind, ''), COALESCE(e.n, 0), COALESCE(r.continues_run_id, '')
+       GREATEST(e.last_at, r.ended_at), COALESCE(e.last_kind, ''), COALESCE(e.n, 0), COALESCE(r.continues_run_id, ''),
+       COALESCE(r.stopped_by, '')
 FROM r FULL OUTER JOIN e ON e.run_id = r.run_id
 WHERE e.run_id IS NOT NULL OR r.started_at IS NOT NULL
 ORDER BY 6 NULLS LAST, 1`, chatID)
@@ -1256,7 +1296,7 @@ ORDER BY 6 NULLS LAST, 1`, chatID)
 	for rows.Next() {
 		var r SubagentRunSummary
 		var task string
-		if err := rows.Scan(&r.RunID, &r.Agent, &r.Label, &r.State, &task, &r.StartedAt, &r.EndedAt, &r.LastAt, &r.LastKind, &r.Entries, &r.ContinuesRunID); err != nil {
+		if err := rows.Scan(&r.RunID, &r.Agent, &r.Label, &r.State, &task, &r.StartedAt, &r.EndedAt, &r.LastAt, &r.LastKind, &r.Entries, &r.ContinuesRunID, &r.StoppedBy); err != nil {
 			return nil, err
 		}
 		r.TaskHead = taskHead(task)

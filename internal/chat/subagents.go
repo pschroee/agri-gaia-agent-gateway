@@ -243,6 +243,29 @@ func parseChildSessionKnown(chatID, run, agent, data string, known func(ref stri
 	return out
 }
 
+// captureSubagentImages saves the display images the answers of a subagent show (issue #120, F16, DL3.8): the same
+// way as for the main agent (captureImages, the same key and the same roots), because a subagent's tools run in the
+// same execution sandbox (E9). The stored entries keep only clipped text, so the raw messages are read from the newly
+// arrived chunk of the session file (the halt note of the plan: entries do not carry the raw message).
+func (m *Manager) captureSubagentImages(chatID string, a Agent, data string) {
+	for _, line := range strings.Split(data, "\n") {
+		var e struct {
+			Type    string          `json:"type"`
+			Message json.RawMessage `json:"message"`
+		}
+		if json.Unmarshal([]byte(line), &e) != nil || e.Type != "message" || len(e.Message) == 0 {
+			continue
+		}
+		var role struct {
+			Role string `json:"role"`
+		}
+		if json.Unmarshal(e.Message, &role) != nil || role.Role != "assistant" {
+			continue
+		}
+		m.captureImages(chatID, a, e.Message)
+	}
+}
+
 // watchSubagents keeps reading the subagents' session files while the chat
 // is active and enforces the limit.
 func (m *Manager) watchSubagents(chatID string, l *live) {
@@ -359,6 +382,8 @@ func (m *Manager) pollSubagents(chatID string, l *live, offsets map[string]int64
 		if err != nil {
 			slog.Warn("subagent entries not stored", "chat", chatID, "err", err)
 		}
+		// Display images of the subagent's answers (issue #120, F16), from the same chunk the entries came from.
+		m.captureSubagentImages(chatID, l.slot.Worker, f.Data)
 		for _, e := range added {
 			if e.Kind == "user_echo" {
 				var p struct {
@@ -427,6 +452,14 @@ func (m *Manager) enforceSubagentLimit(chatID string, l *live, now time.Time) bo
 		return changed
 	}
 	slog.Warn("subagent limit exceeded, aborting", "chat", chatID, "running", n, "allowed", limit)
+	// The turn was cut short by the limit, not by the user, and every run that met it says so (issue #120, L3):
+	// the UI shows "stopped (subagent limit)" instead of "stopped by you".
+	m.markTurnAborted(chatID, l, AbortSubagentLimit)
+	for _, id := range running {
+		if err := m.st.SetSubagentStoppedBy(context.Background(), chatID, id, StoppedByLimit); err != nil {
+			slog.Warn("stopped_by not stored", "chat", chatID, "run", id, "err", err)
+		}
+	}
 	_, _ = callT(l.slot.Worker, map[string]any{"type": "abort"}, 10*time.Second)
 	_, _ = execPiT(l.slot.Worker, []string{"agw-exec", "kill-node"}, nil, 10*time.Second)
 	m.LogCall(l.slot.ID, chatID, "orchestrator", "subagent_limit", fmt.Sprintf("%d running at the same time, %d allowed", n, limit), "aborted")

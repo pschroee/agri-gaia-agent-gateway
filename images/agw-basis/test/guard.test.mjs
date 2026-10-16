@@ -183,9 +183,30 @@ test("relay: spawn keeps agent, task and async only; blocked agents and code are
 	);
 });
 
+// Issue #120: the user stops one running subagent. Nothing but the run's ID is passed on, no message and no further
+// parameters (DL3.1).
+test("relay: stop keeps the id only and needs no message", () => {
+	assert.deepEqual(relayRequest(relayJSON({ ref: REF, method: "stop", params: { id: "pi-1" } })), {
+		ref: REF,
+		method: "stop",
+		params: { id: "pi-1" },
+	});
+	// a message and every other field are dropped, not refused
+	assert.deepEqual(
+		relayRequest(relayJSON({ ref: REF, method: "stop", params: { id: "pi-1", message: "x", index: 2, mode: "steer", workflowScript: "y", cwd: "/" } })),
+		{ ref: REF, method: "stop", params: { id: "pi-1" } },
+	);
+	// without an id (or with a broken one) the stop is refused
+	for (const params of [{}, { id: "" }, { id: "a b" }, { id: "x".repeat(65) }, { id: 7 }]) {
+		assert.equal(typeof relayRequest(relayJSON({ ref: REF, method: "stop", params })), "string", JSON.stringify(params));
+	}
+	// stop is a method of its own: a missing params object stays a refusal
+	assert.equal(typeof relayRequest(relayJSON({ ref: REF, method: "stop" })), "string");
+});
+
 test("relay: other methods, bad refs, bad ids and broken requests are refused", () => {
 	for (const req of [
-		{ ref: REF, method: "stop", params: { id: "x" } },
+		{ ref: REF, method: "interrupt", params: { id: "x" } },
 		{ ref: REF, method: "manage", params: { action: "schedule.run", id: "x" } },
 		{ ref: "agw-XYZ", method: "steer", params: { id: "x", message: "m" } },
 		{ ref: REF, method: "steer", params: { id: "a b", message: "m" } },

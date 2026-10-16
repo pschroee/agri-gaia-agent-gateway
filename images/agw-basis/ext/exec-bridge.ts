@@ -1027,15 +1027,15 @@ function isChildSession(ctx: any): boolean {
 	}
 }
 
-// --- relay of messages from the user to subagents (issue #81) ---
+// --- relay of messages from the user to subagents (issue #81) and of a stop (issue #120) ---
 //
 // The gateway sends `/agw-subagent-relay <base64url JSON>` to the main session as a prompt. pi runs the
 // command at once, without a model call, and it does not reach the conversation. The command passes the
 // request to the in-process RPC of pi-subagents (subagents:rpc:v1:request, reply on :reply:<ref>) and reports
 // the reply to the gateway over the socket (POST /subagent-relay/result). The gateway decides what is sent
-// (chat, run, text, limits); this side only lets through the three methods below with the fixed parameters,
+// (chat, run, text, limits); this side only lets through the four methods below with the fixed parameters,
 // because RPC requests over pi.events do not pass the tool_call hook.
-const RELAY_METHODS = ["steer", "resume", "spawn"] as const;
+const RELAY_METHODS = ["steer", "resume", "spawn", "stop"] as const;
 type RelayMethod = (typeof RELAY_METHODS)[number];
 const RELAY_REF = /^agw-[0-9a-f]{8}$/;
 const RELAY_RUN = /^[A-Za-z0-9#._:-]{1,64}$/;
@@ -1084,6 +1084,11 @@ export function relayRequest(raw: string): RelayRequest | string {
 		return { ref: req.ref, method, params: { agent: p.agent, task: p.task, async: true } };
 	}
 	if (typeof p.id !== "string" || !RELAY_RUN.test(p.id)) return "invalid id";
+	if (method === "stop") {
+		// stopping a run (issue #120): nothing but the run's ID is passed on, no message and no further fields, so
+		// that a stop can end exactly what the gateway named (DL3.1)
+		return { ref: req.ref, method, params: { id: p.id } };
+	}
 	if (typeof p.message !== "string" || !p.message.trim()) return "message must not be empty";
 	const params: Record<string, unknown> = { id: p.id, message: p.message };
 	if (p.index !== undefined) {

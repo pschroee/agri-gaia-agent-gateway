@@ -271,6 +271,9 @@ type Manager struct {
 	opt    Options
 	// relayWait: replies awaited for relay commands to subagents, by ref (under mu; issue #81).
 	relayWait map[string]chan relayReply
+	// stopRefs: refs of stops of subagents on their way, mapped to the chat they belong to (under mu; issue #120).
+	// A stop has no stored message that could vouch for its ref (DL3.3); the socket call subagent_stop is its record.
+	stopRefs map[string]string
 
 	mu   sync.Mutex
 	live map[string]*live
@@ -890,7 +893,16 @@ func AttachmentNote(names []string) string {
 	return b.String()
 }
 
+// Abort is the user's stop (POST /api/chats/{id}/abort). It calls abortWith with AbortUser; every other abort of the
+// gateway (the trash, a limit) does the same with its own reason, so the turn records who or what cut it short
+// (issue #120, L3).
 func (m *Manager) Abort(ctx context.Context, chatID string) (ChatView, error) {
+	return m.abortWith(ctx, chatID, AbortUser)
+}
+
+// abortWith stops the running turn of a chat. reason names what did it (AbortUser and the constants next to it) and
+// is recorded on the turn before pi is asked to stop.
+func (m *Manager) abortWith(ctx context.Context, chatID, reason string) (ChatView, error) {
 	m.mu.Lock()
 	m.userAt[chatID] = time.Now()
 	m.aborts[chatID]++ // a request currently on its way no longer goes to pi
@@ -901,6 +913,7 @@ func (m *Manager) Abort(ctx context.Context, chatID string) (ChatView, error) {
 		l.holdQueue, l.holdReason = true, HoldAbort
 	}
 	m.mu.Unlock()
+	m.markTurnAborted(chatID, l, reason)
 	// Stop means "halt", not "throw away": a running autonomous plan is paused, not cancelled (A-E1, D1.10).
 	// Platform jobs (a training) keep running; stopping one is a separate action.
 	if ap, err := m.st.ActiveAutonomousPlan(ctx, chatID); err == nil && ap.State == plan.StateApproved {
@@ -1090,6 +1103,7 @@ func (m *Manager) armIdleAfter(chatID string, l *live, d time.Duration) {
 		m.mu.Unlock()
 		if stuck { // maximum duration exceeded: abort, then let it go idle
 			slog.Warn("turn too long, aborting", "chat", chatID)
+			m.markTurnAborted(chatID, l, AbortTimeLimit)
 			_, _ = callT(l.slot.Worker, map[string]any{"type": "abort"}, 10*time.Second)
 			m.setRunning(l, false)
 		} else if wait, ok := m.keepAliveForBackground(chatID, l); ok {
@@ -1420,6 +1434,7 @@ func (m *Manager) startPiTurn(ctx context.Context, chatID string, l *live) {
 		m.mu.Unlock()
 		slog.Warn("limit for turns without the user reached, turn from pi aborted", "chat", chatID, "limit", ev.Limit)
 		m.publish(chatID, Event{Kind: "auto_held", Data: ev})
+		m.markTurnAborted(chatID, l, AbortTurnLimit)
 		go func() { _, _ = callT(l.slot.Worker, map[string]any{"type": "abort"}, 10*time.Second) }()
 	}
 }
