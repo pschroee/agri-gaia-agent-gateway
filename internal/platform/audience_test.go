@@ -23,6 +23,11 @@ func TestNeedsMinIO(t *testing.T) {
 		{"GET", "/train/containers/3/status", false},
 		{"POST", "/datasets", true},
 		{"DELETE", "/datasets/5", true},
+		// Creating the CVAT task of a dataset reads the dataset's annotation file from MinIO with the
+		// caller's token (V1, #106); without the audience the backend answers 500.
+		{"POST", "/cvat/tasks/5", true},
+		{"GET", "/cvat/tasks/5", false},
+		{"GET", "/cvat/user/exists", false},
 		{"GET", "/train/containers/3/model", true},
 		{"GET", "/integrated-services/files", true},
 		{"PATCH", "/integrated-services/files", true},
