@@ -7,6 +7,7 @@ package delegation
 import (
 	"net/http"
 	"regexp"
+	"strings"
 
 	"agw/internal/platform"
 )
@@ -25,6 +26,8 @@ func init() {
 		r(http.MethodPost, prefix+`/checks`, Create, Assessment, 0).as(EffectWrite).refine(refineAssess),
 		// What the last check of a model says (R1.14): an approval of an image build reads it.
 		r(http.MethodGet, prefix+`/models/[0-9]+/latest`, Read, Assessment, 0),
+		// What the last check of a file of the sandbox says (R2.7): an approval of an upload reads it.
+		r(http.MethodGet, prefix+`/files/`+platform.AssessSHARe+`/latest`, Read, Assessment, 0),
 	)
 	// The bodies of both calls carry exactly these fields (R1.1, R1.7); the check runs with and without
 	// a delegation (issue #65).
@@ -38,7 +41,10 @@ func init() {
 			method string
 			re     *regexp.Regexp
 			fields []string
-		}{http.MethodPost, regexp.MustCompile(`^` + prefix + `/checks$`), []string{"model_id", "eval_dataset_id", "final"}},
+		}{http.MethodPost, regexp.MustCompile(`^` + prefix + `/checks$`),
+			// R2.2 adds the source of a file of the sandbox (path) with what its code declares about
+			// itself (class_names, preprocess); a body with another field never reaches the check.
+			[]string{"model_id", "path", "eval_dataset_id", "final", "class_names", "preprocess"}},
 	)
 	registerConformance(assessTrainingCases()...)
 }
@@ -49,11 +55,15 @@ func refineSplit(a *Access, req platform.Request) {
 	a.Also = append(a.Also, Access{Action: Update, Resource: Dataset, ID: bodyIDOr(req.Body, "dataset_id")})
 }
 
-// refineAssess adds the model and the dataset a check touches (R1.7): the gateway reads the model and
-// downloads the evaluation dataset. The datasets the model saw are decided by the gateway (they come
-// from its own origin table), so they are named in the approval, not in the call.
+// refineAssess adds the model and the dataset a check touches (R1.7, R2.2): the gateway reads the model
+// of the platform and downloads the evaluation dataset. A check of a file of the sandbox (path) names no
+// model — the check itself is what a later upload makes a model of. The datasets the model could have
+// seen are decided by the gateway (its own origin table and the runs of the notebook server), so they are
+// named in the approval, not in the call.
 func refineAssess(a *Access, req platform.Request) {
-	a.Also = append(a.Also, Access{Action: Read, Resource: Model, ID: bodyIDOr(req.Body, "model_id")})
+	if id := bodyID(req.Body, "model_id"); id != "" {
+		a.Also = append(a.Also, Access{Action: Read, Resource: Model, ID: id})
+	}
 	if id := bodyID(req.Body, "eval_dataset_id"); id != "" {
 		a.Also = append(a.Also, Access{Action: Update, Resource: Dataset, ID: id})
 	}
@@ -112,6 +122,13 @@ func assessTrainingCases() []Case {
 			Group: "control", Rules: assessTrainingRules},
 		{Name: "read the last check of a model (control)", Req: platform.Request{Method: http.MethodGet,
 			Path: platform.AssessPrefix + "/models/5/latest"}, Allowed: true, Group: "control", Rules: assessTrainingRules},
+		// A check of a file of the sandbox (R2.2) touches no model: it needs the rule for the assessment
+		// and for the evaluation dataset.
+		{Name: "check a file of the sandbox (control)", Req: check(`{"path":"/workspace/notebook/r1/model.onnx","eval_dataset_id":12}`),
+			Allowed: true, Group: "control", Rules: assessTrainingRules},
+		{Name: "read the last check of a file (control)", Req: platform.Request{Method: http.MethodGet,
+			Path: platform.AssessPrefix + "/files/" + strings.Repeat("a", 64) + "/latest"}, Allowed: true, Group: "control",
+			Rules: assessTrainingRules},
 
 		// The calls themselves (R1.1, R1.7): create dataset plus the update of the downloaded source,
 		// create assessment plus reading the model and downloading the evaluation dataset. A delegation
@@ -123,10 +140,14 @@ func assessTrainingCases() []Case {
 		{Name: "check a model of another chat", Req: check(`{"model_id":9,"eval_dataset_id":12}`), Group: "object",
 			Rules: assessTrainingNoModelRules},
 
-		// Field allowlists (R1.1, R1.7): a field the gateway does not read never reaches the call.
+		// Field allowlists (R1.1, R1.7, R2.2): a field the gateway does not read never reaches the call.
 		{Name: "split with a field of its own", Req: split(`{"dataset_id":12,"kept_images":40}`), Group: "field",
 			Rules: assessTrainingRules},
-		{Name: "check with a field of its own", Req: check(`{"model_id":5,"path":"/workspace/m.onnx"}`), Group: "field",
+		{Name: "check with a field of its own", Req: check(`{"model_id":5,"keep_images":40}`), Group: "field",
 			Rules: assessTrainingRules},
+		// A check of a file of the sandbox names what the code declares about itself (R2.4); a field beyond
+		// the list is refused there as well.
+		{Name: "check of a file with a field of its own", Req: check(`{"path":"/workspace/m.onnx","architecture":"resnet"}`),
+			Group: "field", Rules: assessTrainingRules},
 	}
 }

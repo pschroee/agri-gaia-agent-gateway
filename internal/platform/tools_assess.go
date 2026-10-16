@@ -23,6 +23,10 @@ const AssessPrefix = "/_agw/assess"
 // pattern.
 var AssessCheckIDRe = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
+// AssessSHARe is the shape of the SHA-256 in the check paths of an own model (R2.7), as the route of the
+// delegation writes it. The gateway compares and stores it in lower case.
+const AssessSHARe = `[0-9a-fA-F]{64}`
+
 // init appends the tools of the result checks, so that other features can add theirs in parallel.
 func init() {
 	Tools = append(Tools, assessStatus)

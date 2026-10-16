@@ -95,6 +95,7 @@ func New(run *Runner, st *store.Store, max int) *Service {
 	s.Handle(http.MethodGet, regexp.MustCompile(`^`+regexp.QuoteMeta(platform.AssessPrefix)+`/checks/(`+checkIDPattern+`)$`), s.status)
 	s.registerTraining()
 	s.registerDeployment()
+	s.registerOwnModel()
 	return s
 }
 

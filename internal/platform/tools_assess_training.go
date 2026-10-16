@@ -203,31 +203,56 @@ var splitDataset = Tool{
 	},
 }
 
-// assessModel is the tool of R1.7: it starts the check of a platform model in the background.
+// assessModel is the tool of R1.7 (a platform model, R1) and R2.2 (a file of the sandbox, R2): it starts
+// a check in the background.
 var assessModel = Tool{
 	Name: "assess_model", CLI: "assess-model",
-	Desc: "Starts a check of a training result: the gateway runs the model in a container of its own on images the " +
-		"model did not see in training and reports accuracy, the figures per class, the majority baseline and a verdict " +
+	Desc: "Starts a check of a result: the gateway runs the model in a container of its own on images the model " +
+		"did not see and reports accuracy, the figures per class, the majority baseline and a verdict " +
 		"(usable, questionable, not measured). It answers at once with a check_id; follow it with assess_status, whose " +
 		"report starts with the header to begin your reply with (the gateway also wakes you when it is done). " +
 		"final=true measures the hold-out set and works once per dataset and chat: use it only when the model will not " +
 		"change any more; compare a retrained model with final=false. Needs approval; it downloads the model, the " +
-		"training log and the datasets (which syncs their CVAT annotations) and reads the model's own figures.",
+		"training log and the datasets (which syncs their CVAT annotations) and reads the model's own figures. " +
+		"Give the model either as model_id (a platform model of this chat) or as path (a file the notebook_fetch of " +
+		"this chat wrote into the sandbox, e.g. /workspace/notebook/<run>/model.onnx): the gateway checks the file " +
+		"itself, before upload_model, and answers not measured with an unknown origin for a file that no run of this " +
+		"chat handed over.",
 	Write: true,
 	Params: []Param{
-		{Name: "model_id", Type: "integer", Desc: "id of the platform model to check", Required: true},
-		{Name: "eval_dataset_id", Type: "integer", Desc: "dataset to measure on (default: the dataset the training dataset was split from)"},
+		{Name: "model_id", Type: "integer", Desc: "id of the platform model to check (either this or path)"},
+		{Name: "path", Type: "string", Desc: "model file in the sandbox that notebook_fetch brought out of a run of this chat (either this or model_id)", Path: true},
+		{Name: "eval_dataset_id", Type: "integer", Desc: "dataset to measure on (default: the dataset the seen training dataset was split from)"},
 		{Name: "final", Type: "boolean", Desc: "true: measure the hold-out set (once per dataset and chat), default false"},
+		{Name: "class_names", Type: "array", Desc: "for path: the class names in the order the outputs of your model mean them, e.g. [\"0\",\"1\"]; the gateway compares this order with the order it derives from images the model saw"},
+		{Name: "preprocess", Type: "object", Desc: "for path: how your model expects an image: {color: rgb|gray, size: [h,w], scale, mean, std, layout: nchw|nhwc}; default the platform template (rgb, 1/255, nchw, no mean/std)"},
 	},
 	build: func(a Args) (Request, error) {
 		id, ok, err := a.int("model_id")
 		if err != nil {
 			return Request{}, err
 		}
-		if !ok || id <= 0 {
-			return Request{}, errors.New("model_id missing")
+		path, hasPath, err := a.str("path")
+		if err != nil {
+			return Request{}, err
 		}
-		body := map[string]any{"model_id": id}
+		asModel := ok && id > 0
+		switch {
+		case asModel && hasPath:
+			return Request{}, errors.New("give either model_id or path, not both")
+		case !asModel && !hasPath:
+			return Request{}, errors.New("model_id or path missing")
+		}
+		body := map[string]any{}
+		files := []File(nil)
+		if id > 0 {
+			body["model_id"] = id
+		} else {
+			// The bytes are read by the socket and travel as the upload of this call (R2.2), so what the
+			// check measures is what a later upload_model sends; the path is named for the approval.
+			body["path"] = path
+			files = []File{{Field: "modelfile", Path: path}}
+		}
 		eval, hasEval, err := a.int("eval_dataset_id")
 		if err != nil {
 			return Request{}, err
@@ -245,8 +270,42 @@ var assessModel = Tool{
 		if final {
 			body["final"] = true
 		}
+		names, err := a.strings("class_names")
+		if err != nil {
+			return Request{}, err
+		}
+		if names != nil {
+			if id > 0 {
+				return Request{}, errors.New("class_names belong to path: the class order of a platform model comes from its training data")
+			}
+			if err := checkClassNames(names); err != nil {
+				return Request{}, err
+			}
+			body["class_names"] = names
+		}
+		pre, hasPre, err := a.object("preprocess")
+		if err != nil {
+			return Request{}, err
+		}
+		if hasPre {
+			if id > 0 {
+				return Request{}, errors.New("preprocess belongs to path: a platform model is measured with the template's preprocessing")
+			}
+			checked, names, err := checkPreprocess(pre)
+			if err != nil {
+				return Request{}, err
+			}
+			// An empty declaration is none: the call does not carry it, and the check uses the default of
+			// the platform templates (R2.4).
+			if names {
+				body["preprocess"] = json.RawMessage(checked)
+			}
+		}
 		b, err := json.Marshal(body)
-		return Request{Method: http.MethodPost, Path: AssessCheckPath, Body: b}, err
+		if err != nil {
+			return Request{}, err
+		}
+		return Request{Method: http.MethodPost, Path: AssessCheckPath, Body: b, Files: files}, nil
 	},
 }
 
