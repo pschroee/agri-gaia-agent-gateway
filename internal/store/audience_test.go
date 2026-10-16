@@ -12,7 +12,9 @@ import (
 )
 
 func TestNoteAudience(t *testing.T) {
-	for typ, want := range map[string]string{NoteLanguage: AudienceAgent, NoteContext: AudienceAgent, NoteBackground: "", NoteSandbox: "", "pi": "", "": ""} {
+	// The notes of a plan (A-E1, A-E2) are meant for the user as well: the agent only needs them in the chat.
+	for typ, want := range map[string]string{NoteLanguage: AudienceAgent, NoteContext: AudienceAgent, NoteBackground: "", NoteSandbox: "",
+		NotePlan: "", NotePlanStep: "", "pi": "", "": ""} {
 		if got := NoteAudience(typ); got != want {
 			t.Errorf("NoteAudience(%q) = %q, want %q", typ, got, want)
 		}

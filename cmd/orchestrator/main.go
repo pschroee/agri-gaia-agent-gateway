@@ -247,6 +247,12 @@ func run() error {
 	p.Start(poolCtx)
 	// Chats in the trash past AGW_TRASH_RETENTION_DAYS are deleted for good (off by default; issue #76).
 	go m.RunTrashRetention(poolCtx)
+	// A-E2: the watcher of observed platform jobs. It polls the platform with the user's token until a
+	// job ends, writes its progress into watch_jobs, distributes it and wakes the agent when a plan step
+	// is through. Without a platform binding (AGW_PLATFORM_API_URL empty) it says so and returns. The
+	// kinds themselves are registered with internal/watch next to the feature that owns them (see
+	// watch.Register for the notebook and the pre-annotation above).
+	go m.RunWatchers(poolCtx)
 	// Notebook servers of chats that had no run for a while are stopped (own code C-E3); the volumes
 	// with the files stay.
 	if nb != nil {

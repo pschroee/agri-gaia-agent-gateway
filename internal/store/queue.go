@@ -118,6 +118,9 @@ const (
 	NoteSubagentUser = "subagent_user"
 	// NotePlan: the user paused, resumed or cancelled an autonomous plan (A-E1); queued so the agent learns it.
 	NotePlan = "plan"
+	// NotePlanStep: a step of an autonomous plan ended — its observed platform job finished or failed, or
+	// a parked approval was decided (A-E2). Such a note is what wakes a resting chat.
+	NotePlanStep = "plan_step"
 )
 
 const queueCols = `id::text, chat_id::text, text, attachments, created_at, kind, note, refs, context`

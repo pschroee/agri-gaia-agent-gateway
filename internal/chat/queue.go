@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"agw/internal/artifacts"
+	"agw/internal/plan"
 	"agw/internal/store"
 )
 
@@ -658,7 +659,7 @@ func (m *Manager) deliverQueue(chatID string, l *live) {
 		}
 	}
 	if trigger == store.TriggerWake {
-		if ev, limited := m.autoLimit(ctx, chatID); limited {
+		if ev, limited := m.autoLimit(ctx, chatID, open); limited {
 			m.mu.Lock()
 			l.holdQueue, l.holdReason = true, ev.Reason
 			m.mu.Unlock()
@@ -806,6 +807,50 @@ func (m *Manager) restoreSteered(ctx context.Context, chatID string, lost []*tur
 	}
 }
 
+// planWakeLimit counts a wake-up that carries the end of a plan step against the plan's own budget
+// (A-E2, D2.7): every such wake-up raises plans.auto_turns, and at auto_turns > max_auto_turns the plan
+// is paused with reason budget_turns while the note stays queued (the user's next message or "Send now"
+// still delivers it). The gateway's own limits (AGW_AUTO_TURNS_MAX, AGW_BG_WAKES_PER_HOUR) do not apply
+// here: a plan with five long steps would not get past five turns, and the user set the plan's budget
+// themselves. handled is false for a plan that no longer runs — such a note is an ordinary one again.
+func (m *Manager) planWakeLimit(ctx context.Context, chatID, planID string) (ev AutoHeldEvent, limited, handled bool) {
+	p, err := m.st.GetPlan(ctx, planID)
+	if err != nil || p.Mode != plan.ModeAutonomous {
+		return AutoHeldEvent{}, false, false
+	}
+	switch p.State {
+	case plan.StateApproved:
+		n, err := m.st.IncPlanAutoTurns(ctx, planID)
+		if err != nil {
+			slog.Error("turn of an autonomous plan not counted", "plan", planID, "error", err)
+			return AutoHeldEvent{Reason: HoldAutoTurns, Limit: p.Budget.MaxAutoTurns}, true, true
+		}
+		if p.Budget.MaxAutoTurns > 0 && n > p.Budget.MaxAutoTurns {
+			if ok, perr := m.st.PausePlan(ctx, planID, "budget_turns"); perr != nil {
+				slog.Error("plan not paused at its turn budget", "plan", planID, "error", perr)
+			} else if !ok {
+				slog.Warn("plan not paused at its turn budget (state changed)", "plan", planID)
+			}
+			m.publishPlan(ctx, planID)
+			slog.Warn("turn budget of an autonomous plan used up, note stays queued", "chat", chatID, "plan", planID, "turns", n, "limit", p.Budget.MaxAutoTurns)
+			return AutoHeldEvent{Reason: HoldAutoTurns, Limit: p.Budget.MaxAutoTurns, Count: n}, true, true
+		}
+		slog.Info("turn of an autonomous plan", "chat", chatID, "plan", planID, "turns", n, "limit", p.Budget.MaxAutoTurns)
+		return AutoHeldEvent{}, false, true
+	case plan.StatePaused, plan.StateCompleted, plan.StateFailed:
+		// The plan no longer runs: this is its last note, nothing is held back and nothing can be paused
+		// any more. It is still counted, so that the number in the UI stays the number of turns the plan
+		// took.
+		if _, err := m.st.IncPlanAutoTurns(ctx, planID); err != nil {
+			slog.Error("last turn of an autonomous plan not counted", "plan", planID, "error", err)
+		}
+		return AutoHeldEvent{}, false, true
+	}
+	// Cancelled, superseded, expired or rejected: the note is an ordinary one again, with the gateway's
+	// own limits.
+	return AutoHeldEvent{}, false, false
+}
+
 // autoLimitTurns checks only the limit for turns in a row without the user (AutoTurnsMax); for
 // turns that pi starts itself (the wake-ups per hour count background tasks).
 func (m *Manager) autoLimitTurns(ctx context.Context, chatID string) (AutoHeldEvent, bool) {
@@ -816,9 +861,37 @@ func (m *Manager) autoLimitTurns(ctx context.Context, chatID string) (AutoHeldEv
 	return AutoHeldEvent{}, false
 }
 
+// planStepWake names the autonomous plan whose step ended, when the open entries are nothing but such
+// notes (A-E2, D2.7): then the wake-up counts against that plan's own turn budget instead of the
+// gateway's wake limits. "" for every other delivery.
+func planStepWake(open []store.QueueEntry) string {
+	planID := ""
+	for _, e := range open {
+		if e.Kind != store.QueueSystem || e.Note != store.NotePlanStep {
+			return ""
+		}
+		if len(e.Refs) == 0 || e.Refs[0] == "" {
+			continue
+		}
+		if planID == "" {
+			planID = e.Refs[0]
+			continue
+		}
+		if e.Refs[0] != planID {
+			return "" // notes of two plans: no single budget to count against
+		}
+	}
+	return planID
+}
+
 // autoLimit checks the limits for a turn without the user. Errors while counting count as a
 // reached limit (better to stop than to run on without limit).
-func (m *Manager) autoLimit(ctx context.Context, chatID string) (AutoHeldEvent, bool) {
+func (m *Manager) autoLimit(ctx context.Context, chatID string, open []store.QueueEntry) (AutoHeldEvent, bool) {
+	if planID := planStepWake(open); planID != "" {
+		if ev, limited, handled := m.planWakeLimit(ctx, chatID, planID); handled {
+			return ev, limited
+		}
+	}
 	n, err := m.st.WakesSince(ctx, chatID, time.Now().Add(-time.Hour))
 	if err != nil || n >= m.opt.BgWakesPerHour {
 		return AutoHeldEvent{Reason: HoldWakeLimit, Limit: m.opt.BgWakesPerHour, Count: n}, true

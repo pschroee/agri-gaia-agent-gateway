@@ -19,6 +19,7 @@ import (
 	"agw/internal/plan"
 	"agw/internal/platform"
 	"agw/internal/store"
+	"agw/internal/watch"
 )
 
 // planNow is the clock of plan validity; tests set it.
@@ -249,8 +250,10 @@ func (m *Manager) planMatch(ctx context.Context, chatID string, req platform.Req
 }
 
 // planFinish records the outcome of a step. A created object enters the provenance register, so a
-// later step can name it. A failed step fails the plan; when every step is done the plan completes.
-func (m *Manager) planFinish(ctx context.Context, chatID string, st *store.PlanStep, access delegation.Access, res platform.Result, callErr error) {
+// later step can name it. A call that started a platform job the gateway observes (A-E2) does not
+// finish the step: it waits until that job ends (StepWaiting). A failed step fails the plan; when every
+// step is done the plan completes.
+func (m *Manager) planFinish(ctx context.Context, chatID string, st *store.PlanStep, access delegation.Access, req platform.Request, res platform.Result, callErr error) {
 	if st == nil {
 		return
 	}
@@ -269,6 +272,14 @@ func (m *Manager) planFinish(ctx context.Context, chatID string, st *store.PlanS
 			resource, id = r, i
 			if err := m.st.AddDelegationObject(bg, chatID, r, i); err != nil {
 				slog.Error("provenance of a plan step not recorded", "chat", chatID, "object", r+" "+i, "error", err)
+			}
+		}
+		// The step started a platform job (A-E2, D2.2): the job is observed from here on, and the step
+		// waits for its end. The object the call created is already in the register, so a later step can
+		// name it while the job runs.
+		if kind, ref, watching := watch.For(access, req, res); watching {
+			if m.startWatching(bg, chatID, st, from, kind, ref, result, resource, id) {
+				return
 			}
 		}
 	}

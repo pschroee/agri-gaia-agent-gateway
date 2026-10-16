@@ -217,6 +217,12 @@ func (s *Server) Handler() http.Handler {
 	writes("POST /api/chats/{id}/plans/{plan}/cancel", s.planControl(func(ctx context.Context, chatID, planID string) (store.Plan, error) {
 		return s.M.CancelPlan(ctx, chatID, planID)
 	}))
+	// A-E2: observed platform jobs (the gateway's watcher, not the agent). The list carries the state
+	// of every job of a chat including the progress of a waiting plan step; "stop" is the user's own
+	// action for a waiting step and for a single job outside a plan (D2.9).
+	chat("GET /api/chats/{id}/jobs", s.jobs)
+	writes("POST /api/chats/{id}/plans/{plan}/steps/{idx}/stop", s.stopPlanStep)
+	writes("POST /api/chats/{id}/jobs/{job}/stop", s.stopJob)
 	chat("GET /api/chats/{id}/llm_calls", s.llmCalls)
 	chat("GET /api/chats/{id}/tool_executions", s.toolExecutions)
 	chat("GET /api/chats/{id}/background", s.background)

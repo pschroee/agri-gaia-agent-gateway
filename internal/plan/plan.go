@@ -39,6 +39,9 @@ const (
 
 	StepOpen    = "open"
 	StepRunning = "running"
+	// StepWaiting: the call went out and started a platform job the gateway observes (A-E2, D2.2); the
+	// step is done once that job ends.
+	StepWaiting = "waiting"
 	StepDone    = "done"
 	StepFailed  = "failed"
 	StepSkipped = "skipped"
@@ -408,6 +411,9 @@ func Build(p Proposal, classify Classify) ([]store.PlanStep, error) {
 		}
 		actions[idx] = action
 		st.Effect = effect
+		// The confirm-each trait is stored with the step (A-E2): a step that is loaded again has to be
+		// classified the same way, or a reloaded plan would cover a call that asks for every single call.
+		st.ConfirmEach = confirmEach
 		st.Covered = effect != EffectIrreversible && !confirmEach
 		st.MaxAttempts = spec.MaxAttempts
 		if st.MaxAttempts < MinPlanAttempts {

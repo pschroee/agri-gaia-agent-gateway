@@ -2145,11 +2145,14 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 	if step != nil && step.Covered {
 		defer func() {
 			if !stepFinished {
-				m.planFinish(ctx, chatID, step, access, platform.Result{Status: "error", Message: "not executed"}, errors.New("not executed"))
+				m.planFinish(ctx, chatID, step, access, req, platform.Result{Status: "error", Message: "not executed"}, errors.New("not executed"))
 			}
 		}()
 	}
-	if needsApproval(access, req.Writes(), del) && (step == nil || !step.Covered) {
+	// The gateway repeating a parked step (A-E2, D2.8): the user decided, and the marker names the
+	// approval the step was parked with. Only then does the repeated call not ask again.
+	approvedHere := m.parkedHere(ctx, chatID, req)
+	if needsApproval(access, req.Writes(), del) && (step == nil || !step.Covered) && !approvedHere {
 		if err := m.checkPendingLimit(ctx, chatID); err != nil {
 			return platform.Result{}, err
 		}
@@ -2217,6 +2220,19 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 		m.publish(chatID, Event{Kind: "approval", Data: ap})
 		m.publishChat(ctx, chatID)
 		slog.Info("platform call requested", "chat", chatID, "approval", ap.ID, "call", req.String(), "via", via)
+		// A step of an autonomous plan that the plan does not cover is parked instead of waited for
+		// (A-E2, D2.8): the user may decide hours later, the gateway repeats the stored call then. A step
+		// that carries files of the sandbox is asked synchronously — the gateway cannot repeat it without
+		// the running sandbox, and the approval has to show the bytes that were read.
+		if step != nil && len(req.Files) == 0 && m.stepIsParked(ctx, step) {
+			if s, ok := m.pool.Get(slotID); ok {
+				s.SetActivity("tool", "")
+			}
+			m.publishChat(ctx, chatID)
+			m.parkApproval(ctx, chatID, slotID, via, req, step, ap, w)
+			return platform.Result{Status: "pending_user", Message: fmt.Sprintf(
+				"waiting for the user's approval of step %d; end your turn, you will be woken when the user decides", step.Idx)}, nil
+		}
 		approved, werr := w.Wait(ctx, m.opt.ApprovalTimeout)
 		bg := context.WithoutCancel(ctx)
 		final := m.settle(bg, chatID, ap.ID, approved, werr)
@@ -2264,7 +2280,11 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 	res, err := m.platformDo(ctx, chatID, req)
 	took := time.Since(t0)
 	stepFinished = true
-	m.planFinish(ctx, chatID, step, access, res, err) // nil step: nothing to record
+	m.planFinish(ctx, chatID, step, access, req, res, err) // nil step: nothing to record
+	if step == nil && err == nil {
+		// No plan step: a started job is only observed for the cards (A-E2.2, no note, no wake-up).
+		m.recordJobOutsidePlan(ctx, chatID, access, req, res)
+	}
 	if reserved && (err != nil || res.Status != "ok") {
 		if rerr := m.st.ReleaseCompute(context.WithoutCancel(ctx), chatID); rerr != nil {
 			slog.Error("compute call not given back", "chat", chatID, "error", rerr)

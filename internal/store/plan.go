@@ -66,26 +66,41 @@ type PlanStep struct {
 	Description string `json:"agent_note,omitempty"`
 	Tool        string `json:"tool,omitempty"`
 	// Args: canonical arguments of a tool step with steps, scalars as text, placeholders as {{stepN.id}}.
-	Args            json.RawMessage `json:"args,omitempty"`
-	Method          string          `json:"method"`
-	Path            string          `json:"path"`
-	Query           json.RawMessage `json:"query,omitempty"`
-	Body            json.RawMessage `json:"body,omitempty"`
-	BodySHA256      string          `json:"body_sha256,omitempty"`
-	Form            json.RawMessage `json:"form,omitempty"`
-	FormSHA256      string          `json:"form_sha256,omitempty"`
-	Files           []PlanFile      `json:"files,omitempty"`
-	Effect          string          `json:"effect"`
-	Covered         bool            `json:"covered"`
-	State           string          `json:"state"`
-	Result          string          `json:"result,omitempty"`
-	CreatedResource string          `json:"created_resource,omitempty"`
-	CreatedID       string          `json:"created_id,omitempty"`
-	DoneAt          *time.Time      `json:"done_at,omitempty"`
+	Args       json.RawMessage `json:"args,omitempty"`
+	Method     string          `json:"method"`
+	Path       string          `json:"path"`
+	Query      json.RawMessage `json:"query,omitempty"`
+	Body       json.RawMessage `json:"body,omitempty"`
+	BodySHA256 string          `json:"body_sha256,omitempty"`
+	Form       json.RawMessage `json:"form,omitempty"`
+	FormSHA256 string          `json:"form_sha256,omitempty"`
+	Files      []PlanFile      `json:"files,omitempty"`
+	Effect     string          `json:"effect"`
+	// ConfirmEach: the route asks for every single call (G1.1); such a step is never covered by a plan,
+	// also not after the plan was loaded again (A-E2).
+	ConfirmEach     bool       `json:"confirm_each,omitempty"`
+	Covered         bool       `json:"covered"`
+	State           string     `json:"state"`
+	Result          string     `json:"result,omitempty"`
+	CreatedResource string     `json:"created_resource,omitempty"`
+	CreatedID       string     `json:"created_id,omitempty"`
+	DoneAt          *time.Time `json:"done_at,omitempty"`
 	// MaxAttempts: how often an autonomous plan may repeat this step after a failure (1 to 3, A-E1).
 	MaxAttempts int `json:"max_attempts,omitempty"`
 	// Attempts counts the claims of this step so far (incremented by ClaimPlanStep).
 	Attempts int `json:"attempts,omitempty"`
+	// WatchJob names the observed platform job the step waits for (A-E2); empty for every other step.
+	WatchJob string `json:"watch_job,omitempty"`
+	// ParkedApproval names the approval a non-covered step of an autonomous plan waits for (D2.8).
+	ParkedApproval string `json:"parked_approval,omitempty"`
+	// The progress of the step's job, read with the step out of watch_jobs (A-E2): the percent, one line
+	// the platform reported, the estimated end, the last lines of its log and the objects it produced.
+	Progress    *float64      `json:"progress,omitempty"`
+	ProgressMsg string        `json:"progress_msg,omitempty"`
+	ETA         *time.Time    `json:"eta,omitempty"`
+	LogTail     string        `json:"log_tail,omitempty"`
+	Outputs     []WatchOutput `json:"outputs,omitempty"`
+	JobStarted  *time.Time    `json:"started_at,omitempty"`
 	// PlanID: the plan the step belongs to (not part of the JSON; the plan carries it).
 	PlanID string `json:"-"`
 }
@@ -99,7 +114,11 @@ type PlanFile struct {
 
 const planCols = `id::text, chat_id::text, approval_id, title, session, tool_call_id, via, state, mode, max_duration_s, max_llm_cost, max_auto_turns, auto_turns, grant_json, pause_reason, replaces, created_at, decided_at, expires_at, ended_at`
 
-const planStepCols = `idx, summary, COALESCE(summary_proposed,''), description, tool, args, method, path, query, body, body_sha256, form, form_sha256, files, effect, state, result, created_resource, created_id, done_at, max_attempts, attempts`
+// planStepCols reads a step together with the progress of its observed job (A-E2): the step's own columns
+// first, then the fields of watch_jobs, so that the plan API carries them for every step at once.
+// The columns of the job are COALESCEd: a step without an observed job joins onto no row at all, and NULL
+// would be readable only into pointers.
+const planStepCols = `s.idx, s.summary, COALESCE(s.summary_proposed,''), s.description, s.tool, s.args, s.method, s.path, s.query, s.body, s.body_sha256, s.form, s.form_sha256, s.files, s.effect, s.confirm_each, s.state, s.result, s.created_resource, s.created_id, s.done_at, s.max_attempts, s.attempts, s.watch_job, s.parked_approval, w.progress, COALESCE(w.message,''), w.eta, COALESCE(w.log_tail,''), COALESCE(w.outputs,'[]'), w.started_at`
 
 func scanPlan(row interface{ Scan(...any) error }) (Plan, error) {
 	var p Plan
@@ -121,9 +140,10 @@ func rawOrNil(s string) json.RawMessage {
 
 func scanPlanStep(row interface{ Scan(...any) error }) (PlanStep, error) {
 	var st PlanStep
-	var query, body, form, files, args string
+	var query, body, form, files, args, outputs string
 	err := row.Scan(&st.Idx, &st.Summary, &st.SummaryProposed, &st.Description, &st.Tool, &args, &st.Method, &st.Path, &query, &body, &st.BodySHA256, &form, &st.FormSHA256, &files,
-		&st.Effect, &st.State, &st.Result, &st.CreatedResource, &st.CreatedID, &st.DoneAt, &st.MaxAttempts, &st.Attempts)
+		&st.Effect, &st.ConfirmEach, &st.State, &st.Result, &st.CreatedResource, &st.CreatedID, &st.DoneAt, &st.MaxAttempts, &st.Attempts,
+		&st.WatchJob, &st.ParkedApproval, &st.Progress, &st.ProgressMsg, &st.ETA, &st.LogTail, &outputs, &st.JobStarted)
 	if err != nil {
 		return st, err
 	}
@@ -136,9 +156,17 @@ func scanPlanStep(row interface{ Scan(...any) error }) (PlanStep, error) {
 			return st, err
 		}
 	}
-	st.Covered = st.Effect != "irreversible"
+	if outputs != "" && outputs != "[]" {
+		if err := json.Unmarshal([]byte(outputs), &st.Outputs); err != nil {
+			return st, err
+		}
+	}
+	st.Covered = st.Effect != "irreversible" && !st.ConfirmEach
 	return st, nil
 }
+
+// planStepFrom joins the job of a step, so that the stored progress comes along (A-E2).
+const planStepFrom = `plan_steps s LEFT JOIN watch_jobs w ON w.id = s.watch_job`
 
 // CreatePlan stores a new plan with its steps in state "proposed"; the steps start "open".
 func (s *Store) CreatePlan(ctx context.Context, p Plan) (Plan, error) {
@@ -170,9 +198,9 @@ VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id::text`,
 			attempts = 1
 		}
 		_, err := tx.Exec(ctx, `INSERT INTO plan_steps (plan_id, idx, description, tool, args, method, path, query, body, body_sha256,
-form, form_sha256, files, effect, summary, max_attempts) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
+form, form_sha256, files, effect, confirm_each, summary, max_attempts) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
 			id, st.Idx, st.Description, st.Tool, string(st.Args), st.Method, st.Path, string(st.Query), string(st.Body), st.BodySHA256,
-			string(st.Form), st.FormSHA256, files, st.Effect, st.Summary, attempts)
+			string(st.Form), st.FormSHA256, files, st.Effect, st.ConfirmEach, st.Summary, attempts)
 		if err != nil {
 			return Plan{}, err
 		}
@@ -184,7 +212,7 @@ form, form_sha256, files, effect, summary, max_attempts) VALUES ($1,$2,$3,$4,$5,
 }
 
 func (s *Store) planSteps(ctx context.Context, planID string) ([]PlanStep, error) {
-	rows, err := s.pool.Query(ctx, `SELECT `+planStepCols+` FROM plan_steps WHERE plan_id=$1 ORDER BY idx`, planID)
+	rows, err := s.pool.Query(ctx, `SELECT `+planStepCols+` FROM `+planStepFrom+` WHERE s.plan_id=$1 ORDER BY s.idx`, planID)
 	if err != nil {
 		return nil, err
 	}
@@ -407,7 +435,8 @@ func (s *Store) CancelPlan(ctx context.Context, planID string) (bool, error) {
 	if tag.RowsAffected() == 0 {
 		return false, nil
 	}
-	if _, err := tx.Exec(ctx, `UPDATE plan_steps SET state='skipped' WHERE plan_id=$1 AND state IN ('open','running')`, planID); err != nil {
+	// "waiting" belongs in the list: a cancelled plan does not continue its observed step either (A-E2).
+	if _, err := tx.Exec(ctx, `UPDATE plan_steps SET state='skipped' WHERE plan_id=$1 AND state IN ('open','running','waiting')`, planID); err != nil {
 		return false, err
 	}
 	return true, tx.Commit(ctx)
@@ -438,7 +467,7 @@ func (s *Store) RetryPlanStep(ctx context.Context, planID string, idx int) (bool
 	if !isUUID(planID) {
 		return false, ErrNotFound
 	}
-	tag, err := s.pool.Exec(ctx, `UPDATE plan_steps SET state='open', result='', done_at=NULL
+	tag, err := s.pool.Exec(ctx, `UPDATE plan_steps SET state='open', result='', done_at=NULL, watch_job=''
 WHERE plan_id=$1 AND idx=$2 AND state='failed' AND attempts < max_attempts`, planID, idx)
 	return tag.RowsAffected() > 0, err
 }
@@ -473,9 +502,14 @@ func (s *Store) RecoverPlans(ctx context.Context) error {
 	if _, err := s.pool.Exec(ctx, `UPDATE plans SET state='expired', decided_at=now() WHERE state='proposed'`); err != nil {
 		return err
 	}
-	_, err := s.pool.Exec(ctx, `WITH stuck AS (
+	if _, err := s.pool.Exec(ctx, `WITH stuck AS (
   UPDATE plan_steps SET state='failed', result='orchestrator restarted', done_at=now() WHERE state='running' RETURNING plan_id
 )
-UPDATE plans SET state='failed' WHERE state='approved' AND id IN (SELECT plan_id FROM stuck)`)
-	return err
+UPDATE plans SET state='failed' WHERE state='approved' AND id IN (SELECT plan_id FROM stuck)`); err != nil {
+		return err
+	}
+	// Steps in state "waiting" (A-E2) are not stuck: their platform job runs on and their row in watch_jobs
+	// survives the restart, so the loop picks the observation up again. Parked approvals stay open, the
+	// user may still decide.
+	return nil
 }
