@@ -462,3 +462,13 @@ ALTER TABLE approvals ADD COLUMN IF NOT EXISTS summary_changed_at timestamptz;
 -- Whether an input went with a message (issue L4/#121): only an input with sent_at IS NULL may still be removed.
 -- A sent file belongs to the history; removing it would take the attachment away from an earlier message.
 ALTER TABLE artifacts ADD COLUMN IF NOT EXISTS sent_at timestamptz;
+
+-- Who stopped a subagent run (issue #120, L3): "user" over the stop route, "limit" when the orchestrator ended the
+-- runs because too many ran at the same time. Empty: not stopped, or stopped by something that does not record it
+-- (the chat's own abort, the trash). Only the gateway writes it; UpsertSubagentRun never touches it.
+ALTER TABLE subagent_runs ADD COLUMN IF NOT EXISTS stopped_by text NOT NULL DEFAULT '';
+
+-- Why a turn was aborted (issue #120, L3): user, trash, time_limit, turn_limit, subagent_limit. The first reason
+-- wins (a turn ended by the time limit and then moved to the trash keeps the time limit). NULL for turns that were
+-- not aborted and for rows from before this change.
+ALTER TABLE chat_turns ADD COLUMN IF NOT EXISTS abort_reason text;
