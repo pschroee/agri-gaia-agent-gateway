@@ -1284,6 +1284,13 @@ capability entry `annotation` says that this setup does not have it.
   `POST /cvat/tasks/{id}` (the session in the body; the backend waits for CVAT to import the images, so this call may
   take minutes) → `PATCH /datasets/{id}` with **exactly** `{"annotation_task_id":N}`. Only the id from the answer right
   before is written: the backend exports the task with the CVAT superuser, so a hand-set id would read foreign images.
+  `POST /cvat/tasks/{id}` is in `minioRoutes` (`internal/platform/audience.go`): the backend reads the dataset's
+  annotation file from MinIO with the caller's token while creating the task and asks even when there is none, so the
+  exchanged token must carry the audience `minio` — without it the backend answers 500 after it has already created
+  and deleted the task in CVAT (found live on 16.10.2026).
+- **A failed platform call names the platform's answer:** the message of a call the platform answers with a status
+  outside 2xx carries what the platform said (`… answered HTTP 500: {"detail": …}`), shortened to 300 characters and
+  redacted by `DoTrusted`. Without it every such failure reads "HTTP 500" and the reason stays hidden.
 - **Runs:** `pre_annotate` maps function labels to dataset classes (`mapping`; without one only equal names are used,
   and the refusal `no function label matches a dataset class; give mapping` names both lists), refuses `existing=keep`
   on a task that already has annotations, and starts `POST /api/lambda/requests` with `quality: original`,

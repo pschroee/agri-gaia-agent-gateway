@@ -68,6 +68,8 @@ const (
 	maxDownloadBytes = 512 << 20 // the whole dataset as a ZIP: the only way the platform exports a task
 	// maxExcInfo bounds the traceback of a failed run: text from CVAT is data and stays short.
 	maxExcInfo = 2000
+	// maxAnswerText bounds what the answer of a failed platform call contributes to a message.
+	maxAnswerText = 300
 	// imageDatasetType is the only dataset type CVAT can take.
 	imageDatasetType = "AgriImageDataResource"
 	// sourceAuto marks the annotations a pre-annotation wrote; everything else is manual (E21).
@@ -253,9 +255,19 @@ func (s *Service) platformExpect(ctx context.Context, r *recorder, req platform.
 		return nil, err
 	}
 	if res.Status != "ok" || res.HTTPStatus < 200 || res.HTTPStatus >= 300 {
-		return nil, platformAnswered{req: req.String(), status: res.HTTPStatus}
+		return nil, platformAnswered{req: req.String(), status: res.HTTPStatus, body: answerText(res.Body)}
 	}
 	return raw, nil
+}
+
+// answerText shortens what the platform answered to a failed call (it is redacted and truncated by
+// DoTrusted already) into one line, so that the agent and the log show why the call failed.
+func answerText(body string) string {
+	body = strings.Join(strings.Fields(body), " ")
+	if body == "" || body == "null" {
+		return ""
+	}
+	return truncate(body, maxAnswerText)
 }
 
 // okAnswer marshals the answer of an operation into a Result with status ok and HTTP 200.
@@ -294,14 +306,20 @@ func truncate(s string, max int) string {
 	return s[:max] + "…"
 }
 
-// platformAnswered is the error of a call the platform answered with a status outside 2xx.
+// platformAnswered is the error of a call the platform answered with a status outside 2xx. It names
+// the answer of the platform, shortened, so that a failure like "HTTP 500" is diagnosable at once:
+// on 16.10.2026 the body carried the reason (a MinIO error) that cost an investigation.
 type platformAnswered struct {
 	req    string
 	status int
+	body   string
 }
 
 func (p platformAnswered) Error() string {
-	return fmt.Sprintf("%s: the platform answered HTTP %d", p.req, p.status)
+	if p.body == "" {
+		return fmt.Sprintf("%s: the platform answered HTTP %d", p.req, p.status)
+	}
+	return fmt.Sprintf("%s: the platform answered HTTP %d: %s", p.req, p.status, p.body)
 }
 
 // errCVAT is a failed call at the CVAT server with its status; 0 stands for a call that got no answer.
