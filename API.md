@@ -434,7 +434,8 @@ for a deleted chat's calls.
   `not_in_trash` otherwise). In one transaction the call logs are kept and anonymised, then the chat is deleted; the
   objects in the object store (artifacts, display images, workspace archive, pending uploads) are removed afterwards.
   Messages, runs, approvals, plans, subagents, messages to subagents, queue, background tasks, annotation runs
-  (V1), session and title go with the chat; nothing of them stays.
+  (V1), result checks, recorded splits and model origins (R0/R1), session and title go with the chat; nothing
+  of them stays.
 - **What stays for the evaluation** (the decision of the author, 12.10.2026): the entries in `socket_calls`,
   `tool_executions`, `llm_calls`, `aux_llm_calls` and `web_requests` get `chat_id` NULL and `deleted_chat`, a random
   tombstone ID in `deleted_chats` that holds only owner, model and binding (no title, no times of the chat). The
@@ -1495,7 +1496,7 @@ report form and rules.
 
 - **Virtual paths.** The gateway answers `/_agw/assess/…` itself (`RegisterVirtual`, G1.5); delegation, class, log and
   plan apply as for every other call. Raw calls are refused — the REST binding and the `request` tool answer
-  `check calls go through the assess tools (assess_status)` — because the gateway decides what a check runs on and the
+  `check calls go through the assess tools (assess_status, split_dataset, assess_model)` — because the gateway decides what a check runs on and the
   agent must not be able to name or read the measured set (P11).
 - **Delegation.** `assessment` is a resource of its own; a delegation without a rule for it forbids every check call.
 - **The check container** (P6, R0.11) is a fresh container of the execution image (`AGW_IMAGE`) with no network
@@ -1552,6 +1553,93 @@ report form and rules.
 - **Configuration:** `AGW_ASSESS_MAX_PER_CHAT` (default 12), `AGW_ASSESS_DOWNLOAD_MAX_MB` (the largest dataset archive
   a check unpacks, default 2048), `AGW_VISION_DATASET_PATTERN` (default `^(mnist|test)[-_]`) and the catalog field
   `self_hosted` per model (default false). The skill `result-check` (cli binding) carries the rules of the report.
+
+## Training checks (R1)
+
+`assess_model` measures a model from a training of this chat on images that training did not see, and
+`split_dataset` creates the training dataset that makes such images possible (#114). The rules, the
+report form and the figures are those of the result checks (R0); this section names what is R1's own.
+
+| Tool (CLI) | Path (virtual) | Action / resource | Class | Approval |
+|---|---|---|---|---|
+| `split_dataset` (`split-dataset`) | `POST /_agw/assess/splits` | create dataset + update dataset | `write` | yes |
+| `assess_model` (`assess-model`) | `POST /_agw/assess/checks` | create assessment + read model + update dataset | `write` | yes |
+| — (the gateway's own read for approvals) | `GET /_agw/assess/models/{id}/latest` | read assessment | `read` | no |
+
+- **`split_dataset`** (`dataset_id`, `name` default `<source>-train`, `train_share` 50, 60, 70, 80 or 90,
+  default 70) reads the source dataset, picks the images that go into a training dataset and creates that
+  dataset on the platform. The selection lives in `assess.SelectTrain`: per class the annotated images are
+  sorted by their SHA-256, and every tenth position goes into the training set while the position is below
+  the share; the rest is kept back. Only images with exactly one `<tag>` take part — images without a tag
+  or with several are counted in `skipped_images`, and a dataset with boxes or polygons is refused
+  (`split_dataset supports classification datasets (one tag per image); this dataset has boxes or polygons`,
+  P8). The answer names `train_dataset_id`, both counts and the classes. Every image is identified by its
+  content, so a copy under another file name counts as seen (P1).
+- **`assess_model`** (`model_id`, `eval_dataset_id` optional, `final` optional) starts a check in the
+  background and answers `{"check_id", "state": "queued", "note"}`; `assess_status` and the wake-up follow
+  it. The evaluation dataset defaults to the source of the split whose training dataset the model saw
+  (`assess_splits`); without a split it is that training dataset itself, and then every image of it is a
+  seen one.
+- **Where the model came from** (`model_origins`) is written by the gateway alone, when a model is created
+  from a training container of the chat (`create_model_from_training`). Without such a row the verdict is
+  `not measured – origin unknown: the gateway did not see this model being created in this chat`; the agent
+  cannot claim an origin (P2).
+- **What "seen" means:** the gateway downloads every dataset of `model_origins.seen_dataset_ids`, hashes
+  every image in it and keeps every image of the evaluation dataset back whose SHA-256 occurs there —
+  whatever the file names are (P1). `assess.Partition` then splits the held-out images per class into the
+  validation set (every third) and the hold-out set (the rest).
+- **Preprocessing** is the one of the templates (`torchvision_classification`, 1.1): RGB, the size of the
+  model's input, values times 1/255, NCHW, no mean and no std. The figures rest on one container run, which
+  also carries a sample of up to ten seen images per class for the class order (P9).
+- **The verdict** (`assess.JudgeClassification`, `internal/assess/training.go`) is `not measured` when the
+  origin is unknown, the model is no ONNX model, the output is neither `[1, C]` nor `[C]`, the evaluation
+  dataset holds no held-out image, fewer than 5 validation images or fewer than 20 held-out images exist.
+  Otherwise it is `usable` only when the class order is clear, every prediction is finite, the model has as
+  many outputs as there are classes, the accuracy is at least 0.10 above the majority baseline, the
+  binomial test "better than the baseline" stays below 5 % and every class with at least three images has a
+  hit rate of at least 0.50. Every rule that does not hold becomes one reason, and the verdict is
+  `questionable`. The thresholds are named constants (`MinGainOverBaseline`, `MaxPValue`, `BelowRecall`,
+  `GoodAccuracy`, `MaxSeenGap`, `MaxPlatformGap`).
+- **Hints** change nothing about the verdict: an accuracy below 0.80 despite `usable`, a gap of more than
+  0.20 between the accuracy on the sample of seen images and on the measured set (overfitting), a
+  difference of more than 0.15 to the platform's own figure (preprocessing, class order), a class of the
+  training data that does not occur in the measured set, `nan` losses in the training log.
+- **Suggestions** (`assess.Suggestion`): `split_dataset`, `more_data`, `more_epochs`, `regularize`,
+  `check_preprocessing`, `other_architecture`, `retrain` (only when no retraining was checked for this
+  dataset in this chat yet) and `stop` (the sentence of `assess.MayContinue`). The agent follows them within
+  the compute calls that are left or proposes them to the user (P15).
+- **The comparison of rounds** (R1.12): a report carries `figures.previous` (the last finished interim
+  check of the same evaluation dataset that belongs to another model) and `figures.delta` per figure.
+- **The platform's own figure** (`figures.platform_figure`) is read out of the training log right after the
+  model was downloaded — before every `not measured` exit except "origin unknown", so that every report
+  after the download carries the key (the key is absent only for an unknown origin and `null` when the log
+  holds no figure). `assess.ParseTrainLog` reads Lightning's metric table (the last value of a metric name)
+  or Ultralytics' `all …` line (`mAP50-95`); its `note` says what it is worth: "measured by the template on
+  its own internal test split of about N images; the gateway cannot see which images".
+- **`figures`** of a training check: `model {id, name}`, `eval_dataset {id, name}`, `seen_datasets`,
+  `measured_images`, `per_class`, `overall {accuracy, macro_f1}`, `baseline {kind, class, accuracy,
+  macro_f1, p_value}`, `seen_sample {images, accuracy}`, `mapping {"0": "<class>", …}`, `platform_figure`,
+  `log_nan` and — with a previous check — `previous` and `delta`. Never a file name or a SHA-256 of the
+  measured set (P11). The `note` names the dataset and what was skipped, not the images.
+- **`image_review`** is `{done: false, reason}`: `held-out images are never shown to a language model` for a
+  final check, `image review is not available yet` for an interim one (L7; the review of misclassified
+  validation images is R4).
+- **The approval of an image build** (`POST /container-images/build`) carries the line `Model check:
+  <verdict> (<n> held-out images, accuracy <a>)` directly after the detail that names the model, or — when
+  this chat has no finished final check of that model — `Model check: none in this chat` (or `… (interim
+  only)` when only interim checks exist). `not measured` reads `Model check: not measured (<first reason>)`
+  (R1.14, L8, L9). The gateway writes the line; the approval reads it from
+  `GET /_agw/assess/models/{id}/latest` — a reading GET the summary reader answers through the virtual
+  doer, like any other read of the gateway's own paths.
+- **State:** tables `assess_splits` (one row per created training dataset: source, train dataset, both
+  counts) and `model_origins` (one row per model: chat, source `training`, training container, the datasets
+  it could have seen). Both go with the chat (`ON DELETE CASCADE`). The split is one approved write: the
+  route carries `Create Dataset` plus `Update Dataset` of the source, because the gateway downloads it (the
+  download syncs the CVAT annotations, 1.1). The check is one approved write as well: `Create Assessment`
+  plus reading the model and downloading the evaluation dataset. The datasets the model saw come from the
+  gateway's own table, so the agent cannot name them.
+- **The skill `result-check`** carries the flow in its section *After a training*; `training-advice` points
+  at it before and after the training.
 
 ## Tool executions (E9)
 
