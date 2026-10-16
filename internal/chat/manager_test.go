@@ -289,6 +289,9 @@ func (a *fakeAgent) Exec(_ context.Context, cmd []string, stdin io.Reader) ([]by
 		}
 	case strings.Contains(script, "mkdir -p"):
 		a.files[cmd[len(cmd)-1]] = b
+	case strings.HasPrefix(script, "rm -f -- "):
+		// RemoveInput takes an unsent input out of the sandbox (issue L4/#121)
+		delete(a.files, cmd[len(cmd)-1])
 	default:
 		return nil, errors.New("unknown exec: " + script)
 	}

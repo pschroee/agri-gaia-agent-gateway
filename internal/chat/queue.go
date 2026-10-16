@@ -243,6 +243,8 @@ func (m *Manager) send(ctx context.Context, chatID string, msg *store.QueueEntry
 		if err != nil {
 			return SendResult{}, err
 		}
+		// The message is in the queue with its attachments, so they are no longer removable (issue L4/#121).
+		m.markInputsSent(ctx, chatID, msg.Attachments)
 		slog.Info("message enqueued", "chat", chatID, "entry", e.ID)
 		m.publishQueue(ctx, chatID, "queued", []string{e.ID}, "")
 		if l != nil {
@@ -270,7 +272,24 @@ func (m *Manager) send(ctx context.Context, chatID string, msg *store.QueueEntry
 	m.sending[chatID] = true
 	m.mu.Unlock()
 	unlock()
-	return m.deliver(ctx, chatID, entries, ids(held), store.TriggerUser, gen)
+	res, err := m.deliver(ctx, chatID, entries, ids(held), store.TriggerUser, gen)
+	if err == nil && msg != nil {
+		// The attachments are on their way to pi, so they are no longer removable (issue L4/#121). After the
+		// delivery, not in one transaction with it: a failed delivery keeps them removable.
+		m.markInputsSent(ctx, chatID, msg.Attachments)
+	}
+	return res, err
+}
+
+// markInputsSent notes that the inputs went with a message (issue L4/#121). Only logged on failure: the message
+// is out, and the safe error (an input that stays removable) is not worth failing the send for.
+func (m *Manager) markInputsSent(ctx context.Context, chatID string, names []string) {
+	if len(names) == 0 {
+		return
+	}
+	if err := m.st.MarkInputsSent(context.WithoutCancel(ctx), chatID, names); err != nil {
+		slog.Warn("inputs not marked as sent", "chat", chatID, "error", err)
+	}
 }
 
 // turnMeta accompanies a message to pi until pi reports the matching user message (handle assigns

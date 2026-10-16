@@ -458,3 +458,7 @@ CREATE INDEX IF NOT EXISTS web_requests_deleted ON web_requests (deleted_chat) W
 -- current text. summary_proposed is NULL until the first change; summary_changed_at marks when it happened.
 ALTER TABLE approvals ADD COLUMN IF NOT EXISTS summary_proposed text;
 ALTER TABLE approvals ADD COLUMN IF NOT EXISTS summary_changed_at timestamptz;
+
+-- Whether an input went with a message (issue L4/#121): only an input with sent_at IS NULL may still be removed.
+-- A sent file belongs to the history; removing it would take the attachment away from an earlier message.
+ALTER TABLE artifacts ADD COLUMN IF NOT EXISTS sent_at timestamptz;

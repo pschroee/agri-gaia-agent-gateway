@@ -49,6 +49,10 @@ func SchemaSQL() string {
 
 var ErrNotFound = errors.New("not found")
 
+// ErrAlreadySent: an input that went with a message. It belongs to the history and is not removed any more
+// (issue L4/#121).
+var ErrAlreadySent = errors.New("input already sent")
+
 const (
 	StateActive  = "active"
 	StateDormant = "dormant"
@@ -158,6 +162,9 @@ type Artifact struct {
 	Via         string    `json:"via"`
 	ObjectKey   string    `json:"-"`
 	CreatedAt   time.Time `json:"created_at"`
+	// SentAt: when the input went with a message (issue L4/#121); NULL while it is only staged in the field.
+	// A sent input is not removed any more, an unsent one is (DeleteUnsentInput).
+	SentAt *time.Time `json:"sent_at,omitempty"`
 	// ToolCallID: tool call that uploaded the artifact (outputs only; empty for older
 	// artifacts). Serves solely to show it at the right place in the history; with the CLI the
 	// ID comes from the command's environment, so the agent could change it.
@@ -751,6 +758,8 @@ func (s *Store) PutArtifact(ctx context.Context, a Artifact) error {
 	if a.ContentType == "" {
 		a.ContentType = "application/octet-stream"
 	}
+	// sent_at is not part of the statement: a re-upload of the same name keeps the state of the row that is
+	// there (issue L4/#121, safe error: an input that was sent once stays not removable).
 	_, err := s.pool.Exec(ctx, `
 INSERT INTO artifacts (chat_id, kind, name, size, sha256, content_type, via, object_key, tool_call_id, preview)
 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
@@ -761,11 +770,11 @@ ON CONFLICT (chat_id, kind, name) DO UPDATE SET size=EXCLUDED.size, sha256=EXCLU
 	return err
 }
 
-const artifactCols = `chat_id::text, kind, name, size, sha256, content_type, via, object_key, created_at, tool_call_id, preview`
+const artifactCols = `chat_id::text, kind, name, size, sha256, content_type, via, object_key, created_at, tool_call_id, preview, sent_at`
 
 func scanArtifact(row pgx.Row) (Artifact, error) {
 	var a Artifact
-	err := row.Scan(&a.ChatID, &a.Kind, &a.Name, &a.Size, &a.SHA256, &a.ContentType, &a.Via, &a.ObjectKey, &a.CreatedAt, &a.ToolCallID, &a.Preview)
+	err := row.Scan(&a.ChatID, &a.Kind, &a.Name, &a.Size, &a.SHA256, &a.ContentType, &a.Via, &a.ObjectKey, &a.CreatedAt, &a.ToolCallID, &a.Preview, &a.SentAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return a, ErrNotFound
 	}
@@ -791,6 +800,36 @@ func (s *Store) ListArtifacts(ctx context.Context, chatID string) ([]Artifact, e
 
 func (s *Store) GetArtifact(ctx context.Context, chatID, kind, name string) (Artifact, error) {
 	return scanArtifact(s.pool.QueryRow(ctx, `SELECT `+artifactCols+` FROM artifacts WHERE chat_id=$1 AND kind=$2 AND name=$3`, chatID, kind, name))
+}
+
+// MarkInputsSent notes that these inputs went with a message (issue L4/#121). An input that was sent before keeps
+// its earlier time; names that are no input of the chat stay untouched.
+func (s *Store) MarkInputsSent(ctx context.Context, chatID string, names []string) error {
+	if len(names) == 0 {
+		return nil
+	}
+	_, err := s.pool.Exec(ctx, `UPDATE artifacts SET sent_at=now()
+		WHERE chat_id=$1 AND kind=$2 AND name = ANY($3) AND sent_at IS NULL`, chatID, KindInput, names)
+	return err
+}
+
+// DeleteUnsentInput removes an input that was not sent with a message and returns the row (its ObjectKey is
+// needed to remove the file from the object store). ErrNotFound for an unknown name, ErrAlreadySent for a file
+// that went with a message (issue L4/#121).
+func (s *Store) DeleteUnsentInput(ctx context.Context, chatID, name string) (Artifact, error) {
+	a, err := scanArtifact(s.pool.QueryRow(ctx, `DELETE FROM artifacts
+		WHERE chat_id=$1 AND kind=$2 AND name=$3 AND sent_at IS NULL RETURNING `+artifactCols, chatID, KindInput, name))
+	if err == nil {
+		return a, nil
+	}
+	if !errors.Is(err, ErrNotFound) {
+		return Artifact{}, err
+	}
+	// Nothing deleted: either the input is unknown or it has already been sent.
+	if _, gerr := s.GetArtifact(ctx, chatID, KindInput, name); gerr == nil {
+		return Artifact{}, ErrAlreadySent
+	}
+	return Artifact{}, ErrNotFound
 }
 
 const approvalCols = `id::text, chat_id::text, kind, via, name, size, sha256, content_type, pending_key, COALESCE(preview,''), state, created_at, decided_at, session, tool_call_id, COALESCE(effect,''), COALESCE(summary,''), COALESCE(summary_proposed,''), summary_changed_at, COALESCE(notebook::text,'')`

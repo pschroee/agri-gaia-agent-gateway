@@ -236,6 +236,8 @@ func (s *Server) Handler() http.Handler {
 	chat("GET /api/chats/{id}/artifacts", s.artifacts)
 	chat("GET /api/chats/{id}/artifacts/{name}", s.download)
 	writes("POST /api/chats/{id}/files", s.upload)
+	// L4/#121: an input that was not sent with a message can be taken back (the cross on the tile, a cancelled upload).
+	writes("DELETE /api/chats/{id}/inputs/{name}", s.removeInput)
 	chat("GET /api/chats/{id}/images", s.image)
 	chat("GET /api/chats/{id}/events", s.events)
 	chat("POST /api/chats/{id}/trash", s.trashChat)
@@ -1172,6 +1174,20 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, out)
+}
+
+// removeInput takes back an input the user uploaded but did not send with a message (issue L4/#121): 204, or
+// 404 for an unknown name, or 409 "already_sent" for a file that went with a message.
+func (s *Server) removeInput(w http.ResponseWriter, r *http.Request) {
+	err := s.M.RemoveInput(r.Context(), r.PathValue("id"), r.PathValue("name"))
+	switch {
+	case err == nil:
+		w.WriteHeader(http.StatusNoContent)
+	case errors.Is(err, chat.ErrAlreadySent):
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error(), "code": "already_sent"})
+	default:
+		fail(w, err)
+	}
 }
 
 func (s *Server) events(w http.ResponseWriter, r *http.Request) {
