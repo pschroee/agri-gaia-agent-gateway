@@ -160,13 +160,22 @@ func BuildZip(name, kind string, labels []string, size int, model []byte, modelN
 // image python:3.11-slim sets none, and the onbuild stage does not either), while the template
 // opens config.json and model.onnx next to it - without the WORKDIR the handler dies at its start
 // with "FileNotFoundError: config.json". CVAT's own functions carry the same in their image.
+//
+// spec.description is no decoration: CVAT 2.4.2 reads it without a default when it builds the entry
+// of a function for its list ("self.description = data['spec']['description']",
+// apps/lambda_manager/views.py). A function without it makes GET /api/lambda/functions answer HTTP
+// 500 with KeyError 'description', and that breaks every tool that asks CVAT for the functions -
+// annotation_functions, pre_annotate, annotation_check. Measured on the instance on 16.10.2026; an
+// empty catalogue hides it, so the whole feature works right up to the first own function.
 func functionYAML(name string, labels []string, modelName string, modelID int64) []byte {
 	spec, _ := json.Marshal(classSpecs(labels))
+	title := cvatTitle(modelName, modelID)
 	var b strings.Builder
 	fmt.Fprintf(&b, "metadata:\n  name: %s\n  namespace: cvat\n", name)
 	fmt.Fprintf(&b, "  annotations:\n    name: %s\n    type: detector\n    framework: onnx\n    spec: %s\n",
-		strconv.Quote(cvatTitle(modelName, modelID)), strconv.Quote(string(spec)))
-	b.WriteString("spec:\n  runtime: \"python:3.11\"\n  handler: main:handler\n  eventTimeout: 30s\n")
+		strconv.Quote(title), strconv.Quote(string(spec)))
+	fmt.Fprintf(&b, "spec:\n  description: %s\n  runtime: \"python:3.11\"\n  handler: main:handler\n  eventTimeout: 30s\n",
+		strconv.Quote(title))
 	fmt.Fprintf(&b, "  build:\n    image: cvat.%s\n    baseImage: python:3.11-slim\n"+
 		"    directives:\n      preCopy:\n        - kind: WORKDIR\n          value: %s\n"+
 		"      postCopy:\n        - kind: RUN\n          value: pip install --no-cache-dir %s\n",

@@ -132,11 +132,16 @@ func TestBuildZipLayout(t *testing.T) {
 	}
 
 	sp := yamlMap(t, y, "spec")
-	if got := yamlKeys(t, sp); !reflect.DeepEqual(got, []string{"build", "eventTimeout", "handler", "platform", "runtime", "triggers"}) {
+	if got := yamlKeys(t, sp); !reflect.DeepEqual(got, []string{"build", "description", "eventTimeout", "handler", "platform", "runtime", "triggers"}) {
 		t.Errorf("spec fields: %v", got)
 	}
 	if sp["runtime"] != "python:3.11" || sp["handler"] != "main:handler" || sp["eventTimeout"] != "30s" {
 		t.Errorf("spec: %v", sp)
+	}
+	// CVAT reads spec.description without a default when it lists functions; without the field its
+	// list answers 500 (KeyError 'description') and the whole pre-annotation toolset fails.
+	if sp["description"] != an["name"] || sp["description"] == "" {
+		t.Errorf("spec.description does not carry the title of the function: %v", sp["description"])
 	}
 	build := yamlMap(t, sp, "build")
 	if got := yamlKeys(t, build); !reflect.DeepEqual(got, []string{"baseImage", "directives", "image"}) {
@@ -272,9 +277,10 @@ func TestFunctionYAMLDirectives(t *testing.T) {
 	var cfg struct {
 		Metadata map[string]any `yaml:"metadata"`
 		Spec     struct {
-			Runtime      string         `yaml:"runtime"`
-			Handler      string         `yaml:"handler"`
-			EventTimeout string         `yaml:"eventTimeout"`
+			Description  string `yaml:"description"`
+			Runtime      string `yaml:"runtime"`
+			Handler      string `yaml:"handler"`
+			EventTimeout string `yaml:"eventTimeout"`
 			Build        struct {
 				Image      string                       `yaml:"image"`
 				BaseImage  string                       `yaml:"baseImage"`
