@@ -37,7 +37,24 @@ suggestion to the user, not a permission to spend: propose it and wait.
 
 ## After a training
 
-Filled by R1.
+1. Propose the split before the training (the skill training-advice says so): `split-dataset` creates a
+   training dataset from about 70 % of the annotated images per class and keeps the rest back. Train on
+   that training dataset, never on the source.
+2. The gateway wakes you when the training is done; take the model over with `model-from-training` as
+   usual.
+3. Check it with `assess-model <model_id>` (without `--final`, so the validation images are measured).
+   The answer is a `check_id`; follow it with `assess-status <check_id>` or wait for the wake-up. Start
+   your report with the header the gateway returns.
+4. Interim result usable: measure once more with `assess-model <model_id> --final true` if the model will
+   not change any more. `final=true` works once per dataset and chat; use it for the final report.
+5. Result questionable: follow the suggestions the gateway names (for example `more_epochs`). At most one
+   retraining: train once more with exactly that change, take the new model over, check it with
+   `--final false` and report before and after against the previous check.
+6. Result not measured: report it as it stands. The reason names what is missing - "no held-out images"
+   (train on a split training dataset next time), "too few held-out images" (more annotated images),
+   "origin unknown" (the gateway did not see this model being created in this chat).
+7. The platform's own figure ("platform figure") is the number the training template printed on its own
+   internal test split; quote it as the platform's figure and never as the result of your check.
 
 ## Own models
 

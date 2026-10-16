@@ -19,6 +19,8 @@ The approval of `create-training` comes on top; it does not replace the consent.
 - `agw-platform train-options` (providers), `agw-platform train-options <provider>` (architectures with
   `category`), `agw-platform train-options <provider> <architecture>` (JSON Schema and default values of the
   `train_config`).
+- Propose `split-dataset` first, so that the result can be checked on held-out images; see the skill
+  result-check. Train on the training dataset it creates, not on the source.
 
 ## 2. Check the category
 
@@ -72,4 +74,5 @@ take longer; do not invent factors that were not measured. If the user's data is
 ## 6. Wait for consent
 
 End the proposal with a question. Create the training only after the user agrees, with exactly the values
-shown (or the ones the user changed). The approval of `create-training` follows anyway.
+shown (or the ones the user changed). The approval of `create-training` follows anyway. After the
+training, check the result as the skill result-check says.
