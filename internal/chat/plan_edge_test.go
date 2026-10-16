@@ -28,7 +28,9 @@ func withEdgeDeployPlatform(t *testing.T, e *env) func() []string {
 	var got []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/token" {
-			fmt.Fprint(w, `{"access_token":"t","expires_in":3600}`)
+			// The guard of D-E1 reads the user out of the chat's token and compares it with the namespace
+			// of the image, so the fake has to hand out a token that carries the name.
+			fmt.Fprintf(w, `{"access_token":%q,"expires_in":3600}`, edgeJWT("agent-test"))
 			return
 		}
 		mu.Lock()
@@ -39,6 +41,9 @@ func withEdgeDeployPlatform(t *testing.T, e *env) func() []string {
 		case r.Method == http.MethodGet && r.URL.Path == "/edge-devices":
 			fmt.Fprint(w, "["+device+"]")
 		case r.Method == http.MethodGet && r.URL.Path == "/container-images/agent-test/mnist-triton:v1":
+			fmt.Fprint(w, `[{"id":5,"repository":"agent-test/mnist-triton","tag":"v1","platform":"linux/amd64","exposed_ports":[]}]`)
+		case r.Method == http.MethodGet && r.URL.Path == "/container-images":
+			// The guard of D-E1 (edge.go) reads the list and looks the image up by its identifier.
 			fmt.Fprint(w, `[{"id":5,"repository":"agent-test/mnist-triton","tag":"v1","platform":"linux/amd64","exposed_ports":[]}]`)
 		case r.Method == http.MethodPost && r.URL.Path == "/container-deployments":
 			w.WriteHeader(http.StatusCreated)

@@ -59,6 +59,10 @@ func watchInterval(age time.Duration) time.Duration {
 	}
 }
 
+// watchNow is the clock of the watcher; tests move it forward so that a job that was just polled is due
+// again (the loop itself polls a young job only every watchIntervalA).
+var watchNow = time.Now
+
 // watchDue reports whether a job is due again at now: first poll at once, then by its age.
 func watchDue(j store.WatchJob, now time.Time) bool {
 	if j.CheckedAt == nil || j.CheckedAt.IsZero() {
@@ -100,7 +104,7 @@ func (m *Manager) watchOnce(ctx context.Context, sem chan struct{}) {
 		slog.Warn("open jobs not readable", "error", err)
 		return
 	}
-	now := time.Now()
+	now := watchNow()
 	var wg sync.WaitGroup
 	for _, j := range jobs {
 		if !watchDue(j, now) {

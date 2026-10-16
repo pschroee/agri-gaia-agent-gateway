@@ -28,10 +28,14 @@ func TestSelectTrainDeterministic(t *testing.T) {
 	if len(train) != 14 || len(kept) != 6 {
 		t.Fatalf("70 %% of ten per class: %d train, %d kept", len(train), len(kept))
 	}
-	// Two calls with the same images in another order give the same split.
-	shuffled := []Item{items[9], items[19], items[0], items[11], items[3], items[14], items[7], items[2], items[17], items[5]}
+	// Two calls with the same images in another order give the same split: every class keeps its share,
+	// because the rule sorts by class and name before it counts.
+	shuffled := make([]Item, 0, len(items))
+	for _, i := range []int{9, 19, 0, 11, 3, 14, 7, 2, 17, 5, 1, 12, 4, 16, 8, 10, 6, 15, 13, 18} {
+		shuffled = append(shuffled, items[i])
+	}
 	t2, k2 := SelectTrain(shuffled, 70)
-	if len(t2) != 6 || len(k2) != 4 {
+	if len(t2) != 14 || len(k2) != 6 {
 		t.Fatalf("shuffled: %d train, %d kept", len(t2), len(k2))
 	}
 	// The first seven SHAs of each class are in the training set, the last three are kept back.

@@ -56,7 +56,9 @@ func TestAnnotationFunctionTool(t *testing.T) {
 		`{"kind":"classification"}`,
 		`{"model_id":5,"kind":"classification","input_size":8}`,
 		`{"model_id":5,"kind":"classification","input_size":4096}`,
-		`{"model_id":5,"kind":"classification","labels":"a"}`,
+		// A single name is accepted as a shorthand list for every array argument of the binding (Args.strings);
+		// an entry that is not a name is not.
+		`{"model_id":5,"kind":"classification","labels":[5]}`,
 		`{"model_id":5,"kind":"classification","function_yaml":"x"}`,
 	} {
 		if _, err := tool.Build(json.RawMessage(bad)); err == nil {

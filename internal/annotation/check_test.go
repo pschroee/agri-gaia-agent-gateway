@@ -100,9 +100,10 @@ func TestCalibrateClassification(t *testing.T) {
 	if got.Confusion["class_0"]["0"] != 8 || got.Confusion["class_0"]["1"] != 2 {
 		t.Errorf("confusion: %v", got.Confusion)
 	}
-	// 0.10 answers all ten images (8 of 10 right), 0.50 answers eight (all right) — the hit rate of the
-	// hypothesis "what the function answers is right" is what decides, and 80 percent coverage allows it.
-	if got.ProposedMinConfidence != 50 {
+	// 0.10 answers all ten images (8 of 10 right), 0.25 answers eight (all right): the hit rate of the
+	// hypothesis "what the function answers is right" decides, and 80 percent coverage permits the answer
+	// that drops the two wrong ones — the lowest threshold that reaches the best hit rate.
+	if got.ProposedMinConfidence != 25 {
 		t.Errorf("proposed threshold: %d", got.ProposedMinConfidence)
 	}
 	if got.Accuracy == nil || *got.Accuracy != 1.0 {
@@ -380,7 +381,7 @@ func TestCheckCalibrateJob(t *testing.T) {
 	if got.Images != 10 || got.Mapping["class_0"] != "0" {
 		t.Fatalf("calibration: %+v", got)
 	}
-	if got.ProposedMinConfidence != 50 || got.Accuracy == nil || *got.Accuracy != 1 || got.Coverage != 0.8 {
+	if got.ProposedMinConfidence != 25 || got.Accuracy == nil || *got.Accuracy != 1 || got.Coverage != 0.8 {
 		t.Errorf("figures: %+v", got)
 	}
 	if !strings.Contains(got.Note, "Measured on 10") || !strings.Contains(got.Note, "confirm it") {

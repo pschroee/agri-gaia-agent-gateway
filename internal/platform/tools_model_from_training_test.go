@@ -85,7 +85,7 @@ func TestModelFromTrainingSteps(t *testing.T) {
 	if got.ID.String() != "21" || got.Format != "onnx" || !got.TensorMetadata {
 		t.Errorf("summary = %+v", got)
 	}
-	if len(got.Warnings) != 1 || !strings.Contains(got.Warnings[0], "platform_training_logs") {
+	if len(got.Warnings) != 1 || !strings.Contains(got.Warnings[0], "platform_assess_model") {
 		t.Errorf("warnings = %v", got.Warnings)
 	}
 }

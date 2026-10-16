@@ -42,7 +42,9 @@ func TestPreAnnotationSkillOwnModel(t *testing.T) {
 		"## 1a. Your own model as a function",
 		"agw-platform annotation-function",
 		"Only an **ONNX** model of the user's own works",
-		"the order the model outputs them",
+		// The skill wraps the sentence ("… class names in the\norder the model outputs them"), so only the
+		// part that stands on one line is checked.
+		"order the model outputs them",
 		"every CVAT user of the platform",
 		"you cannot remove it — only the operator can",
 		"`deploying` until CVAT lists it, `ready` (then it can be run), `failed`",

@@ -80,6 +80,11 @@ func TestDeleteDeploymentIrreversibleInPlan(t *testing.T) {
 		t.Fatal(err)
 	}
 	slot := e.m.live[c.ID].slot.ID
+	// The guard of D-E1 (edge.go) lets the agent touch only the deployments of this chat, so the test
+	// records the deployment as created here.
+	if err := e.st.AddDelegationObject(ctx, c.ID, delegation.ContainerDeployment, "9"); err != nil {
+		t.Fatal(err)
+	}
 
 	const proposal = `{"title":"Delete the deployment","steps":[{"tool":"delete_deployment","args":{"deployment_id":9}}]}`
 	if r, _ := proposeAndDecide(t, e, ctx, c.ID, slot, proposal, true); r.Status != "ok" {

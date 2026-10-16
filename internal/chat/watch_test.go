@@ -155,9 +155,16 @@ func startWatchedStep(t *testing.T, e *env, ctx context.Context, c ChatView, slo
 	return jobs[0]
 }
 
-// runWatchersOnce runs one pass of the watcher loop.
+// watchOffset is how far runWatchersOnce has moved the watcher's clock forward.
+var watchOffset time.Duration
+
+// runWatchersOnce runs one pass of the watcher loop. The loop polls a young job only every
+// watchIntervalA (10 s), so the helper moves the watcher's clock forward: the next pass sees every job
+// due again.
 func runWatchersOnce(t *testing.T, e *env) {
 	t.Helper()
+	watchOffset += 2 * time.Minute
+	watchNow = func() time.Time { return time.Now().Add(watchOffset) }
 	e.m.watchOnce(context.Background(), make(chan struct{}, watchParallel))
 }
 

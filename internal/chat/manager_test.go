@@ -37,10 +37,10 @@ type fakeAgent struct {
 	closed   bool
 	reason   string // teardown reason passed by the pool (issue #55)
 	events   chan rpc.Event
-	pollOut  string   // response to the subagents' read script
+	pollOut  string        // response to the subagents' read script
 	pollGate chan struct{} // when set, the read script waits for it to be closed (a poll that takes long)
-	execs    []string // executed commands
-	reply    string   // text of the response (otherwise "Answer from …")
+	execs    []string      // executed commands
+	reply    string        // text of the response (otherwise "Answer from …")
 
 	wsOut        []byte // output of the backup script for /workspace (otherwise "unchanged")
 	wsSaves      int    // calls of the backup script
@@ -392,9 +392,14 @@ type env struct {
 	gate       chan struct{} // set: new sandboxes start only once it is closed
 }
 
+// agent returns the i-th sandbox of the test; a caller looking for a wake-up may ask for more sandboxes
+// than the test created, and gets nil for those (the callers check for nil).
 func (e *env) agent(i int) *fakeAgent {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	if i < 0 || i >= len(e.agents) {
+		return nil
+	}
 	return e.agents[i]
 }
 

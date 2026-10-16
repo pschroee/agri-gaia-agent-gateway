@@ -67,8 +67,9 @@ func TestMajorityTie(t *testing.T) {
 	if b.Class != "Kuh" {
 		t.Fatalf("class: %q", b.Class)
 	}
-	// The baseline answers the majority class everywhere: three of four images.
-	if !closeTo(b.Accuracy, 0.75) {
+	// The baseline answers the majority class everywhere: with the tie broken to "Kuh" that is one of the
+	// four measured images.
+	if !closeTo(b.Accuracy, 0.25) {
 		t.Errorf("accuracy: %v", b.Accuracy)
 	}
 	// Macro F1 over the two classes of the measured set: "Kuh" as the only answer reaches precision 0.25

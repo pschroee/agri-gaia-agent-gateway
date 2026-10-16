@@ -77,9 +77,10 @@ func TestConformanceThroughManager(t *testing.T) {
 	f := withRecordingPlatform(t, e)
 	// The virtual features a registered case belongs to answer through their doer. The check registers
 	// stubs, so that it exercises the delegated rights and not whether this setup wired the feature
-	// (in production the gateway wires notebook and annotation when the instance offers them). The
-	// delegation check runs before the doer, so a forbidden call is still refused before it is reached.
-	for _, prefix := range []string{platform.NotebookPrefix, platform.AnnotationPrefix} {
+	// (in production the gateway wires notebook, annotation and the checks when the instance offers
+	// them). The delegation check runs before the doer, so a forbidden call is still refused before it
+	// is reached.
+	for _, prefix := range []string{platform.NotebookPrefix, platform.AnnotationPrefix, platform.AssessPrefix} {
 		e.m.RegisterVirtual(prefix, conformanceVirtual{})
 	}
 	ctx := context.Background()

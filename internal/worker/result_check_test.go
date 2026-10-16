@@ -57,7 +57,7 @@ func TestResultCheckSkillBody(t *testing.T) {
 		"statistics only, no image review",
 		"## After a training\n",
 		"assess-model",
-		"final=true works",
+		"`final=true` works",
 		"no held-out images",
 		"platform figure",
 		"Filled by R2",
