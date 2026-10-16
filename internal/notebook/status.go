@@ -24,12 +24,24 @@ const (
 	StateFailed  = "failed"  // any other exit code
 )
 
-// stateOf is the state that belongs to an exit code (nil: the run has not ended).
-func stateOf(exit *int) string {
+// The two notes a status answer carries when the chat's notebook server is not running (own code C-E4).
+const (
+	// serverGoneNote: the run ended before the server went away, only its directory is gone.
+	serverGoneNote = "the notebook server of this chat is not running; its directory is gone, a new run starts it again"
+	// stoppedRunNote: the server went away while the run was going — it was stopped, and the run ended
+	// without an exit code. The card shows the run as failed with this line (a stop is no exit code of
+	// the code itself, and the gateway states no code it did not read).
+	stoppedRunNote = "the run ended without an exit code: the notebook server of this chat was stopped while it went"
+)
+
+// stateOf is the state that belongs to a stored run: running while it has no end, done after exit code 0,
+// failed after any other exit code — and failed for a run that ended without a code at all, because its
+// notebook server was stopped while it went (own code C-E4; no code the gateway has not read).
+func stateOf(exit *int, finished bool) string {
 	switch {
-	case exit == nil:
+	case !finished:
 		return StateRunning
-	case *exit == 0:
+	case exit != nil && *exit == 0:
 		return StateDone
 	}
 	return StateFailed
@@ -136,7 +148,25 @@ func (n *Notebooks) Status(ctx context.Context, chatID, runID string) (RunInfo, 
 	containerID, err := n.container(ctx, row.HubUser, row.Server)
 	if err != nil {
 		if errors.Is(err, errNoContainer) {
-			info.Note = "the notebook server of this chat is not running; its directory is gone, a new run starts it again"
+			// The server of this chat is gone and with it whatever ran inside it: the code of a run that
+			// has not ended cannot go on, and without an end the run would block the next one
+			// (ActiveNotebookRun) and keep its job "running" for good. Its end is recorded here, without
+			// an exit code (own code C-E4: the user's stop of a run ends the server, see the kind's Stop).
+			if row.FinishedAt == nil {
+				at := n.now()
+				ok, err := n.store.EndNotebookRun(ctx, row.ID, at)
+				if err != nil {
+					return RunInfo{}, err
+				}
+				if ok {
+					row.FinishedAt = &at
+					applyRun(&info, row)
+					info.Note = stoppedRunNote
+				}
+			}
+			if info.Note == "" {
+				info.Note = serverGoneNote
+			}
 			return info, nil
 		}
 		return info, err
@@ -189,10 +219,7 @@ func applyRun(info *RunInfo, row store.NotebookRun) {
 		info.DurationSeconds = int64(row.FinishedAt.Sub(row.StartedAt).Seconds())
 	}
 	info.ExitCode = row.ExitCode
-	info.State = stateOf(row.ExitCode)
-	if row.FinishedAt == nil {
-		info.State = StateRunning
-	}
+	info.State = stateOf(row.ExitCode, row.FinishedAt != nil)
 }
 
 // applyMarkers overrules the stored state with what the run directory says (it is what the run
@@ -206,7 +233,7 @@ func applyMarkers(info *RunInfo, m markers) {
 	}
 	if m.ExitCode != nil {
 		info.ExitCode = m.ExitCode
-		info.State = stateOf(m.ExitCode)
+		info.State = stateOf(m.ExitCode, true) // the run directory wrote an exit code: the run has ended
 	}
 	if info.StartedAt != "" && info.FinishedAt != "" {
 		if from, err := time.Parse(time.RFC3339, info.StartedAt); err == nil {
@@ -285,14 +312,12 @@ func (n *Notebooks) runsResult(ctx context.Context, chatID string) (platform.Res
 				}
 			}
 		}
-		v := rowView{RunID: row.ID, Entry: row.Entry, State: stateOf(row.ExitCode), ExitCode: row.ExitCode,
+		v := rowView{RunID: row.ID, Entry: row.Entry, State: stateOf(row.ExitCode, row.FinishedAt != nil), ExitCode: row.ExitCode,
 			StartedAt: row.StartedAt.UTC().Format(time.RFC3339), TimeoutMinutes: row.TimeoutMin,
 			Link: n.Link(row.HubUser, row.Server, row.ID)}
 		if row.FinishedAt != nil {
 			v.FinishedAt = row.FinishedAt.UTC().Format(time.RFC3339)
 			v.DurationSeconds = int64(row.FinishedAt.Sub(row.StartedAt).Seconds())
-		} else {
-			v.State = StateRunning
 		}
 		out = append(out, v)
 	}

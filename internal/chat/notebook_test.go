@@ -7,6 +7,7 @@ package chat
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"strings"
 	"sync"
 	"testing"
@@ -15,6 +16,7 @@ import (
 	"agw/internal/notebook"
 	"agw/internal/platform"
 	"agw/internal/store"
+	"agw/internal/watch"
 )
 
 // fakeNotebook is the notebook service of these tests: it answers the chat's virtual notebook paths
@@ -207,6 +209,42 @@ func TestNotebookApprovalDataOnlyForRuns(t *testing.T) {
 		t.Fatal(err)
 	}
 	<-done
+}
+
+// The stop of a notebook run at the user's request reaches the gateway itself (own code C-E4, "Stop job" of
+// A-E2 D2.9): the call of the kind is a virtual path, and the stop of a job must not send it to the platform,
+// where nothing is behind that path.
+func TestStopNotebookJobReachesTheGateway(t *testing.T) {
+	e := setup(t)
+	got := withPlatform(t, e)
+	ctx := context.Background()
+	nb := &fakeNotebook{}
+	chatID, _ := notebookTestChat(t, e, nb)
+	// The service registers its kinds in main.go; the test registers the kind itself. Its route is not
+	// registered: a route would make other tests' notebook calls start an observed job.
+	watch.Register(notebook.New(notebook.Config{}, nil, nil, nil).WatchKind())
+	jobID, err := e.st.AddWatchJob(ctx, store.WatchJob{ChatID: chatID, Kind: notebook.KindName,
+		Ref: "r20260101120000-abcd"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, err := e.m.StopJob(ctx, chatID, jobID)
+	if err != nil {
+		t.Fatalf("StopJob: %v", err)
+	}
+	if job.ID != jobID || job.State != store.JobRunning {
+		t.Errorf("job: %+v", job)
+	}
+	// The stop went to the notebook service and not to the platform.
+	nb.mu.Lock()
+	calls := append([]platform.Request(nil), nb.calls...)
+	nb.mu.Unlock()
+	if len(calls) != 1 || calls[0].Method != http.MethodPost || calls[0].Path != platform.NotebookPrefix+"/stop" {
+		t.Fatalf("calls at the notebook service: %+v", calls)
+	}
+	if calls := got(); len(calls) != 0 {
+		t.Errorf("the stop went to the platform: %v", calls)
+	}
 }
 
 // A run counts against the compute limit of the chat like a training (AGW_COMPUTE_MAX_PER_CHAT).

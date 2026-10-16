@@ -77,6 +77,18 @@ func (s *Store) FinishNotebookRun(ctx context.Context, runID string, exit int, a
 	return err
 }
 
+// EndNotebookRun records the end of a run that has no exit code: its notebook server was stopped while it
+// went, so nothing was left to write the exit code into the run directory (own code C-E4 — that is what the
+// user's "Stop job" of a run does). exit_code stays NULL, the gateway invents no code, and a run that ended
+// already is left alone. ok reports whether this end was recorded.
+func (s *Store) EndNotebookRun(ctx context.Context, runID string, at time.Time) (bool, error) {
+	tag, err := s.pool.Exec(ctx, `UPDATE notebook_runs SET finished_at=$2 WHERE id=$1 AND finished_at IS NULL`, runID, at)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
 // NotebookRuns lists a chat's runs, newest first.
 func (s *Store) NotebookRuns(ctx context.Context, chatID string) ([]NotebookRun, error) {
 	rows, err := s.pool.Query(ctx, `SELECT `+notebookRunCols+` FROM notebook_runs WHERE chat_id=$1 ORDER BY started_at DESC`, chatID)

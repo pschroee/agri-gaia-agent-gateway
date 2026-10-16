@@ -643,3 +643,96 @@ func TestNotebookWatchKind(t *testing.T) {
 		t.Error("an answer without a run id must not name a job")
 	}
 }
+
+// The stop of a run at the user's request (own code C-E4, "Stop job" of A-E2 D2.9): the kind names the
+// call that ends it — the chat's notebook server carries the run, so that call is what stops the code —,
+// and a run whose server is gone is ended in the store without an exit code, so that it neither keeps its
+// job "running" nor blocks the next run.
+func TestNotebookRunStop(t *testing.T) {
+	st := testStore(t)
+	chatID := testChat(t, st)
+	hub := newFakeHub()
+	docker := &fakeDocker{ids: []string{"c1"}}
+	n, _ := testService(t, st, docker, hub)
+	ctx := context.Background()
+	runID := "r20260101120000-abcd"
+	if err := st.CreateNotebookRun(ctx, store.NotebookRun{ID: runID, ChatID: chatID, HubUser: "agent-test",
+		Server: n.Server(chatID), Entry: "train.py", TimeoutMin: 60, StartedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+
+	// The kind offers the stop and names the virtual call of the notebook tools; without a run id in the
+	// reference there is nothing to stop, and it refuses like the other kinds.
+	kind := n.WatchKind()
+	if kind.Stop == nil {
+		t.Fatal("the kind notebook_run cannot be stopped")
+	}
+	req, ok := kind.Stop(watch.Job{ID: "j1", ChatID: chatID, Kind: KindName, Ref: runID})
+	if !ok || req.Method != http.MethodPost || req.Path != platform.NotebookPrefix+"/stop" {
+		t.Fatalf("stop: %+v %v", req, ok)
+	}
+	if _, ok := kind.Stop(watch.Job{ID: "j1", ChatID: chatID, Kind: KindName}); ok {
+		t.Error("a job without a run id must not be stoppable")
+	}
+	// The call is the one the notebook tools use: it goes to the gateway itself (the doer answers it) and
+	// the hub removes the container of the server with the code in it.
+	hub.server, hub.ready = n.Server(chatID), true
+	res, err := n.Do(ctx, chatID, req)
+	if err != nil || res.Status != "ok" {
+		t.Fatalf("stop call: %+v %v", res, err)
+	}
+	if del := hub.deleted(); len(del) != 1 || del[0] != n.Server(chatID) {
+		t.Fatalf("servers removed by the stop: %v", del)
+	}
+	// A chat whose server is not running is no error: the hub answers 404, the gateway takes that as done
+	// (the same call is idempotent).
+	if res, err = n.Do(ctx, chatID, req); err != nil || res.Status != "ok" {
+		t.Fatalf("stop without a running server: %+v %v", res, err)
+	}
+
+	// The server is gone, so the run cannot go on: its end is recorded without an exit code, its state is
+	// failed and the note says why.
+	docker.ids = nil
+	info, err := n.Status(ctx, chatID, runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.State != StateFailed || info.ExitCode != nil || info.FinishedAt == "" {
+		t.Fatalf("status of the stopped run: %+v", info)
+	}
+	if !strings.Contains(info.Note, "stopped while it went") {
+		t.Errorf("note of the stopped run: %q", info.Note)
+	}
+	row, err := st.GetNotebookRun(ctx, chatID, runID)
+	if err != nil || row.FinishedAt == nil || row.ExitCode != nil {
+		t.Fatalf("stored end: %+v %v", row, err)
+	}
+	// A second look does not move the end: the watcher polls while the job ends.
+	again, err := n.Status(ctx, chatID, runID)
+	if err != nil || again.FinishedAt != info.FinishedAt {
+		t.Fatalf("the end of the stopped run moved: %+v %v", again, err)
+	}
+	if _, busy, err := st.ActiveNotebookRun(ctx, chatID); err != nil || busy {
+		t.Errorf("the stopped run still blocks the chat: busy=%v err=%v", busy, err)
+	}
+	// A run that ended before its server went away keeps its own state and the old note.
+	other := "r20260101120000-ef01"
+	ended := time.Now().Add(-time.Minute)
+	if err := st.CreateNotebookRun(ctx, store.NotebookRun{ID: other, ChatID: chatID, HubUser: "agent-test",
+		Server: n.Server(chatID), Entry: "train.py", TimeoutMin: 60, StartedAt: time.Now().Add(-2 * time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.FinishNotebookRun(ctx, other, 0, ended); err != nil {
+		t.Fatal(err)
+	}
+	info, err = n.Status(ctx, chatID, other)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.State != StateDone || info.ExitCode == nil || *info.ExitCode != 0 {
+		t.Fatalf("a run that ended keeps its state: %+v", info)
+	}
+	if !strings.Contains(info.Note, "a new run starts it again") {
+		t.Errorf("note of a run that ended: %q", info.Note)
+	}
+}
