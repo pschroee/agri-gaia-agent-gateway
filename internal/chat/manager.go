@@ -2575,6 +2575,13 @@ func (m *Manager) Recover(ctx context.Context) error {
 	} else if n > 0 {
 		slog.Info("result checks ended after restart", "count", n)
 	}
+	// The background jobs of pre-annotation (V3) ran in a goroutine of the last process: a job that was
+	// queued or running can never end by itself, and the agent would wait for it forever.
+	if n, err := m.st.RecoverAnnotationJobs(ctx); err != nil {
+		return err
+	} else if n > 0 {
+		slog.Info("annotation jobs ended after restart", "count", n)
+	}
 	active, err := m.st.ChatsInState(ctx, store.StateActive)
 	if err != nil {
 		return err

@@ -49,3 +49,26 @@ CREATE TABLE IF NOT EXISTS annotation_functions (
     created_at       timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS annotation_functions_user ON annotation_functions (username, created_at);
+
+-- Background jobs of pre-annotation (V3): a check (calibrate | uncertain) and a fill. The job runs in
+-- the gateway (minutes of CPU time, one at a time) instead of inside a tool call; params holds the call
+-- the agent made, result the answer of a finished job and done/total what the observation kind
+-- annotation_job reports. A restart ends every job that was queued or running (store.RecoverAnnotationJobs).
+
+CREATE TABLE IF NOT EXISTS annotation_jobs (
+    id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    chat_id    uuid NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+    kind       text NOT NULL,                            -- calibrate | uncertain | fill
+    dataset_id bigint NOT NULL,
+    task_id    bigint NOT NULL,
+    function   text NOT NULL,
+    params     text NOT NULL DEFAULT '{}',               -- JSON, the call the agent made
+    state      text NOT NULL DEFAULT 'queued',           -- queued | running | finished | failed
+    done       integer NOT NULL DEFAULT 0,
+    total      integer NOT NULL DEFAULT 0,
+    result     text NOT NULL DEFAULT '',
+    error      text NOT NULL DEFAULT '',
+    created_at timestamptz NOT NULL DEFAULT now(),
+    ended_at   timestamptz
+);
+CREATE INDEX IF NOT EXISTS annotation_jobs_chat ON annotation_jobs (chat_id, created_at DESC);

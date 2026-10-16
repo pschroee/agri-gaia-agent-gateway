@@ -43,6 +43,10 @@ type Service struct {
 
 	mu       sync.Mutex
 	sessions map[string]session // the CVAT session per user, in memory only (E2)
+	// sem is the one slot of a background job (V3): a check and a fill ask one function about one image
+	// at a time, and the CPU of the instance is shared with the platform. Without it two jobs of two
+	// chats would run side by side.
+	sem chan struct{}
 }
 
 // session is one user's CVAT session: what the platform's login answered. It never leaves this
@@ -80,7 +84,8 @@ var runIDRe = regexp.MustCompile(`^[A-Za-z0-9-]{1,64}$`)
 // functions a user built (V2). maxFunctions and modelMaxMB bound the function build of V2.
 func New(p *platform.Client, st *store.Store, c *CVAT, operator []string, publicURL string, maxFunctions int, modelMaxMB int64) *Service {
 	return &Service{P: p, C: c, St: st, Operator: operator, PublicURL: publicURL,
-		MaxFunctions: maxFunctions, ModelMaxMB: modelMaxMB, sessions: map[string]session{}}
+		MaxFunctions: maxFunctions, ModelMaxMB: modelMaxMB, sessions: map[string]session{},
+		sem: make(chan struct{}, 1)}
 }
 
 // WatchKindName is the kind of an observed pre-annotation run (G1.7, autonomy A-E2).
@@ -125,6 +130,15 @@ func (s *Service) Do(ctx context.Context, chatID string, req platform.Request) (
 		return s.preAnnotate(ctx, chatID, req)
 	case req.Method == http.MethodGet && path == platform.AnnotationPrefix+"/runs":
 		return platform.Result{Status: "error", Message: "annotation_run needs a run id"}, nil
+	// V3: a check (calibrate | uncertain) and a fill are background jobs of the gateway; their state is
+	// what annotation_job answers.
+	case req.Method == http.MethodPost && path == platform.AnnotationPrefix+"/checks":
+		return s.startCheck(ctx, chatID, req)
+	case req.Method == http.MethodPost && path == platform.AnnotationPrefix+"/fills":
+		return s.startFill(ctx, chatID, req)
+	}
+	if id, ok := jobIDFromPath(path); ok && req.Method == http.MethodGet {
+		return s.jobStatus(ctx, chatID, id, req.Query)
 	}
 	if id, ok := runIDFromPath(path); ok && req.Method == http.MethodGet {
 		return s.runStatus(ctx, chatID, id)
@@ -707,38 +721,10 @@ func (s *Service) preAnnotate(ctx context.Context, chatID string, req platform.R
 		return failed(err)
 	}
 	// The function must be usable (E7) and a detector: only a detector runs over all images on its own.
-	all, err := s.C.Functions(ctx, ses)
-	r.cvat("GET /api/lambda/functions", err)
+	// The rule is the one of V3 as well (a check and a fill call the same functions).
+	fn, err := s.usableFunction(ctx, r, ses, user, body.Function)
 	if err != nil {
 		return failed(err)
-	}
-	// A function the user built from a model (V2) is usable once it is ready: while it builds CVAT
-	// does not list it at all, and a failed or vanished one must not run over the images.
-	rows, err := s.St.AnnotationFunctionsOf(ctx, user)
-	if err != nil {
-		return platform.Result{}, err
-	}
-	row, mine := findFunction(rows, body.Function)
-	var fn *Function
-	prefix := FunctionNamePrefix(user)
-	for i := range all {
-		if all[i].ID != body.Function {
-			continue
-		}
-		if contains(s.Operator, all[i].ID) || strings.HasPrefix(all[i].ID, prefix) {
-			fn = &all[i]
-		}
-		break
-	}
-	if mine && row.State != store.AnnotationFunctionReady && fn == nil {
-		return failed(deny("function %q is %s; annotation_functions follows the build, a run needs state %s",
-			body.Function, row.State, store.AnnotationFunctionReady))
-	}
-	if fn == nil {
-		return failed(deny("function %q is not usable: only your own functions (annotation_function) and functions installed by the operator; a function receives every image of the run", body.Function))
-	}
-	if fn.Kind != "detector" {
-		return failed(fmt.Errorf("function %q has kind %q; only a detector runs over all images of a task", fn.ID, fn.Kind))
 	}
 	mapping, err := runMapping(body.Mapping, fn.Labels, d.AnnotationLabels)
 	if err != nil {

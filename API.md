@@ -1364,6 +1364,74 @@ user sees and may run it, and the agent cannot take it back.
 - **The skill `pre-annotation`** carries the way of the own model in its description and in an own section; the
   description stays a plain YAML scalar on one line.
 
+## Checking a pre-annotation before it runs (V3)
+
+A function that has never seen this dataset is a guess: a batch run puts its objects next to the manual ones on every
+image, and CVAT stores no confidence of them (`apps/lambda_manager/views.py:519-558`). V3 measures the function first
+(issue #108): it asks it about single images (`POST /api/lambda/functions/{id}`), which answers confidence, `raw_label`
+and (classification) `scores` next to the objects, and it writes only into images that carry no annotation at all.
+
+- **Tools** (CLI names in brackets), all virtual paths under `/_agw/annotation`:
+  `annotation_check` (`annotation-check`, effect `compute`; `mode` is `calibrate` or `uncertain`),
+  `annotation_fill` (`annotation-fill`, effect `compute`) and `annotation_job` (`annotation-job`, read).
+- **`annotation_check`**: `dataset_id`, `function`, `mode` (required), `limit` (default 50 for `calibrate`, 200 for
+  `uncertain`, at most 1000), `mapping`, `uncertain_below` (1 to 99 percent, default 60). `calibrate` measures the
+  images with a manual annotation (at least one annotation with `source != "auto"`), evenly spread over the task (every
+  k-th image — reproducible, no random source). `uncertain` checks the images of the task and lists the weak ones.
+- **`annotation_fill`**: `dataset_id`, `function` (required), `min_confidence` (1 to 99 percent, default 50),
+  `mapping`, `limit` (at most 1000, default 1000). It reads the task's annotations, takes the images without any
+  annotation in frame order and asks the function about each one.
+- **One call, one image:** `POST /api/lambda/functions/{id}` with `{task, frame, quality, threshold, mapping}`. A check
+  calls with `threshold: 0.01`, so that CVAT drops nothing; a fill calls with `min_confidence/100`.
+- **The mapping of a check without a `mapping`:** every class the function names is mapped onto the **first** class of
+  the dataset. CVAT drops every class without a mapping (`views.py:326`), and only then does the answer carry
+  `raw_label` for every object, which is what the calibration counts. A function that answers no `raw_label` is refused
+  then (`this function answers no raw_label and no mapping was given; give mapping …`); with a given `mapping` a check
+  measures through it.
+- **What is measured (classification):** the confusion table `class of the function × class of the manual annotation`,
+  out of it the proposed mapping (per class the most frequent manual class, ties to the smaller name), and the
+  threshold: over 0.10 to 0.90 in steps of 0.05 the one with the best hit rate among the answered images, as long as
+  the threshold answers at least 80 percent of the measured images (`coverage`). Without such a threshold the best hit
+  rate stands and `coverage` shows the gap.
+- **What is measured (detection):** an answered box stands on a manual object from an IoU of 0.5 (greedy by
+  confidence, each manual object once); out of that the mapping, then precision, recall and F1 per threshold and the
+  threshold with the best F1. A class without a mapping (CVAT drops it) is not counted.
+- **The answer of a finished check** (`result` of `annotation_job`): `{"images", "mapping", "confusion", "accuracy",
+  "precision", "recall", "f1", "proposed_min_confidence", "coverage", "note"}`. `accuracy` is the hit rate among the
+  answered images (a detector has none, a classification no precision), `coverage` the share of the measured images
+  the function answered at the proposed threshold, and `note` names the sample ("Measured on N manually annotated
+  image(s); a small sample, say so.") — the agent must report the sample size.
+- **`uncertain`**: a classification whose highest confidence stays under `uncertain_below`, a detection with a box
+  under it or with no box at all. Every entry carries `frame`, `file` (from `GET /api/tasks/{id}/data/meta`),
+  `top_label`, `confidence`, `boxes` and `cvat_url` =
+  `<AGW_CVAT_PUBLIC_URL>/tasks/<t>/jobs/<j>?frame=<f>` (the job from `GET /api/jobs?task_id=<t>`, else the task link).
+  The list is sorted by confidence, the weakest first, and answered page by page (50 per page, `page` argument of
+  `annotation_job`).
+- **A fill writes only what is empty:** per image the answer becomes tags (classification) or rectangles (detection)
+  with `source: "auto"`; a class the task does not know, a box outside the image, a box without area and an answer that
+  cannot be read (a `NaN` in the numbers, another shape) are dropped or counted as an empty result. Written in batches
+  of 20 images with `PATCH /api/tasks/{id}/annotations?action=create` and `{"version":0, "tags":[], "shapes":[],
+  "tracks":[]}`. Right before every batch the annotations of the task are read again: an image the user annotated in
+  the meantime is left out and counted in `skipped_annotated`. Its answer: `{"filled", "skipped_annotated",
+  "empty_results"}`.
+- **Background jobs:** a check and a fill run as a goroutine of the gateway, one at a time (`Service.sem`), with a
+  timeout of an hour (`annotation.JobTimeout`). The row carries `params` (the call of the agent), `state`
+  (`queued`|`running`|`finished`|`failed`), `done` and `total` (progress every 10 images) and `result`/`error`. A job
+  cannot be stopped. A restart ends every job that was queued or running (`store.RecoverAnnotationJobs`, called in
+  `Manager.Recover`): its goroutine is gone with the process.
+- **Observation:** the orchestrator registers the kind `annotation_job` with the route `POST
+  ^/_agw/annotation/(checks|fills)$` and `ref` = `job_id` of the answer (`cmd/orchestrator/main.go`). Its poll reads
+  only the row in `annotation_jobs` — no platform call and no CVAT — and reports `done` of `total` as percent.
+- **Delegation:** `run dataset` for a check and a fill (both are compute and act on the dataset in their body, E9),
+  `read annotation_run` for `GET /_agw/annotation/jobs/{id}`. The bodies carry only the fields of the tools (field
+  rules), and the conformance table holds a case pair for `checks` (another user's dataset refused, an own one
+  allowed).
+- **Storage:** table `annotation_jobs` (`chat_id` cascades with the chat). A job of another chat is not found (E8).
+- **The skill `pre-annotation`** carries the loop in the section *Check before you trust*: measure with `calibrate`,
+  report the sample size, below 80 percent accuracy annotate more by hand instead of running, fill only the empty
+  images, name the weak images with their links, and after the correction `annotation-sync`, a new training and a new
+  calibration.
+
 ## Summaries by the gateway
 
 What an approval says will happen is written by the gateway (issue #72), never taken from the agent: the summary of a

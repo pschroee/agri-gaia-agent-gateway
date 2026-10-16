@@ -213,6 +213,19 @@ type fakeCVAT struct {
 	newRun      string // the answer of POST /api/lambda/requests
 	runBodies   []string
 	runStatus   int // status of POST /api/lambda/requests (0: 201)
+
+	// V3: what one function answers for one frame, the frames it was asked about, the bodies of those
+	// calls and the writes of a fill; the jobs of a task and the meta of its data.
+	funcAnswers map[int]string
+	funcCalls   []int
+	funcBodies  []string
+	funcStatus  int // status of POST /api/lambda/functions/{id} (0: 200)
+	writes      []string
+	jobs        string
+	meta        string
+	// onAnnotationsRead runs on every read of the annotations of a task and may answer with another
+	// state; it is how a test lets the user annotate while a job runs (V3).
+	onAnnotationsRead func(string) string
 }
 
 func (f *fakeCVAT) setFunctions(s string)      { f.mu.Lock(); defer f.mu.Unlock(); f.functions = s }
@@ -224,6 +237,41 @@ func (f *fakeCVAT) setAnnotations(id int64, s string) {
 }
 func (f *fakeCVAT) setRun(id, s string)     { f.mu.Lock(); defer f.mu.Unlock(); f.runs[id] = s }
 func (f *fakeCVAT) setRunStatus(status int) { f.mu.Lock(); defer f.mu.Unlock(); f.runStatus = status }
+
+// V3: what the function answers for a frame, the jobs and the meta of a task.
+func (f *fakeCVAT) setAnswers(byFrame map[int]string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.funcAnswers = byFrame
+}
+func (f *fakeCVAT) setJobs(s string) { f.mu.Lock(); defer f.mu.Unlock(); f.jobs = s }
+
+// setOnAnnotationsRead installs the hook a test uses to let the user annotate while a job runs.
+func (f *fakeCVAT) setOnAnnotationsRead(h func(string) string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.onAnnotationsRead = h
+}
+func (f *fakeCVAT) setMeta(s string) { f.mu.Lock(); defer f.mu.Unlock(); f.meta = s }
+func (f *fakeCVAT) setFuncStatus(status int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.funcStatus = status
+}
+
+// askedFrames are the frames the function was called for.
+func (f *fakeCVAT) askedFrames() []int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]int(nil), f.funcCalls...)
+}
+
+// writeBodies are the bodies of the writes of a fill.
+func (f *fakeCVAT) writeBodies() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.writes...)
+}
 
 func (f *fakeCVAT) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
@@ -237,6 +285,39 @@ func (f *fakeCVAT) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		fmt.Fprint(w, f.functions)
+	case r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/api/lambda/functions/"):
+		body := readBody(r)
+		f.funcBodies = append(f.funcBodies, body)
+		if f.funcStatus != 0 {
+			w.WriteHeader(f.funcStatus)
+			fmt.Fprint(w, `{"detail":"the function failed"}`)
+			return
+		}
+		var sent struct {
+			Frame int `json:"frame"`
+		}
+		_ = json.Unmarshal([]byte(body), &sent)
+		f.funcCalls = append(f.funcCalls, sent.Frame)
+		if answer, ok := f.funcAnswers[sent.Frame]; ok {
+			fmt.Fprint(w, answer)
+			return
+		}
+		fmt.Fprint(w, `[]`)
+	case r.Method == http.MethodGet && r.URL.Path == "/api/jobs":
+		if f.jobs == "" {
+			fmt.Fprint(w, `{"count":0,"results":[]}`)
+			return
+		}
+		fmt.Fprint(w, f.jobs)
+	case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/data/meta"):
+		if f.meta == "" {
+			fmt.Fprint(w, `{}`)
+			return
+		}
+		fmt.Fprint(w, f.meta)
+	case r.Method == http.MethodPatch && strings.HasSuffix(r.URL.Path, "/annotations"):
+		f.writes = append(f.writes, readBody(r))
+		fmt.Fprint(w, `{"version":1}`)
 	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/lambda/requests/"):
 		body, ok := f.runs[strings.TrimPrefix(r.URL.Path, "/api/lambda/requests/")]
 		if !ok {
@@ -265,6 +346,9 @@ func (f *fakeCVAT) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusNotFound)
 				fmt.Fprint(w, `{"detail":"no task"}`)
 				return
+			}
+			if f.onAnnotationsRead != nil {
+				body = f.onAnnotationsRead(body)
 			}
 			fmt.Fprint(w, body)
 			return
