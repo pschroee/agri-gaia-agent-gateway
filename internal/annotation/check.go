@@ -719,12 +719,10 @@ func (s *Service) linkImages(ctx context.Context, r *recorder, ses session, task
 }
 
 // imageURL is the link of one image in the CVAT UI: the job that carries the frame (CVAT splits a task
-// into jobs), else the task itself with the frame.
+// into jobs, jobOf), else the task itself with the frame.
 func imageURL(base string, jobs []Job, frame int) string {
-	for _, j := range jobs {
-		if j.ID > 0 && frame >= j.StartFrame && frame <= j.StopFrame {
-			return base + "/jobs/" + strconv.FormatInt(j.ID, 10) + "?frame=" + strconv.Itoa(frame)
-		}
+	if j, ok := jobOf(jobs, frame); ok {
+		return base + "/jobs/" + strconv.FormatInt(j.ID, 10) + "?frame=" + strconv.Itoa(frame)
 	}
 	return base + "?frame=" + strconv.Itoa(frame)
 }

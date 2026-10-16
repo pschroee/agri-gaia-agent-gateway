@@ -235,6 +235,11 @@ type fakeCVAT struct {
 	// onAnnotationsRead runs on every read of the annotations of a task and may answer with another
 	// state; it is how a test lets the user annotate while a job runs (V3).
 	onAnnotationsRead func(string) string
+
+	// V3d: the pictures the image review reads, keyed by "job:<id>:<frame>" or "task:<id>:<frame>", and
+	// the frames it asked for. A frame without a picture answers 404, the way CVAT answers an unknown one.
+	frames     map[string][]byte
+	frameCalls []string
 }
 
 func (f *fakeCVAT) setFunctions(s string)      { f.mu.Lock(); defer f.mu.Unlock(); f.functions = s }
@@ -273,6 +278,28 @@ func (f *fakeCVAT) askedFrames() []int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]int(nil), f.funcCalls...)
+}
+
+// setFrame gives the fake one picture of a frame; kind is "job" or "task" (V3d).
+func (f *fakeCVAT) setFrame(kind string, id int64, frame int, jpeg []byte) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.frames == nil {
+		f.frames = map[string][]byte{}
+	}
+	f.frames[frameKey(kind, id, frame)] = jpeg
+}
+
+// frameRequests are the pictures the review asked for, in the order of the calls (V3d).
+func (f *fakeCVAT) frameRequests() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.frameCalls...)
+}
+
+// frameKey is how the fake files one picture: the kind of the object, its id and the frame.
+func frameKey(kind string, id int64, frame int) string {
+	return kind + ":" + strconv.FormatInt(id, 10) + ":" + strconv.Itoa(frame)
 }
 
 // applyCreate adds the annotations of an action=create write to the task of the fake with fresh ids, so
@@ -368,6 +395,19 @@ func (f *fakeCVAT) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		fmt.Fprint(w, f.jobs)
+	case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/data") && r.URL.Query().Get("type") == "frame":
+		// V3d: one picture of a frame, as the data endpoint of a job or a task serves it.
+		kind, id := dataOwner(r.URL.Path)
+		key := frameKey(kind, id, int(parseID(r.URL.Query().Get("number"))))
+		f.frameCalls = append(f.frameCalls, key)
+		img, ok := f.frames[key]
+		if !ok {
+			w.WriteHeader(http.StatusNotFound)
+			fmt.Fprint(w, `{"detail":"no such frame"}`)
+			return
+		}
+		w.Header().Set("Content-Type", "image/jpeg")
+		_, _ = w.Write(img)
 	case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/data/meta"):
 		if f.meta == "" {
 			fmt.Fprint(w, `{}`)
@@ -444,6 +484,17 @@ func (f *fakeCVAT) bodies() []string {
 func parseID(s string) int64 {
 	id, _ := strconv.ParseInt(s, 10, 64)
 	return id
+}
+
+// dataOwner reads the kind ("job" or "task") and the id out of the data path of a job or a task: the
+// picture of a frame is served under /api/jobs/{id}/data or /api/tasks/{id}/data (V3d).
+func dataOwner(path string) (string, int64) {
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) < 3 {
+		return "", 0
+	}
+	kind := strings.TrimSuffix(parts[1], "s")
+	return kind, parseID(parts[2])
 }
 
 // stepsOf reads the steps out of an answer of the service.
