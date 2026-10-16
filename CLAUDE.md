@@ -354,6 +354,13 @@ refer to this repository.
   a run is recorded where its exit code is read (`Status`, the watcher), never by the reaper.
 - One run at a time per chat; every run counts against `AGW_COMPUTE_MAX_PER_CHAT`. Rules, limits and paths in `API.md`,
   *Notebook tools*.
+- A run is **stoppable by the user**: `kind.Stop` of `notebook_run` names `POST /_agw/notebook/stop`, which takes down
+  the chat's notebook server together with the code running in it — a single run is not addressable (own code C-E4,
+  design F2: the button uses "Stop job" of A-E2). `StopJob` therefore runs the call of a kind through
+  **`m.platformDo`**: a stop call may be a virtual path the gateway answers itself, and `m.opt.Platform.Do` would send
+  it to the platform, where nothing is behind `/_agw/…`. A run whose server went away ends **without an exit code**:
+  `Status` records its end (`store.EndNotebookRun`, `exit_code` stays NULL), reports `failed` and says that the run was
+  stopped — so it neither blocks the next run (`ActiveNotebookRun`) nor keeps its job and card "running" for good.
 - The approval of a run carries, next to its text preview, the **structured data** the frontend card shows
   (`approvals.notebook`, `notebook.ApprovalData`, own code C-E4): entry, files with size, SHA-256 and text, datasets with
   the names the gateway read, and the limits. Every string in it is escaped for display

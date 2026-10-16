@@ -1211,6 +1211,11 @@ user's token.
   delivered — but only for an autonomous plan that was approved while the step ran. Over `max_auto_turns` the plan is
   paused (`pause_reason` `budget_turns`), the note stays queued and the SSE event `auto_held` names the budget; a
   background task's note keeps the gateway's own limits (`AGW_AUTO_TURNS_MAX`, `AGW_BG_WAKES_PER_HOUR`).
+- **The stop of a job (D2.9, #99):** `POST /api/chats/{id}/jobs/{job}/stop` and the same route for a plan step run the
+  call the kind names in `Kind.Stop` with the **user's** token (no delegation check, no approval — the user is the one
+  asking), log it as a user call and add the effect class of the route. A kind without a stop, a job that is not
+  running and a call the kind refuses answer 409. A stop call may be a **virtual** path the gateway answers itself
+  (`/_agw/notebook/stop`, own code C-E4): it goes to the registered doer and never to the platform.
 - **Outside a plan** a job is only observed for the cards and the activity: no note, no wake-up — the agent follows such
   a job itself (`GET …/jobs`, `training_status`), like before.
 - **Parked approvals (D2.8):** a step of an **autonomous** plan that the plan does not cover (irreversible, confirm
@@ -1602,6 +1607,16 @@ user (uid 1000) and reads state, log and results back the same way. The server h
   .cfg .toml`, at most 20 arguments of `A-Za-z0-9_.,=:/+-`, at most 3 datasets. `timeout_minutes` defaults to 120 and
   is capped by `AGW_NOTEBOOK_TIMEOUT_MAX_MIN` (default 480 = the longest an autonomous plan may run). One run at a
   time per chat; a second one is refused. A run counts against `AGW_COMPUTE_MAX_PER_CHAT` like a training.
+- **Stopping a run (own code C-E4).** The observer kind `notebook_run` is stoppable, and its stop is
+  `POST /_agw/notebook/stop` — the one call the notebook paths have for it: a run is not addressable on its own, the
+  code runs **in the chat's notebook server**, and stopping that server takes the container with the code in it away
+  (`Hub.Stop`: `DELETE /users/<user>/servers/<server>`). The user reaches it through `POST
+  /api/chats/{id}/jobs/{job}/stop` (A-E2, D2.9): the call runs with the user's token, is classified as `update
+  notebook` (`write`) and appears in the activity as a user call. A chat whose server is not running is no error, the
+  hub answers 404 and the stop counts as done. The run itself then has **no exit code** (nothing was left to write
+  one): its next `notebook_run_status` (and the poll of its job) records its end, reports `failed` and says `the run
+  ended without an exit code: the notebook server of this chat was stopped while it went` — so the run neither blocks
+  the chat's next run nor keeps its card "running".
 - **Files in the container.** The code runs in a fresh directory `/home/jovyan/work/runs/<run-id>/` (`r<YYYYMMDDhhmmss>`
   plus four hex digits), a `.py` entry with `python -u <entry> [args]`, an `.ipynb` with `jupyter nbconvert --execute`
   (its result is `executed-<entry>`). A run's output goes to `run.log` in that directory, the exit code to
