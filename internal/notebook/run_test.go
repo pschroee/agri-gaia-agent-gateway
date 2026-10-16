@@ -8,6 +8,8 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -466,6 +468,81 @@ func TestFetchScriptOutsideRunDir(t *testing.T) {
 	// Without a running server the file cannot be fetched.
 	if _, _, err := n.Fetch(ctx, chatID, "r20260101120000-0000", "model.onnx"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("unknown run: %v", err)
+	}
+}
+
+// Every fetched file is remembered with the SHA-256 of the bytes the gateway read (R2.1): that row is the
+// origin a check of the file rests on (R2.2). A file fetched twice keeps one row, a second run keeps its
+// own.
+func TestFetchRecordsSHA(t *testing.T) {
+	st := testStore(t)
+	chatID := testChat(t, st)
+	other := testChat(t, st)
+	hub := newFakeHub()
+	docker := &fakeDocker{ids: []string{"c1"}}
+	n, _ := testService(t, st, docker, hub)
+	ctx := context.Background()
+	first := store.NotebookRun{ID: "r20260101120000-aaaa", ChatID: chatID, HubUser: "agent-test",
+		Server: n.Server(chatID), Entry: "train.py", TimeoutMin: 60, StartedAt: time.Now()}
+	second := store.NotebookRun{ID: "r20260101130000-bbbb", ChatID: chatID, HubUser: "agent-test",
+		Server: n.Server(chatID), Entry: "train.py", TimeoutMin: 60, StartedAt: time.Now()}
+	for _, row := range []store.NotebookRun{first, second} {
+		if err := st.CreateNotebookRun(ctx, row); err != nil {
+			t.Fatal(err)
+		}
+	}
+	docker.reply = func(cmd []string, _ []byte) ([]byte, int) {
+		if len(cmd) > 2 && cmd[2] == fetchScript {
+			return []byte("ONNX"), 0
+		}
+		return nil, 0
+	}
+	if _, _, err := n.Fetch(ctx, chatID, first.ID, "out/model.onnx"); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256([]byte("ONNX"))
+	sha := hex.EncodeToString(sum[:])
+	got, found, err := st.NotebookFetchOf(ctx, chatID, sha)
+	if err != nil || !found {
+		t.Fatalf("the fetch was not remembered: %v %v", found, err)
+	}
+	if got.RunID != first.ID || got.Path != "out/model.onnx" || got.Size != 4 {
+		t.Errorf("the row names another file: %+v", got)
+	}
+	// Nothing was recorded about the fetched file in another chat, and an unknown SHA is unknown.
+	if _, found, err := st.NotebookFetchOf(ctx, other, sha); err != nil || found {
+		t.Errorf("another chat knows the file: %v %v", found, err)
+	}
+	if _, found, err := st.NotebookFetchOf(ctx, chatID, strings.Repeat("0", 64)); err != nil || found {
+		t.Errorf("an unknown SHA is known: %v %v", found, err)
+	}
+	// Fetching the same file again keeps one row (the run and the SHA are the key): the row still names
+	// the file, not a second one.
+	if _, _, err := n.Fetch(ctx, chatID, first.ID, "out/model.onnx"); err != nil {
+		t.Fatal(err)
+	}
+	again, found, err := st.NotebookFetchOf(ctx, chatID, sha)
+	if err != nil || !found || again.RunID != first.ID || again.Path != "out/model.onnx" {
+		t.Errorf("the second fetch: %+v %v %v", again, found, err)
+	}
+	// A file of another run is a row of its own, with the SHA of its own bytes.
+	docker.reply = func(cmd []string, _ []byte) ([]byte, int) {
+		if len(cmd) > 2 && cmd[2] == fetchScript {
+			return []byte("OTHER-MODEL"), 0
+		}
+		return nil, 0
+	}
+	if _, _, err := n.Fetch(ctx, chatID, second.ID, "model.onnx"); err != nil {
+		t.Fatal(err)
+	}
+	otherSum := sha256.Sum256([]byte("OTHER-MODEL"))
+	secondFile, found, err := st.NotebookFetchOf(ctx, chatID, hex.EncodeToString(otherSum[:]))
+	if err != nil || !found || secondFile.RunID != "r20260101130000-bbbb" || secondFile.Path != "model.onnx" {
+		t.Errorf("the file of the second run: %+v %v %v", secondFile, found, err)
+	}
+	// A fetch of a run of another chat is not remembered here (the row carries the chat of the run).
+	if _, _, err := n.Fetch(ctx, other, first.ID, "model.onnx"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("a run of another chat: %v", err)
 	}
 }
 
