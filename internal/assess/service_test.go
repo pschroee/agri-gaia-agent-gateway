@@ -138,9 +138,15 @@ func TestStartLimit(t *testing.T) {
 		t.Fatalf("third check: %v", err)
 	}
 	close(release)
+	// Wait until both runs are over, not merely until their rows exist: a queued row counts as well, and
+	// a run that finishes after the test has marked its row failed would put that try back (flake seen
+	// on 16.10.2026, one run in three).
 	waitFor(t, "both checks", func() bool {
-		n, err := st.CountAssessments(ctx, c.ID)
-		return err == nil && n == 2
+		rows, err := st.Assessments(ctx, c.ID)
+		if err != nil || len(rows) != 2 {
+			return false
+		}
+		return store.AssessmentFinal(rows[0].State) && store.AssessmentFinal(rows[1].State)
 	})
 	// A failed check does not eat a try: it is not counted.
 	rows, err := st.Assessments(ctx, c.ID)
