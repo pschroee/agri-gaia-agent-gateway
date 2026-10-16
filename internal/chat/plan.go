@@ -274,9 +274,12 @@ func (m *Manager) planMatch(ctx context.Context, chatID string, req platform.Req
 // finish the step: it waits until that job ends (StepWaiting). A failed step fails the plan; when every
 // step is done the plan completes. A call that never went out because the user's login was gone (A-E3,
 // D3.5) is not a failure at all: the step keeps its claim back and stays open.
-func (m *Manager) planFinish(ctx context.Context, chatID string, st *store.PlanStep, access delegation.Access, req platform.Request, res platform.Result, callErr error) {
+//
+// It returns the id of the platform job the step now waits for, "" for every other outcome: the caller
+// tells the agent, so that it ends its turn instead of polling the job itself (A-E2, D2.1).
+func (m *Manager) planFinish(ctx context.Context, chatID string, st *store.PlanStep, access delegation.Access, req platform.Request, res platform.Result, callErr error) string {
 	if st == nil {
-		return
+		return ""
 	}
 	bg := context.WithoutCancel(ctx)
 	from := plan.StepOpen
@@ -294,7 +297,7 @@ func (m *Manager) planFinish(ctx context.Context, chatID string, st *store.PlanS
 			}
 		}
 		m.publishPlan(bg, st.PlanID)
-		return
+		return ""
 	}
 	to, resource, id := plan.StepFailed, "", ""
 	result := fmt.Sprintf("%s %d", res.Status, res.HTTPStatus)
@@ -312,15 +315,15 @@ func (m *Manager) planFinish(ctx context.Context, chatID string, st *store.PlanS
 		// waits for its end. The object the call created is already in the register, so a later step can
 		// name it while the job runs.
 		if kind, ref, watching := watch.For(access, req, res); watching {
-			if m.startWatching(bg, chatID, st, from, kind, ref, result, resource, id) {
-				return
+			if jobID := m.startWatching(bg, chatID, st, from, kind, ref, result, resource, id); jobID != "" {
+				return jobID
 			}
 		}
 	}
 	ok, err := m.st.FinishPlanStep(bg, st.PlanID, st.Idx, from, to, result, resource, id)
 	if err != nil || !ok {
 		slog.Error("plan step not finished", "chat", chatID, "plan", st.PlanID, "step", st.Idx, "error", err)
-		return
+		return ""
 	}
 	if to == plan.StepFailed {
 		// An autonomous step that was claimed and has attempts left goes back to open and the plan stays
@@ -345,6 +348,7 @@ func (m *Manager) planFinish(ctx context.Context, chatID string, st *store.PlanS
 		}
 	}
 	m.publishPlan(bg, st.PlanID)
+	return ""
 }
 
 func allDone(p store.Plan) bool {

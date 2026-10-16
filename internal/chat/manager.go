@@ -2301,7 +2301,12 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 	res, err := m.platformDo(ctx, chatID, req)
 	took := time.Since(t0)
 	stepFinished = true
-	m.planFinish(ctx, chatID, step, access, req, res, err) // nil step: nothing to record
+	// nil step: nothing to record. A step that waits for an observed platform job from here on says so in
+	// the answer (A-E2, D2.1): the gateway watches the job and wakes the agent, so the agent ends its turn
+	// instead of holding it open and polling the platform itself (seen live on 16.10.2026).
+	if jobID := m.planFinish(ctx, chatID, step, access, req, res, err); jobID != "" && step != nil {
+		res.Note = m.watchNote(ctx, step, jobID)
+	}
 	if step == nil && err == nil {
 		// No plan step: a started job is only observed for the cards (A-E2.2, no note, no wake-up).
 		m.recordJobOutsidePlan(ctx, chatID, access, req, res)

@@ -206,6 +206,10 @@ type Result struct {
 	Body       string `json:"body,omitempty"`
 	Truncated  bool   `json:"truncated,omitempty"`
 	Message    string `json:"message,omitempty"`
+	// Note: what the gateway adds to an answer for the agent, in its own words (A-E2): that it observes
+	// the platform job a plan step started and will wake the agent, so that the agent does not have to
+	// keep its turn open and poll. Never part of the platform's answer (see Text).
+	Note string `json:"note,omitempty"`
 	// Violation: a violation that was only logged and let through (delegation without enforce);
 	// the agent does not see it.
 	Violation string `json:"-"`
@@ -235,6 +239,11 @@ func (r Result) Text() string {
 	case "denied":
 		fmt.Fprintf(&b, "denied by the authorization service: %s (platform_rights or agw-platform rights shows which rights apply)", r.Message)
 		return b.String()
+	case StatusPendingUser:
+		// The call waits for the user's decision and the agent may end its turn (A-E2, D2.8); without this
+		// case the answer would render as "HTTP 0" and the agent would never learn the message.
+		fmt.Fprintf(&b, "waiting for the user: %s", r.Message)
+		return b.String()
 	case "error":
 		fmt.Fprintf(&b, "error: %s", r.Message)
 		if r.HTTPStatus == 0 {
@@ -252,6 +261,9 @@ func (r Result) Text() string {
 	}
 	if r.Truncated {
 		b.WriteString("\n[… truncated; ask again with skip/limit or a narrower call]")
+	}
+	if r.Note != "" {
+		b.WriteString("\n" + r.Note)
 	}
 	return b.String()
 }
