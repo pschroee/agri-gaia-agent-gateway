@@ -382,7 +382,7 @@ type ActivityPage = { calls: ActivityCall[]; chats: Record<string, { id: string;
 | `POST /api/chats/{id}/plans/{plan}/pause` | `Plan` | pauses a running autonomous plan (`pause_reason` `user`); a running chat is stopped. 404 for a foreign or unknown plan, 409 `{"error":"plan is <state>","state":…}` when it is not `approved`. See *Autonomous plans* |
 | `POST /api/chats/{id}/plans/{plan}/resume` | `Plan` | resumes a `paused` plan and queues a note for the agent (`NotePlan`). 409 when it is not `paused`. Only this route resumes a plan; the agent has no tool for it |
 | `POST /api/chats/{id}/plans/{plan}/cancel` | `Plan` | ends an `approved` or `paused` plan: `cancelled`, its open steps `skipped`, a note queued. 409 otherwise |
-| `GET /api/chats/{id}/jobs` | `WatchJob[]` | observed platform jobs of the chat, newest first (A-E2): state, percent, message, ETA, log tail, outputs and `plan_id`/`step_idx` for the job of a plan step. 404 for foreign and unknown chats. See *Long-running platform jobs* |
+| `GET /api/chats/{id}/jobs` | `WatchJob[]` | observed platform jobs of the chat, newest first (A-E2): state, percent, message, ETA, log tail, outputs, `link` (the address the user can open, own code C-E4) and `plan_id`/`step_idx` for the job of a plan step. 404 for foreign and unknown chats. See *Long-running platform jobs* |
 | `POST /api/chats/{id}/plans/{plan}/steps/{idx}/stop` | `Plan` | the user stops the platform job a waiting step observes (`watch_job`): the call runs with the user's token and is logged as `socket_calls` with `via: "user"`. 404 unknown plan, 409 if the step does not wait or its kind cannot be stopped |
 | `POST /api/chats/{id}/jobs/{job}/stop` | `WatchJob` | the same for a single job outside a plan. 404 unknown job, 409 if it is not running or cannot be stopped |
 | `GET /api/chats/{id}/annotation` | `{cvat_url, runs: AnnotationRun[], jobs: AnnotationJob[]}` | runs and jobs of pre-annotation with their results, oldest first, for the cards in the history (V4); reads the database and never wakes the chat. 404 for foreign and unknown chats. See *Annotation cards in the history (V4)* |
@@ -1168,10 +1168,14 @@ user's token.
 - **The table `watch_jobs`** is the one place for every observed job, inside and outside plans: `id` (`w` + 12 hex),
   `chat_id`, `plan_id` + `step_idx` (empty/0 outside plans), `tool_call_id`, `kind`, `ref`, `state`
   (`running`/`done`/`failed`), `progress` (percent, NULL while unknown), `message`, `eta`, `log_tail`, `outputs`,
-  `fail_reads`, `started_at`, `checked_at`, `ended_at`. A plan step names its job in `plan_steps.watch_job` and waits in
+  `link`, `fail_reads`, `started_at`, `checked_at`, `ended_at`. A plan step names its job in `plan_steps.watch_job` and waits in
   state **`waiting`** — a value of the state column of `plan_steps`, no new type; `plan_steps` also carries
   `parked_approval` (see below) and, since A-E2, `confirm_each` (the trait of the route at proposal time, so that a
   reloaded plan never covers a call that has to ask the user every time).
+- **`link` (own code C-E4)** is the address the user can open for the job, when the kind knows one: the kind
+  `notebook_run` writes the run in the user's JupyterHub there with its first poll (the run's link, built by the
+  gateway), every other kind leaves the field empty — and a card builds no address of its own. It is a field of the job
+  in the answer of `GET /api/chats/{id}/jobs` and in the SSE `job` event (`link`, missing while empty).
 - **Which call starts a job** is decided by the gateway from the route, never by the agent: `watch.For` matches the call
   after it succeeded. Today: `POST /train/config` and `POST /containers/{id}/run` → `platform_task`, `POST
   /container-images/build` → `image_build`, and the run of a container chains on: the task ends when the container is

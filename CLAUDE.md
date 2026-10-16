@@ -363,7 +363,10 @@ refer to this repository.
   own. A re-read at the moment of the approval (`summary_recheck`) replaces the summary but **never** the code — the
   files, sizes and hashes are what the user was asked about. A notebook is delivered as **its code cells in JSON**
   without outputs, so `notebookCells` in the frontend can show them and a hidden character cannot come back through the
-  JSON parse.
+  JSON parse. The **link** of a run ("Open in JupyterHub") reaches the card as `link` of the `job` event and of
+  `GET /api/chats/{id}/jobs`: the kind `notebook_run` writes the run's link into `watch_jobs.link` with its first poll
+  (`watch.Progress.Link`, cleared when a row is handed over to another kind, empty for every other kind), and no card
+  builds the address itself.
 
 ## Result checks (R0)
 
