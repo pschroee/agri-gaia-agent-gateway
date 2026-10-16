@@ -188,7 +188,7 @@ report:
 | `verdict` | `usable`, `questionable` or `not_measured` |
 | `final`, `set` | held-out (final) or validation (interim) |
 | `measured_images` | how many images the figures rest on; `calibration_images` the size of the calibration set |
-| `image_review` | whether a model looked at the pictures, and why not |
+| `image_review` | whether a model looked at the pictures (`done`), with which `model`, how many it `checked` and the `flagged_share` it complained about; `reason` says why none looked |
 | `per_class` | precision, recall, F1 and support per class; `below` names the figures under their limit |
 | `overall` | accuracy (classification) or macro F1 (detector) |
 | `plausibility` | the automatic annotations against the manual ones: class shares, `tvd`, empty share, boxes per image, box area |
@@ -206,6 +206,17 @@ Then:
 3. Name the reasons if there are any, the hints if any, and the suggestions as the steps that follow.
 4. Give the suspicious images as links (`cvat_url`), not as a JSON dump: the user opens them and
    corrects them.
+
+**With and without an image review.** `capabilities` answers under `vision` whether the current model
+reads images. With it the gateway also looks at a sample of the filled images and at the images its
+own rules found suspicious: it renders them with the automatic annotation drawn on them and lets your
+model judge them in a call of its own — never in your context, and never for a dataset the operator
+did not allow to a cloud model (`image_review.reason` says so). That second view can only make the
+verdict worse: more than a fifth of the checked images flagged means `questionable`, and from ten
+checked images on the milder thresholds apply (held-out images from 10 instead of 20, a figure from
+0.80 instead of 0.85). Without vision the verdict rests on the statistics alone and needs more
+held-out images. **Always say which of the two was used** — the header line names it and
+`image_review.done` carries it, with `checked` and `flagged_share` as the numbers behind it.
 
 **Never call a pre-annotation done without a final verdict `usable` from `--final true`.** Without
 it the honest sentence is: the function ran, the figures are so and so, the gateway judges the
