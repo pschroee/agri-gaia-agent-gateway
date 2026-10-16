@@ -173,7 +173,7 @@ func (s *Service) SessionUser(r *http.Request) (User, bool) {
 	if ss == nil {
 		return User{}, false
 	}
-	if _, err := s.fresh(r.Context(), c.Value, ss); err != nil && errors.Is(err, ErrNoSession) {
+	if _, err := s.fresh(r.Context(), c.Value, ss, refreshAt); err != nil && errors.Is(err, ErrNoSession) {
 		return User{}, false
 	}
 	return ss.user, true
@@ -190,7 +190,7 @@ func (s *Service) AccessToken(ctx context.Context, sub string) (string, error) {
 		if ss == nil {
 			return "", ErrNoSession
 		}
-		tok, err := s.fresh(ctx, id, ss)
+		tok, err := s.fresh(ctx, id, ss, refreshAt)
 		if err == nil {
 			return tok, nil
 		}
@@ -216,7 +216,9 @@ func (s *Service) KeepFresh(ctx context.Context, sub string) error {
 	if !due {
 		return nil
 	}
-	_, err := s.fresh(ctx, id, ss)
+	// Forced renewal (D3.1): the keep-fresh call renews within keepFreshLead, not only shortly before the
+	// token expires, so that the Keycloak session stays alive although nobody has a browser open.
+	_, err := s.fresh(ctx, id, ss, keepFreshLead)
 	return err
 }
 
@@ -256,9 +258,9 @@ func (s *Service) newestSession(sub string) (string, *session) {
 	return bestID, best
 }
 
-// fresh returns the session's access token and renews it shortly before expiry. ErrNoSession means:
-// session discarded (expired, refused by Keycloak).
-func (s *Service) fresh(ctx context.Context, id string, ss *session) (string, error) {
+// fresh returns the session's access token and renews it when it expires within the given window.
+// ErrNoSession means: session discarded (expired, refused by Keycloak).
+func (s *Service) fresh(ctx context.Context, id string, ss *session, within time.Duration) (string, error) {
 	ss.mu.Lock()
 	defer ss.mu.Unlock()
 	now := s.cfg.Now()
@@ -266,7 +268,7 @@ func (s *Service) fresh(ctx context.Context, id string, ss *session) (string, er
 		s.drop(id)
 		return "", ErrNoSession
 	}
-	if ss.expiresAt.Sub(now) > refreshAt {
+	if ss.expiresAt.Sub(now) > within {
 		return ss.access, nil
 	}
 	if ss.refresh == "" {
