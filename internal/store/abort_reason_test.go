@@ -152,9 +152,14 @@ func TestSubagentStoppedByOnce(t *testing.T) {
 	if err != nil || len(sums) != 1 || sums[0].StoppedBy != "user" {
 		t.Fatalf("ListSubagentRunSummaries: %+v %v", sums, err)
 	}
-	// a state update from the sandbox does not touch it
-	if _, err := s.UpsertSubagentRun(ctx, SubagentRun{ChatID: c.ID, RunID: "run-1", State: "cancelled"}); err != nil {
+	// a state update from the sandbox does not touch it, and the answer of the upsert carries it: the chat layer
+	// publishes this very value as the SSE event subagent_run (issue #120)
+	upd, err := s.UpsertSubagentRun(ctx, SubagentRun{ChatID: c.ID, RunID: "run-1", State: "cancelled"})
+	if err != nil {
 		t.Fatal(err)
+	}
+	if upd.StoppedBy != "user" || upd.State != "cancelled" {
+		t.Fatalf("UpsertSubagentRun: %+v", upd)
 	}
 	final, _ := s.SubagentRunOf(ctx, c.ID, "run-1")
 	if final.StoppedBy != "user" || final.State != "cancelled" {

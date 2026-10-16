@@ -1176,9 +1176,9 @@ ON CONFLICT (chat_id, run_id) DO UPDATE SET
   started_at = COALESCE(EXCLUDED.started_at, subagent_runs.started_at),
   ended_at = COALESCE(EXCLUDED.ended_at, subagent_runs.ended_at),
   updated_at = now()
-RETURNING agent, label, state, pi_run_id, parent_run_id, started_at, ended_at, updated_at`,
+RETURNING agent, label, state, pi_run_id, parent_run_id, started_at, ended_at, updated_at, stopped_by`,
 		r.ChatID, r.RunID, r.Agent, r.Label, r.State, r.PiRunID, r.ParentRunID, r.StartedAt, r.EndedAt,
-	).Scan(&r.Agent, &r.Label, &r.State, &r.PiRunID, &r.ParentRunID, &r.StartedAt, &r.EndedAt, &r.UpdatedAt)
+	).Scan(&r.Agent, &r.Label, &r.State, &r.PiRunID, &r.ParentRunID, &r.StartedAt, &r.EndedAt, &r.UpdatedAt, &r.StoppedBy)
 	return r, err
 }
 
