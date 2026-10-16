@@ -32,3 +32,10 @@ CREATE TABLE IF NOT EXISTS model_origins (
     created_at         timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS model_origins_chat ON model_origins (chat_id, created_at DESC);
+
+-- The SHA-256 of the file a model was uploaded from. Filled by the notebook path (R2.6) only; NULL for a
+-- model from a training (R1). It stands here, with the table, because the schema files are applied in
+-- file order and assess_notebook.go registers before assess_training.go — an ALTER in the notebook file
+-- ran before this table existed.
+ALTER TABLE model_origins ADD COLUMN IF NOT EXISTS source_sha text;
+CREATE INDEX IF NOT EXISTS model_origins_sha ON model_origins (chat_id, source_sha);

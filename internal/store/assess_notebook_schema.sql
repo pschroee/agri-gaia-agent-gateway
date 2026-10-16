@@ -13,7 +13,9 @@
 --
 -- model_origins.source_sha (R2.6): the SHA-256 of the file a model was uploaded from. A check of that
 -- file keeps its subject sha:<hex>; this column is how the model finds it again — and how the check card
--- names the model behind a file check.
+-- names the model behind a file check. The column is added in assess_training_schema.sql, which creates
+-- the table: the schema files run in file order, and assess_notebook.go registers before
+-- assess_training.go, so the ALTER cannot stand here.
 
 CREATE TABLE IF NOT EXISTS notebook_fetches (
     chat_id    uuid NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
@@ -25,7 +27,3 @@ CREATE TABLE IF NOT EXISTS notebook_fetches (
     PRIMARY KEY (chat_id, sha256, run_id)
 );
 CREATE INDEX IF NOT EXISTS notebook_fetches_chat ON notebook_fetches (chat_id, fetched_at DESC);
-
--- The SHA of the file a model was uploaded from (R2.6); NULL for a model from a training (R1).
-ALTER TABLE model_origins ADD COLUMN IF NOT EXISTS source_sha text;
-CREATE INDEX IF NOT EXISTS model_origins_sha ON model_origins (chat_id, source_sha);
