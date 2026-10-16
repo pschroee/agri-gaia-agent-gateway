@@ -58,7 +58,31 @@ suggestion to the user, not a permission to spend: propose it and wait.
 
 ## Own models
 
-Filled by R2.
+A model from your own code is checked like a training result: **before** it goes to the platform, not after.
+The gateway measures the file you fetched out of the notebook server, so what it judges is exactly what
+`upload-model` sends.
+
+1. Write and test the code in the sandbox on a small sample (the skill `notebook` says how).
+2. Train it in the notebook server with the **training** dataset of `split-dataset` as `dataset_ids` — never
+   with the dataset you will check on. Every dataset a run of this chat received counts as seen afterwards;
+   if that is the whole source, no held-out image is left and the check answers `not measured – no held-out
+   images`.
+3. Fetch the result: `notebook-fetch <run_id> model.onnx`. It lands under `/workspace/notebook/<run_id>/`.
+   Only a file that came out of a run of this chat can be checked — the gateway knows its SHA-256; a file it
+   did not hand over is `not measured – origin unknown`.
+4. Check it with `assess-model --path /workspace/notebook/<run_id>/model.onnx` (without `--final`) and follow
+   the check with `assess-status`. Add `--preprocess` when your model does not expect what the platform
+   templates feed (rgb, the image size of the model, 1/255, NCHW, no mean/std), and `--class_names` when you
+   know which output means which class. The gateway loads the file, reads its input and output shapes and
+   measures it on images no run of this chat received; it derives the class order itself and only compares it
+   with `class_names` — a declared order that differs from the one the model shows is a reason of its own.
+5. Interim result usable: measure once with `--final true` when the model will not change any more, and
+   report as under *After a training*.
+6. Result questionable: the reasons name what is off (for example `the model returns the same output for
+   different images`). Change the code, start **one** new run, fetch the new file, check it with
+   `--final false` and report before and after.
+7. Only then upload the file with `upload-model`. Its approval names the check of the file
+   (`Model check of this file: usable (…)`); the check stays the check of the model that was uploaded.
 
 ## Edge deployments
 

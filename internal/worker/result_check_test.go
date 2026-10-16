@@ -60,7 +60,11 @@ func TestResultCheckSkillBody(t *testing.T) {
 		"`final=true` works",
 		"no held-out images",
 		"platform figure",
-		"Filled by R2",
+		// The section of R2 (own models) names the way over the notebook server: fetch the file, check it
+		// before the upload, one new run when the result is questionable.
+		"assess-model --path",
+		"Model check of this file",
+		"origin unknown",
 		"Filled by R3",
 		"Never describe the checked set itself",
 	} {
