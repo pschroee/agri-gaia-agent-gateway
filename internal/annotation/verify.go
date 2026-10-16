@@ -104,7 +104,13 @@ func Verify(in VerifyInput) VerifyResult {
 	}
 	// Measured is what the figures rest on: an image whose manual annotation disappeared from CVAT in
 	// the meantime carries no truth and is not counted.
-	rep := assess.NewReport(JobVerify, set, len(in.Measured))
+	counted := 0
+	for _, o := range in.Measured {
+		if manualClass(o) != "" {
+			counted++
+		}
+	}
+	rep := assess.NewReport(JobVerify, set, counted)
 	rep.Final = in.Final
 	rep.ImageReview = in.ImageReview
 	rep.Note = verifyNote(in.Final, len(in.Measured), in.CalibrationImages, in.ValidationImages, in.HoldoutImages)
@@ -116,12 +122,12 @@ func Verify(in VerifyInput) VerifyResult {
 	score := scoreOf(kind, overall)
 
 	var reasons, hints []string
-	if len(in.Measured) < minImages {
+	if counted < minImages {
 		rep.Verdict = assess.NotMeasured
-		reasons = append(reasons, tooFewImages(setName(set), len(in.Measured), minImages))
-		hints = append(hints, tooFewImagesLine(setName(set), len(in.Measured), minImages))
+		reasons = append(reasons, tooFewImages(setName(set), counted, minImages))
+		hints = append(hints, tooFewImagesLine(setName(set), counted, minImages))
 		rep.Reasons, rep.Hints = reasons, hints
-		rep.Suggestions = []assess.Suggestion{suggestMoreManual(len(in.Measured), minImages)}
+		rep.Suggestions = []assess.Suggestion{suggestMoreManual(counted, minImages)}
 		rep.Finish()
 		return VerifyResult{Report: rep, PerClass: perClass, Overall: overall,
 			Plausibility: plausibility, Suspicious: suspicious}
