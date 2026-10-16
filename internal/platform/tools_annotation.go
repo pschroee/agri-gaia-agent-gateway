@@ -157,6 +157,77 @@ var annotationSync = Tool{
 	build:  annotationDatasetPath("sync"),
 }
 
+// ---------------------------------------------------------------------------
+// V2 — a model of the platform as a pre-annotation function
+// ---------------------------------------------------------------------------
+
+// Limits of the function tool. The service checks them again: a raw call over the request tool
+// reaches the same path without this table.
+const (
+	functionKindClassification = "classification"
+	functionKindDetection      = "detection"
+	minFunctionInput           = 32
+	maxFunctionInput           = 2048
+	maxFunctionLabels          = 1000
+)
+
+// V2 adds its tool in its own init, so that the tools of V3 can follow without changing the line of
+// V1.
+func init() { Tools = append(Tools, annotationFunction) }
+
+var annotationFunction = Tool{
+	Name: "annotation_function", CLI: "annotation-function",
+	Desc: "Builds a CVAT pre-annotation function from your own ONNX model of the platform and provides it for the platform: the gateway packs a fixed, versioned template (classification or detection) with the model, a config.json and a function.yaml and sends the archive to POST /datasets/auto-annotation. Code never comes from the agent. kind is classification or detection; labels are the class names in the order the model outputs them (default: the model's output_labels, and for classification class_0 … class_{n-1} from output_shape); input_size is the square input side in pixels (default: from input_shape, else 224 for classification and 640 for detection). Effect irreversible with its own approval: the function is visible to and usable by every CVAT user, it receives every image of a run, and the agent cannot remove it (ask the operator). The build takes several minutes; annotation_functions then shows the state until it is ready. At most AGW_ANNOTATION_MAX_FUNCTIONS functions per user.",
+	Params: []Param{
+		{Name: "model_id", Type: "integer", Desc: "id of your own ONNX model of the platform (platform_list_models)", Required: true},
+		{Name: "kind", Type: "string", Desc: "classification or detection", Required: true},
+		{Name: "labels", Type: "array", Desc: "class names in the order the model outputs them"},
+		{Name: "input_size", Type: "integer", Desc: "square input side in pixels, 32 to 2048"},
+	},
+	Write: true,
+	build: buildAnnotationFunction,
+}
+
+func buildAnnotationFunction(a Args) (Request, error) {
+	id, err := requiredInt(a, "model_id")
+	if err != nil {
+		return Request{}, err
+	}
+	kind, err := requiredStr(a, "kind")
+	if err != nil {
+		return Request{}, err
+	}
+	if kind != functionKindClassification && kind != functionKindDetection {
+		return Request{}, fmt.Errorf("kind must be %s or %s", functionKindClassification, functionKindDetection)
+	}
+	labels, err := a.strings("labels")
+	if err != nil {
+		return Request{}, err
+	}
+	if len(labels) > maxFunctionLabels {
+		return Request{}, fmt.Errorf("at most %d class names", maxFunctionLabels)
+	}
+	body := map[string]any{"model_id": id, "kind": kind}
+	if len(labels) > 0 {
+		body["labels"] = labels
+	}
+	size, ok, err := a.int("input_size")
+	if err != nil {
+		return Request{}, err
+	}
+	if ok {
+		if size < minFunctionInput || size > maxFunctionInput {
+			return Request{}, fmt.Errorf("input_size must be between %d and %d pixels", minFunctionInput, maxFunctionInput)
+		}
+		body["input_size"] = size
+	}
+	b, err := json.Marshal(body)
+	if err != nil {
+		return Request{}, err
+	}
+	return Request{Method: http.MethodPost, Path: AnnotationPrefix + "/functions", Body: b}, nil
+}
+
 // annotationDatasetPath builds the call of a tool that names a dataset and one operation on its
 // annotations (summary reads, sync writes).
 func annotationDatasetPath(op string) func(Args) (Request, error) {
