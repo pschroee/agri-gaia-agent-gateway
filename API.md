@@ -1338,10 +1338,11 @@ user sees and may run it, and the agent cannot take it back.
   `nuctl` with the file name without its extension). `function.yaml` holds only the agreed fields: `metadata.name` and
   `namespace: cvat`, the annotations with `type: detector`, `framework: onnx` and the classes as JSON, `spec` with
   `runtime: "python:3.11"`, `handler: main:handler`, `eventTimeout: 30s`, `build.image: cvat.<name>`,
-  `baseImage: python:3.11-slim`, the build directive `spec.build.directives.postCopy` as a list of `{kind: RUN, value:
-  pip install --no-cache-dir onnxruntime==1.20.1 numpy==1.26.4 pillow==10.4.0}` (nuclio reads the phase as a map to
-  `Directive{kind, value}` and writes `<kind> <value>` into the Dockerfile; pinned, because an unpinned build breaks
-  with the next release of a package), the trigger `myHttpTrigger`
+  `baseImage: python:3.11-slim`, the build directives `spec.build.directives` as a map from a phase to a list of
+  `{kind, value}` — `preCopy: [{kind: WORKDIR, value: /opt/nuclio}]` (nuclio's image would otherwise start in `/` and
+  the template could not open its own `config.json`) and `postCopy: [{kind: RUN, value: pip install --no-cache-dir
+  onnxruntime==1.20.1 numpy==1.26.4 pillow==10.4.0}]` (nuclio writes `<kind> <value>` into the Dockerfile; pinned,
+  because an unpinned build breaks with the next release of a package), the trigger `myHttpTrigger`
   with `maxWorkers: 1` and `maxRequestBodySize`, `restartPolicy: always` and `mountMode: volume`.
 - **The templates** live under `internal/annotation/templates/{classification,detection}/main.py` (own code, MIT,
   `//go:embed`). Classification resizes to SxS, scales to 0..1, softmaxes and returns one tag when the best class
