@@ -354,6 +354,16 @@ refer to this repository.
   a run is recorded where its exit code is read (`Status`, the watcher), never by the reaper.
 - One run at a time per chat; every run counts against `AGW_COMPUTE_MAX_PER_CHAT`. Rules, limits and paths in `API.md`,
   *Notebook tools*.
+- The approval of a run carries, next to its text preview, the **structured data** the frontend card shows
+  (`approvals.notebook`, `notebook.ApprovalData`, own code C-E4): entry, files with size, SHA-256 and text, datasets with
+  the names the gateway read, and the limits. Every string in it is escaped for display
+  (`platform.VisibleControls`; in the JSON of a notebook with the extra backslash of `VisibleControlsJSON`), and a file
+  the preview does not show gets no text either. The dataset names are read through the **same reader as the summary**
+  (`cachedReads`, one read per path), so they appear in the summary's single activity entry and not as calls of their
+  own. A re-read at the moment of the approval (`summary_recheck`) replaces the summary but **never** the code — the
+  files, sizes and hashes are what the user was asked about. A notebook is delivered as **its code cells in JSON**
+  without outputs, so `notebookCells` in the frontend can show them and a hidden character cannot come back through the
+  JSON parse.
 
 ## Result checks (R0)
 

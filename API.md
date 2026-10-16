@@ -328,6 +328,19 @@ type Approval = {
   summary?: string;       // platform_write and plan: what will happen, written by the gateway (see "Summaries by the gateway")
   summary_proposed?: string;   // the summary as it was proposed: set when a click on "Approve" found another platform state
   summary_changed_at?: string; // when that change was seen (see "Summaries by the gateway")
+  notebook?: NotebookApprovalData; // platform_write of a run in the chat's notebook server (own code C-E4): the code of
+                              //   the run file by file, for the card instead of the text of the preview
+};
+// The structured data of the approval of a run in the chat's notebook server (own code C-E4, see "Notebook tools").
+// The gateway builds it from the call, from the files the socket read (their SHA-256 stands in the approval) and from
+// the platform state it read itself — never from the agent's text. Every string is escaped for display (control and
+// bidi characters as \u sequences, in the JSON of a notebook with the extra backslash that survives parsing).
+type NotebookApprovalData = {
+  entry: string;        // file name of the script or notebook that runs
+  files: { name: string; size: number; sha256: string; text?: string }[];  // text: the file's text as the card shows
+                        //   it (a notebook as its code cells in JSON); missing when the approval shows no text of it
+  datasets: { id: number; name?: string }[];  // name: as the platform reports it now; missing when it could not be read
+  limits: { cpus: number; mem_gb: number; timeout_min: number; internet: boolean };
 };
 type SocketCall = { id: number; chat_id?: string; slot_id: string; via: "cli" | "mcp" | "api" | "user" /* user: the user's internet switch */; op: string; detail: string; result: string; created_at: string; session?: string; tool_call_id?: string;
   duration_ms?: number /* platform calls: round trip to the platform in ms (token exchange included, approval wait excluded); missing: not measured */;
@@ -1573,6 +1586,14 @@ user (uid 1000) and reads state, log and results back the same way. The server h
   every file with size and SHA-256: the whole text of a `.py` file, the code cells of an `.ipynb`, the text of other
   files while it is valid UTF-8 and at most 20 KB, otherwise a note instead of the text. **What the user approves is
   what runs:** the files come from `readFiles` (SHA-256 in the approval), not from the sandbox at start time.
+- **Structured data of the approval (own code C-E4).** Next to that text the approval carries the field `notebook`
+  (`NotebookApprovalData`, see "Types"): `entry`, `files` with name, size, SHA-256 and the text the card shows,
+  `datasets` with the name the gateway read through the summary's reader, and `limits` of this instance (2 CPUs,
+  8 GB, the time limit of the call, no internet). The frontend shows it instead of the preview; the preview stays for
+  the log and for clients from before. A file the preview does not show gets no `text` either, and the `text` of a
+  notebook is its code cells as JSON without the outputs — card and preview never disagree about what the user sees of
+  a file. Every string is escaped for display: a file name, a dataset name, the entry and the code. The field is
+  missing for every other kind of approval and for approvals from before C-E4.
 - **Limits of a run.** At most 50 files, 1 MB each, 4 MB together, endings `.py .ipynb .txt .json .yaml .yml .csv .md
   .cfg .toml`, at most 20 arguments of `A-Za-z0-9_.,=:/+-`, at most 3 datasets. `timeout_minutes` defaults to 120 and
   is capped by `AGW_NOTEBOOK_TIMEOUT_MAX_MIN` (default 480 = the longest an autonomous plan may run). One run at a
