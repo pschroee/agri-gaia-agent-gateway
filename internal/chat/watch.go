@@ -422,17 +422,24 @@ func (m *Manager) noteJobEnd(ctx context.Context, j store.WatchJob, st *store.Pl
 		m.wakeIfLive(j.ChatID)
 		return
 	}
+	m.wakeForNote(j.ChatID, j.PlanID)
+}
+
+// wakeForNote hands a note of a plan to the agent: a live chat that is not working gets it at once, a
+// resting one is resumed for it (D2.6). Only ever called for a note that earns a turn — the end of a
+// plan step or the user's decision on a parked step.
+func (m *Manager) wakeForNote(chatID, planID string) {
 	m.mu.Lock()
-	l := m.live[j.ChatID]
-	busy := m.sending[j.ChatID] || (l != nil && (l.running || l.compacting))
+	l := m.live[chatID]
+	busy := m.sending[chatID] || (l != nil && (l.running || l.compacting))
 	m.mu.Unlock()
 	if l != nil {
 		if !busy {
-			m.deliverQueue(j.ChatID, l)
+			m.deliverQueue(chatID, l)
 		}
 		return
 	}
-	m.wakeDormant(j.ChatID, j.PlanID)
+	m.wakeDormant(chatID, planID)
 }
 
 // wakeIfLive hands notes to a live chat that is not working; a resting chat stays resting (only an
@@ -538,6 +545,29 @@ func (m *Manager) stepIsParked(ctx context.Context, st *store.PlanStep) bool {
 	return live != nil && live.State == plan.StepOpen
 }
 
+// parkedStep reports whether a call of a step is parked instead of waited for (D2.8): the step belongs to
+// an autonomous plan that still runs, the plan does not cover it, and the call carries no files from the
+// sandbox. A step with files is asked synchronously: the gateway cannot repeat it without the running
+// sandbox, and the approval has to show the bytes that were read.
+func (m *Manager) parkedStep(ctx context.Context, st *store.PlanStep, req platform.Request) bool {
+	return st != nil && len(req.Files) == 0 && m.stepIsParked(ctx, st)
+}
+
+// parkedAgain answers a call that repeats an already parked step: as long as the approval the step was
+// parked with is pending, no second approval is raised and nothing runs — the same answer the agent got
+// at the first call, so that it ends its turn (D2.8). waiting is false for every other call.
+func (m *Manager) parkedAgain(ctx context.Context, st *store.PlanStep) (platform.Result, bool) {
+	if st == nil || st.ParkedApproval == "" {
+		return platform.Result{}, false
+	}
+	ap, err := m.st.GetApproval(ctx, st.ParkedApproval)
+	if err != nil || ap.State != store.ApprovalPending {
+		return platform.Result{}, false
+	}
+	return platform.Result{Status: "pending_user", Message: fmt.Sprintf(
+		"waiting for the user's approval of step %d; end your turn, you will be woken when the user decides", st.Idx)}, true
+}
+
 // parkApproval repeats the wait of a parked step in the background. The approval must already be
 // registered with the broker; the step must carry the approval's id.
 func (m *Manager) parkApproval(ctx context.Context, chatID, slotID, via string, req platform.Request, st *store.PlanStep, ap store.Approval, w *artifacts.Waiter) {
@@ -599,7 +629,34 @@ func (m *Manager) onParkedDecision(ctx context.Context, chatID, slotID, via stri
 			result = cerr.Error()
 		}
 	}
-	m.finishParkedStep(ctx, chatID, st, to, result)
+	m.finishParkedStep(ctx, chatID, st, to, result, cerr == nil)
+}
+
+// noteParkedStep tells the agent that its parked step was acted on: the repeat went out (or did not) and
+// what came of it; a step that went to "waiting" is reported as such, because the watcher's note about
+// the job follows on its own.
+func (m *Manager) noteParkedStep(ctx context.Context, chatID string, st *store.PlanStep, to, result string) {
+	state := plan.StateApproved
+	if fresh, err := m.st.GetPlan(ctx, st.PlanID); err == nil {
+		state = fresh.State
+	}
+	head, body := fmt.Sprintf("Step %d %q ran after your approval: %s.", st.Idx, watch.ClipRunes(oneLine(st.Description), 60), result),
+		"The plan continues with its next step."
+	switch {
+	case to == plan.StepFailed:
+		head, body = fmt.Sprintf("Step %d %q was not run: %s.", st.Idx, watch.ClipRunes(oneLine(st.Description), 60), result),
+			"The plan ends here. Nothing else was executed."
+	case state == plan.StateCompleted:
+		body = "That was the last step; the plan is through."
+	}
+	note := systemNote{Type: store.NotePlanStep, Refs: []string{st.PlanID, fmt.Sprintf("%d", st.Idx)}, Summary: head, Body: body}
+	if _, err := m.st.EnqueueSystem(ctx, chatID, note.Type, note.Refs, note.Text()); err != nil {
+		slog.Error("note about a parked decision not queued", "chat", chatID, "plan", st.PlanID, "error", err)
+		return
+	}
+	m.publishQueue(ctx, chatID, "queued", nil, "")
+	m.publishPlan(ctx, st.PlanID)
+	m.wakeForNote(chatID, st.PlanID)
 }
 
 // parkedCall rebuilds the call of a step with every placeholder resolved from the plan's earlier steps.
@@ -618,36 +675,44 @@ func (m *Manager) parkedCall(ctx context.Context, p store.Plan, st store.PlanSte
 // failParkedStep ends a parked step as failed and fails its plan (no retry: a step the plan does not
 // cover is never claimed, A-E1) — the agent learns it through a note.
 func (m *Manager) failParkedStep(ctx context.Context, chatID string, st *store.PlanStep, why string) {
-	m.finishParkedStep(ctx, chatID, st, plan.StepFailed, why)
+	m.finishParkedStep(ctx, chatID, st, plan.StepFailed, why, false)
 }
 
-// finishParkedStep records the outcome of a parked step, ends the plan with it and tells the agent. The
-// step is unclaimed (a step the plan does not cover never is), so it moves from "open".
-func (m *Manager) finishParkedStep(ctx context.Context, chatID string, st *store.PlanStep, to, result string) {
+// finishParkedStep ends a parked step whose decision is in, ends the plan with it and tells the agent.
+// The step is unclaimed (a step the plan does not cover never is), so it moves from "open". repeated
+// says whether the gateway's own repetition of the step ran: then planFinish has recorded the step
+// already (it matched the plan again), and only the note is missing here.
+func (m *Manager) finishParkedStep(ctx context.Context, chatID string, st *store.PlanStep, to, result string, repeated bool) {
 	ok, err := m.st.FinishPlanStep(ctx, st.PlanID, st.Idx, plan.StepOpen, to, result, "", "")
 	if err != nil || !ok {
-		slog.Error("parked step not finished", "plan", st.PlanID, "step", st.Idx, "error", err)
+		if !repeated {
+			slog.Error("parked step not finished", "plan", st.PlanID, "step", st.Idx, "error", err)
+			return
+		}
+		// The repetition ran through PlatformCall, so the step is recorded there (planFinish): the plan is
+		// already finished or waits for its platform job; only the note about the decision is left.
+		if live, gerr := m.st.GetPlan(ctx, st.PlanID); gerr == nil {
+			if step := stepOf(live, st.Idx); step != nil && step.State == plan.StepWaiting {
+				m.noteParkedStep(ctx, chatID, st, to, "it now waits for its platform job: "+result)
+				return
+			}
+		}
+		m.noteParkedStep(ctx, chatID, st, to, result)
 		return
 	}
 	if to == plan.StepFailed {
 		if _, err := m.st.FinishPlan(ctx, st.PlanID, plan.StateFailed); err != nil {
 			slog.Error("plan not failed", "plan", st.PlanID, "error", err)
 		}
+	} else if fresh, err := m.st.GetPlan(ctx, st.PlanID); err == nil && allDone(fresh) {
+		// The step was the last one: the plan is through with it (like planFinish does for the steps the
+		// plan covers).
+		if _, err := m.st.FinishPlan(ctx, st.PlanID, plan.StateCompleted); err != nil {
+			slog.Error("plan not completed", "plan", st.PlanID, "error", err)
+		}
 	}
 	m.publishPlan(ctx, st.PlanID)
-	head, body := fmt.Sprintf("Step %d %q ran after your approval: %s.", st.Idx, watch.ClipRunes(oneLine(st.Description), 60), result),
-		"The plan continues with its next step."
-	if to == plan.StepFailed {
-		head, body = fmt.Sprintf("Step %d %q was not run: %s.", st.Idx, watch.ClipRunes(oneLine(st.Description), 60), result),
-			"The plan ends here. Nothing else was executed."
-	}
-	note := systemNote{Type: store.NotePlanStep, Refs: []string{st.PlanID, fmt.Sprintf("%d", st.Idx)}, Summary: head, Body: body}
-	if _, err := m.st.EnqueueSystem(ctx, chatID, note.Type, note.Refs, note.Text()); err != nil {
-		slog.Error("note about a parked decision not queued", "chat", chatID, "plan", st.PlanID, "error", err)
-		return
-	}
-	m.publishQueue(ctx, chatID, "queued", nil, "")
-	m.wakeIfLive(chatID)
+	m.noteParkedStep(ctx, chatID, st, to, result)
 }
 
 // StopJob stops the platform job of a plan step or of a single job at the user's request (D2.9, #99).

@@ -26,6 +26,10 @@ func withEdgeDeployPlatform(t *testing.T, e *env) func() []string {
 	device := edgeDeviceStateJSON("sim-edge-01", "amd64", []string{"simulated"}, edgeHeartbeatNow(), true)
 	var mu sync.Mutex
 	var got []string
+	// started: the deploy call arrived, so the device is on its way up. Before that the deployment is
+	// "created" (the tool refuses to start an already deployed one), after it "deployed" — that is the state
+	// the watcher of the edge kind waits for (edge D-E2).
+	started := false
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/token" {
 			// The guard of D-E1 reads the user out of the chat's token and compares it with the namespace
@@ -49,8 +53,27 @@ func withEdgeDeployPlatform(t *testing.T, e *env) func() []string {
 			w.WriteHeader(http.StatusCreated)
 			fmt.Fprint(w, `{"id":9,"name":"agw-mnist","status":"created","edge_device_id":1,"container_image_id":5}`)
 		case r.Method == http.MethodGet && r.URL.Path == "/container-deployments/9":
-			fmt.Fprint(w, `{"id":9,"name":"agw-mnist","status":"created","edge_device_id":1,"container_image_id":5}`)
+			mu.Lock()
+			up := started
+			mu.Unlock()
+			status := "created"
+			if up {
+				status = "deployed"
+			}
+			fmt.Fprintf(w, `{"id":9,"name":"agw-mnist","status":%q,"edge_device_id":1,"container_image_id":5}`, status)
+		case r.Method == http.MethodGet && r.URL.Path == "/tasks/5":
+			mu.Lock()
+			up := started
+			mu.Unlock()
+			if up {
+				fmt.Fprint(w, `{"id":5,"status":"completed","completion_percentage":1.0,"message":"started"}`)
+				return
+			}
+			fmt.Fprint(w, `{"id":5,"status":"inprogress","completion_percentage":0.5}`)
 		case r.Method == http.MethodPut && r.URL.Path == "/container-deployments/9/deploy":
+			mu.Lock()
+			started = true
+			mu.Unlock()
 			w.Header().Set("Location", "/tasks/5")
 			w.WriteHeader(http.StatusAccepted)
 		default:
@@ -129,6 +152,12 @@ func TestPlanCreateAndStartDeployment(t *testing.T) {
 	if n, _ := e.st.ComputeCalls(ctx, c.ID); n != 1 {
 		t.Fatalf("compute calls: %d", n)
 	}
+	// The start is a platform job of its own (A-E2): the step waits for it instead of being done at once,
+	// and the plan is through once the device reports the deployment up (edge D-E2).
+	if p := onlyPlan(t, e, ctx, c.ID); p.Steps[1].State != "waiting" || p.Steps[1].WatchJob == "" {
+		t.Fatalf("the start step does not wait for its job: %+v", p.Steps[1])
+	}
+	e.m.watchOnce(ctx, make(chan struct{}, watchParallel))
 	if p := onlyPlan(t, e, ctx, c.ID); p.State != "completed" || p.Steps[0].State != "done" || p.Steps[1].State != "done" {
 		t.Fatalf("plan %s, steps %+v", p.State, p.Steps)
 	}

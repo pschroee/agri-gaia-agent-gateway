@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"agw/internal/delegation"
 	"agw/internal/plan"
 	"agw/internal/platform"
 	"agw/internal/store"
@@ -134,7 +135,8 @@ func watchedChat(t *testing.T, e *env, ctx context.Context, body string) (ChatVi
 }
 
 // startWatchedStep makes the call of the plan's first step: it is covered by the plan, runs without an
-// approval and leaves the step waiting for the job it started. It returns the step's job.
+// approval and leaves the step waiting for the job it started. It returns the step's job (the newest
+// running one, because a repeated step starts a second job).
 func startWatchedStep(t *testing.T, e *env, ctx context.Context, c ChatView, slot string) store.WatchJob {
 	t.Helper()
 	req, err := platform.Normalize(platform.Request{Method: http.MethodPost, Path: "/train/config"})
@@ -148,11 +150,28 @@ func startWatchedStep(t *testing.T, e *env, ctx context.Context, c ChatView, slo
 	if res.Status != "ok" || res.HTTPStatus != http.StatusAccepted {
 		t.Fatalf("the step did not run: %+v", res)
 	}
-	jobs, err := e.m.Jobs(ctx, c.ID)
-	if err != nil || len(jobs) != 1 {
-		t.Fatalf("jobs: %+v %v", jobs, err)
+	steps := stepsOfPlan(t, e, planOfChat(t, e, c.ID))
+	if steps[0].WatchJob == "" {
+		t.Fatalf("the step waits for no job: %+v", steps[0])
 	}
-	return jobs[0]
+	job, err := e.st.GetWatchJob(ctx, c.ID, steps[0].WatchJob)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.State != store.JobRunning {
+		t.Fatalf("the job of the step is not running: %+v", job)
+	}
+	return job
+}
+
+// planOfChat returns the id of the chat's newest plan.
+func planOfChat(t *testing.T, e *env, chatID string) string {
+	t.Helper()
+	ps, err := e.m.Plans(context.Background(), chatID)
+	if err != nil || len(ps) == 0 {
+		t.Fatalf("plans: %+v %v", ps, err)
+	}
+	return ps[len(ps)-1].ID
 }
 
 // watchOffset is how far runWatchersOnce has moved the watcher's clock forward.
@@ -593,9 +612,14 @@ func TestPlanWakeOverBudgetPausesPlan(t *testing.T) {
 	if notes := queueNotes(t, e, c.ID, store.NotePlanStep); len(notes) != 1 || notes[0].ID != entry.ID {
 		t.Fatalf("the note was not held back: %+v", notes)
 	}
-	// The note about an ordinary background task is not counted on a plan.
-	if got := planStepWake(queueNotes(t, e, c.ID, store.NotePlanStep)); got != "" {
-		t.Fatalf("a paused plan's note still counts on it: %q", got)
+	// The turn was counted on the plan, and the paused plan holds nothing back any more: it cannot run on
+	// by itself, so its last note is an ordinary one again (the user's next message delivers it).
+	pl, err = e.st.GetPlan(ctx, p.ID)
+	if err != nil || pl.AutoTurns != 4 {
+		t.Fatalf("the turn was not counted: %+v %v", pl, err)
+	}
+	if ev, limited, handled := e.m.planWakeLimit(ctx, c.ID, p.ID); !handled || limited {
+		t.Fatalf("a paused plan must not hold its last note back: %+v %v %v", ev, limited, handled)
 	}
 }
 
@@ -784,36 +808,45 @@ func TestParkedMarkerOnlyForThatStep(t *testing.T) {
 	ctx := store.WithSession(context.Background(), "main")
 	c, slot, p, f := watchedChat(t, e, ctx, watchPlanDelete)
 	ap := parkStep(t, e, ctx, c, slot)
-	// The marker is in the context, but the call is not the parked step.
+
 	marked := WithParkedApproval(ctx, ap.ID)
-	other := platform.Request{Method: http.MethodDelete, Path: "/datasets/9",
-		Body: json.RawMessage(`{"key":"-","csrftoken":"-","sessionid":"-"}`)}
-	events, cancel := e.m.Subscribe(c.ID)
-	defer cancel()
-	done := make(chan platform.Result, 1)
-	go func() {
-		r, _ := e.m.PlatformCall(marked, c.ID, slot, "cli", other)
-		done <- r
-	}()
-	second := waitEvent(t, events, "approval", "").Data.(store.Approval)
-	for second.State != store.ApprovalPending || second.ID == ap.ID {
-		second = waitEvent(t, events, "approval", "").Data.(store.Approval)
-	}
-	if second.ID == ap.ID {
-		t.Fatal("the second call reused the parked approval")
-	}
-	if _, err := e.m.Decide(ctx, second.ID, false); err != nil {
+	// The call the marker opens: exactly the step that was parked.
+	pl, err := e.st.GetPlan(ctx, p.ID)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if res := <-done; res.Status == "ok" {
-		t.Fatalf("the call ran without its own approval: %+v", res)
+	exact, _, err := e.m.parkedCall(ctx, pl, stepsOfPlan(t, e, p.ID)[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !e.m.parkedHere(marked, c.ID, exact) {
+		t.Fatal("the marker does not open its own step")
+	}
+	// Another call, even on the same path, is not that step: it goes through the whole check again and is
+	// refused by the plan's grant (the plan covers the delete of dataset 5 with this body, nothing else).
+	other := platform.Request{Method: http.MethodDelete, Path: "/datasets/5",
+		Body: json.RawMessage(`{"key":"x","csrftoken":"-","sessionid":"-"}`)}
+	if e.m.parkedHere(marked, c.ID, other) {
+		t.Fatal("the marker opened another call")
+	}
+	res, err := e.m.PlatformCall(marked, c.ID, slot, "cli", other)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Status == "ok" || res.Status == "pending_user" {
+		t.Fatalf("a call the marker does not name ran anyway: %+v", res)
 	}
 	if n := len(f.writeCalls()); n != 0 {
 		t.Fatalf("something ran: %v", f.writeCalls())
 	}
-	// The parked step itself is still open.
-	if steps := stepsOfPlan(t, e, p.ID); steps[0].ParkedApproval != ap.ID {
+	// The parked step itself is untouched.
+	if steps := stepsOfPlan(t, e, p.ID); steps[0].ParkedApproval != ap.ID || steps[0].State != plan.StepOpen {
 		t.Fatalf("the parked step changed: %+v", steps[0])
+	}
+	// And the parked approval is still pending: nothing decided it.
+	got, err := e.st.GetApproval(ctx, ap.ID)
+	if err != nil || got.State != store.ApprovalPending {
+		t.Fatalf("the parked approval: %+v %v", got, err)
 	}
 }
 
@@ -823,6 +856,11 @@ func TestConfirmEachStepParked(t *testing.T) {
 	e := setup(t)
 	ctx := store.WithSession(context.Background(), "main")
 	c, slot, p, f := watchedChat(t, e, ctx, watchPlanDeploy)
+	// The edge guard only lets the chat start its own deployment (edge D-E1): the step is one this chat
+	// created. Everything else about the call is the same.
+	if err := e.st.AddDelegationObject(ctx, c.ID, delegation.ContainerDeployment, "5"); err != nil {
+		t.Fatal(err)
+	}
 	steps := stepsOfPlan(t, e, p.ID)
 	if steps[0].Covered {
 		t.Fatalf("a confirm-each step must not be covered by its plan: %+v", steps[0])
@@ -855,6 +893,22 @@ func TestConfirmEachStepParked(t *testing.T) {
 	if n := len(f.writeCalls()); n != 0 {
 		t.Fatalf("the deploy ran without the user: %v", f.writeCalls())
 	}
+
+	// The user approves: the gateway repeats the deploy. Its task is observed like any other job, so the
+	// step waits for the device to report the deployment up.
+	if _, err := e.m.Decide(ctx, ap.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		return len(f.writeCalls()) == 1 && f.writeCalls()[0] == "PUT /container-deployments/5/deploy"
+	})
+	f.set("GET /tasks/5", `{"status":"completed","completion_percentage":1.0}`)
+	f.set("GET /container-deployments/5", `{"status":"deployed"}`)
+	runWatchersOnce(t, e)
+	waitFor(t, func() bool { return stepsOfPlan(t, e, p.ID)[0].State == plan.StepDone })
+	if pl, err := e.st.GetPlan(ctx, p.ID); err != nil || pl.State != plan.StateCompleted {
+		t.Fatalf("plan: %+v %v", pl, err)
+	}
 }
 
 // A-E2 (D2.8, exception): a step whose call carries files of the sandbox is not parked — the gateway
@@ -862,24 +916,51 @@ func TestConfirmEachStepParked(t *testing.T) {
 func TestStepWithFilesAsksSynchronously(t *testing.T) {
 	e := setup(t)
 	ctx := store.WithSession(context.Background(), "main")
-	c, slot, p, _ := watchedChat(t, e, ctx, `{"title":"Upload","mode":"autonomous","budget":{"max_duration_minutes":60,"max_llm_cost_usd":1,"max_auto_turns":3},
- "steps":[{"method":"POST","path":"/datasets","body":{"name":"x","description":"y","metadata":{}},"file_sha256":["`+strings.Repeat("a", 64)+`"]}]}`)
-	req := platform.Request{Method: http.MethodPost, Path: "/datasets",
-		Body:    json.RawMessage(`{"name":"x","description":"y","metadata":{}}`),
-		Files:   []platform.File{{Field: "files", Path: "/workspace/a.png"}},
-		Uploads: []platform.Upload{{Field: "files", Name: "a.png", Data: []byte("png"), SHA256: strings.Repeat("a", 64)}}}
+	f := newFakeJobs(t, e, "/tasks/5")
+	nb := &fakeNotebook{}
+	e.m.opt.Notebook = nb
+	e.m.RegisterVirtual(platform.NotebookPrefix, nb)
+	// A run in the notebook server asks for every single call and carries the code from the sandbox.
+	const args = `{"files":["/workspace/train.py"],"entry":"train.py","dataset_ids":["17"]}`
+	body := `{"title":"Run","mode":"autonomous","budget":{"max_duration_minutes":60,"max_llm_cost_usd":1,"max_auto_turns":3},
+ "steps":[{"tool":"notebook_run","args":` + args + `,"file_sha256":["` + strings.Repeat("a", 64) + `"]}]}`
+	c, _, p := autonomousChat(t, e, ctx, body)
+	slot := e.m.live[c.ID].slot.ID
+	steps := stepsOfPlan(t, e, p.ID)
+	if steps[0].Covered {
+		t.Fatalf("a notebook run must not be covered by a plan: %+v", steps[0])
+	}
+	tool, ok := platform.Lookup("notebook_run")
+	if !ok {
+		t.Fatal("the tool notebook_run is missing")
+	}
+	req, err := tool.Build(json.RawMessage(args))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Uploads = []platform.Upload{{Field: "file", Name: "train.py", Data: []byte("print('hi')\n"), SHA256: "aa11"}}
+	if len(req.Files) == 0 {
+		t.Fatal("the call of a notebook run carries no files")
+	}
+	// Without files the step is parked; with them it is not.
+	if !e.m.parkedStep(ctx, &steps[0], platform.Request{Method: req.Method, Path: req.Path}) {
+		t.Error("a step without files must be parked")
+	}
+	if e.m.parkedStep(ctx, &steps[0], req) {
+		t.Fatal("a step whose call carries files must be asked synchronously")
+	}
+	// And the call really asks: it waits for the user instead of answering at once.
 	events, cancel := e.m.Subscribe(c.ID)
 	defer cancel()
 	done := make(chan platform.Result, 1)
 	go func() {
-		r, _ := e.m.PlatformCall(ctx, c.ID, slot, "cli", req)
+		r, _ := e.m.PlatformCall(platform.WithInvocation(ctx, "notebook_run", json.RawMessage(args)), c.ID, slot, "cli", req)
 		done <- r
 	}()
 	ap := waitEvent(t, events, "approval", "").Data.(store.Approval)
 	for ap.State != store.ApprovalPending {
 		ap = waitEvent(t, events, "approval", "").Data.(store.Approval)
 	}
-	// It waits: nothing answers at once, and the step is not parked.
 	select {
 	case res := <-done:
 		t.Fatalf("a step with files must wait for the user: %+v", res)
@@ -888,11 +969,46 @@ func TestStepWithFilesAsksSynchronously(t *testing.T) {
 	if steps := stepsOfPlan(t, e, p.ID); steps[0].ParkedApproval != "" {
 		t.Fatalf("a step with files was parked: %+v", steps[0])
 	}
-	// The user rejects it, so the call ends and the plan fails.
+	if nb.count() != 0 {
+		t.Fatalf("the run reached the notebook server before the decision: %d", nb.count())
+	}
+	// The user rejects it: nothing runs, and the step stays open for another try.
 	if _, err := e.m.Decide(ctx, ap.ID, false); err != nil {
 		t.Fatal(err)
 	}
 	if res := <-done; res.Status == "ok" {
 		t.Fatalf("the call ran after a rejection: %+v", res)
+	}
+	if nb.count() != 0 || len(f.writeCalls()) != 0 {
+		t.Fatalf("something ran: %d %v", nb.count(), f.writeCalls())
+	}
+}
+
+// A-E2 (D2.8): a step that already waits for the user's decision is not asked a second time — the second
+// approval would run the same irreversible call twice.
+func TestParkedStepNotAskedTwice(t *testing.T) {
+	e := setup(t)
+	ctx := store.WithSession(context.Background(), "main")
+	c, slot, p, f := watchedChat(t, e, ctx, watchPlanDelete)
+	ap := parkStep(t, e, ctx, c, slot)
+	// The same call again, without the marker: the answer is the one of the first call.
+	req := platform.Request{Method: http.MethodDelete, Path: "/datasets/5",
+		Body: json.RawMessage(`{"csrftoken":"-","key":"-","sessionid":"-"}`)}
+	res, err := e.m.PlatformCall(ctx, c.ID, slot, "cli", req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Status != "pending_user" || !strings.Contains(res.Message, "waiting for the user's approval of step 1") {
+		t.Fatalf("the second call: %+v", res)
+	}
+	aps, err := e.st.ListApprovals(ctx, store.ApprovalPending, c.ID)
+	if err != nil || len(aps) != 1 || aps[0].ID != ap.ID {
+		t.Fatalf("there must be exactly the parked approval: %+v %v", aps, err)
+	}
+	if steps := stepsOfPlan(t, e, p.ID); steps[0].ParkedApproval != ap.ID {
+		t.Fatalf("the step changed: %+v", steps[0])
+	}
+	if n := len(f.writeCalls()); n != 0 {
+		t.Fatalf("something ran: %v", f.writeCalls())
 	}
 }
