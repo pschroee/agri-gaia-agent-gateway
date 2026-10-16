@@ -241,6 +241,32 @@ func run() error {
 		watch.Register(checks.WatchKind())
 	}
 
+	// R1 — the training check: the gateway splits a dataset before a training and measures the model
+	// afterwards on the images the training did not see. It does both with the user's token, and it is
+	// the only place that records where a model came from (R1.6): without such a row every check of that
+	// model answers "origin unknown" (P2).
+	if plat != nil {
+		checks.Plat = plat
+		checks.MaxDownloadBytes = int64(env.AssessDownloadMaxMB) << 20
+		// The downloads and the created training dataset appear in the activity like the dataset
+		// archives of a notebook run (C-E3).
+		checks.LogCall = func(ctx context.Context, chatID, detail, result string) {
+			m.LogCallBy(ctx, m.SlotOf(chatID), chatID, "platform", "platform", detail, result)
+		}
+		platform.SetOnModelCreated(func(ctx context.Context, chatID string, modelID, trainID, datasetID int64) {
+			seen := []int64{}
+			if datasetID > 0 {
+				seen = append(seen, datasetID)
+			}
+			if err := st.RecordModelOrigin(ctx, store.ModelOrigin{
+				ModelID: modelID, ChatID: chatID, Source: store.OriginTraining,
+				TrainContainerID: trainID, SeenDatasetIDs: seen,
+			}); err != nil {
+				slog.Error("model origin not recorded", "chat", chatID, "model", modelID, "error", err)
+			}
+		})
+	}
+
 	if err := m.Recover(ctx); err != nil {
 		return err
 	}

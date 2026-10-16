@@ -192,6 +192,11 @@ func (m *Manager) summaryReader(chatID string) platform.Doer {
 		if r.Method != http.MethodGet || r.Writes() {
 			return platform.Result{Status: "error", Message: "not a reading call"}, nil
 		}
+		// A path the gateway answers itself (G1.5) is read from the gateway, not from the platform: an
+		// approval names the last check of a model (R1.14) no differently from a dataset's name.
+		if d, ok := m.virtualFor(r.Path); ok {
+			return d.Do(ctx, chatID, r)
+		}
 		return m.opt.Platform.Do(ctx, chatID, r)
 	}
 }
