@@ -59,6 +59,21 @@ func TestSandboxIntegration(t *testing.T) {
 		t.Fatalf("exec read: %q %v", out, err)
 	}
 
+	// 2b. ContainerByName finds a running container with exactly this name and answers its labels (R3);
+	// a name that is only part of another container's name does not match (Docker's name filter matches
+	// substrings).
+	if id, labels, ok, err := rt.ContainerByName(ctx, "agwpoc-test-"+suffix); err != nil || !ok || id == "" {
+		t.Fatalf("ContainerByName: %q %v %v %v", id, labels, ok, err)
+	} else if labels[LabelSlot] != "test" {
+		t.Fatalf("labels of the container: %v", labels)
+	}
+	if _, _, ok, err := rt.ContainerByName(ctx, "agwpoc-test-"+suffix+"0"); err != nil || ok {
+		t.Fatalf("a name that belongs to no container matched: %v %v", ok, err)
+	}
+	if _, _, ok, err := rt.ContainerByName(ctx, ""); err != nil || ok {
+		t.Fatalf("an empty name matched: %v %v", ok, err)
+	}
+
 	// 3. Hardening: root read-only, user not root.
 	if _, _, err := rt.Exec(ctx, inst.ID, []string{"sh", "-c", "touch /usr/x"}, nil); err == nil {
 		t.Fatal("root file system is writable")
