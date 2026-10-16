@@ -29,6 +29,12 @@ var minioRoutes = []minioRoute{
 	{http.MethodPatch, regexp.MustCompile(`^/datasets/[^/]+/toggle-public/?$`)},
 	{http.MethodDelete, regexp.MustCompile(`^/datasets/[^/]+/?$`)},
 	{http.MethodPost, regexp.MustCompile(`^/datasets/auto-annotation/?$`)},
+	// Creates the CVAT task of a dataset (V1). The backend reads the dataset's annotation file from
+	// MinIO with the caller's token while doing so (services/cvat/cvat_api.py, _annotation_file_exists
+	// asks even when the dataset has no such file); MinIO only accepts a token whose audience holds
+	// "minio" (MINIO_IDENTITY_OPENID_CLIENT_ID in the platform's compose file). Without this route
+	// that read fails, the backend answers 500 and deletes the task it has just created in CVAT.
+	{http.MethodPost, regexp.MustCompile(`^/cvat/tasks/[^/]+/?$`)},
 	{http.MethodPost, regexp.MustCompile(`^/models/?$`)},
 	{http.MethodGet, regexp.MustCompile(`^/models/[^/]+/download/?$`)},
 	{http.MethodPatch, regexp.MustCompile(`^/models/[^/]+/toggle-public/?$`)},

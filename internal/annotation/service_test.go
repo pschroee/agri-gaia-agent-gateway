@@ -42,8 +42,12 @@ type fakePlatform struct {
 	taskBodies []string
 	dataset    string // the answer of GET /datasets/{id}
 	login      string // the answer of POST /cvat/auth/login; empty: HTTP 500
-	taskID     int64  // the id POST /cvat/tasks/{id} answers
-	operators  []string
+	// annotateStatus/annotateBody answer POST /datasets/{id}/annotate with a failure (0: 200 and the
+	// dataset), for the test that a failed platform call names the platform's answer.
+	annotateStatus int
+	annotateBody   string
+	taskID         int64 // the id POST /cvat/tasks/{id} answers
+	operators      []string
 
 	// V2: the models of the platform, the file of one of them, the background tasks of the platform
 	// and the builds of a function (POST /datasets/auto-annotation, multipart).
@@ -122,6 +126,11 @@ func (f *fakePlatform) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.Method == http.MethodPost && annotateRe.MatchString(r.URL.Path):
 		f.annotates++
+		if f.annotateStatus != 0 {
+			w.WriteHeader(f.annotateStatus)
+			fmt.Fprint(w, f.annotateBody)
+			return
+		}
 		fmt.Fprint(w, f.dataset)
 	case r.Method == http.MethodPost && taskCreateRe.MatchString(r.URL.Path):
 		f.taskBodies = append(f.taskBodies, readBody(r))
@@ -640,6 +649,32 @@ func TestTaskNoCVATAccount(t *testing.T) {
 	res := e.do(t, chatID, http.MethodPost, platform.AnnotationPrefix+"/tasks", `{"dataset_id":5}`)
 	if res.Status != "error" || !strings.Contains(res.Message, "you have no CVAT account yet") {
 		t.Fatalf("no account: %+v", res)
+	}
+}
+
+// A call the platform answers with a status outside 2xx names the answer of the platform: without it
+// a 500 is only "HTTP 500" and the reason stays hidden (V1: the body of POST /cvat/tasks/{id} carried
+// the MinIO error that explained the failure).
+func TestFailedCallNamesThePlatformsAnswer(t *testing.T) {
+	e := newTestEnv(t)
+	chatID := e.chat(t)
+	e.pf.mu.Lock()
+	e.pf.annotateStatus = http.StatusInternalServerError
+	e.pf.annotateBody = `{"detail":"400 Client Error: Bad Request for url: https://cvat.example/api/tasks/9/data"}`
+	e.pf.mu.Unlock()
+
+	res := e.do(t, chatID, http.MethodPost, platform.AnnotationPrefix+"/tasks", `{"dataset_id":5}`)
+	if res.Status != "error" {
+		t.Fatalf("status: %+v", res)
+	}
+	for _, want := range []string{"POST /datasets/5/annotate", "HTTP 500", "400 Client Error"} {
+		if !strings.Contains(res.Message, want) {
+			t.Errorf("message %q lacks %q", res.Message, want)
+		}
+	}
+	// The failure came before the task was created.
+	if e.pf.sawCall("POST", "/cvat/tasks/5") {
+		t.Errorf("a task was created although the annotate call failed: %v", e.pf.saw())
 	}
 }
 
