@@ -1637,7 +1637,7 @@ ones. Taking the result back goes over exactly the objects the gateway wrote and
 - **The verdict** (`assess.Verdict`): `usable`, `questionable` or `not_measured`. Thresholds are constants of
   `internal/annotation/verdict.go`, chosen by whether a model looked at the images (V3d):
   - without an image review: held-out set at least **20** images and accuracy/macro F1 at least **0.85**;
-  - with one: at least **10** images and **0.80**, and at most 20 % of the measured images flagged.
+  - with one: at least **10** images and **0.80**, and at most 20 % of the images it looked at flagged (V3d).
   Below the sample bound the verdict is `not_measured` (`too few held-out images (N of at least M)`); the validation
   set needs 5 images. Further reasons for `questionable` (each one suffices): a class with at least 3 measured images
   and a hit rate under 0.50; the class shares of the automatic and the manual side further apart than 0.25 (0.20
@@ -1657,9 +1657,9 @@ ones. Taking the result back goes over exactly the objects the gateway wrote and
   calibration set answers best at and which mapping it gives), `rollback` and `retrain`. V3c carries exactly these out.
 - **The report** is the result of the job: the `assess.Report` shell (`kind`, `verdict`, `final`, `set`,
   `measured_images`, `image_review`, `reasons`, `hints`, `suggestions`, `note`, `header`) plus
-  `calibration_images`, `per_class`, `overall`, `plausibility` and `suspicious`. `image_review` is always filled —
-  V3b never sends pictures to a model (`done: false`, `reason: "no image review: no model has looked at the pictures of
-  this task"`), and without a review the stricter thresholds hold.
+  `calibration_images`, `per_class`, `overall`, `plausibility` and `suspicious`. V3b itself never sends pictures to a
+  model: `image_review` is `done: false` with a reason, and without a review the stricter thresholds hold. Whether a
+  model does look at the images is V3d (below).
 - **`annotation_rollback`** (`annotation-rollback`, effect **write**, E21): `source_id` (required) and `scope`
   (`all`, default, or `suspicious`). It deletes in CVAT exactly the objects that stand in the register of this chat for
   that source, read again right before the delete and only when CVAT still carries them with `source: "auto"` and the
@@ -1680,6 +1680,59 @@ ones. Taking the result back goes over exactly the objects the gateway wrote and
 - **The skill `pre-annotation`** carries the report as its section *Report the result*: begin the reply with the header
   line, never call a pre-annotation done without a final verdict `usable`, name the figures per class and the size of
   the set they rest on, and offer the rollback when the setting was wrong.
+
+## Looking at the images of a pre-annotation (V3d)
+
+The verdict of V3b rests on figures. With a model that reads images the gateway also shows that model a sample of the
+pictures and lets it say whether the annotation fits the picture (issue #111). That second view is uncertain: it never
+replaces the measured set, it can only make the verdict worse, and without a model that reads images everything works
+as V3b judged it — only with the stricter thresholds.
+
+- **When it runs:** with the **chat's own model** (`capabilities`, entry `vision`, G1.12) — there is no second model
+  for the review and no switch of its own; choosing a model that reads text only switches it off. The pictures go to
+  the provider of that model, so the rule of #111 applies (`assess.ImageReviewAllowed`, R0.9): a **self hosted** model
+  (`self_hosted` in the model catalog) may see every dataset, a **cloud model** only datasets whose name matches
+  `AGW_VISION_DATASET_PATTERN` (default `^(mnist|test)[-_]`). Without permission `image_review.done` stays `false` and
+  `reason` names it word for word (`the current model reads text only` /
+  `images of this dataset may not go to the cloud model (AGW_VISION_DATASET_PATTERN)`).
+- **What it looks at:** at most **40** images per verification — first up to **20** of the images V3b found suspicious
+  (a look at the picture can settle exactly those), then up to **20** of the images the source annotated, evenly spread
+  over the task (`Sample`). The **held-out images are never** among them (E22): the review is a second view on the
+  edges of the result, not a look at the set the verdict rests on.
+- **How the pictures are made** (`internal/annotation/render.go`, standard library only — no scaler and no font): the
+  frame is read through the job that carries it
+  (`GET /api/jobs/{id}/data?type=frame&number=<frame>&quality=compressed`, the task as the fallback when no job names
+  the frame), rendered at a longest side of **512 px** — a big picture is shrunk, a small one is blown up, because an
+  MNIST picture of 28 px says next to nothing to a model at its own size — and the boxes of the automatic annotation
+  drawn on it as frames three pixels wide, one colour per class (red, green, blue, yellow, magenta, cyan, orange,
+  white; from the ninth class on they repeat). A classification is not drawn on — its class stands in the line of the
+  prompt, and a line says so when nothing is annotated on the image.
+- **The model call** goes from the gateway straight to the provider of the chat's model (like the title call) and never
+  through the sandbox: **4** images per call, a fixed English prompt, the pictures as `image_url` with a `data:` URL.
+  Neither the agent nor its context ever sees a picture. Back comes only a fixed JSON
+  (`{"images":[{"frame":n,"ok":bool,"problems":["<code>"],"remark":"<at most 200 characters>"}]}`) with the problem
+  codes `missing_object`, `wrong_class`, `bad_box`, `extra_object` and `unclear_image`; a code the gateway does not know
+  is dropped, the remark is cut to 200 characters, a verdict about a frame of another call is ignored, and an answer
+  that is not this JSON leaves the images of that call **unchecked** — there is no second try.
+- **Billing:** every call is an **auxiliary call** of the chat (`aux_llm_calls`, purpose `image_review`, with model,
+  tokens and cost), like a title; it never counts as an `llm_call` of the agent.
+- **The effect** is part of `verify` and only ever makes the verdict worse: `image_review.flagged_share` is the share
+  of the **checked** images the review complained about, and above **0.20** the verdict is `questionable`, whatever the
+  figures say. The milder thresholds (10 images, 0.80) rest on at least **10 checked** images (`MinReviewChecked`):
+  below that `done` is `false` with the reason `only N of M images could be checked; from 10 images on the report
+  judges with image review`, and the stricter set of V3b holds. A complaint already counts when the review was too
+  small to carry the verdict — a fifth of what it saw gone wrong is a fifth of what it saw.
+- **The report:** `image_review` carries `done`, `model`, `checked`, `flagged_share` and `reason` (empty when a model
+  looked); the header line names the model (`Result: usable (held-out images, image review with <model>)` against
+  `(…, statistics only, no image review)`). The images it complained about stand among the `suspicious` ones with the
+  reason `image_review:<problems>`, and a frame that is already suspicious keeps both reasons in one line.
+- **Steps and failure:** every picture the review read appears under `steps` (the call, never its bytes). A frame that
+  cannot be read or decoded stays out of the count; if nothing could be rendered, the report says so. The review never
+  fails the verification: what it cannot do only means the stricter thresholds.
+- **Configuration:** `AGW_VISION_DATASET_PATTERN` (R0.9); the bounds of the verdict are constants of
+  `internal/annotation/verdict.go`, the bounds of the review (40 images, 4 per call, 512 px) of `review.go` and
+  `render.go`.
+- **The skill `pre-annotation`** carries both ways in its section *Report the result*.
 
 ## Summaries by the gateway
 

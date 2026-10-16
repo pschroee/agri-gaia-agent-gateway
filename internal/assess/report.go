@@ -65,11 +65,18 @@ type Suggestion struct {
 	Text string `json:"text"`
 }
 
-// ImageReview is whether a text model looked at the pictures of the measured set (P14). A check of the
-// gateway (R0–R3) never sends images on its own: it reports Done false with a reason.
+// ImageReview is whether a model looked at the pictures behind the measured task (P14). A check of the
+// gateway that never sends images of its own (R0–R3) reports Done false with a reason; the pre-annotation
+// (V3d) fills Checked and FlaggedShare as well, and Done only from ten checked images on.
 type ImageReview struct {
-	Done   bool   `json:"done"`
-	Model  string `json:"model,omitempty"`
+	Done  bool   `json:"done"`
+	Model string `json:"model,omitempty"`
+	// Checked is how many images the review gave a verdict for (V3d); 0 when no model looked at any.
+	Checked int `json:"checked,omitempty"`
+	// FlaggedShare is the share of the checked images the review complained about (V3d): above 0.20 the
+	// verdict may not be usable, however good the figures are.
+	FlaggedShare float64 `json:"flagged_share,omitempty"`
+	// Reason says why no model looked at the images; empty when one did.
 	Reason string `json:"reason,omitempty"`
 }
 

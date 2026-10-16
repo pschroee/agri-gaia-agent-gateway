@@ -58,10 +58,12 @@ type VerifyInput struct {
 	HoldoutImages     int
 	// Objects is what the task carries: the annotations of the source and the manual ones.
 	Objects TaskObjects
-	// ImageReview says whether a model looked at the images of the measured set (V3d); without it the
-	// stricter thresholds hold.
+	// ImageReview says whether a model looked at the images of this task (V3d). Done is true only from
+	// ten checked images on (MinReviewChecked); without it the stricter thresholds hold.
 	ImageReview assess.ImageReview
-	// Flagged is how many images of the measured set the image review complained about.
+	// Flagged is how many of the images the image review checked it complained about. The share is of the
+	// checked images, never of the measured ones: the review looks at a sample of the source's
+	// annotations, not at the held-out set the verdict rests on (E22).
 	Flagged int
 }
 
@@ -173,8 +175,15 @@ func Verify(in VerifyInput) VerifyResult {
 			reasons = append(reasons, areaReason(plausibility.MedianRelAreaRatio))
 		}
 	}
-	if in.ImageReview.Done && counted > 0 && float64(in.Flagged)/float64(counted) > MaxFlaggedShare {
-		reasons = append(reasons, flaggedReason(in.Flagged, counted))
+	// The image review can only make the verdict worse (V3d): it looks at a sample of the images the
+	// source annotated and at the suspicious ones and complains about what does not fit. Its share is of
+	// the images it checked; a review that was too small to carry the verdict (Done false) still counts
+	// here — a fifth of what it saw gone wrong is a fifth of what it saw.
+	if share := reviewFlaggedShare(in.Flagged, in.ImageReview.Checked); share > 0 {
+		rep.ImageReview.FlaggedShare = share
+		if share > MaxFlaggedShare {
+			reasons = append(reasons, flaggedReason(in.Flagged, in.ImageReview.Checked))
+		}
 	}
 
 	if len(reasons) == 0 {
@@ -264,9 +273,10 @@ func scoreReason(kind string, score, limit float64) string {
 	return name + " " + trim(score) + " is below " + trim(limit)
 }
 
-// flaggedReason names the share of images the image review complained about.
-func flaggedReason(flagged, images int) string {
-	return trim(float64(flagged)/float64(images)) + " of the measured images were flagged by the image review"
+// flaggedReason names the share of images the image review complained about (V3d); the figure is of the
+// images it checked, not of the measured set.
+func flaggedReason(flagged, checked int) string {
+	return trim(float64(flagged)/float64(checked)) + " of the images the image review looked at were flagged"
 }
 
 // trim writes a figure the way a sentence reads it (two digits).
@@ -921,6 +931,7 @@ func (s *Service) runVerify(ctx context.Context, jobID, chatID string, spec jobS
 		}
 	}
 	cal := Calibrate(calibObs, kind)
+	objects := TaskObjects{Frames: t.Size, Manual: manual, Auto: auto, Sizes: sizes, Holdout: holdout}
 	in := VerifyInput{
 		Kind: kind, Final: spec.Final, Measured: obs, Classes: classNames(labels),
 		Mapping: names, Threshold: float64(spec.MinConfidence) / 100, SourceID: spec.SourceID,
@@ -928,10 +939,22 @@ func (s *Service) runVerify(ctx context.Context, jobID, chatID string, spec jobS
 		CalibrationImages: len(calibFrames),
 		ValidationImages:  len(framesInPart(split, store.SplitValidation)),
 		HoldoutImages:     len(framesInPart(split, store.SplitHoldout)),
-		Objects:           TaskObjects{Frames: t.Size, Manual: manual, Auto: auto, Sizes: sizes, Holdout: holdout},
-		ImageReview:       assess.ImageReview{Done: false, Reason: imageReviewReason},
+		Objects:           objects,
 	}
+	// V3d: with a model that reads images the gateway looks at a sample of the automatic annotations and
+	// at the images V3b found suspicious, and reports what it saw. The review never looks at a held-out
+	// image and can only make the verdict worse; without it the stricter thresholds hold.
+	jobs, jerr := s.C.Jobs(ctx, ses, taskID)
+	r.cvat("GET /api/jobs task "+strconv.FormatInt(taskID, 10), jerr)
+	if jerr != nil {
+		jobs = nil
+	}
+	review := s.imageReview(ctx, reviewInput{ChatID: chatID, ChatModel: s.chatModel(ctx, chatID),
+		DatasetName: d.Name, TaskID: taskID, Session: ses, Jobs: jobs, Classes: in.Classes, Auto: auto,
+		Suspicious: suspiciousImages(objects, kind), Holdout: holdout})
+	in.ImageReview, in.Flagged = review.ImageReview, review.Flagged
 	res := Verify(in)
+	res.Suspicious = mergeSuspicious(res.Suspicious, review.Suspicious)
 	s.linkSuspicious(ctx, r, ses, taskID, res.Suspicious)
 	answer := verifyAnswer{stepList: r.steps(), Report: res.Report, SourceID: spec.SourceID,
 		CalibrationImages: in.CalibrationImages, PerClass: res.PerClass, Overall: res.Overall,
