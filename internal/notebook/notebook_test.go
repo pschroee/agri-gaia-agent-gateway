@@ -167,6 +167,19 @@ func platformWithUser(t *testing.T, apiURL, name string) *platform.Client {
 
 // --- the hub ---
 
+// The server name has to start with "agw-": the hub's spawner hardens only servers with that prefix and
+// runs everything else with the user's privileges in the default image (plan E2). So the built-in
+// fallback has to carry it too (AGW_NOTEBOOK_PREFIX is only the override).
+func TestServerNameCarriesHardenedPrefix(t *testing.T) {
+	n := &Notebooks{}
+	if got := n.Server("2d44c5f1-b7be-4620-b0be-e758c0e6c6b6"); !strings.HasPrefix(got, "agw-") {
+		t.Fatalf("server name %q does not start with agw-", got)
+	}
+	if got := n.Server("2d44c5f1-b7be-4620-b0be-e758c0e6c6b6"); got != "agw-2d44c5f1" {
+		t.Fatalf("server name %q", got)
+	}
+}
+
 // Start, Ready and Stop speak the hub's API: the paths, the token header and the answers.
 func TestHubStartReadyStop(t *testing.T) {
 	hub := newFakeHub()

@@ -83,7 +83,7 @@ func (n *Notebooks) Server(chatID string) string {
 	}
 	prefix := n.cfg.Prefix
 	if prefix == "" {
-		prefix = "agri_gaia-jupyter"
+		prefix = "agw"
 	}
 	return prefix + "-" + hex
 }

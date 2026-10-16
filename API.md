@@ -1314,7 +1314,8 @@ user (uid 1000) and reads state, log and results back the same way. The server h
   <duration>`, the last 20 lines of the log and the files of the run directory as its outputs. It records the end of a
   run in `notebook_runs` like a status call does.
 - **Configuration:** `AGW_JUPYTERHUB_API_URL` (`…/hub/api`), `AGW_JUPYTERHUB_TOKEN`, `AGW_JUPYTERHUB_PUBLIC_URL` (for
-  the links), `AGW_NOTEBOOK_PREFIX` (server name, `agri_gaia-jupyter` by default), `AGW_NOTEBOOK_TIMEOUT_MAX_MIN`,
+  the links), `AGW_NOTEBOOK_PREFIX` (server name, `agw` by default: the spawner hardens only servers whose
+  name starts with `agw-`), `AGW_NOTEBOOK_TIMEOUT_MAX_MIN`,
   `AGW_NOTEBOOK_DATASET_MAX_MB`, `AGW_NOTEBOOK_IDLE_MIN`. Table `notebook_runs` (one row per run: chat, hub user,
   server, entry, files with size and SHA-256, dataset ids, timeout, start, end, exit code).
 - **Boundary of the observation:** the code runs in the container with the same uid as the status files `.agw/`; it can

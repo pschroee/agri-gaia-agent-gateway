@@ -454,9 +454,10 @@ const DefaultMaxSubagents = 5
 
 // C-E3 (own code in the agent's notebook server): the defaults of AGW_NOTEBOOK_*.
 const (
-	// DefaultNotebookPrefix: the spawner of the instance only hardens servers whose name carries it
-	// (plan E2), so the gateway must never start one without it.
-	DefaultNotebookPrefix = "agri_gaia-jupyter"
+	// DefaultNotebookPrefix: the spawner of the instance only hardens servers whose name starts with
+	// this prefix (plan E2, platform_spawner.py AGENT_PREFIX "agw-"), so the gateway must never start
+	// a server without it: an unhardened server would run the agent's code with the user's privileges.
+	DefaultNotebookPrefix = "agw"
 	// DefaultNotebookTimeoutMaxMin: 480 minutes is the longest an autonomous plan may run
 	// (AGW_PLAN_MAX_DURATION, 8 h), so a run inside a plan cannot outlive the plan.
 	DefaultNotebookTimeoutMaxMin = 480
