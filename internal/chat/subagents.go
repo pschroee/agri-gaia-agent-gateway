@@ -243,6 +243,29 @@ func parseChildSessionKnown(chatID, run, agent, data string, known func(ref stri
 	return out
 }
 
+// captureSubagentImages saves the display images the answers of a subagent show (issue #120, F16, DL3.8): the same
+// way as for the main agent (captureImages, the same key and the same roots), because a subagent's tools run in the
+// same execution sandbox (E9). The stored entries keep only clipped text, so the raw messages are read from the newly
+// arrived chunk of the session file (the halt note of the plan: entries do not carry the raw message).
+func (m *Manager) captureSubagentImages(chatID string, a Agent, data string) {
+	for _, line := range strings.Split(data, "\n") {
+		var e struct {
+			Type    string          `json:"type"`
+			Message json.RawMessage `json:"message"`
+		}
+		if json.Unmarshal([]byte(line), &e) != nil || e.Type != "message" || len(e.Message) == 0 {
+			continue
+		}
+		var role struct {
+			Role string `json:"role"`
+		}
+		if json.Unmarshal(e.Message, &role) != nil || role.Role != "assistant" {
+			continue
+		}
+		m.captureImages(chatID, a, e.Message)
+	}
+}
+
 // watchSubagents keeps reading the subagents' session files while the chat
 // is active and enforces the limit.
 func (m *Manager) watchSubagents(chatID string, l *live) {
@@ -359,6 +382,8 @@ func (m *Manager) pollSubagents(chatID string, l *live, offsets map[string]int64
 		if err != nil {
 			slog.Warn("subagent entries not stored", "chat", chatID, "err", err)
 		}
+		// Display images of the subagent's answers (issue #120, F16), from the same chunk the entries came from.
+		m.captureSubagentImages(chatID, l.slot.Worker, f.Data)
 		for _, e := range added {
 			if e.Kind == "user_echo" {
 				var p struct {

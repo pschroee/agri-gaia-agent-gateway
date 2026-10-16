@@ -1107,6 +1107,11 @@ schemes); it shows `data:image/(png|jpeg|gif|webp);base64` directly, SVG never.
 Display images are not artifacts: they need no approval, do not appear in `artifacts` and only go to the logged-in
 UI.
 
+Since issue #120 the gateway saves them **also for answers of subagents**: the tools of a subagent run in the same
+execution sandbox (E9), so the paths are the same, and a response ID is unique across the chat. The subagent view
+loads the image of its answer with the same `msg` (`message.responseId` of the entry in `subagent_entries`, i.e. its
+`response_id`) and the chat as `chatId`.
+
 ## Files the agent sends
 
 Since issue #62 the agent sends result files to the user **without approval**: `agw-artifact upload <file> [--name
