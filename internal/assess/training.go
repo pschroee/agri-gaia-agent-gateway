@@ -164,6 +164,9 @@ type JudgeInput struct {
 	// Outputs: the number of outputs the model has (0: no run happened). It must be the number of
 	// classes in the data (R1.9).
 	Outputs int
+	// Counted: the pairs of truth and prediction the figures rest on (0: nothing was counted, e.g.
+	// because no class order could be derived).
+	Counted int
 	// Classes: the classes of the data.
 	Classes  []string
 	PerClass map[string]ClassFigures
@@ -253,15 +256,23 @@ func JudgeClassification(in JudgeInput) Report {
 	if in.NonFinite {
 		reasons = append(reasons, "the model answered values that are not finite numbers")
 	}
-	if in.Accuracy < in.Baseline.Accuracy+MinGainOverBaseline-minImprovementEpsilon {
-		reasons = append(reasons, fmt.Sprintf("the accuracy %.2f is not at least %.2f above the majority baseline %.2f",
-			in.Accuracy, MinGainOverBaseline, in.Baseline.Accuracy))
+	if in.Counted == 0 {
+		// Without a counted pair the figures say nothing: that is no usable result, whatever the reason
+		// for it is.
+		if in.MappingOK {
+			reasons = append(reasons, "no image of the measured set could be counted")
+		}
+	} else {
+		if in.Accuracy < in.Baseline.Accuracy+MinGainOverBaseline-minImprovementEpsilon {
+			reasons = append(reasons, fmt.Sprintf("the accuracy %.2f is not at least %.2f above the majority baseline %.2f",
+				in.Accuracy, MinGainOverBaseline, in.Baseline.Accuracy))
+		}
+		if in.PValue >= MaxPValue {
+			reasons = append(reasons, fmt.Sprintf("not better than the majority baseline with less than %g probability by chance (p = %.2g)",
+				MaxPValue, in.PValue))
+		}
+		reasons = append(reasons, weakClasses(in.PerClass)...)
 	}
-	if in.PValue >= MaxPValue {
-		reasons = append(reasons, fmt.Sprintf("not better than the majority baseline with less than %g probability by chance (p = %.2g)",
-			MaxPValue, in.PValue))
-	}
-	reasons = append(reasons, weakClasses(in.PerClass)...)
 	if len(reasons) == 0 {
 		rep.Verdict = Usable
 	} else {
@@ -304,11 +315,11 @@ func hints(in JudgeInput, verdict Verdict) []string {
 	if in.MissingClass != "" {
 		out = append(out, fmt.Sprintf("class %q of the training data does not occur in the measured images", in.MissingClass))
 	}
-	if in.SeenImages > 0 && in.SeenAccuracy-in.Accuracy > MaxSeenGap {
+	if in.Counted > 0 && in.SeenImages > 0 && in.SeenAccuracy-in.Accuracy > MaxSeenGap {
 		out = append(out, fmt.Sprintf("the model reaches %.2f on the images it saw and %.2f on the measured ones: likely overfitting",
 			in.SeenAccuracy, in.Accuracy))
 	}
-	if in.PlatformFigure != nil && abs(in.PlatformFigure.Value-in.Accuracy) > MaxPlatformGap {
+	if in.Counted > 0 && in.PlatformFigure != nil && abs(in.PlatformFigure.Value-in.Accuracy) > MaxPlatformGap {
 		out = append(out, fmt.Sprintf("the platform's figure %.2f differs from the measured accuracy %.2f: check preprocessing and class order",
 			in.PlatformFigure.Value, in.Accuracy))
 	}
@@ -328,13 +339,13 @@ func suggestions(in JudgeInput, verdict Verdict) []Suggestion {
 		return nil
 	}
 	var out []Suggestion
-	if in.SeenImages > 0 && in.SeenAccuracy < GoodAccuracy {
+	if in.Counted > 0 && in.SeenImages > 0 && in.SeenAccuracy < GoodAccuracy {
 		out = append(out, suggestionMoreEpochs)
 	}
-	if verdict == Questionable && in.SeenImages > 0 && in.SeenAccuracy-in.Accuracy > MaxSeenGap {
+	if in.Counted > 0 && verdict == Questionable && in.SeenImages > 0 && in.SeenAccuracy-in.Accuracy > MaxSeenGap {
 		out = append(out, suggestionRegularize)
 	}
-	if in.PlatformFigure != nil && abs(in.PlatformFigure.Value-in.Accuracy) > MaxPlatformGap {
+	if in.Counted > 0 && in.PlatformFigure != nil && abs(in.PlatformFigure.Value-in.Accuracy) > MaxPlatformGap {
 		out = append(out, suggestionCheckPreprocessing)
 	}
 	if verdict != Questionable {
@@ -541,12 +552,18 @@ func (s *Service) runTrainingCheck(ctx context.Context, chatID string, body asse
 	}
 	// The datasets the model could have seen (P2): every image in one of them is a seen image, whatever
 	// its file name is (P1).
-	seen, seenImages, seenRefs, err := s.seenImages(ctx, chatID, origin.SeenDatasetIDs)
+	seen, seenImages, seenRefs, seenCount, notClass, err := s.seenImages(ctx, chatID, origin.SeenDatasetIDs)
 	if err != nil {
 		return Report{}, err
 	}
 	in.SeenDatasets = seenRefs
-	in.PlatformFigure = platformFigure(tl, len(seen))
+	in.PlatformFigure = platformFigure(tl, seenCount)
+	if notClass {
+		// The training data carries boxes or polygons: the model is no classification model, and the
+		// gateway measures classification only (P8). The platform's figure stands in the report.
+		in.NotClassification = true
+		return JudgeClassification(in), nil
+	}
 
 	if model.Format != "onnx" {
 		rep := notMeasuredReport(in, ReasonNotONNX+" (format "+model.Format+")")
@@ -556,6 +573,12 @@ func (s *Service) runTrainingCheck(ctx context.Context, chatID string, body asse
 	}
 
 	items, skipped, err := s.datasetItems(ctx, chatID, evalID)
+	if errors.Is(err, ErrNotClassification) {
+		// The evaluation dataset is annotated with boxes or polygons, so its images are no
+		// classification (P8).
+		in.NotClassification = true
+		return JudgeClassification(in), nil
+	}
 	if err != nil {
 		return Report{}, err
 	}
@@ -673,6 +696,7 @@ func (s *Service) judgeRun(ctx context.Context, chatID string, in JudgeInput, ou
 		truth = append(truth, im.Class)
 		pred = append(pred, c)
 	}
+	in.Counted = len(truth)
 	in.Classes = classesOf(seen, measured)
 	figures := ClassMetrics(truth, pred, in.Classes)
 	in.PerClass = figures.PerClass
@@ -771,23 +795,32 @@ func (s *Service) datasetItems(ctx context.Context, chatID string, id int64) ([]
 }
 
 // seenImages loads every dataset the model could have seen and hashes its images (P1, P2). It answers
-// the images by SHA-256 (with their class), the images themselves (for the sample of the class order)
-// and the names for the report.
-func (s *Service) seenImages(ctx context.Context, chatID string, ids []int64) (map[string]Item, []checkImage, []DatasetRef, error) {
+// the images by SHA-256 (with their class), the images themselves (for the sample of the class order),
+// the names for the report, how many images the training saw (for the note of the platform's figure) and
+// whether one of the datasets is no classification dataset (boxes or polygons, P8).
+func (s *Service) seenImages(ctx context.Context, chatID string, ids []int64) (map[string]Item, []checkImage, []DatasetRef, int, bool, error) {
 	seen := map[string]Item{}
 	seenImages := []checkImage{}
 	var refs []DatasetRef
+	images := 0
+	notClass := false
 	for _, id := range ids {
 		if id <= 0 {
 			continue
 		}
 		files, err := s.datasetFiles(ctx, chatID, id)
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, nil, nil, 0, false, err
 		}
 		items, _, err := SplitOf(files)
-		if err != nil {
-			return nil, nil, nil, err
+		if errors.Is(err, ErrNotClassification) {
+			// The images were still seen; only their tags are no classification.
+			items, notClass = nil, true
+			images += len(files.Images)
+		} else if err != nil {
+			return nil, nil, nil, 0, false, err
+		} else {
+			images += len(items)
 		}
 		ref := DatasetRef{ID: id}
 		if info, err := s.datasetInfo(ctx, chatID, id); err == nil {
@@ -806,7 +839,7 @@ func (s *Service) seenImages(ctx context.Context, chatID string, ids []int64) (m
 			seenImages = append(seenImages, checkImage{Item: it, Data: data, Ext: endOf(name)})
 		}
 	}
-	return seen, seenImages, refs, nil
+	return seen, seenImages, refs, images, notClass, nil
 }
 
 // imageOfSHA finds the image bytes of a SHA-256 in an archive (they were hashed right before).

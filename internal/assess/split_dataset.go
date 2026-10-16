@@ -53,6 +53,10 @@ const MsgSplitNotClassification = "split_dataset supports classification dataset
 // MsgTrainShare is the refusal of a share that is not in the accepted steps.
 const MsgTrainShare = "train_share must be 50, 60, 70, 80 or 90"
 
+// ErrNotClassification is the error of a dataset that is annotated with boxes or polygons: the gateway
+// measures classification models only (P8). The message is the one the agent sees.
+var ErrNotClassification = errors.New(MsgSplitNotClassification)
+
 // MsgNoAnnotations is the refusal of a dataset without an annotation file.
 const MsgNoAnnotations = "the dataset archive carries no annotations/annotations.xml; a split needs the annotations"
 
@@ -321,7 +325,7 @@ func SplitOf(files DatasetFiles) (items []Item, stats SplitStats, err error) {
 		}
 	}
 	if stats.Shapes > 0 {
-		return nil, stats, errors.New(MsgSplitNotClassification)
+		return nil, stats, ErrNotClassification
 	}
 	return items, stats, nil
 }

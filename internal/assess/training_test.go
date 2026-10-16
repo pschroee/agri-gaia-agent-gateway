@@ -33,7 +33,7 @@ func judgeInput() JudgeInput {
 			"0": {Precision: &p, Recall: 0.95, F1: 0.93, Support: 20},
 			"1": {Precision: &p, Recall: 0.85, F1: 0.87, Support: 20},
 		},
-		Accuracy: 0.90, MacroF1: 0.90,
+		Accuracy: 0.90, MacroF1: 0.90, Counted: 40,
 		Baseline: Baseline{Class: "0", Accuracy: 0.50, MacroF1: 0.40},
 		PValue:   0.0001,
 		Mapping:  map[int]string{0: "0", 1: "1"}, MappingOK: true,
