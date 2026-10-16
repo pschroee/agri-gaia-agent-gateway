@@ -55,6 +55,35 @@ func (m *Manager) loggedSummaryReader(chatID string, rl *readLog) platform.Doer 
 	}
 }
 
+// cachedReads keeps the answer of a reading call for the rest of one approval (own code C-E4): the summary and
+// the structured data of a run read the same dataset, and the activity entry of the summary's reads (issue
+// L2/#119) names every path once. Only successful answers are kept — a failed read is tried again. The reader
+// runs during one approval on one goroutine, the mutex only guards the map against the summary's own retries.
+func cachedReads(read platform.Doer) platform.Doer {
+	if read == nil {
+		return nil
+	}
+	var mu sync.Mutex
+	cache := map[string]platform.Result{}
+	return func(ctx context.Context, r platform.Request) (platform.Result, error) {
+		key := r.String()
+		mu.Lock()
+		res, ok := cache[key]
+		mu.Unlock()
+		if ok {
+			return res, nil
+		}
+		res, err := read(ctx, r)
+		if err != nil || res.Status != "ok" || res.HTTPStatus < 200 || res.HTTPStatus >= 300 {
+			return res, err
+		}
+		mu.Lock()
+		cache[key] = res
+		mu.Unlock()
+		return res, nil
+	}
+}
+
 // logSummaryReads writes the one activity entry of a summary's reads (DL2.5). Nothing is logged when no read
 // happened (binding without a platform, or a summary that names no object). phase is "proposed" for the reads that
 // wrote the summary at proposal time and "approval" for the re-read at the moment of the decision.

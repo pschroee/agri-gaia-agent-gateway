@@ -242,6 +242,10 @@ type Approval struct {
 	// the time a re-read at the moment of the approval found other values. Both empty/nil while nothing changed.
 	SummaryProposed  string     `json:"summary_proposed,omitempty"`
 	SummaryChangedAt *time.Time `json:"summary_changed_at,omitempty"`
+	// Notebook: the structured data of the approval of a run in the chat's notebook server (own code C-E4), built
+	// by the notebook service and written as it is — entry, files with size, SHA-256 and text, datasets and limits.
+	// The frontend shows it instead of the text of the preview; empty for every other kind of approval.
+	Notebook json.RawMessage `json:"notebook,omitempty"`
 }
 
 type SocketCall struct {
@@ -789,22 +793,29 @@ func (s *Store) GetArtifact(ctx context.Context, chatID, kind, name string) (Art
 	return scanArtifact(s.pool.QueryRow(ctx, `SELECT `+artifactCols+` FROM artifacts WHERE chat_id=$1 AND kind=$2 AND name=$3`, chatID, kind, name))
 }
 
-const approvalCols = `id::text, chat_id::text, kind, via, name, size, sha256, content_type, pending_key, COALESCE(preview,''), state, created_at, decided_at, session, tool_call_id, COALESCE(effect,''), COALESCE(summary,''), COALESCE(summary_proposed,''), summary_changed_at`
+const approvalCols = `id::text, chat_id::text, kind, via, name, size, sha256, content_type, pending_key, COALESCE(preview,''), state, created_at, decided_at, session, tool_call_id, COALESCE(effect,''), COALESCE(summary,''), COALESCE(summary_proposed,''), summary_changed_at, COALESCE(notebook::text,'')`
 
 func scanApproval(row pgx.Row) (Approval, error) {
 	var a Approval
-	err := row.Scan(&a.ID, &a.ChatID, &a.Kind, &a.Via, &a.Name, &a.Size, &a.SHA256, &a.ContentType, &a.PendingKey, &a.Preview, &a.State, &a.CreatedAt, &a.DecidedAt, &a.Session, &a.ToolCallID, &a.Effect, &a.Summary, &a.SummaryProposed, &a.SummaryChangedAt)
+	var notebook string
+	err := row.Scan(&a.ID, &a.ChatID, &a.Kind, &a.Via, &a.Name, &a.Size, &a.SHA256, &a.ContentType, &a.PendingKey, &a.Preview, &a.State, &a.CreatedAt, &a.DecidedAt, &a.Session, &a.ToolCallID, &a.Effect, &a.Summary, &a.SummaryProposed, &a.SummaryChangedAt, &notebook)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return a, ErrNotFound
 	}
-	return a, err
+	if err != nil {
+		return a, err
+	}
+	if notebook != "" {
+		a.Notebook = json.RawMessage(notebook)
+	}
+	return a, nil
 }
 
 func (s *Store) CreateApproval(ctx context.Context, a Approval) (Approval, error) {
 	return scanApproval(s.pool.QueryRow(ctx, `
-INSERT INTO approvals (chat_id, kind, via, name, size, sha256, content_type, pending_key, preview, session, tool_call_id, effect, summary)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NULLIF($9,''),$10,$11,NULLIF($12,''),NULLIF($13,'')) RETURNING `+approvalCols,
-		a.ChatID, a.Kind, a.Via, a.Name, a.Size, a.SHA256, a.ContentType, a.PendingKey, a.Preview, a.Session, a.ToolCallID, a.Effect, a.Summary))
+INSERT INTO approvals (chat_id, kind, via, name, size, sha256, content_type, pending_key, preview, session, tool_call_id, effect, summary, notebook)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NULLIF($9,''),$10,$11,NULLIF($12,''),NULLIF($13,''),NULLIF($14,'')::jsonb) RETURNING `+approvalCols,
+		a.ChatID, a.Kind, a.Via, a.Name, a.Size, a.SHA256, a.ContentType, a.PendingKey, a.Preview, a.Session, a.ToolCallID, a.Effect, a.Summary, string(a.Notebook)))
 }
 
 func (s *Store) GetApproval(ctx context.Context, id string) (Approval, error) {

@@ -97,9 +97,9 @@ func (m *Manager) ProposePlan(ctx context.Context, chatID, slotID, via string, r
 	}
 	rl := &readLog{}
 	for i, s := range platform.SummarizePlan(ctx, m.loggedSummaryReader(chatID, rl), calls) {
-		steps[i].Summary = visibleControls(s)
+		steps[i].Summary = platform.VisibleControls(s)
 	}
-	preview := visibleControls(plan.Preview(p.Title, steps, auto))
+	preview := platform.VisibleControls(plan.Preview(p.Title, steps, auto))
 	if n := len([]rune(preview)); n > maxPlatformPreview {
 		return platform.Result{Status: "error", Message: fmt.Sprintf("plan too large for an approval (%d characters, at most %d); split it", n, maxPlatformPreview)}, nil
 	}

@@ -412,9 +412,9 @@ func baseName(p string) string {
 const (
 	// NotebookLogMaxTail is the longest log the tool asks for.
 	NotebookLogMaxTail = 2000
-	// notebookTextMax is how much of a file the approval shows when it is not code: enough for a
+	// NotebookTextMax is how much of a file the approval shows when it is not code: enough for a
 	// configuration, not enough to drown the code above it.
-	notebookTextMax = 20 << 10
+	NotebookTextMax = 20 << 10
 )
 
 // NotebookPreview is the body of the approval of a run (own code C-E3): the user must see the code
@@ -458,8 +458,8 @@ func notebookFileText(name string, data []byte) string {
 	if !utf8.Valid(data) {
 		return "(not shown: not valid UTF-8)\n"
 	}
-	if len(data) > notebookTextMax {
-		return fmt.Sprintf("(not shown: %d bytes of text, more than %d KB)\n", len(data), notebookTextMax>>10)
+	if len(data) > NotebookTextMax {
+		return fmt.Sprintf("(not shown: %d bytes of text, more than %d KB)\n", len(data), NotebookTextMax>>10)
 	}
 	return string(data) + "\n"
 }
@@ -481,7 +481,7 @@ func notebookCells(data []byte) (string, bool) {
 		if c.Type != "code" {
 			continue
 		}
-		src, ok := notebookSource(c.Source)
+		src, ok := NotebookSource(c.Source)
 		if !ok || strings.TrimSpace(src) == "" {
 			continue
 		}
@@ -498,8 +498,8 @@ func notebookCells(data []byte) (string, bool) {
 	return sb.String(), true
 }
 
-// notebookSource reads the source of a cell: a list of lines or one string.
-func notebookSource(raw json.RawMessage) (string, bool) {
+// NotebookSource reads the source of a cell: a list of lines or one string.
+func NotebookSource(raw json.RawMessage) (string, bool) {
 	var lines []string
 	if json.Unmarshal(raw, &lines) == nil {
 		return strings.Join(lines, ""), true

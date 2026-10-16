@@ -31,3 +31,7 @@ CREATE TABLE IF NOT EXISTS watch_jobs (
 );
 CREATE INDEX IF NOT EXISTS watch_jobs_open ON watch_jobs (state) WHERE state = 'running';
 CREATE INDEX IF NOT EXISTS watch_jobs_chat ON watch_jobs (chat_id, started_at DESC);
+
+-- The address the user can open for a job (own code C-E4): the kind notebook_run fills it with the run in the
+-- user's JupyterHub, every other kind leaves it empty. It appears with the first poll of the job.
+ALTER TABLE watch_jobs ADD COLUMN IF NOT EXISTS link text NOT NULL DEFAULT '';

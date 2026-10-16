@@ -328,6 +328,19 @@ type Approval = {
   summary?: string;       // platform_write and plan: what will happen, written by the gateway (see "Summaries by the gateway")
   summary_proposed?: string;   // the summary as it was proposed: set when a click on "Approve" found another platform state
   summary_changed_at?: string; // when that change was seen (see "Summaries by the gateway")
+  notebook?: NotebookApprovalData; // platform_write of a run in the chat's notebook server (own code C-E4): the code of
+                              //   the run file by file, for the card instead of the text of the preview
+};
+// The structured data of the approval of a run in the chat's notebook server (own code C-E4, see "Notebook tools").
+// The gateway builds it from the call, from the files the socket read (their SHA-256 stands in the approval) and from
+// the platform state it read itself — never from the agent's text. Every string is escaped for display (control and
+// bidi characters as \u sequences, in the JSON of a notebook with the extra backslash that survives parsing).
+type NotebookApprovalData = {
+  entry: string;        // file name of the script or notebook that runs
+  files: { name: string; size: number; sha256: string; text?: string }[];  // text: the file's text as the card shows
+                        //   it (a notebook as its code cells in JSON); missing when the approval shows no text of it
+  datasets: { id: number; name?: string }[];  // name: as the platform reports it now; missing when it could not be read
+  limits: { cpus: number; mem_gb: number; timeout_min: number; internet: boolean };
 };
 type SocketCall = { id: number; chat_id?: string; slot_id: string; via: "cli" | "mcp" | "api" | "user" /* user: the user's internet switch */; op: string; detail: string; result: string; created_at: string; session?: string; tool_call_id?: string;
   duration_ms?: number /* platform calls: round trip to the platform in ms (token exchange included, approval wait excluded); missing: not measured */;
@@ -369,7 +382,7 @@ type ActivityPage = { calls: ActivityCall[]; chats: Record<string, { id: string;
 | `POST /api/chats/{id}/plans/{plan}/pause` | `Plan` | pauses a running autonomous plan (`pause_reason` `user`); a running chat is stopped. 404 for a foreign or unknown plan, 409 `{"error":"plan is <state>","state":…}` when it is not `approved`. See *Autonomous plans* |
 | `POST /api/chats/{id}/plans/{plan}/resume` | `Plan` | resumes a `paused` plan and queues a note for the agent (`NotePlan`). 409 when it is not `paused`. Only this route resumes a plan; the agent has no tool for it |
 | `POST /api/chats/{id}/plans/{plan}/cancel` | `Plan` | ends an `approved` or `paused` plan: `cancelled`, its open steps `skipped`, a note queued. 409 otherwise |
-| `GET /api/chats/{id}/jobs` | `WatchJob[]` | observed platform jobs of the chat, newest first (A-E2): state, percent, message, ETA, log tail, outputs and `plan_id`/`step_idx` for the job of a plan step. 404 for foreign and unknown chats. See *Long-running platform jobs* |
+| `GET /api/chats/{id}/jobs` | `WatchJob[]` | observed platform jobs of the chat, newest first (A-E2): state, percent, message, ETA, log tail, outputs, `link` (the address the user can open, own code C-E4) and `plan_id`/`step_idx` for the job of a plan step. 404 for foreign and unknown chats. See *Long-running platform jobs* |
 | `POST /api/chats/{id}/plans/{plan}/steps/{idx}/stop` | `Plan` | the user stops the platform job a waiting step observes (`watch_job`): the call runs with the user's token and is logged as `socket_calls` with `via: "user"`. 404 unknown plan, 409 if the step does not wait or its kind cannot be stopped |
 | `POST /api/chats/{id}/jobs/{job}/stop` | `WatchJob` | the same for a single job outside a plan. 404 unknown job, 409 if it is not running or cannot be stopped |
 | `GET /api/chats/{id}/annotation` | `{cvat_url, runs: AnnotationRun[], jobs: AnnotationJob[]}` | runs and jobs of pre-annotation with their results, oldest first, for the cards in the history (V4); reads the database and never wakes the chat. 404 for foreign and unknown chats. See *Annotation cards in the history (V4)* |
@@ -1155,10 +1168,14 @@ user's token.
 - **The table `watch_jobs`** is the one place for every observed job, inside and outside plans: `id` (`w` + 12 hex),
   `chat_id`, `plan_id` + `step_idx` (empty/0 outside plans), `tool_call_id`, `kind`, `ref`, `state`
   (`running`/`done`/`failed`), `progress` (percent, NULL while unknown), `message`, `eta`, `log_tail`, `outputs`,
-  `fail_reads`, `started_at`, `checked_at`, `ended_at`. A plan step names its job in `plan_steps.watch_job` and waits in
+  `link`, `fail_reads`, `started_at`, `checked_at`, `ended_at`. A plan step names its job in `plan_steps.watch_job` and waits in
   state **`waiting`** — a value of the state column of `plan_steps`, no new type; `plan_steps` also carries
   `parked_approval` (see below) and, since A-E2, `confirm_each` (the trait of the route at proposal time, so that a
   reloaded plan never covers a call that has to ask the user every time).
+- **`link` (own code C-E4)** is the address the user can open for the job, when the kind knows one: the kind
+  `notebook_run` writes the run in the user's JupyterHub there with its first poll (the run's link, built by the
+  gateway), every other kind leaves the field empty — and a card builds no address of its own. It is a field of the job
+  in the answer of `GET /api/chats/{id}/jobs` and in the SSE `job` event (`link`, missing while empty).
 - **Which call starts a job** is decided by the gateway from the route, never by the agent: `watch.For` matches the call
   after it succeeded. Today: `POST /train/config` and `POST /containers/{id}/run` → `platform_task`, `POST
   /container-images/build` → `image_build`, and the run of a container chains on: the task ends when the container is
@@ -1194,6 +1211,11 @@ user's token.
   delivered — but only for an autonomous plan that was approved while the step ran. Over `max_auto_turns` the plan is
   paused (`pause_reason` `budget_turns`), the note stays queued and the SSE event `auto_held` names the budget; a
   background task's note keeps the gateway's own limits (`AGW_AUTO_TURNS_MAX`, `AGW_BG_WAKES_PER_HOUR`).
+- **The stop of a job (D2.9, #99):** `POST /api/chats/{id}/jobs/{job}/stop` and the same route for a plan step run the
+  call the kind names in `Kind.Stop` with the **user's** token (no delegation check, no approval — the user is the one
+  asking), log it as a user call and add the effect class of the route. A kind without a stop, a job that is not
+  running and a call the kind refuses answer 409. A stop call may be a **virtual** path the gateway answers itself
+  (`/_agw/notebook/stop`, own code C-E4): it goes to the registered doer and never to the platform.
 - **Outside a plan** a job is only observed for the cards and the activity: no note, no wake-up — the agent follows such
   a job itself (`GET …/jobs`, `training_status`), like before.
 - **Parked approvals (D2.8):** a step of an **autonomous** plan that the plan does not cover (irreversible, confirm
@@ -1573,10 +1595,28 @@ user (uid 1000) and reads state, log and results back the same way. The server h
   every file with size and SHA-256: the whole text of a `.py` file, the code cells of an `.ipynb`, the text of other
   files while it is valid UTF-8 and at most 20 KB, otherwise a note instead of the text. **What the user approves is
   what runs:** the files come from `readFiles` (SHA-256 in the approval), not from the sandbox at start time.
+- **Structured data of the approval (own code C-E4).** Next to that text the approval carries the field `notebook`
+  (`NotebookApprovalData`, see "Types"): `entry`, `files` with name, size, SHA-256 and the text the card shows,
+  `datasets` with the name the gateway read through the summary's reader, and `limits` of this instance (2 CPUs,
+  8 GB, the time limit of the call, no internet). The frontend shows it instead of the preview; the preview stays for
+  the log and for clients from before. A file the preview does not show gets no `text` either, and the `text` of a
+  notebook is its code cells as JSON without the outputs — card and preview never disagree about what the user sees of
+  a file. Every string is escaped for display: a file name, a dataset name, the entry and the code. The field is
+  missing for every other kind of approval and for approvals from before C-E4.
 - **Limits of a run.** At most 50 files, 1 MB each, 4 MB together, endings `.py .ipynb .txt .json .yaml .yml .csv .md
   .cfg .toml`, at most 20 arguments of `A-Za-z0-9_.,=:/+-`, at most 3 datasets. `timeout_minutes` defaults to 120 and
   is capped by `AGW_NOTEBOOK_TIMEOUT_MAX_MIN` (default 480 = the longest an autonomous plan may run). One run at a
   time per chat; a second one is refused. A run counts against `AGW_COMPUTE_MAX_PER_CHAT` like a training.
+- **Stopping a run (own code C-E4).** The observer kind `notebook_run` is stoppable, and its stop is
+  `POST /_agw/notebook/stop` — the one call the notebook paths have for it: a run is not addressable on its own, the
+  code runs **in the chat's notebook server**, and stopping that server takes the container with the code in it away
+  (`Hub.Stop`: `DELETE /users/<user>/servers/<server>`). The user reaches it through `POST
+  /api/chats/{id}/jobs/{job}/stop` (A-E2, D2.9): the call runs with the user's token, is classified as `update
+  notebook` (`write`) and appears in the activity as a user call. A chat whose server is not running is no error, the
+  hub answers 404 and the stop counts as done. The run itself then has **no exit code** (nothing was left to write
+  one): its next `notebook_run_status` (and the poll of its job) records its end, reports `failed` and says `the run
+  ended without an exit code: the notebook server of this chat was stopped while it went` — so the run neither blocks
+  the chat's next run nor keeps its card "running".
 - **Files in the container.** The code runs in a fresh directory `/home/jovyan/work/runs/<run-id>/` (`r<YYYYMMDDhhmmss>`
   plus four hex digits), a `.py` entry with `python -u <entry> [args]`, an `.ipynb` with `jupyter nbconvert --execute`
   (its result is `executed-<entry>`). A run's output goes to `run.log` in that directory, the exit code to

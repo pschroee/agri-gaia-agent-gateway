@@ -233,7 +233,7 @@ func TestNotebookPreviewShowsCode(t *testing.T) {
 	}
 
 	// A file the approval cannot show says so instead of showing nothing.
-	big := strings.Repeat("x", notebookTextMax+1)
+	big := strings.Repeat("x", NotebookTextMax+1)
 	r.Uploads = []Upload{{Field: "file", Name: "huge.py", Data: []byte(big), SHA256: "dd44"}}
 	text, err = NotebookPreview(r)
 	if err != nil {

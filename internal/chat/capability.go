@@ -4,7 +4,12 @@
 
 package chat
 
-import "context"
+import (
+	"context"
+	"encoding/json"
+
+	"agw/internal/platform"
+)
 
 // The capability "notebook" (own code C-E3, G1.11): whether this chat can run its own code in its
 // notebook server in JupyterHub. The entry lives in its own file; the service behind it is wired in
@@ -19,6 +24,10 @@ type Notebooker interface {
 	NotebookState(ctx context.Context, chatID string) (available bool, detail string)
 	// StopChat stops the chat's notebook server; the files of the runs stay. The trash uses it.
 	StopChat(ctx context.Context, chatID string) error
+	// ApprovalData builds the structured data of the approval of a run (own code C-E4): entry, files with
+	// size, SHA-256 and text, datasets with their names and the limits. read answers the reading calls of
+	// the chat's user and goes through the same log as the summary; nil leaves the dataset names empty.
+	ApprovalData(ctx context.Context, req platform.Request, read platform.Doer) (json.RawMessage, error)
 }
 
 // notebookWithout is what the agent should do without a notebook server (G1.13); the runner and the

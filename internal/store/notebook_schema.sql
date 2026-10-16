@@ -5,6 +5,11 @@
 -- Runs of a chat's notebook server in JupyterHub (own code C-E3). Registered by the store seam
 -- (registerSchema, G1.6): applied after schema.sql at every start, idempotent.
 
+-- The structured data of the approval of a run (own code C-E4): entry, files with size, SHA-256 and text,
+-- datasets and limits, built by the notebook service. The frontend shows it instead of the text preview;
+-- NULL for every other kind of approval and for approvals from before C-E4.
+ALTER TABLE approvals ADD COLUMN IF NOT EXISTS notebook jsonb;
+
 CREATE TABLE IF NOT EXISTS notebook_runs (
     id          text PRIMARY KEY,
     chat_id     uuid NOT NULL REFERENCES chats(id) ON DELETE CASCADE,

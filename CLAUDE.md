@@ -354,6 +354,26 @@ refer to this repository.
   a run is recorded where its exit code is read (`Status`, the watcher), never by the reaper.
 - One run at a time per chat; every run counts against `AGW_COMPUTE_MAX_PER_CHAT`. Rules, limits and paths in `API.md`,
   *Notebook tools*.
+- A run is **stoppable by the user**: `kind.Stop` of `notebook_run` names `POST /_agw/notebook/stop`, which takes down
+  the chat's notebook server together with the code running in it — a single run is not addressable (own code C-E4,
+  design F2: the button uses "Stop job" of A-E2). `StopJob` therefore runs the call of a kind through
+  **`m.platformDo`**: a stop call may be a virtual path the gateway answers itself, and `m.opt.Platform.Do` would send
+  it to the platform, where nothing is behind `/_agw/…`. A run whose server went away ends **without an exit code**:
+  `Status` records its end (`store.EndNotebookRun`, `exit_code` stays NULL), reports `failed` and says that the run was
+  stopped — so it neither blocks the next run (`ActiveNotebookRun`) nor keeps its job and card "running" for good.
+- The approval of a run carries, next to its text preview, the **structured data** the frontend card shows
+  (`approvals.notebook`, `notebook.ApprovalData`, own code C-E4): entry, files with size, SHA-256 and text, datasets with
+  the names the gateway read, and the limits. Every string in it is escaped for display
+  (`platform.VisibleControls`; in the JSON of a notebook with the extra backslash of `VisibleControlsJSON`), and a file
+  the preview does not show gets no text either. The dataset names are read through the **same reader as the summary**
+  (`cachedReads`, one read per path), so they appear in the summary's single activity entry and not as calls of their
+  own. A re-read at the moment of the approval (`summary_recheck`) replaces the summary but **never** the code — the
+  files, sizes and hashes are what the user was asked about. A notebook is delivered as **its code cells in JSON**
+  without outputs, so `notebookCells` in the frontend can show them and a hidden character cannot come back through the
+  JSON parse. The **link** of a run ("Open in JupyterHub") reaches the card as `link` of the `job` event and of
+  `GET /api/chats/{id}/jobs`: the kind `notebook_run` writes the run's link into `watch_jobs.link` with its first poll
+  (`watch.Progress.Link`, cleared when a row is handed over to another kind, empty for every other kind), and no card
+  builds the address itself.
 
 ## Result checks (R0)
 

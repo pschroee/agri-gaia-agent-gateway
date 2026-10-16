@@ -7,22 +7,36 @@ package chat
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"strings"
 	"sync"
 	"testing"
 
 	"agw/internal/delegation"
+	"agw/internal/notebook"
 	"agw/internal/platform"
 	"agw/internal/store"
+	"agw/internal/watch"
 )
 
 // fakeNotebook is the notebook service of these tests: it answers the chat's virtual notebook paths
-// and counts what reached it.
+// and counts what reached it. The structured data of an approval is built by the real service (own code
+// C-E4), so a test of the approval shows what the gateway would write into it.
 type fakeNotebook struct {
 	mu      sync.Mutex
 	calls   []platform.Request
 	res     platform.Result
 	stopped []string
+	real    *notebook.Notebooks
+}
+
+// ApprovalData answers with the data of the real service (own code C-E4): the fake itself only answers
+// the notebook paths.
+func (f *fakeNotebook) ApprovalData(ctx context.Context, req platform.Request, read platform.Doer) (json.RawMessage, error) {
+	if f.real == nil {
+		f.real = notebook.New(notebook.Config{}, nil, nil, nil)
+	}
+	return f.real.ApprovalData(ctx, req, read)
 }
 
 func (f *fakeNotebook) Do(_ context.Context, _ string, req platform.Request) (platform.Result, error) {
@@ -123,6 +137,116 @@ func TestNotebookRunAlwaysAsksWithConfirmNone(t *testing.T) {
 	}
 }
 
+// The approval of a run carries the structured data of the card (own code C-E4): entry, every file with
+// size and SHA-256 and its text, the datasets and the limits. The reads for the names of the datasets go
+// through the reader of the summary, so its activity entry names every path once.
+func TestNotebookRunApprovalData(t *testing.T) {
+	e := setup(t)
+	withNamedPlatform(t, e)
+	nb := &fakeNotebook{}
+	chatID, slot := notebookTestChat(t, e, nb)
+	ctx := context.Background()
+
+	code := "import torch\nprint('hello')\n"
+	done := startCall(e, chatID, slot, notebookRunReq(t, code))
+	ap := pendingApproval(t, e, chatID)
+	if len(ap.Notebook) == 0 {
+		t.Fatal("the approval of a run carries no structured data")
+	}
+	var data notebook.ApprovalData
+	if err := json.Unmarshal(ap.Notebook, &data); err != nil {
+		t.Fatalf("notebook field %s: %v", ap.Notebook, err)
+	}
+	if data.Entry != "train.py" {
+		t.Errorf("entry: %q", data.Entry)
+	}
+	if len(data.Files) != 1 || data.Files[0].Name != "train.py" || data.Files[0].SHA256 != "aa11" ||
+		data.Files[0].Size != int64(len(code)) {
+		t.Fatalf("files: %+v", data.Files)
+	}
+	if data.Files[0].Text == nil || *data.Files[0].Text != code {
+		t.Errorf("text of the file: %v", data.Files[0].Text)
+	}
+	if len(data.Datasets) != 1 || data.Datasets[0].ID != 17 {
+		t.Errorf("datasets: %+v", data.Datasets)
+	}
+	if l := data.Limits; l.CPUs != 2 || l.MemGB != 8 || l.TimeoutMin != 120 || l.Internet {
+		t.Errorf("limits: %+v", l)
+	}
+	// The read of the dataset serves the summary and the data; the entry names it once (issue L2/#119).
+	reads := summaryReadEntries(t, e, chatID)
+	if len(reads) != 1 || strings.Count(reads[0].Detail, "GET /datasets/17") != 1 {
+		t.Fatalf("summary reads: %+v", reads)
+	}
+	if _, err := e.m.Decide(ctx, ap.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	<-done
+}
+
+// Only the approval of a run carries the structured data (own code C-E4); another platform call leaves
+// the field empty.
+func TestNotebookApprovalDataOnlyForRuns(t *testing.T) {
+	e := setup(t)
+	withNamedPlatform(t, e)
+	ctx := context.Background()
+	c, err := e.m.Create(ctx, NewChat{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	slot := e.m.live[c.ID].slot.ID
+	req, err := platform.Normalize(platform.Request{Method: "PATCH", Path: "/datasets/17",
+		Body: json.RawMessage(`{"name":"renamed"}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := startCall(e, c.ID, slot, req)
+	ap := pendingApproval(t, e, c.ID)
+	if len(ap.Notebook) != 0 {
+		t.Errorf("a plain platform call carries notebook data: %s", ap.Notebook)
+	}
+	if _, err := e.m.Decide(ctx, ap.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	<-done
+}
+
+// The stop of a notebook run at the user's request reaches the gateway itself (own code C-E4, "Stop job" of
+// A-E2 D2.9): the call of the kind is a virtual path, and the stop of a job must not send it to the platform,
+// where nothing is behind that path.
+func TestStopNotebookJobReachesTheGateway(t *testing.T) {
+	e := setup(t)
+	got := withPlatform(t, e)
+	ctx := context.Background()
+	nb := &fakeNotebook{}
+	chatID, _ := notebookTestChat(t, e, nb)
+	// The service registers its kinds in main.go; the test registers the kind itself. Its route is not
+	// registered: a route would make other tests' notebook calls start an observed job.
+	watch.Register(notebook.New(notebook.Config{}, nil, nil, nil).WatchKind())
+	jobID, err := e.st.AddWatchJob(ctx, store.WatchJob{ChatID: chatID, Kind: notebook.KindName,
+		Ref: "r20260101120000-abcd"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, err := e.m.StopJob(ctx, chatID, jobID)
+	if err != nil {
+		t.Fatalf("StopJob: %v", err)
+	}
+	if job.ID != jobID || job.State != store.JobRunning {
+		t.Errorf("job: %+v", job)
+	}
+	// The stop went to the notebook service and not to the platform.
+	nb.mu.Lock()
+	calls := append([]platform.Request(nil), nb.calls...)
+	nb.mu.Unlock()
+	if len(calls) != 1 || calls[0].Method != http.MethodPost || calls[0].Path != platform.NotebookPrefix+"/stop" {
+		t.Fatalf("calls at the notebook service: %+v", calls)
+	}
+	if calls := got(); len(calls) != 0 {
+		t.Errorf("the stop went to the platform: %v", calls)
+	}
+}
+
 // A run counts against the compute limit of the chat like a training (AGW_COMPUTE_MAX_PER_CHAT).
 func TestNotebookRunCountsCompute(t *testing.T) {
 	e := setup(t)
@@ -184,7 +308,7 @@ func TestNotebookPreviewShowsCode(t *testing.T) {
 	<-done
 
 	// A run whose code does not fit into one approval is refused: the user only approves what they see.
-	// A single file above the display cap (platform.notebookTextMax) is noted rather than shown, so the
+	// A single file above the display cap (platform.NotebookTextMax) is noted rather than shown, so the
 	// limit is reached with several files of printable size.
 	long := notebookRunReq(t, "x")
 	long.Uploads = nil

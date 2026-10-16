@@ -134,8 +134,8 @@ func TestPlatformCallPreviewTooLarge(t *testing.T) {
 	}
 }
 
-// Review M7: expiry of the waiting time executes nothing; a writing GET (K1) asks for approval;
-// control characters appear visibly in the preview.
+// Review M7: expiry of the waiting time executes nothing; a writing GET (K1) asks for approval.
+// The control characters of a preview are asserted in internal/platform (VisibleControls).
 func TestPlatformCallExpiredAndWritingGET(t *testing.T) {
 	e := setup(t)
 	got := withPlatform(t, e)
@@ -155,10 +155,6 @@ func TestPlatformCallExpiredAndWritingGET(t *testing.T) {
 	}
 	if r := <-done; r.Status != "rejected" || len(got()) != 0 { // ApprovalTimeout in the test: 2 s
 		t.Fatalf("expiry: %+v %v", r, got())
-	}
-	rlo := string(rune(0x202e)) // bidi control character RIGHT-TO-LEFT OVERRIDE
-	if s := visibleControls("a" + rlo + "b\nc"); s != "a\\u202eb\nc" {
-		t.Fatalf("control characters: %q", s)
 	}
 }
 

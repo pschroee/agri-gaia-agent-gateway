@@ -41,17 +41,31 @@ func RunIDFrom(_ platform.Request, res platform.Result) (string, bool) {
 
 // WatchKind is the kind of job that observes one run of this chat's notebook server.
 func (n *Notebooks) WatchKind() watch.Kind {
-	return watch.Kind{Name: KindName, Poll: n.poll}
+	return watch.Kind{Name: KindName, Poll: n.poll, Stop: stopRun}
+}
+
+// stopRun builds the call that ends a run of this kind at the user's request ("Stop job", A-E2 D2.9, own
+// code C-E4). A single run is not addressable: the code runs in the chat's notebook server, so the call
+// stops that server — the hub removes its container (Hub.Stop: DELETE /users/<user>/servers/<server>),
+// and with the container the code that runs in it. The run then ends without an exit code, and Status
+// records and explains that. Without a run id in the reference there is nothing to stop, so the kind
+// refuses as the other kinds do.
+func stopRun(j watch.Job) (platform.Request, bool) {
+	if !platform.NotebookRunIDRe.MatchString(j.Ref) {
+		return platform.Request{}, false
+	}
+	return platform.Request{Method: http.MethodPost, Path: platform.NotebookPrefix + "/stop"}, true
 }
 
 // poll answers the state of a run. It reads the same way a status call does, so a run that ended
-// while nobody looked gets its end recorded here too.
+// while nobody looked gets its end recorded here too. The link goes along (own code C-E4): it is the
+// address of the run the card offers, and the gateway is the one that knows it.
 func (n *Notebooks) poll(ctx context.Context, j watch.Job, _ watch.Reader) (watch.Progress, error) {
 	info, err := n.Status(ctx, j.ChatID, j.Ref)
 	if err != nil {
 		return watch.Progress{}, err
 	}
-	p := watch.Progress{State: info.State, Message: runMessage(info), Outputs: runOutputs(info)}
+	p := watch.Progress{State: info.State, Message: runMessage(info), Outputs: runOutputs(info), Link: info.Link}
 	if info.State != StateRunning {
 		pct := 100.0
 		p.Percent = &pct
