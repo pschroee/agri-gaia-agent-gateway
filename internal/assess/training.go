@@ -536,6 +536,11 @@ func (s *Service) runTrainingCheck(ctx context.Context, chatID string, body asse
 	if err != nil {
 		return Report{}, err
 	}
+	if logText == "" {
+		// The archive carried no train.log (or another name): the end of the training container's log is
+		// the second way to the platform's own figure (R1.13).
+		logText = s.containerLog(ctx, chatID, origin.TrainContainerID)
+	}
 	tl := ParseTrainLog(logText)
 	in.LogNaN = tl.NaN
 
@@ -1055,6 +1060,27 @@ func (s *Service) modelFile(ctx context.Context, chatID string, id int64) ([]byt
 		}
 	}
 	return model, logText, nil
+}
+
+// logTailLines is how many lines the fallback reads from a training container's log: Lightning writes its
+// metric table at the very end, and without a tail the backend answers the whole log.
+const logTailLines = 2000
+
+// containerLog reads the end of the log of a training container (R1.13, the fallback when the model's
+// archive carries no train.log). An unreadable answer is no log: the report then has no platform figure.
+func (s *Service) containerLog(ctx context.Context, chatID string, trainID int64) string {
+	if trainID <= 0 {
+		return ""
+	}
+	req := platform.Request{Method: http.MethodGet,
+		Path:  "/train/containers/" + strconv.FormatInt(trainID, 10) + "/logs",
+		Query: map[string]string{"tail": strconv.Itoa(logTailLines)}}
+	res, err := s.Plat.Do(ctx, chatID, req)
+	s.log(ctx, chatID, "GET "+req.Path, callResult(res, err))
+	if err != nil || res.Status != "ok" || res.HTTPStatus < 200 || res.HTTPStatus >= 300 {
+		return ""
+	}
+	return res.Body
 }
 
 // --- the last check of a model (R1.14) ---

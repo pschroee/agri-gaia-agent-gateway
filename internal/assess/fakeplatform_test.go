@@ -34,6 +34,7 @@ type fakePlatform struct {
 
 	datasets map[int64]datasetFixture
 	models   map[int64]modelFixture
+	logs     map[int64]string
 	created  []createdDataset
 	calls    []string
 	newID    int64
@@ -69,7 +70,8 @@ type testImage struct {
 
 func newFakePlatform(t *testing.T) *fakePlatform {
 	t.Helper()
-	f := &fakePlatform{t: t, datasets: map[int64]datasetFixture{}, models: map[int64]modelFixture{}, newID: 42}
+	f := &fakePlatform{t: t, datasets: map[int64]datasetFixture{}, models: map[int64]modelFixture{},
+		logs: map[int64]string{}, newID: 42}
 	f.srv = httptest.NewServer(http.HandlerFunc(f.handle))
 	t.Cleanup(f.srv.Close)
 	return f
@@ -101,6 +103,9 @@ func (f *fakePlatform) dataset(id int64, name string, images []testImage) {
 func (f *fakePlatform) model(id int64, name, format string, file []byte) {
 	f.models[id] = modelFixture{name: name, format: format, file: file}
 }
+
+// trainLog registers the log of a training container (GET /train/containers/<id>/logs).
+func (f *fakePlatform) trainLog(id int64, log string) { f.logs[id] = log }
 
 func (f *fakePlatform) record(call string) {
 	f.mu.Lock()
@@ -160,6 +165,19 @@ func (f *fakePlatform) handle(w http.ResponseWriter, r *http.Request) {
 		}
 		writeTestJSON(w, map[string]any{"id": id, "name": ds.name, "filecount": len(ds.files),
 			"dataset_type": "AgriImageDataResource", "annotation_labels": classes})
+	case len(parts) >= 2 && parts[0] == "train" && len(parts) >= 4 && parts[1] == "containers" && parts[3] == "logs":
+		id, err := strconv.ParseInt(parts[2], 10, 64)
+		if err != nil {
+			http.Error(w, "bad id", http.StatusBadRequest)
+			return
+		}
+		log, ok := f.logs[id]
+		if !ok {
+			http.Error(w, "no such training container", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "text/plain")
+		_, _ = io.WriteString(w, log)
 	case len(parts) >= 2 && parts[0] == "models":
 		id, err := strconv.ParseInt(parts[1], 10, 64)
 		if err != nil {

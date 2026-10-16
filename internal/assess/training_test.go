@@ -410,6 +410,42 @@ func TestAssessNoHeldOut(t *testing.T) {
 	}
 }
 
+// When the model's archive carries no train.log, the gateway reads the end of the training container's
+// log for the platform's own figure (R1.13).
+func TestAssessTrainLogFallback(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+	chat := testChat(t, st, "log fallback")
+	f := newFakePlatform(t)
+	f.dataset(7, "mnist-check-120", classImages(10))
+	// The download answers the model file alone (no ZIP, so no train.log inside).
+	f.model(3, "mnist-effnet", "onnx", []byte("onnx-bytes"))
+	f.trainLog(9, "Epoch 2\n"+lightningLog)
+	if err := st.RecordModelOrigin(ctx, store.ModelOrigin{ModelID: 3, ChatID: chat.ID,
+		Source: store.OriginTraining, TrainContainerID: 9, SeenDatasetIDs: []int64{7}}); err != nil {
+		t.Fatal(err)
+	}
+	svc := New(NewRunner(&fakeRuntime{answer: goodAnswer}, "img"), st, 12)
+	svc.Plat = f.client()
+	rep, err := svc.runTrainingCheck(ctx, chat.ID, assessRequest{ModelID: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	figures, ok := rep.Figures.(*TrainingFigures)
+	if !ok || figures.PlatformFigure == nil {
+		t.Fatalf("no platform figure from the container log: %+v", rep.Figures)
+	}
+	if figures.PlatformFigure.Value != 0.9583 || figures.PlatformFigure.Name != "MulticlassAccuracy" {
+		t.Errorf("platform figure: %+v", figures.PlatformFigure)
+	}
+	if !strings.Contains(figures.PlatformFigure.Note, "about 4 images") {
+		t.Errorf("the note does not name the test split of the seen images: %+v", figures.PlatformFigure)
+	}
+	if !f.called("GET", "/train/containers/9/logs") {
+		t.Error("the container log was not read")
+	}
+}
+
 // An image whose bytes occur in a dataset the model saw is a seen image, whatever its file name is (P1).
 func TestHeldOutExcludesDuplicates(t *testing.T) {
 	st := testStore(t)

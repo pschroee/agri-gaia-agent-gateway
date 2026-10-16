@@ -1613,7 +1613,8 @@ report form and the figures are those of the result checks (R0); this section na
 - **The platform's own figure** (`figures.platform_figure`) is read out of the training log right after the
   model was downloaded — before every `not measured` exit except "origin unknown", so that every report
   after the download carries the key (the key is absent only for an unknown origin and `null` when the log
-  holds no figure). `assess.ParseTrainLog` reads Lightning's metric table (the last value of a metric name)
+  holds no figure). When the archive carries no `train.log`, the fallback reads the end of the log of the
+  training container (`GET /train/containers/{id}/logs`, 2 000 lines). `assess.ParseTrainLog` reads Lightning's metric table (the last value of a metric name)
   or Ultralytics' `all …` line (`mAP50-95`); its `note` says what it is worth: "measured by the template on
   its own internal test split of about N images; the gateway cannot see which images".
 - **`figures`** of a training check: `model {id, name}`, `eval_dataset {id, name}`, `seen_datasets`,
