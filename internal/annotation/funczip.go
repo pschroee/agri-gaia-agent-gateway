@@ -144,6 +144,13 @@ func BuildZip(name, kind string, labels []string, size int, model []byte, modelN
 // functionYAML writes the function.yaml of a function: the conventions CVAT reads (metadata.name,
 // the annotations with type detector, framework onnx and the classes as JSON) plus the runtime and
 // the packages of the template. Only the fields below are written.
+//
+// The build directives carry the shape nuclio 1.16.4 reads: spec.build.directives is a map from a
+// phase ("preCopy"/"postCopy") to a list of {kind, value}, where kind is the Dockerfile
+// instruction (RUN) and value its argument alone - the builder writes "<kind> <value>" into the
+// Dockerfile (pkg/functionconfig/types.go, pkg/processor/build/builder.go). nuctl refuses a list of
+// bare strings ("cannot unmarshal string into Go struct field ... of type
+// functionconfig.Directive"), so the packages must not repeat the RUN.
 func functionYAML(name string, labels []string, modelName string, modelID int64) []byte {
 	spec, _ := json.Marshal(classSpecs(labels))
 	var b strings.Builder
@@ -152,7 +159,8 @@ func functionYAML(name string, labels []string, modelName string, modelID int64)
 		strconv.Quote(cvatTitle(modelName, modelID)), strconv.Quote(string(spec)))
 	b.WriteString("spec:\n  runtime: \"python:3.11\"\n  handler: main:handler\n  eventTimeout: 30s\n")
 	fmt.Fprintf(&b, "  build:\n    image: cvat.%s\n    baseImage: python:3.11-slim\n"+
-		"    directives:\n      postCopy:\n        - RUN pip install --no-cache-dir %s\n", name, functionPackages)
+		"    directives:\n      postCopy:\n        - kind: RUN\n          value: pip install --no-cache-dir %s\n",
+		name, functionPackages)
 	fmt.Fprintf(&b, "  triggers:\n    myHttpTrigger:\n      maxWorkers: 1\n      kind: \"http\"\n"+
 		"      attributes:\n        maxRequestBodySize: %d\n", maxRequestBodySize)
 	b.WriteString("  platform:\n    attributes:\n      restartPolicy:\n        name: always\n        maximumRetryCount: 3\n" +

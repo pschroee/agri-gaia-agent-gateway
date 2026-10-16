@@ -145,10 +145,29 @@ func TestBuildZipLayout(t *testing.T) {
 	if build["image"] != "cvat."+name || build["baseImage"] != "python:3.11-slim" {
 		t.Errorf("build: %v", build)
 	}
+	// The directives are the shape nuclio reads: a list of {kind, value}, kind the Dockerfile
+	// instruction and value its argument alone (no repeated RUN).
 	post := yamlMap(t, build, "directives")["postCopy"]
-	pkgs, ok := post.([]any)
-	if !ok || len(pkgs) != 1 || !strings.Contains(pkgs[0].(string), functionPackages) {
-		t.Errorf("the packages of the image are not pinned: %v", post)
+	items, ok := post.([]any)
+	if !ok || len(items) != 1 {
+		t.Fatalf("directives.postCopy is not a one-element list: %v (%T)", post, post)
+	}
+	item, ok := items[0].(map[string]any)
+	if !ok {
+		t.Fatalf("a directive is not a mapping: %v (%T)", items[0], items[0])
+	}
+	if got := yamlKeys(t, item); !reflect.DeepEqual(got, []string{"kind", "value"}) {
+		t.Errorf("directive fields: %v", got)
+	}
+	if item["kind"] != "RUN" {
+		t.Errorf("directive kind: %v", item["kind"])
+	}
+	value, _ := item["value"].(string)
+	if !strings.Contains(value, functionPackages) {
+		t.Errorf("the packages of the image are not pinned: %v", value)
+	}
+	if strings.HasPrefix(strings.TrimSpace(value), "RUN ") {
+		t.Errorf("the directive value repeats the kind: %q", value)
 	}
 	tr := yamlMap(t, sp, "triggers")
 	if got := yamlKeys(t, tr); !reflect.DeepEqual(got, []string{"myHttpTrigger"}) {
@@ -207,6 +226,67 @@ func TestBuildZipDetection(t *testing.T) {
 	// A long model name is shortened.
 	if got := cvatTitle(strings.Repeat("a", 100), 1); len(got) > 90 {
 		t.Errorf("the title is not shortened: %d characters", len(got))
+	}
+}
+
+// nuclioDirective mirrors functionconfig.Directive of nuclio 1.16.4: the Dockerfile instruction and
+// its argument, written into the Dockerfile as "<kind> <value>".
+type nuclioDirective struct {
+	Kind  string `yaml:"kind"`
+	Value string `yaml:"value"`
+}
+
+// The directives of function.yaml are unmarshalled the way nuctl 1.16.4 unmarshals them: a map from
+// a phase ("preCopy"/"postCopy") to a list of {kind, value}. A strict decoder refuses a bare string
+// where a directive mapping is expected - exactly the failure nuctl reported ("cannot unmarshal
+// string into Go struct field ... of type functionconfig.Directive") - so a regression fails here
+// instead of on the instance.
+func TestFunctionYAMLDirectives(t *testing.T) {
+	const name = "agw-agent-test-m1-00112233"
+	raw, err := BuildZip(name, KindDetection, []string{"pig"}, 640, []byte("m"), "m", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, _ := zipEntries(t, raw)
+
+	// Every key function.yaml writes is declared, so the strict decoder checks the whole file.
+	var cfg struct {
+		Metadata map[string]any `yaml:"metadata"`
+		Spec     struct {
+			Runtime      string         `yaml:"runtime"`
+			Handler      string         `yaml:"handler"`
+			EventTimeout string         `yaml:"eventTimeout"`
+			Build        struct {
+				Image      string                       `yaml:"image"`
+				BaseImage  string                       `yaml:"baseImage"`
+				Directives map[string][]nuclioDirective `yaml:"directives"`
+			} `yaml:"build"`
+			Triggers map[string]any `yaml:"triggers"`
+			Platform map[string]any `yaml:"platform"`
+		} `yaml:"spec"`
+	}
+	dec := yaml.NewDecoder(bytes.NewReader(entries[name+"/function.yaml"]))
+	dec.KnownFields(true)
+	if err := dec.Decode(&cfg); err != nil {
+		t.Fatalf("nuctl 1.16.4 would refuse this function.yaml: %v", err)
+	}
+
+	if got := cfg.Spec.Build.Directives; len(got) != 1 || got["postCopy"] == nil {
+		t.Fatalf("directives carry %d phases, want only postCopy: %v", len(got), got)
+	}
+	post := cfg.Spec.Build.Directives["postCopy"]
+	if len(post) != 1 {
+		t.Fatalf("postCopy holds %d directives, want 1", len(post))
+	}
+	if post[0].Kind != "RUN" {
+		t.Errorf("directive kind = %q, want RUN", post[0].Kind)
+	}
+	want := "pip install --no-cache-dir " + functionPackages
+	if post[0].Value != want {
+		t.Errorf("directive value = %q, want %q", post[0].Value, want)
+	}
+	if strings.HasPrefix(post[0].Value, "RUN") {
+		t.Errorf("the directive value repeats the kind: %q", post[0].Value)
 	}
 }
 
