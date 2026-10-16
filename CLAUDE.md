@@ -409,6 +409,22 @@ refer to this repository.
   summary reader (`internal/chat/plan.go`) answers a path under a virtual prefix through its doer, because
   `platform.Client.Do` would send it to the platform. Without a readable answer the line is left out.
 
+## Annotation cards (V4)
+
+- `GET /api/chats/{id}/annotation` (issue #112) is what the cards of pre-annotation in the history read: the runs of
+  V1 (`annotation_runs`) and the checks and fills of V3 (`annotation_jobs`) with their results, each oldest first, plus
+  `tool_call_id` and the percent the observation wrote out of `watch_jobs` (kinds `annotation_run`, `annotation_job`).
+  Own chats only. The handler reads the database through `Manager.AnnotationRuns`/`AnnotationJobs`/`Jobs` and **never
+  calls CVAT**: a card of a dormant chat has to load, and the counts of a finished run stay the agent's
+  `annotation_summary` — nothing is guessed to fill the gap. Route in `internal/api/annotation.go`, Manager methods in
+  `internal/chat/annotation.go`, so parallel plans do not touch their files.
+- The route answers a job's **whole** `result` (the list of uncertain images too, up to the job's `limit`, at most
+  1 000): the card shows the first rows and expands them; the agent's tool `annotation_job` keeps its pages of 50 for
+  its own context. `params` goes along as well — the card reads its threshold (`uncertain_below`, `min_confidence`)
+  from there.
+- **`cvat_url` of the answer is `AGW_CVAT_PUBLIC_URL`** and every link of a card begins with it; the UI opens no other
+  link. Without that address the field and the task links stay empty.
+
 ## Testing
 
 - `./dev.sh test` is the everyday check, before every commit and before every push: Go with Postgres (with Go's

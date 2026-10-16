@@ -372,6 +372,7 @@ type ActivityPage = { calls: ActivityCall[]; chats: Record<string, { id: string;
 | `GET /api/chats/{id}/jobs` | `WatchJob[]` | observed platform jobs of the chat, newest first (A-E2): state, percent, message, ETA, log tail, outputs and `plan_id`/`step_idx` for the job of a plan step. 404 for foreign and unknown chats. See *Long-running platform jobs* |
 | `POST /api/chats/{id}/plans/{plan}/steps/{idx}/stop` | `Plan` | the user stops the platform job a waiting step observes (`watch_job`): the call runs with the user's token and is logged as `socket_calls` with `via: "user"`. 404 unknown plan, 409 if the step does not wait or its kind cannot be stopped |
 | `POST /api/chats/{id}/jobs/{job}/stop` | `WatchJob` | the same for a single job outside a plan. 404 unknown job, 409 if it is not running or cannot be stopped |
+| `GET /api/chats/{id}/annotation` | `{cvat_url, runs: AnnotationRun[], jobs: AnnotationJob[]}` | runs and jobs of pre-annotation with their results, oldest first, for the cards in the history (V4); reads the database and never wakes the chat. 404 for foreign and unknown chats. See *Annotation cards in the history (V4)* |
 | `POST /api/chats/{id}/subagents` | 410 | removed: the subagent limit is fixed for the service (see *Limit for subagents*); the answer says so |
 | `POST /api/chats/{id}/messages` `{text, attachments?: string[], context?: PageContext}` | `SendResult` | sends (`context`: see *Page context*; invalid: 400); a dormant chat is resumed in a fresh sandbox (response after resuming, steps beforehand via SSE `resume`). If pi is working, the chat is being resumed or another instruction is in flight, the message is queued (`queued: true`, see *Queue*). Held entries go along |
 | `GET /api/chats/{id}/queue` | `QueueEntry[]` | open entries of the queue |
@@ -1451,6 +1452,44 @@ and (classification) `scores` next to the objects, and it writes only into image
   report the sample size, below 80 percent accuracy annotate more by hand instead of running, fill only the empty
   images, name the weak images with their links, and after the correction `annotation-sync`, a new training and a new
   calibration.
+
+## Annotation cards in the history (V4)
+
+The runs of `pre_annotate` (V1) and the checks and fills of V3 appear as cards in the chat without the agent reporting
+them (issue #112). Their progress and state come from the watcher of A-E2 (the `job` events and
+`GET /api/chats/{id}/jobs`, kinds `annotation_run` and `annotation_job`); the rows and results behind them load from
+one route, so a card survives a reload of the page.
+
+- **`GET /api/chats/{id}/annotation`** (own chats only, 404 for foreign and unknown chats) answers
+  `{"cvat_url": "<AGW_CVAT_PUBLIC_URL>", "runs":[...], "jobs":[...]}`, each list oldest first. The route reads the
+  database only: it never calls CVAT, never wakes the chat and takes no slot, so the cards of a dormant chat load as
+  well.
+- **A run line:** `{run_id, dataset_id, task_id, function, min_confidence, mapping, existing, state, error, progress,
+  message, tool_call_id, created_at, ended_at, cvat_url}`. `state` is the run's own state of V1
+  (`queued`|`started`|`finished`|`failed`|`expired`); `existing` `replace` is the run that wipes every annotation of
+  the task first, which the card carries as irreversible. `progress` (percent) and `message` are what the watcher last
+  wrote for the run's row in `watch_jobs` — a run whose observation is gone carries `progress: null` instead of a
+  guessed one. `function` is the id of the function, which is its name (V2).
+- **A job line:** `{job_id, kind, dataset_id, task_id, function, params, state, done, total, result, error,
+  tool_call_id, created_at, ended_at, cvat_url}`. `kind` is `calibrate`|`uncertain`|`fill`, `state` is
+  `queued`|`running`|`finished`|`failed`, `done`/`total` are the progress the job writes every ten images. `params` is
+  the call the agent made (`limit`, `mapping`, `uncertain_below`, `min_confidence`) — the card reads the threshold it
+  shows from there — and `result` is the answer of a finished job as the gateway stored it.
+- **The whole result goes through, the list of uncertain images included** (the job's `limit`, at most 1 000 images):
+  the card shows the first rows and expands them and therefore needs all of them. The agent's tool `annotation_job`
+  cuts the same result into pages of 50 instead, to keep its context small.
+- **`tool_call_id` comes from `watch_jobs`** (the observation of the run or job, matched by kind and reference) and is
+  the place of the card in the history, like the plan card's. It is empty for an item the watcher never observed.
+- **Every field is stored state; the route adds nothing and invents nothing.** `annotation_runs` and
+  `annotation_jobs` carry the row, `watch_jobs` the observation; a `params` or `result` the store cannot read is left
+  out of the line rather than breaking the answer of the whole route.
+- **What the route does not answer: the counts of a finished run.** Counting the annotations is `annotation_summary`
+  (V1) and reads the task from CVAT; the card takes the count from the agent's summary instead, which is what the
+  expired card names. The frame count of a task and the annotations a `replace` run wipes are not stored either.
+- **Links** begin with the `cvat_url` of the answer (`AGW_CVAT_PUBLIC_URL`); the run and job lines carry the task link
+  built on it (`<base>/tasks/<id>`), and without that address both stay empty. The UI opens no other link.
+- **No observer and no SSE kind of its own** (V4 decision): a run and a job are observed by the watcher of A-E2, which
+  already publishes their state.
 
 ## Summaries by the gateway
 
