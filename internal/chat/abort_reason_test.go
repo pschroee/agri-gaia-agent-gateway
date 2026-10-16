@@ -44,9 +44,9 @@ func TestAbortReasonUser(t *testing.T) {
 	if _, err := e.m.Abort(ctx, id); err != nil {
 		t.Fatal(err)
 	}
-	if got := turnReason(t, e, id); got != AbortUser {
-		t.Fatalf("abort reason of the user's stop: %q", got)
-	}
+	// The reason stands on the turn right away, but the message that carries it is written once pi's stream
+	// is stored — so it is waited for rather than read on the spot.
+	waitFor(t, func() bool { return turnReason(t, e, id) == AbortUser })
 	release()
 	waitSettled(t, e, id)
 	if got := turnReason(t, e, id); got != AbortUser {

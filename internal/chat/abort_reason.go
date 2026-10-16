@@ -40,6 +40,11 @@ func (m *Manager) markTurnAborted(chatID string, l *live, reason string) {
 	if l.running {
 		if t := l.turn; t != nil {
 			id = t.id
+		} else if n := len(l.pendingTurns); n > 0 {
+			// pi has not reported the user's message yet, so no turn is assigned to the live chat. The
+			// request that is on its way is that turn: the user can stop the moment the chat counts as
+			// running, and the reason must not be lost in that window.
+			id = l.pendingTurns[n-1].id
 		}
 	}
 	m.mu.Unlock()
