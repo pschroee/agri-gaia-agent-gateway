@@ -623,29 +623,21 @@ func (s *Service) runCheck(ctx context.Context, jobID, chatID string, spec jobSp
 		return nil, err
 	}
 	manual := manualObjects(ann, classesOf(labels))
-	frames := checkFrames(spec, t.Size, manual)
+	// The three sets of the manually annotated images are recorded here, the first time a task is
+	// checked (V3b, E22): a calibration may only measure the calibration set, so that the validation and
+	// the held-out set stay untouched for the comparison of rounds and the verdict.
+	split, err := s.splitOf(ctx, chatID, taskID, manual)
+	if err != nil {
+		return nil, err
+	}
+	frames := checkFrames(spec, t.Size, split)
 	if len(frames) == 0 {
 		return nil, errors.New(noImagesText(spec))
 	}
-	obs := make([]Observation, 0, len(frames))
-	for i, frame := range frames {
-		objs, err := s.C.CallFunction(ctx, ses, fn.ID, FunctionCall{Task: taskID, Frame: frame,
-			Quality: "original", Threshold: call.threshold, Mapping: call.mapping})
-		r.cvat("POST /api/lambda/functions/"+fn.ID+" frame "+strconv.Itoa(frame), err)
-		if err != nil {
-			// A single call that fails does not silently count as "the function answered nothing": that
-			// would corrupt the measurement. The job ends with what it got through.
-			return partialCheck(spec, obs), fmt.Errorf("frame %d: %w", frame, err)
-		}
-		if spec.Kind == JobCalibrate && call.needRaw && !hasRawLabel(objs) {
-			// Only a calibration holds on raw_label: it is what tells one class of the function from
-			// another while the mapping of the call says nothing (V3). An uncertainty only reads scores.
-			return nil, errors.New("this function answers no raw_label and no mapping was given; give mapping, so that the calibration has something to hold on (annotation-functions shows its labels)")
-		}
-		obs = append(obs, Observation{Frame: frame, Answers: answersOf(objs), Manual: manual[frame]})
-		if (i+1)%progressEvery == 0 || i+1 == len(frames) {
-			s.jobProgress(ctx, chatID, jobID, i+1, len(frames))
-		}
+	obs, merr := s.measure(ctx, r, ses, taskID, fn, frames, call, manual, spec.Kind == JobCalibrate,
+		func(done, total int) { s.jobProgress(ctx, chatID, jobID, done, total) })
+	if merr != nil {
+		return partialCheck(spec, obs), merr
 	}
 	kind := KindOf(obs)
 	if spec.Kind == JobUncertain {
@@ -658,6 +650,32 @@ func (s *Service) runCheck(ctx context.Context, jobID, chatID string, spec jobSp
 		cal.Note += " The calls mapped every class of the function onto the first class of the dataset, so the mapping above is what the function answered on these images; have the user confirm it."
 	}
 	return calibrateAnswer{cal}, nil
+}
+
+// measure asks the function about the given frames and returns, per frame, what it answered and what the
+// user annotated (V3). A single call that fails does not silently count as "the function answered
+// nothing" — that would corrupt every figure — so the measurement ends there and the caller gets what it
+// got through. requireRaw demands the class as the function names it: a calibration without a mapping
+// has nothing else to hold on (V3). progress is called every progressEvery frames and at the end.
+func (s *Service) measure(ctx context.Context, r *recorder, ses session, taskID int64, fn Function,
+	frames []int, call callMapping, manual map[int][]ManualObject, requireRaw bool, progress func(done, total int)) ([]Observation, error) {
+	obs := make([]Observation, 0, len(frames))
+	for i, frame := range frames {
+		objs, err := s.C.CallFunction(ctx, ses, fn.ID, FunctionCall{Task: taskID, Frame: frame,
+			Quality: "original", Threshold: call.threshold, Mapping: call.mapping})
+		r.cvat("POST /api/lambda/functions/"+fn.ID+" frame "+strconv.Itoa(frame), err)
+		if err != nil {
+			return obs, fmt.Errorf("frame %d: %w", frame, err)
+		}
+		if requireRaw && call.needRaw && !hasRawLabel(objs) {
+			return obs, errors.New("this function answers no raw_label and no mapping was given; give mapping, so that the calibration has something to hold on (annotation-functions shows its labels)")
+		}
+		obs = append(obs, Observation{Frame: frame, Answers: answersOf(objs), Manual: manual[frame]})
+		if progress != nil && ((i+1)%progressEvery == 0 || i+1 == len(frames)) {
+			progress(i+1, len(frames))
+		}
+	}
+	return obs, nil
 }
 
 // partialCheck is what a check job that broke can still report: the images it got through. Without it
@@ -674,7 +692,7 @@ func noImagesText(spec jobSpec) string {
 	if spec.Kind == JobUncertain {
 		return "the CVAT task of this dataset has no images"
 	}
-	return "the CVAT task of this dataset has no image with a manual annotation; annotate some images in CVAT first, or check the task (annotation-summary counts them)"
+	return "no image of the calibration set of this task carries a manual annotation; annotate some images in CVAT first, or check the task (annotation-summary counts them)"
 }
 
 // linkImages adds the file name and the CVAT link of an uncertain image: the job of the frame and the
@@ -749,23 +767,47 @@ func checkMapping(spec jobSpec, fn Function, classes []string) (callMapping, err
 	return callMapping{mapping: m, threshold: callThreshold, synthetic: true, needRaw: true}, nil
 }
 
-// checkFrames selects the images a check measures: a calibration measures the images with a manual
-// annotation, an uncertainty every image of the task, each evenly spread over the task up to the limit
-// (V3).
-func checkFrames(spec jobSpec, size int, manual map[int][]ManualObject) []int {
+// checkFrames selects the images a check measures: a calibration the images of the calibration set (V3b:
+// the frames the mapping and the threshold may be chosen on), an uncertainty every image of the task.
+// Each is evenly spread over the task up to the limit (V3).
+func checkFrames(spec jobSpec, size int, split map[int]string) []int {
 	if spec.Kind == JobUncertain {
 		return Sample(size, spec.Limit)
 	}
+	frames := framesInPart(split, store.SplitCalibration)
+	return sampleFrames(frames, spec.Limit)
+}
+
+// framesInPart lists the frames of one part of the split, sorted by frame number.
+func framesInPart(split map[int]string, part string) []int {
+	frames := make([]int, 0, len(split))
+	for frame, p := range split {
+		if p == part {
+			frames = append(frames, frame)
+		}
+	}
+	sort.Ints(frames)
+	return frames
+}
+
+// sampleFrames picks at most limit of the frames, evenly spread (Sample over their positions).
+func sampleFrames(frames []int, limit int) []int {
+	out := make([]int, 0, len(frames))
+	for _, i := range Sample(len(frames), limit) {
+		out = append(out, frames[i])
+	}
+	return out
+}
+
+// splitOf records the three sets of the manually annotated images of a task and returns them (V3b, E22).
+// The frames come in sorted by number, so that the same task always gives the same assignment.
+func (s *Service) splitOf(ctx context.Context, chatID string, taskID int64, manual map[int][]ManualObject) (map[int]string, error) {
 	frames := make([]int, 0, len(manual))
 	for frame := range manual {
 		frames = append(frames, frame)
 	}
 	sort.Ints(frames)
-	out := make([]int, 0, len(frames))
-	for _, i := range Sample(len(frames), spec.Limit) {
-		out = append(out, frames[i])
-	}
-	return out
+	return s.St.SplitFor(ctx, chatID, taskID, frames, PartForIndex)
 }
 
 // answersOf brings the objects of a single call into the form the checks work with: the class as the

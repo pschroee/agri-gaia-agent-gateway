@@ -134,7 +134,7 @@ func (s *Service) runFill(ctx context.Context, jobID, chatID string, spec jobSpe
 			}
 		}
 		if len(pending) >= fillBatch || i+1 == len(empty) {
-			if err := s.writeFill(ctx, r, ses, taskID, pending, &res); err != nil {
+			if err := s.writeFill(ctx, r, ses, chatID, jobID, taskID, pending, &res); err != nil {
 				return res, err
 			}
 			pending = pending[:0]
@@ -149,7 +149,9 @@ func (s *Service) runFill(ctx context.Context, jobID, chatID string, spec jobSpe
 // writeFill writes the collected images into the task. Right before the write it reads the annotations
 // of the task again and leaves out every image that carries one meanwhile — the user may annotate in
 // CVAT while the job runs, and a machine object next to a manual one is not separable afterwards (E12).
-func (s *Service) writeFill(ctx context.Context, r *recorder, ses session, taskID int64, pending []frameAnnotations, res *fillAnswer) error {
+// What it wrote goes into the register of the gateway right after the write (V3b): only from there can
+// a rollback find it again.
+func (s *Service) writeFill(ctx context.Context, r *recorder, ses session, chatID, sourceID string, taskID int64, pending []frameAnnotations, res *fillAnswer) error {
 	if len(pending) == 0 {
 		return nil
 	}
@@ -160,7 +162,7 @@ func (s *Service) writeFill(ctx context.Context, r *recorder, ses session, taskI
 	}
 	taken := annotationsByFrame(ann)
 	body := NewAnnotations{Version: 0, Tags: []NewTag{}, Shapes: []NewShape{}, Tracks: []any{}}
-	written := 0
+	writtenFrames := make([]int, 0, len(pending))
 	for _, p := range pending {
 		if taken[p.frame] {
 			res.SkippedAnnotated++
@@ -168,9 +170,9 @@ func (s *Service) writeFill(ctx context.Context, r *recorder, ses session, taskI
 		}
 		body.Tags = append(body.Tags, p.tags...)
 		body.Shapes = append(body.Shapes, p.shapes...)
-		written++
+		writtenFrames = append(writtenFrames, p.frame)
 	}
-	if written == 0 {
+	if len(writtenFrames) == 0 {
 		return nil
 	}
 	err = s.C.CreateAnnotations(ctx, ses, taskID, body)
@@ -178,7 +180,8 @@ func (s *Service) writeFill(ctx context.Context, r *recorder, ses session, taskI
 	if err != nil {
 		return err
 	}
-	res.Filled += written
+	res.Filled += len(writtenFrames)
+	s.registerAutomatic(ctx, r, ses, chatID, sourceID, taskID, writtenFrames)
 	return nil
 }
 

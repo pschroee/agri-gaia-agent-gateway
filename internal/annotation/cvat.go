@@ -120,29 +120,42 @@ type Annotations struct {
 	Tracks []Track `json:"tracks"`
 }
 
+// Attribute is one attribute value of an annotation. It belongs to the fingerprint of a registered
+// object (V3b): changing an attribute in CVAT is a correction of the user.
+type Attribute struct {
+	SpecID int    `json:"spec_id"`
+	Value  string `json:"value"`
+}
+
 // Tag is one classification annotation of a frame.
 type Tag struct {
-	Frame   int    `json:"frame"`
-	LabelID int64  `json:"label_id"`
-	Source  string `json:"source"`
+	ID         int64       `json:"id"`
+	Frame      int         `json:"frame"`
+	LabelID    int64       `json:"label_id"`
+	Source     string      `json:"source"`
+	Attributes []Attribute `json:"attributes"`
 }
 
 // Shape is one object annotation of a frame. Points is the box [x1,y1,x2,y2] of a rectangle; V3 reads
 // it to compare the manual annotation of the user with what a function answers.
 type Shape struct {
-	Frame   int       `json:"frame"`
-	LabelID int64     `json:"label_id"`
-	Type    string    `json:"type"`
-	Source  string    `json:"source"`
-	Outside bool      `json:"outside"`
-	Points  []float64 `json:"points"`
+	ID         int64       `json:"id"`
+	Frame      int         `json:"frame"`
+	LabelID    int64       `json:"label_id"`
+	Type       string      `json:"type"`
+	Source     string      `json:"source"`
+	Outside    bool        `json:"outside"`
+	Points     []float64   `json:"points"`
+	Attributes []Attribute `json:"attributes"`
 }
 
 // Track is a sequence of shapes of one object over several frames.
 type Track struct {
-	LabelID int64   `json:"label_id"`
-	Source  string  `json:"source"`
-	Shapes  []Shape `json:"shapes"`
+	ID         int64       `json:"id"`
+	LabelID    int64       `json:"label_id"`
+	Source     string      `json:"source"`
+	Attributes []Attribute `json:"attributes"`
+	Shapes     []Shape     `json:"shapes"`
 }
 
 // Run is one request of the CVAT queue (an rq job). Status and progress are rq's; progress is percent.

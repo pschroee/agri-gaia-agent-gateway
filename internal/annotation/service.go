@@ -138,6 +138,9 @@ func (s *Service) Do(ctx context.Context, chatID string, req platform.Request) (
 		return s.startCheck(ctx, chatID, req)
 	case req.Method == http.MethodPost && path == platform.AnnotationPrefix+"/fills":
 		return s.startFill(ctx, chatID, req)
+	// V3b: the annotations a run or a fill wrote are taken back, as far as they still stand unchanged.
+	case req.Method == http.MethodPost && path == platform.AnnotationPrefix+"/rollbacks":
+		return s.rollback(ctx, chatID, req)
 	}
 	if id, ok := jobIDFromPath(path); ok && req.Method == http.MethodGet {
 		return s.jobStatus(ctx, chatID, id, req.Query)
@@ -893,6 +896,10 @@ func (s *Service) runStatus(ctx context.Context, chatID, id string) (platform.Re
 			return platform.Result{}, uerr
 		}
 	}
+	// The run is over: what it wrote into the task goes into the register of the gateway, once (V3b).
+	if state == store.AnnotationFinished && row.State != store.AnnotationFinished {
+		s.snapshotRun(ctx, r, ses, chatID, row.ID, row.TaskID)
+	}
 	a := runStatusAnswer{stepList: r.steps(), RunID: row.ID, State: state, Progress: run.Progress,
 		Started: run.Started, Ended: run.Ended, Error: errText}
 	if state == store.AnnotationFinished {
@@ -939,7 +946,8 @@ func (s *Service) poll(ctx context.Context, j watch.Job, _ watch.Reader) (watch.
 	if store.AnnotationRunFinal(row.State) {
 		return runProgress(row.State, 100, row.Error), nil
 	}
-	ses, err := s.currentSession(ctx, j.ChatID, &recorder{chatID: j.ChatID})
+	r := &recorder{chatID: j.ChatID}
+	ses, err := s.currentSession(ctx, j.ChatID, r)
 	if err != nil {
 		return watch.Progress{}, err
 	}
@@ -962,6 +970,10 @@ func (s *Service) poll(ctx context.Context, j watch.Job, _ watch.Reader) (watch.
 		if uerr := s.St.UpdateAnnotationRun(ctx, j.ChatID, row.ID, state, errText); uerr != nil {
 			return watch.Progress{}, uerr
 		}
+	}
+	// The run is over: what it wrote into the task goes into the register of the gateway, once (V3b).
+	if state == store.AnnotationFinished && row.State != store.AnnotationFinished {
+		s.snapshotRun(ctx, r, ses, j.ChatID, row.ID, row.TaskID)
 	}
 	return runProgress(state, run.Progress, errText), nil
 }

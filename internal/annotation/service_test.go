@@ -275,6 +275,56 @@ func (f *fakeCVAT) askedFrames() []int {
 	return append([]int(nil), f.funcCalls...)
 }
 
+// applyCreate adds the annotations of an action=create write to the task of the fake with fresh ids, so
+// that a later read shows them as CVAT would. A fill of V3 registers what it wrote from exactly such a
+// read (V3b).
+func (f *fakeCVAT) applyCreate(taskID int64, body string) {
+	var written NewAnnotations
+	if json.Unmarshal([]byte(body), &written) != nil {
+		return
+	}
+	var current struct {
+		Tags   []Tag   `json:"tags"`
+		Shapes []Shape `json:"shapes"`
+		Tracks []Track `json:"tracks"`
+	}
+	if json.Unmarshal([]byte(f.annotations[taskID]), &current) != nil {
+		return
+	}
+
+	next := int64(1)
+	for _, t := range current.Tags {
+		if t.ID >= next {
+			next = t.ID + 1
+		}
+	}
+	for _, sh := range current.Shapes {
+		if sh.ID >= next {
+			next = sh.ID + 1
+		}
+	}
+	for _, tr := range current.Tracks {
+		if tr.ID >= next {
+			next = tr.ID + 1
+		}
+	}
+	for _, t := range written.Tags {
+		current.Tags = append(current.Tags, Tag{ID: next, Frame: t.Frame, LabelID: t.LabelID, Source: t.Source,
+			Attributes: []Attribute{}})
+		next++
+	}
+	for _, sh := range written.Shapes {
+		current.Shapes = append(current.Shapes, Shape{ID: next, Frame: sh.Frame, LabelID: sh.LabelID, Type: sh.Type,
+			Source: sh.Source, Points: sh.Points, Attributes: []Attribute{}})
+		next++
+	}
+	out, err := json.Marshal(map[string]any{"version": 0, "tags": current.Tags, "shapes": current.Shapes, "tracks": current.Tracks})
+	if err != nil {
+		return
+	}
+	f.annotations[taskID] = string(out)
+}
+
 // writeBodies are the bodies of the writes of a fill.
 func (f *fakeCVAT) writeBodies() []string {
 	f.mu.Lock()
@@ -325,7 +375,11 @@ func (f *fakeCVAT) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		fmt.Fprint(w, f.meta)
 	case r.Method == http.MethodPatch && strings.HasSuffix(r.URL.Path, "/annotations"):
-		f.writes = append(f.writes, readBody(r))
+		body := readBody(r)
+		f.writes = append(f.writes, body)
+		if r.URL.Query().Get("action") == "create" {
+			f.applyCreate(parseID(strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/tasks/"), "/annotations")), body)
+		}
 		fmt.Fprint(w, `{"version":1}`)
 	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/lambda/requests/"):
 		body, ok := f.runs[strings.TrimPrefix(r.URL.Path, "/api/lambda/requests/")]
