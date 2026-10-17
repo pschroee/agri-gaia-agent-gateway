@@ -226,6 +226,58 @@ func TestBodyWithFileOnlyForChecks(t *testing.T) {
 	}
 }
 
+// X4 (#129): the fixture service hands files over that the gateway read itself; there are no sandbox
+// paths to check, but the multipart request must carry the bytes all the same.
+func TestUploadsWithoutSandboxFiles(t *testing.T) {
+	var gotName, gotField string
+	var gotData []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/token" {
+			fmt.Fprint(w, `{"access_token":"t","refresh_token":"r","expires_in":3600}`)
+			return
+		}
+		if err := r.ParseMultipartForm(1 << 20); err != nil {
+			t.Errorf("multipart: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		file, hdr, err := r.FormFile("modelfile")
+		if err != nil {
+			t.Errorf("modelfile: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		defer file.Close()
+		gotField, gotName = "modelfile", hdr.Filename
+		gotData, _ = io.ReadAll(file)
+		w.WriteHeader(http.StatusCreated)
+		fmt.Fprint(w, `{"id":7,"name":"placeholder-model"}`)
+	}))
+	defer srv.Close()
+	c, err := New(Config{APIURL: srv.URL + "/api", TokenURL: srv.URL + "/token", User: "test", Password: "pw"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := Request{Method: "POST", Path: "/models", Form: map[string][]string{"name": {"placeholder-model"}},
+		Uploads: []Upload{{Field: "modelfile", Name: "model.onnx", SHA256: "abc", Data: []byte("model")}}}
+	if got := req.String(); !strings.Contains(got, "multipart, 1 file") {
+		t.Fatalf("short form: %q", got)
+	}
+	res, err := c.Do(context.Background(), "", req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.HTTPStatus != http.StatusCreated || gotField != "modelfile" || gotName != "model.onnx" || string(gotData) != "model" {
+		t.Fatalf("upload: %+v field=%q name=%q data=%q", res, gotField, gotName, gotData)
+	}
+	// Files of the sandbox and uploads of the gateway are alternatives, never both.
+	if _, err := Normalize(Request{Method: "POST", Path: "/models",
+		Files:   []File{{Field: "modelfile", Path: "/workspace/model.onnx"}},
+		Uploads: []Upload{{Field: "modelfile", Name: "model.onnx", Data: []byte("x")}}}); err == nil {
+		t.Fatal("files and uploads together accepted")
+	}
+}
+
 func TestToolsBuild(t *testing.T) {
 	cases := []struct {
 		tool, args, want string

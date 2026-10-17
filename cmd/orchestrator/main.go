@@ -23,6 +23,7 @@ import (
 	"agw/internal/assess"
 	"agw/internal/chat"
 	"agw/internal/config"
+	"agw/internal/exp"
 	"agw/internal/llmproxy"
 	"agw/internal/notebook"
 	"agw/internal/oidc"
@@ -157,6 +158,34 @@ func run() error {
 		slog.Info("platform binding off (AGW_PLATFORM_API_URL empty)")
 	} else {
 		slog.Info("platform binding on", "api", env.PlatformAPIURL, "account", konto, "client", env.PlatformClientID, "token_exchange", plat.Exchanging())
+	}
+	// X4 (issue #129): the fixture service works with the tokens of the two experiment accounts, never
+	// through a chat. It is off without a platform binding or without credentials; a fixture of an
+	// owner whose account is missing then fails with a message naming the variable.
+	var fixtures *exp.Fixtures
+	if env.PlatformAPIURL != "" && (env.ExpUser != "" || env.Exp2User != "") {
+		fixtureClient := func(user, password string) (*platform.Client, error) {
+			if user == "" || password == "" {
+				return nil, nil
+			}
+			return platform.New(platform.Config{
+				APIURL: env.PlatformAPIURL, TokenURL: env.PlatformTokenURL,
+				ClientID: env.PlatformClientID, User: user, Password: password,
+			})
+		}
+		primary, err := fixtureClient(env.ExpUser, env.ExpPassword)
+		if err != nil {
+			return fmt.Errorf("experiment account %s: %w", env.ExpUser, err)
+		}
+		secondary, err := fixtureClient(env.Exp2User, env.Exp2Password)
+		if err != nil {
+			return fmt.Errorf("experiment account %s: %w", env.Exp2User, err)
+		}
+		fixtures = &exp.Fixtures{Store: st, Primary: primary, Secondary: secondary}
+		slog.Info("experiment fixtures on", "primary", env.ExpUser != "", "secondary", env.Exp2User != "",
+			"api_key", env.ExpAPIToken != "")
+	} else {
+		slog.Info("experiment fixtures off (AGW_EXP_USER/AGW_EXP2_USER or AGW_PLATFORM_API_URL empty)")
 	}
 	// C-E3 (own code in the agent's notebook server): without AGW_JUPYTERHUB_API_URL the service is
 	// not built, the manager registers no doer for its paths, and every notebook tool answers "not
@@ -361,8 +390,14 @@ func run() error {
 	// connections, which would otherwise hold up Shutdown until the deadline.
 	baseCtx, cancelBase := context.WithCancel(context.Background())
 	defer cancelBase()
+	// A typed nil would satisfy the interface and turn the 503 of an unconfigured instance into a
+	// panic on the first call, so only a built service is handed over.
+	var expFixtures api.ExpFixtures
+	if fixtures != nil {
+		expFixtures = fixtures
+	}
 	apiSrv := &http.Server{Addr: env.HTTPAddr, Handler: (&api.Server{M: m, Pool: p, Cat: cat, Env: env, Web: webFS, Blocked: blocked, Token: env.APIToken, AllowedHosts: env.AllowedHosts,
-		OIDC: auth, FrameAncestors: env.FrameAncestors, Platform: plat}).Handler(),
+		OIDC: auth, FrameAncestors: env.FrameAncestors, Platform: plat, ExpFixtures: expFixtures, ExpAPIToken: env.ExpAPIToken}).Handler(),
 		ReadHeaderTimeout: 10 * time.Second, MaxHeaderBytes: 64 << 10, BaseContext: func(net.Listener) context.Context { return baseCtx }}
 	proxy := llmproxy.New(cat)
 	proxy.SetRecorder(m) // assignment per slot, billing, hard limit of concurrent agents

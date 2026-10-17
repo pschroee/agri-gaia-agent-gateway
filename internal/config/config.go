@@ -448,6 +448,15 @@ type Env struct {
 	PlatformAudiences    []string
 	// PlatformTokenMaxAge: an exchanged token is used this long at most (AGW_PLATFORM_TOKEN_MAX_AGE, default 5m).
 	PlatformTokenMaxAge time.Duration
+	// Experiment accounts (X4, issue #129): the two accounts whose platform objects the fixtures are.
+	// Primary is the run's own account (agent-exp), Secondary a second one whose objects do not belong
+	// to the user (agent-exp-2, XS2). The passwords stay in the secret file on the instance.
+	ExpUser      string
+	ExpPassword  string
+	Exp2User     string
+	Exp2Password string
+	// ExpAPIToken protects /api/exp/* (AGW_EXP_API_TOKEN). Empty: the fixture routes answer 503.
+	ExpAPIToken string
 
 	// V1 — pre-annotation with CVAT. The service is wired only when both URLs are set; without them
 	// the path /_agw/annotation answers "not configured" and the capability annotation says so.
@@ -661,6 +670,12 @@ func FromEnv() Env {
 		PlatformExchange:     str("AGW_PLATFORM_TOKEN_EXCHANGE", "false") == "true",
 		PlatformAudiences:    strings.Split(str("AGW_PLATFORM_AUDIENCES", "backend,minio"), ","),
 		PlatformTokenMaxAge:  dur("AGW_PLATFORM_TOKEN_MAX_AGE", 5*time.Minute),
+		// X4: the two experiment accounts and the key of the fixture routes.
+		ExpUser:      str("AGW_EXP_USER", ""),
+		ExpPassword:  str("AGW_EXP_PASSWORD", ""),
+		Exp2User:     str("AGW_EXP2_USER", ""),
+		Exp2Password: str("AGW_EXP2_PASSWORD", ""),
+		ExpAPIToken:  str("AGW_EXP_API_TOKEN", ""),
 
 		// V1 — pre-annotation with CVAT.
 		CVATAPIURL:          strings.TrimRight(str("AGW_CVAT_API_URL", ""), "/"),

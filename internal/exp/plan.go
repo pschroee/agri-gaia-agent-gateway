@@ -3,9 +3,10 @@
 // SPDX-License-Identifier: MIT
 
 // Package exp reads the experiment material of the master's thesis (issue #134, X9): the
-// experiment plan, its tasks and the fixture manifests. The formats are the ones the runner
-// (X1) and the fixture seeding (X4) use later; validation checks referential integrity and
-// refuses example files in a main plan. It does not run anything.
+// experiment plan, its tasks and the fixture manifests. The formats are the ones the runner (X1)
+// and the fixture seeding (X4, issue #129) use; validation checks referential integrity and refuses
+// example files in a main plan. Seeding, verification and removal live in fixtures.go and work
+// against the platform, never through a chat.
 package exp
 
 import (
