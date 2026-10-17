@@ -457,7 +457,7 @@ func setup(t *testing.T) *env {
 		}
 	}
 	p := pool.New[Agent](create, destroy, map[string]int{"cli": 1})
-	p.SetKnown(toolset.Valid) // chats of other combinations get a slot on demand (issue #29)
+	p.SetKnown(toolset.ValidVariant) // chats of other combinations and experiment variants get a slot on demand (issue #29, X0)
 	pctx, cancel := context.WithCancel(ctx)
 	p.Start(pctx)
 	t.Cleanup(func() { cancel(); p.Shutdown(context.Background()) })

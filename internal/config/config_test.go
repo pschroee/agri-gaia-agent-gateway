@@ -390,3 +390,24 @@ func TestEnvToolsets(t *testing.T) {
 		t.Fatalf("negative pool size: %d", e.PoolSize)
 	}
 }
+
+// X0.3: AGW_EXPERIMENT_POOL names warm slots of experiment variants, with or without the prefix;
+// mistyped bindings and counts below 1 are dropped.
+func TestEnvExperimentPool(t *testing.T) {
+	// A combination key contains a comma and cannot be written here; such variants start on demand.
+	t.Setenv("AGW_EXPERIMENT_POOL", "exp:mcp=2, api=1, shell=1, exp:api=0, junk")
+	e := FromEnv()
+	want := map[string]int{"exp:mcp": 2, "exp:api": 1}
+	if len(e.ExperimentPool) != len(want) {
+		t.Fatalf("pool targets: %v", e.ExperimentPool)
+	}
+	for variant, n := range want {
+		if e.ExperimentPool[variant] != n {
+			t.Errorf("%s: %d, want %d", variant, e.ExperimentPool[variant], n)
+		}
+	}
+	t.Setenv("AGW_EXPERIMENT_USERS", " agent-test , agent-exp ,")
+	if got := FromEnv().ExperimentUsers; len(got) != 2 || got[0] != "agent-test" || got[1] != "agent-exp" {
+		t.Fatalf("experiment users: %q", got)
+	}
+}
