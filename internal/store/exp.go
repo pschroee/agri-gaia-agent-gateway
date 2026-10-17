@@ -182,6 +182,36 @@ func (s *Store) ListExpRuns(ctx context.Context, plan, cell string) ([]ExpRun, e
 	return out, rows.Err()
 }
 
+// ExpUsage is what a plan has consumed so far (#161). Tokens are input + output of the plan's chats
+// without cache reads, as in X3.3; llm_calls is the authoritative source, subagent runs included.
+// Duration is the wall-clock time of every attempt, a superseded one with the time it used and a
+// running one up to now.
+type ExpUsage struct {
+	TokensTotal   int64  `json:"tokens_total"`
+	DurationTotal string `json:"duration_total"`
+	Runs          int    `json:"runs"`
+}
+
+// ExpUsage sums tokens and duration of every attempt of a plan.
+func (s *Store) ExpUsage(ctx context.Context, plan string) (ExpUsage, error) {
+	var (
+		u       ExpUsage
+		seconds int64
+	)
+	err := s.pool.QueryRow(ctx, `
+		SELECT
+		  COALESCE((SELECT SUM(x.input + x.output) FROM llm_calls x
+		            WHERE x.chat_id IN (SELECT r.chat_id FROM exp_runs r WHERE r.plan=$1 AND r.chat_id IS NOT NULL)), 0),
+		  COALESCE(SUM(EXTRACT(EPOCH FROM (COALESCE(ended_at, now()) - started_at)))::bigint, 0),
+		  COUNT(*)
+		FROM exp_runs WHERE plan=$1`, plan).Scan(&u.TokensTotal, &seconds, &u.Runs)
+	if err != nil {
+		return ExpUsage{}, err
+	}
+	u.DurationTotal = (time.Duration(seconds) * time.Second).String()
+	return u, nil
+}
+
 // GetExpRun returns one attempt.
 func (s *Store) GetExpRun(ctx context.Context, id string) (ExpRun, error) {
 	row := s.pool.QueryRow(ctx, `SELECT id, run_key, plan, plan_sha256, cell, task, rep, seed, position,

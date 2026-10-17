@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 )
 
 func TestRunLifecycle(t *testing.T) {
@@ -60,6 +61,62 @@ func TestRunLifecycle(t *testing.T) {
 	}
 	if err := s.EndExpRun(ctx, "does-not-exist", ExpRunEnd{Status: ExpDone}); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("unknown run: %v", err)
+	}
+}
+
+// #161: the plan usage sums input + output of the plan's chats and the time of its attempts, and
+// leaves the runs of other plans out.
+func TestExpUsage(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	newChat := func(title string) string {
+		t.Helper()
+		c, err := s.CreateChat(ctx, NewChat{Title: title, Model: "m", Variant: "api"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c.ID
+	}
+	chatA, chatB, chatOther := newChat("a"), newChat("b"), newChat("other")
+	for _, run := range []ExpRun{
+		{ID: "pilot/a/t1/1", Key: "pilot/a/t1/1", Plan: "pilot", Cell: "a", Task: "t1", Rep: 1, ChatID: chatA},
+		{ID: "pilot/b/t1/1", Key: "pilot/b/t1/1", Plan: "pilot", Cell: "b", Task: "t1", Rep: 1, ChatID: chatB},
+		{ID: "main/a/t1/1", Key: "main/a/t1/1", Plan: "main", Cell: "a", Task: "t1", Rep: 1, ChatID: chatOther},
+	} {
+		if err := s.StartExpRun(ctx, run); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.EndExpRun(ctx, run.ID, ExpRunEnd{Status: ExpDone}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, call := range []LLMCall{
+		{ChatID: chatA, SlotID: "s", Model: "m", Status: 200, Input: 100, Output: 20, StartedAt: time.Now(), ToolCalls: json.RawMessage(`[]`)},
+		{ChatID: chatB, SlotID: "s", Model: "m", Status: 200, Input: 7, Output: 3, StartedAt: time.Now(), ToolCalls: json.RawMessage(`[]`)},
+		{ChatID: chatOther, SlotID: "s", Model: "m", Status: 200, Input: 999, Output: 999, StartedAt: time.Now(), ToolCalls: json.RawMessage(`[]`)},
+	} {
+		if _, err := s.AddLLMCall(ctx, call); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := s.pool.Exec(ctx, `UPDATE exp_runs SET started_at=now()-interval '2 minutes', ended_at=now()
+		WHERE id='pilot/a/t1/1'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.pool.Exec(ctx, `UPDATE exp_runs SET started_at=now()-interval '30 seconds', ended_at=now()
+		WHERE id='pilot/b/t1/1'`); err != nil {
+		t.Fatal(err)
+	}
+	usage, err := s.ExpUsage(ctx, "pilot")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if usage.TokensTotal != 130 || usage.Runs != 2 {
+		t.Fatalf("usage: %+v", usage)
+	}
+	got, err := time.ParseDuration(usage.DurationTotal)
+	if err != nil || got < 150*time.Second || got > 151*time.Second {
+		t.Fatalf("duration %q: %v", usage.DurationTotal, err)
 	}
 }
 

@@ -625,12 +625,15 @@ func (a *app) cmdExpExport(args []string) error {
 	}
 	var roles map[string]string
 	var cells map[string]exp.Cell
+	var planLimits *exp.Limits
 	var planSHA string
 	if materialPath != "" {
 		m, err := loadMaterial(materialPath)
 		if err != nil {
 			return err
 		}
+		limits := m.Plan.Limits
+		planLimits = &limits
 		if raw, err := os.ReadFile(m.Path); err == nil {
 			sum := sha256.Sum256(raw)
 			planSHA = hex.EncodeToString(sum[:])
@@ -692,6 +695,12 @@ func (a *app) cmdExpExport(args []string) error {
 	if version == "" {
 		version = gwversion.String()
 	}
+	// #161: the manifest carries what the plan consumed and, when its file is known, what is left
+	// before its token and duration limits.
+	usage, err := a.c.ExpUsage(a.ctx, plan)
+	if err != nil {
+		return fmt.Errorf("usage: %w", err)
+	}
 	manifest := map[string]any{
 		"gateway_version":  version,
 		"gateway_commit":   gwversion.Commit,
@@ -700,7 +709,15 @@ func (a *app) cmdExpExport(args []string) error {
 		"plan_sha256":      planSHA,
 		"exported_at":      time.Now().UTC().Format(time.RFC3339),
 		"synthetic":        false,
+		"usage":            usage,
 		"files":            files,
+	}
+	if planLimits != nil {
+		limits, err := expLimitReport(*planLimits, usage)
+		if err != nil {
+			return err
+		}
+		manifest["limits"] = limits
 	}
 	raw, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {
@@ -712,6 +729,24 @@ func (a *app) cmdExpExport(args []string) error {
 	}
 	fmt.Fprintf(a.stdout, "manifest.json: %d files\n", len(files))
 	return nil
+}
+
+// expLimitReport names the plan-wide limits, what the export consumed and what is left before each
+// limit (#161). The defaults of the plan format apply when the plan leaves a field empty.
+func expLimitReport(limits exp.Limits, usage agwclient.ExpUsage) (map[string]any, error) {
+	used, err := time.ParseDuration(usage.DurationTotal)
+	if err != nil {
+		return nil, fmt.Errorf("usage duration %q: %w", usage.DurationTotal, err)
+	}
+	tokenLimit, durationLimit := limits.PlanTokens(), limits.PlanDuration()
+	return map[string]any{
+		"tokens_total":       tokenLimit,
+		"duration_total":     durationLimit.String(),
+		"tokens_used":        usage.TokensTotal,
+		"duration_used":      used.Round(time.Second).String(),
+		"tokens_remaining":   max(tokenLimit-usage.TokensTotal, 0),
+		"duration_remaining": max(durationLimit-used, 0).Round(time.Second).String(),
+	}, nil
 }
 
 // agwExportNames lists the files of the export in the order of the manifest (X5.7).
