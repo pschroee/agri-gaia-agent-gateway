@@ -249,7 +249,10 @@ type LLMCall = { id: number; slot_id: string; source_ip: string; model: string; 
   input: number; output: number; cache_read: number; cache_write: number; cost: number; peak: boolean;
   tool_calls: { id?: string /* the provider's tool_calls[].id */; name: string; arguments: string }[]; started_at: string; duration_ms: number; main: boolean;
   finish_reason: string; complete: boolean;
-  request_bytes?: number /* size of the request body the proxy forwarded unchanged to the provider, in bytes (issue #69); sizes only, no contents; missing on calls recorded before */ };
+  request_bytes?: number /* size of the request body the proxy forwarded to the provider, in bytes (issue #69); sizes only, no contents; missing on calls recorded before */;
+  temperature?: number /* X3.6: the temperature the proxy sent for an experiment run; missing = not sent (product chat or the model does not take it) */;
+  seed?: number /* X3.6: the seed sent for an experiment run; missing = not sent */;
+  model_reported?: string /* X3.7: the model the provider reported in the response, with its system fingerprint where it reports one; missing for older rows and responses without either */ };
 
 // Operation the orchestrator executed for a tool in the execution sandbox (E9).
 // Proven, because it executed and recorded it itself. One tool call can have several
@@ -1050,6 +1053,27 @@ the service's value. The limit is enforced on two levels, both outside the sandb
    subagents start from zero. `subagents_running` in `Chat` is this count.
 3. **pi-subagents (cooperative):** `globalConcurrencyLimit` and `maxActiveAsyncRunsPerSession` are set to the same
    limit, without a cap on runs in total; surplus runs wait in pi-subagents' queue.
+
+## Limits of an experiment run
+
+An experiment chat (`experiment` in `Chat`, X0) is held to the limits of its run at the LLM proxy (X3):
+
+- **Only the chat's model** (`chats.model`) is accepted; any other model — also another model of the catalog — gets
+  403 `model not allowed in this experiment run: <m>`. Titles from the model are off for these chats (the runner
+  sets the title).
+- The sum of `llm_calls.cost` of the chat stays below `AGW_EXP_MAX_COST_USD` (default 0.50 USD, placeholder).
+- `input + output` of the chat's calls (without `cache_read`) stays below `AGW_EXP_MAX_TOKENS` (default 2 000 000).
+- The run ends within `AGW_EXP_MAX_DURATION` (default 90m) of the chat's creation.
+
+Once a limit is reached, the next model call is refused with 429
+`experiment run limit reached: cost|tokens|duration`; the gateway stores the reason as `experiment.limit` at the chat
+and aborts the turn. The check runs before the call, so one call may take the run over the limit — the record shows
+it as it is. The limits apply to experiment chats only; a product chat keeps the plan budget.
+
+For these runs the proxy sets `temperature` (`AGW_EXP_TEMPERATURE`) and the run's seed, but only where the model's
+catalog entry says it takes them (`sampling` per model: `{"temperature": true, "seed": false}`). `llm_calls.temperature`
+and `.seed` hold the values actually sent (NULL = not sent), `llm_calls.model_reported` the model (with its system
+fingerprint where reported) from the provider's answer. The defaults are placeholders until the pilot runs fix them.
 
 ## Attachments to messages
 

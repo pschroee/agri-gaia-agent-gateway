@@ -1422,11 +1422,21 @@ has four advantages:
   can neither read nor pass it on.
 - **Token usage per run** accrues at the orchestrator, exactly the quantity the pilot study needs for
   the cost estimate (outline 7.1).
-- **A cost limit per run** can be enforced in one place.
-- **Only the specified model.** The pass-through accepts only the model the experiment plan
-  specifies. It is a path by which content reaches the provider: everything the agent is permitted
-  to read ends up in the model's context. Therefore no non-public dataset is on the instance during
-  the runs with the cloud model (assumption in outline 7.1).
+- **Limits per experiment run** are enforced in one place: the proxy refuses a model call once the run
+  has used up its cost (`AGW_EXP_MAX_COST_USD`, default 0.50 USD), its tokens (`AGW_EXP_MAX_TOKENS`,
+  default 2 000 000, input + output without cache reads) or its duration (`AGW_EXP_MAX_DURATION`,
+  default 90 minutes, counted from the chat's creation). The answer is HTTP 429
+  `experiment run limit reached: cost|tokens|duration`; the gateway stores that reason in the chat's
+  experiment profile and aborts the turn. The check runs before a call, so one call may take the run
+  over the limit — that is recorded as it is. The limits apply to experiment chats; product chats keep
+  the plan budget.
+- **Only the specified model.** For an experiment run the pass-through accepts only the chat's model
+  (`chats.model`), not just any model of the catalog and not the title model. It is a path by which
+  content reaches the provider: everything the agent is permitted to read ends up in the model's
+  context. Therefore no non-public dataset is on the instance during the runs with the cloud model
+  (assumption in outline 7.1). Temperature and seed are set for those runs where the catalog says the
+  model takes them (`sampling` per model), and the values actually sent — together with the model the
+  provider reports — are recorded per call (`llm_calls.temperature`, `.seed`, `.model_reported`).
 
 pi addresses models via an HTTP address (`baseUrl` in `models.json`), not via a socket. The sandbox
 therefore needs a small forwarder from `localhost` to the socket (e.g. `socat`); loopback works even
