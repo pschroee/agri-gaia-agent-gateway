@@ -744,10 +744,15 @@ func (f *Factory) Create(ctx context.Context, slotID, variant string) (chat.Agen
 		return nil, fmt.Errorf("Socket: %w", err)
 	}
 	labels := map[string]string{sandbox.LabelSlot: slotID, sandbox.LabelVariant: variant}
+	execEnv := append([]string{"AGW_SLOT=" + slotID}, f.RT.PkgCacheEnv()...)
+	if _, experiment := SplitExperiment(variant); experiment {
+		// X6.5: only experiment slots trace failed syscalls; product slots do not carry the slowdown.
+		execEnv = append(execEnv, "AGW_EXEC_TRACE=failed")
+	}
 	w.exec, err = f.RT.Start(ctx, sandbox.Spec{
 		Name: "agwpoc-" + slotID, Image: f.Env.Image, NoAttach: true,
-		// Package caches for npm and pip (reachable only with internet).
-		Env:    append([]string{"AGW_SLOT=" + slotID}, f.RT.PkgCacheEnv()...),
+		// Package caches for npm and pip (reachable only with internet); tracing only for experiments.
+		Env:    execEnv,
 		Labels: withRole(labels, "exec"), Tmpfs: sandbox.ExecTmpfs, CapAdd: sandbox.ExecCaps,
 		InternalNet: w.xnet, SocketVolume: f.Env.SocketVolume, SocketSubpath: slotID + "/exec",
 		MemoryMB: f.Env.ExecMemoryMB, CPUs: f.Env.ExecCPUs, Pids: f.Env.ExecPids,
