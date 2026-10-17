@@ -984,11 +984,14 @@ func scanApproval(row pgx.Row) (Approval, error) {
 	return a, nil
 }
 
+// CreateApproval inserts an approval. A caller that has to register state under the id before the row becomes
+// visible (the manager keeps the recheck of a waiting call there, issue #154) sets a.ID; otherwise the database
+// assigns one.
 func (s *Store) CreateApproval(ctx context.Context, a Approval) (Approval, error) {
 	return scanApproval(s.pool.QueryRow(ctx, `
-INSERT INTO approvals (chat_id, kind, via, name, size, sha256, content_type, pending_key, preview, session, tool_call_id, effect, summary, notebook)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NULLIF($9,''),$10,$11,NULLIF($12,''),NULLIF($13,''),NULLIF($14,'')::jsonb) RETURNING `+approvalCols,
-		a.ChatID, a.Kind, a.Via, a.Name, a.Size, a.SHA256, a.ContentType, a.PendingKey, a.Preview, a.Session, a.ToolCallID, a.Effect, a.Summary, string(a.Notebook)))
+INSERT INTO approvals (id, chat_id, kind, via, name, size, sha256, content_type, pending_key, preview, session, tool_call_id, effect, summary, notebook)
+VALUES (COALESCE(NULLIF($1,'')::uuid, gen_random_uuid()),$2,$3,$4,$5,$6,$7,$8,$9,NULLIF($10,''),$11,$12,NULLIF($13,''),NULLIF($14,''),NULLIF($15,'')::jsonb) RETURNING `+approvalCols,
+		a.ID, a.ChatID, a.Kind, a.Via, a.Name, a.Size, a.SHA256, a.ContentType, a.PendingKey, a.Preview, a.Session, a.ToolCallID, a.Effect, a.Summary, string(a.Notebook)))
 }
 
 func (s *Store) GetApproval(ctx context.Context, id string) (Approval, error) {

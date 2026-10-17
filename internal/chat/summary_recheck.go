@@ -26,6 +26,8 @@ var ErrSummaryChanged = errors.New("the platform changed since this was proposed
 type recheck func(ctx context.Context) (summaries []string, preview string, failed bool)
 
 // registerRecheck notes how to re-read the summary of a pending approval and returns the way to forget it again.
+// Callers register before the approval row is inserted: from the moment it is visible, a click must find the recheck
+// (issue #154). The id therefore comes from the caller, not from the database.
 func (m *Manager) registerRecheck(approvalID string, f recheck) func() {
 	m.mu.Lock()
 	if m.rechecks == nil {
