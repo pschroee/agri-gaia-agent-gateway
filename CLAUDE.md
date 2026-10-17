@@ -540,6 +540,10 @@ refer to this repository.
   own chats and `/api/exp/*`** (`internal/api/api.go`, `expRouteAllowed`). It is a bearer key, never a cookie, and
   `/api/exp/*` additionally refuses a normal login. The runner must use `AGW_EXP_API_TOKEN`, never the gateway's
   `AGW_API_TOKEN` (`agw.expClient`): the container's full key must not leak into the runner.
+- **On the instance the runner needs `--url https://app.<base>/agent`** (#155, seen live on 17.10.2026): Compose
+  sets `AGW_ALLOWED_HOSTS: app.${PROJECT_BASE_URL}`, so `docker exec … /agw exp run …` against
+  `http://127.0.0.1:18480` answers `403 unknown host` — not a key problem. **No loopback exception**: the host
+  check stays as it is; the error names the host and points at `AGW_ALLOWED_HOSTS`.
 - **The runner is `/agw` in this image** (`Dockerfile`) and talks to the gateway over HTTP; its state is
   `exp_runs` (`internal/store/exp.go`, `exp_schema.sql`). The logical run is `run_key = <plan>/<cell>/<task>/<rep>`;
   a crashed attempt keeps `status: "started"` until the next start supersedes it as `key#2`, `key#3`, … — a row

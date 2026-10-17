@@ -1,7 +1,12 @@
 # Orchestrator API (PoC stage 1, with E9)
 
-Base: `http://127.0.0.1:18480`. All responses are JSON, times RFC 3339, errors as
+Base: `http://127.0.0.1:18480` for a local install. All responses are JSON, times RFC 3339, errors as
 `{"error": "<text>"}` with a matching status code. The web UI is served at `/`.
+
+The `Host` header must be in `AGW_ALLOWED_HOSTS` (protection against DNS rebinding). Compose sets it to the
+public host (`app.${PROJECT_BASE_URL}`), so on the instance the API is reached under
+`https://app.<base>/agent`, and a call from inside the gateway container to `http://127.0.0.1:18480` answers
+`403 unknown host "127.0.0.1:18480" (not in AGW_ALLOWED_HOSTS; …)` (issue #155). Do not add a loopback exception.
 
 ## Login
 
@@ -2333,8 +2338,10 @@ the account's `sub` as owner, so ownership checks work unchanged.
 | `POST /api/exp/chats/abort` | `{chat}`: stops the running turn (a limit of X3) |
 
 **The runner** is `agw exp run --plan <dir|file> [--cell <id>]... [--k N] [--seed N] [--dry-run]`; it is shipped in
-the gateway image as `/agw` and starts from the container (`docker exec -d agri_gaia-agent_gateway-1 /agw exp run …`)
-with `AGW_EXP_API_TOKEN` in its environment. It reads `plan.yaml`/`pilot.yaml`, the tasks and the fixture manifests
+the gateway image as `/agw` and starts from the container
+(`docker exec -d agri_gaia-agent_gateway-1 /agw --url https://app.<base>/agent exp run …`) with
+`AGW_EXP_API_TOKEN` in its environment. The `--url` is required on the instance: `http://127.0.0.1:18480` is not
+in `AGW_ALLOWED_HOSTS` there and answers `403 unknown host` (issue #155). It reads `plan.yaml`/`pilot.yaml`, the tasks and the fixture manifests
 (X9), checks `plan.lock` for a main plan (X8.5), orders the runs per task and repetition with a seeded shuffle of
 the cells (X1.6) and runs them strictly one after the other (X1.7). A run ends when the chat is quiet
 (`running: false`, `queued: 0`, not resuming) and no observed job (`GET /api/chats/{id}/jobs`) is still running,

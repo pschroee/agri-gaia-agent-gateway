@@ -142,7 +142,13 @@ func (s *Server) auth(next http.Handler) http.Handler {
 		}
 		if len(s.AllowedHosts) > 0 && !slices.Contains(s.AllowedHosts, r.Host) {
 			slog.Warn("API: foreign host refused", "host", r.Host)
-			writeErr(w, http.StatusForbidden, "unknown host")
+			// Name the host and the cause, never the allowed list: a caller who uses 127.0.0.1
+			// from inside a container should learn that the URL, not the key, is wrong (#155).
+			hint := "check AGW_ALLOWED_HOSTS and the URL"
+			if s.Env.PublicURL != "" {
+				hint = "use the instance's URL " + s.Env.PublicURL
+			}
+			writeErr(w, http.StatusForbidden, `unknown host "`+r.Host+`" (not in AGW_ALLOWED_HOSTS; `+hint+`)`)
 			return
 		}
 		if strings.HasPrefix(r.URL.Path, "/api/exp/") {

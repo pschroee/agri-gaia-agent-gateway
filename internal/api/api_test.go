@@ -267,3 +267,30 @@ func TestToolsetsReported(t *testing.T) {
 		t.Fatal("ErrVariantFixed")
 	}
 }
+
+// #155: a foreign host names the host and the cause, without listing the allowed hosts.
+func TestForeignHostMessage(t *testing.T) {
+	s := &Server{Token: testToken, AllowedHosts: []string{"app.example.test"},
+		Env: config.Env{PublicURL: "https://app.example.test/agent"}}
+	h := s.auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(204) }))
+	r := httptest.NewRequest("GET", "http://127.0.0.1:18480/api/chats", nil)
+	r.Host = "127.0.0.1:18480"
+	r.Header.Set("Authorization", "Bearer "+testToken)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	body := w.Body.String()
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("status %d: %s", w.Code, body)
+	}
+	var resp struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("body %q: %v", body, err)
+	}
+	for _, want := range []string{`unknown host "127.0.0.1:18480"`, "AGW_ALLOWED_HOSTS", "https://app.example.test/agent"} {
+		if !strings.Contains(resp.Error, want) {
+			t.Fatalf("missing %q in %q", want, resp.Error)
+		}
+	}
+}
