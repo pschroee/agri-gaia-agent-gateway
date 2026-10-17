@@ -460,7 +460,9 @@ type Env struct {
 	// chats, and it needs at least 32 characters.
 	ExpAPIToken string
 	// ExpClientID: the client of the experiment account's password grant (AGW_EXP_CLIENT_ID,
-	// default frontend, X1.2).
+	// default frontend, X1.2). With AGW_PLATFORM_TOKEN_EXCHANGE=true it must be the client that
+	// performs the exchange (agw-agent); Keycloak refuses a frontend token with "Client is not
+	// within the token audience". Its secret comes from AGW_PLATFORM_CLIENT_SECRET.
 	ExpClientID string
 
 	// V1 — pre-annotation with CVAT. The service is wired only when both URLs are set; without them

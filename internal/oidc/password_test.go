@@ -38,6 +38,7 @@ type fakeAccount struct {
 	status  int
 	hit     atomic.Int32
 	forms   []string
+	secrets []string
 	enabled atomic.Bool
 }
 
@@ -59,6 +60,7 @@ func startAccount(t *testing.T) *fakeAccount {
 		}
 		f.hit.Add(1)
 		f.forms = append(f.forms, r.Form.Get("grant_type")+" "+r.Form.Get("client_id")+" "+r.Form.Get("username"))
+		f.secrets = append(f.secrets, r.Form.Get("client_secret"))
 		if !f.enabled.Load() {
 			http.Error(w, "boom", http.StatusInternalServerError)
 			return
@@ -76,7 +78,7 @@ func startAccount(t *testing.T) *fakeAccount {
 func TestPasswordSourceCaches(t *testing.T) {
 	f := startAccount(t)
 	now := time.Unix(1_700_000_000, 0)
-	p := NewPasswordSource(f.srv.URL, "frontend", "agent-exp", "s3cret")
+	p := NewPasswordSource(f.srv.URL, "frontend", "", "agent-exp", "s3cret")
 	p.Now = func() time.Time { return now }
 	ctx := context.Background()
 	for i := 0; i < 3; i++ {
@@ -90,12 +92,32 @@ func TestPasswordSourceCaches(t *testing.T) {
 	if len(f.forms) != 1 || f.forms[0] != "password frontend agent-exp" {
 		t.Fatalf("form: %v", f.forms)
 	}
+	if len(f.secrets) != 1 || f.secrets[0] != "" {
+		t.Fatalf("public client sent a secret: %v", f.secrets)
+	}
+}
+
+// With token exchange the account logs in through the client that performs the exchange; that
+// client is confidential and needs its secret.
+func TestPasswordSourceSendsClientSecret(t *testing.T) {
+	f := startAccount(t)
+	p := NewPasswordSource(f.srv.URL, "agw-agent", "client-secret", "agent-exp", "s3cret")
+	p.HTTP = f.srv.Client()
+	if _, err := p.Token(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.forms) != 1 || f.forms[0] != "password agw-agent agent-exp" {
+		t.Fatalf("form: %v", f.forms)
+	}
+	if len(f.secrets) != 1 || f.secrets[0] != "client-secret" {
+		t.Fatalf("client secret not sent")
+	}
 }
 
 func TestPasswordSourceRenewsBeforeExpiry(t *testing.T) {
 	f := startAccount(t)
 	now := time.Unix(1_700_000_000, 0)
-	p := NewPasswordSource(f.srv.URL, "frontend", "agent-exp", "s3cret")
+	p := NewPasswordSource(f.srv.URL, "frontend", "", "agent-exp", "s3cret")
 	p.Now = func() time.Time { return now }
 	ctx := context.Background()
 	if _, err := p.Token(ctx); err != nil {
@@ -122,7 +144,7 @@ func TestPasswordSourceRenewsBeforeExpiry(t *testing.T) {
 func TestPasswordSourceErrorHasNoSecret(t *testing.T) {
 	f := startAccount(t)
 	f.status = http.StatusUnauthorized
-	p := NewPasswordSource(f.srv.URL, "frontend", "agent-exp", "s3cret")
+	p := NewPasswordSource(f.srv.URL, "frontend", "", "agent-exp", "s3cret")
 	p.HTTP = f.srv.Client()
 	_, err := p.Token(context.Background())
 	if err == nil {
@@ -140,7 +162,7 @@ func TestPasswordSourceSubjectAndOwns(t *testing.T) {
 	f := startAccount(t)
 	f.sub = "sub-exp"
 	f.ttl = 300
-	p := NewPasswordSource(f.srv.URL, "frontend", "agent-exp", "s3cret")
+	p := NewPasswordSource(f.srv.URL, "frontend", "", "agent-exp", "s3cret")
 	ctx := context.Background()
 	sub, err := p.Subject(ctx)
 	if err != nil || sub != "sub-exp" {

@@ -99,8 +99,15 @@ func run() error {
 		case env.OIDCIssuer == "":
 			return errors.New("AGW_EXP_USER needs AGW_OIDC_ISSUER (AGW_AUTH_MODE=oidc)")
 		default:
-			expAcct = oidc.NewPasswordSource(env.OIDCIssuer, env.ExpClientID, env.ExpUser, env.ExpPassword)
+			expAcct = oidc.NewPasswordSource(env.OIDCIssuer, env.ExpClientID, expClientSecret(env), env.ExpUser, env.ExpPassword)
 			slog.Info("experiment account on", "user", env.ExpUser, "client", env.ExpClientID)
+			if env.PlatformExchange && env.ExpClientID != env.PlatformClientID {
+				// Keycloak only exchanges a token of the requesting client (or one whose audience
+				// names it); a token of another client is refused with "Client is not within the
+				// token audience".
+				slog.Warn("experiment account logs in through a client other than the exchanging one",
+					"experiment_client", env.ExpClientID, "exchange_client", env.PlatformClientID)
+			}
 		}
 		if env.ExpAPIToken != "" {
 			if len(env.ExpAPIToken) < 32 {
@@ -190,20 +197,11 @@ func run() error {
 	// owner whose account is missing then fails with a message naming the variable.
 	var fixtures *exp.Fixtures
 	if env.PlatformAPIURL != "" && (env.ExpUser != "" || env.Exp2User != "") {
-		fixtureClient := func(user, password string) (*platform.Client, error) {
-			if user == "" || password == "" {
-				return nil, nil
-			}
-			return platform.New(platform.Config{
-				APIURL: env.PlatformAPIURL, TokenURL: env.PlatformTokenURL,
-				ClientID: env.PlatformClientID, User: user, Password: password,
-			})
-		}
-		primary, err := fixtureClient(env.ExpUser, env.ExpPassword)
+		primary, err := fixtureClient(env, env.ExpUser, env.ExpPassword)
 		if err != nil {
 			return fmt.Errorf("experiment account %s: %w", env.ExpUser, err)
 		}
-		secondary, err := fixtureClient(env.Exp2User, env.Exp2Password)
+		secondary, err := fixtureClient(env, env.Exp2User, env.Exp2Password)
 		if err != nil {
 			return fmt.Errorf("experiment account %s: %w", env.Exp2User, err)
 		}
@@ -477,6 +475,29 @@ func sessionKeeper(auth *oidc.Service) chat.SessionKeeper {
 		return nil
 	}
 	return auth
+}
+
+// fixtureClient is the password grant of one experiment account for the fixtures (X4). It uses the
+// same public client as the experiment account of X1.2 (AGW_EXP_CLIENT_ID, default frontend):
+// agw-agent is confidential, and Keycloak rejects a password grant without its client secret
+// (unauthorized_client).
+func fixtureClient(env config.Env, user, password string) (*platform.Client, error) {
+	if user == "" || password == "" {
+		return nil, nil
+	}
+	return platform.New(platform.Config{
+		APIURL: env.PlatformAPIURL, TokenURL: env.PlatformTokenURL,
+		ClientID: env.ExpClientID, ClientSecret: expClientSecret(env), User: user, Password: password,
+	})
+}
+
+// expClientSecret is the secret of the experiment account's login client. It is only used when the
+// configured client is the gateway's confidential client; the public "frontend" needs none.
+func expClientSecret(env config.Env) string {
+	if env.ExpClientID != "" && env.ExpClientID == env.PlatformClientID {
+		return env.PlatformClientSecret
+	}
+	return ""
 }
 
 // ownerToken returns, per chat, the access token of its owner from the owner's session at the orchestrator.
