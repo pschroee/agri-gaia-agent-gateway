@@ -169,6 +169,10 @@ type Frame struct {
 	// Only bash at pi's socket, code "backgrounded": the user has turned the command into a
 	// background task; its ID (bg-<n>).
 	Background string `json:"background,omitempty"`
+	// X6: failed network and file syscalls of this operation as strace lines (at most 1 MiB),
+	// only in the final frame and only when the slot traces (AGW_EXEC_TRACE=failed).
+	Trace          []byte `json:"trace,omitempty"`
+	TraceTruncated bool   `json:"traceTruncated,omitempty"`
 }
 
 type ReadResult struct {
