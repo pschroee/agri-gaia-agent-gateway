@@ -399,6 +399,9 @@ func (t *task) finish(f execproto.Frame, err error, started bool) store.Backgrou
 	}
 	now := time.Now()
 	t.t.EndedAt = &now
+	// X6/#145: the trace of the operation arrives with its last frame; the notifier attaches it
+	// to the tool_executions row of the background task.
+	t.t.Trace, t.t.TraceTruncated = f.Trace, f.TraceTruncated
 	t.t.OutputSHA256 = hex.EncodeToString(t.sum.Sum(nil))
 	t.t.OutputExcerpt = t.excerptText()
 	if t.t.OutputBytes > 0 && t.lastByte != '\n' {
