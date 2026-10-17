@@ -261,6 +261,14 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if p.rec == nil {
 				return nil
 			}
+			// Issue #151: the proxy reads every response to meter tokens. A compressed body would pass
+			// through it unreadable and the call would be recorded with zeros while pi decodes it. The
+			// outgoing request asks for no encoding, so the transport usually decompresses already; this
+			// covers an upstream that compresses anyway.
+			if err := decompress(resp); err != nil {
+				slog.Error("LLM proxy: compressed response not readable", "provider", provID, "error", err)
+				return err
+			}
 			m := newMeter(prov.API)
 			status := resp.StatusCode
 			resp.Body = &meteredBody{ReadCloser: resp.Body, m: m, done: func(c Call) {
@@ -288,6 +296,10 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			pr.Out.Host = target.Host
 			pr.Out.Header.Del("Authorization")
 			pr.Out.Header.Del("X-Api-Key")
+			// Issue #151: no Accept-Encoding from the sandbox. The Go transport then negotiates gzip itself
+			// and decompresses the answer transparently, so the meter sees the plain SSE/JSON. Forwarding
+			// the sandbox's header would leave the body compressed here.
+			pr.Out.Header.Del("Accept-Encoding")
 			if key := prov.APIKey(); key != "" {
 				if prov.API == "anthropic-messages" {
 					pr.Out.Header.Set("X-Api-Key", key)
