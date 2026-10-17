@@ -714,11 +714,13 @@ func TestParkedApprovalRunsExactStepOnApprove(t *testing.T) {
 	if got := f.writeCalls()[0]; got != "DELETE /datasets/5" {
 		t.Fatalf("the repeated call: %v", got)
 	}
-	waitFor(t, func() bool { return stepsOfPlan(t, e, p.ID)[0].State == plan.StepDone })
-	pl, err := e.st.GetPlan(ctx, p.ID)
-	if err != nil || pl.State != plan.StateCompleted {
-		t.Fatalf("plan: %+v %v", pl, err)
-	}
+	// The step is written before the plan completes (finishParkedStep: FinishPlanStep, then allDone and
+	// FinishPlan), so waiting for the step alone can see the plan still approved. Wait for the state the test
+	// is about — the completed plan — not for the write that happens to come first (issue #157).
+	waitFor(t, func() bool {
+		pl, err := e.st.GetPlan(ctx, p.ID)
+		return err == nil && pl.State == plan.StateCompleted
+	})
 	waitFor(t, func() bool { return len(e.agent(0).prompts()) > 0 })
 	if text := strings.Join(e.agent(0).prompts(), "\n"); !strings.Contains(text, "ran after your approval") {
 		t.Fatalf("the note does not report the run step:\n%s", text)
