@@ -158,10 +158,17 @@ func getTask(ctx context.Context, read Reader, taskID string) (taskDoc, error) {
 		return doc, err
 	}
 	if res.Status == "error" || res.HTTPStatus >= 400 {
-		return doc, fmt.Errorf("task %s not readable: %s", taskID, res.Message)
+		// A 404 says the task is gone: no further attempt can make it readable (issue #140). Everything
+		// else (5xx, a lost login) may pass and is retried.
+		err := fmt.Errorf("task %s not readable: %s", taskID, res.Message)
+		if DecidedByStatus(res.HTTPStatus) {
+			return doc, Decided(err)
+		}
+		return doc, err
 	}
 	if err := json.Unmarshal([]byte(res.Body), &doc); err != nil {
-		return doc, fmt.Errorf("task %s: %v", taskID, err)
+		// The answer is no task any more (a deleted one answers an empty body): decided as well.
+		return doc, Decidedf("task %s: %v", taskID, err)
 	}
 	return doc, nil
 }

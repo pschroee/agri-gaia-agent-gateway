@@ -1264,6 +1264,14 @@ user's token.
   poll only uses reading `GET`s of the kind's own paths (a kind that asks for anything else is refused) and never writes
   (`TestWatchReaderRefusesWrites`). Five failing reads in a row leave the job `running` and write
   `platform not readable: …` into `message`; a plan step raises SSE `attention` (and keeps waiting).
+- **A read that cannot succeed ends the job** (issue #140): a kind marks the errors that are **decided** — the platform
+  answers 404 for the object, or its answer is no longer that object (`watch.Decided` / `watch.Decidedf`,
+  `watch.DecidedByStatus`). The loop then closes the job as `failed` with `the job is no longer readable: …`, and the step
+  and the plan follow the path of a failed job (retry per A-E1, otherwise the plan fails; the note names the reason).
+  Everything else — 5xx, timeouts, a lost login, an unknown error from a kind of another plan — is **transient**: the job
+  stays `running`, `fail_reads` counts, and the next attempt waits the interval of its age doubled per failure up to
+  `watchMaxBackoff` (15 min). The log gets one warning at the first failure, one when the job starts saying so, and then
+  only every tenth; one warning per tick for hours (278 in the run of 16.10.2026) filled it without any news.
 - **The answer says that the job is observed** (D2.1): a call whose plan step starts being watched adds
   `note` to its answer (`platform.Result.Note`, rendered by CLI and MCP as the last line, carried by the REST binding
   as JSON), e.g. `The gateway observes this platform job (job w1) for step 1 and wakes you when it ends; do not poll the
