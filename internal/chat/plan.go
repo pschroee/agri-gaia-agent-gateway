@@ -116,6 +116,10 @@ func (m *Manager) ProposePlan(ctx context.Context, chatID, slotID, via string, r
 	// registration would skip the re-read and approve the summaries as proposed (issue #154).
 	apID := uuid.NewString()
 	defer m.registerRecheck(apID, m.planRecheck(chatID, apID, p.Title, steps, calls, auto))()
+	// The reads of the summaries are one activity entry of the system (issue L2/#119), and while the plan waits,
+	// approving re-reads them first (DL2.1). It is written before the approval row exists: an approval that the
+	// API shows must never be visible without the entry that explains its summaries (issue #157).
+	m.logSummaryReads(ctx, chatID, apID, "proposed", rl)
 	ap, err := m.st.CreateApproval(ctx, store.Approval{ID: apID, ChatID: chatID, Kind: "plan", Via: via, Name: plan.ApprovalName(len(steps)), Size: int64(len(steps)),
 		ContentType: "application/json", PendingKey: "-", Preview: preview, Summary: plan.ApprovalSummary(steps), Session: session, ToolCallID: store.ToolCallFrom(ctx)})
 	if err != nil {
@@ -124,9 +128,6 @@ func (m *Manager) ProposePlan(ctx context.Context, chatID, slotID, via string, r
 	if err := m.st.SetPlanApproval(ctx, pl.ID, ap.ID); err != nil {
 		return platform.Result{}, err
 	}
-	// The reads of the summaries are one activity entry of the system (issue L2/#119), and while the plan waits,
-	// approving re-reads them first (DL2.1).
-	m.logSummaryReads(ctx, chatID, ap.ID, "proposed", rl)
 	w := m.broker.Register(ap.ID)
 	if s, ok := m.pool.Get(slotID); ok {
 		s.SetActivity("waiting_approval", "")
