@@ -1663,8 +1663,11 @@ ones. Taking the result back goes over exactly the objects the gateway wrote and
 - **`annotation_rollback`** (`annotation-rollback`, effect **write**, E21): `source_id` (required) and `scope`
   (`all`, default, or `suspicious`). It deletes in CVAT exactly the objects that stand in the register of this chat for
   that source, read again right before the delete and only when CVAT still carries them with `source: "auto"` and the
-  same fingerprint; everything the user drew, moved or corrected stays. Batches of 200 ids with
-  `PATCH /api/tasks/{id}/annotations?action=delete` and `{"tags":[],"shapes":[],"tracks":[]}`. `scope=suspicious`
+  same fingerprint; everything the user drew, moved or corrected stays. Batches of 200 objects with
+  `PATCH /api/tasks/{id}/annotations?action=delete`; every element carries `id`, `frame` and `label_id`
+  (CVAT 2.4.2 validates the body as `LabeledDataSerializer`, and a bare id answers HTTP 400
+  `{"frame":["This field is required."],"label_id":[…]}`), a shape its `type`, a track its `shapes` (an
+  empty list is taken). Deleted is only what the ids name (`filter(pk__in=…)`), whatever the source says. `scope=suspicious`
   goes by the newest finished verification of that source (`LastVerifyResult`) and refuses without one. The answer:
   `{"source_id", "scope", "deleted", "changed_kept", "missing", "frames_emptied", "note"}`; the rows of what was
   deleted leave the register.

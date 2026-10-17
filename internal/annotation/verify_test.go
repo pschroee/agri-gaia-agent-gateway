@@ -18,14 +18,20 @@ import (
 )
 
 // annotationsWith builds the answer of GET /api/tasks/{id}/annotations out of tags and shapes.
-func annotationsWith(tags []Tag, shapes []Shape) string {
+func annotationsWith(tags []Tag, shapes []Shape) string { return annotationsAll(tags, shapes, nil) }
+
+// annotationsAll is the same with the tracks of the task.
+func annotationsAll(tags []Tag, shapes []Shape, tracks []Track) string {
 	if tags == nil {
 		tags = []Tag{}
 	}
 	if shapes == nil {
 		shapes = []Shape{}
 	}
-	b, _ := json.Marshal(map[string]any{"version": 0, "tags": tags, "shapes": shapes, "tracks": []any{}})
+	if tracks == nil {
+		tracks = []Track{}
+	}
+	b, _ := json.Marshal(map[string]any{"version": 0, "tags": tags, "shapes": shapes, "tracks": tracks})
 	return string(b)
 }
 
@@ -333,14 +339,15 @@ func TestRollbackOnlyAutoAndUnchanged(t *testing.T) {
 	if got.Deleted != 2 || got.ChangedKept != 1 || got.Missing != 0 {
 		t.Fatalf("rollback: %+v", got)
 	}
-	// Only the two unchanged ids are named in the delete call, never the corrected one, never the manual
-	// one and never the object the fill wrote without a register entry.
+	// Only the two unchanged objects are named in the delete call, never the corrected one, never the
+	// manual one and never the object the fill wrote without a register entry. Every element carries the
+	// frame and the class CVAT's delete serializer requires (V3b).
 	body := lastWrite(t, e)
-	if !strings.Contains(body, `"tags":[11,12]`) {
-		t.Errorf("the delete call does not carry exactly the unchanged objects: %s", body)
+	if !strings.Contains(body, `"tags":[{"id":11,"frame":25,"label_id":1},{"id":12,"frame":26,"label_id":1}]`) {
+		t.Errorf("the delete call does not carry exactly the unchanged objects in CVAT's form: %s", body)
 	}
 	for _, id := range []string{"13", "14", "15"} {
-		if strings.Contains(body, "["+id+"]") || strings.Contains(body, ","+id+"]") || strings.Contains(body, "["+id+",") {
+		if strings.Contains(body, `"id":`+id) {
 			t.Errorf("the delete call names id %s: %s", id, body)
 		}
 	}
@@ -390,7 +397,7 @@ func TestRollbackKeepsManual(t *testing.T) {
 		t.Fatalf("a manual annotation was taken back: %+v", got)
 	}
 	for _, b := range e.fc.writeBodies() {
-		if strings.Contains(b, "[11]") {
+		if strings.Contains(b, `"id":11`) {
 			t.Errorf("the delete call names a manual object: %s", b)
 		}
 	}
@@ -424,7 +431,7 @@ func TestRollbackScopeSuspicious(t *testing.T) {
 		t.Fatalf("scope suspicious took back %d objects, expected 1: %+v", got.Deleted, got)
 	}
 	body := lastWrite(t, e)
-	if !strings.Contains(body, "[12]") {
+	if !strings.Contains(body, `"id":12`) || strings.Contains(body, `"id":11`) {
 		t.Errorf("the object of the named image was not the one taken back: %s", body)
 	}
 }
@@ -475,5 +482,54 @@ func TestCalibrateUsesOnlyCalibrationSet(t *testing.T) {
 		default:
 			t.Errorf("the calibration measured frame %d, which is not in the calibration set", frame)
 		}
+	}
+}
+
+// The delete call carries what CVAT 2.4.2 requires of every element (V3b): frame and label_id, for a shape
+// its type and for a track the list of its shapes. A bare id is refused by the serializer with HTTP 400
+// (apps/engine/serializers.py:1351, 1223-1230), which is what the rollback ran into live on 17.10.2026.
+func TestRollbackDeleteBodyShape(t *testing.T) {
+	e, chatID, fillID := filledTask(t)
+	clearRegister(t, e, chatID, fillID)
+	shape := Shape{ID: 12, Frame: 26, LabelID: 2, Type: "rectangle", Source: sourceAuto,
+		Points: []float64{1, 2, 3, 4}, Attributes: []Attribute{}}
+	track := Track{ID: 13, LabelID: 1, Source: sourceAuto, Attributes: []Attribute{},
+		Shapes: []Shape{{Frame: 27, LabelID: 1, Type: "rectangle", Source: sourceAuto,
+			Points: []float64{5, 6, 7, 8}, Attributes: []Attribute{}}}}
+	trackFingerprintOfTrack, trackFrame, automatic := trackFingerprint(track)
+	if !automatic {
+		t.Fatal("the track of the test carries no automatic shape")
+	}
+	objs := []store.AnnotationObject{
+		{SourceID: fillID, ChatID: chatID, TaskID: 7, Kind: store.ObjectTag, CVATID: 11, Frame: 25,
+			LabelID: 1, Fingerprint: tagFingerprint(autoTag(11, 25))},
+		{SourceID: fillID, ChatID: chatID, TaskID: 7, Kind: store.ObjectShape, CVATID: 12, Frame: 26,
+			LabelID: 2, Fingerprint: shapeFingerprint(shape.Type, shape.Frame, shape.LabelID, shape.Points, shape.Attributes)},
+		{SourceID: fillID, ChatID: chatID, TaskID: 7, Kind: store.ObjectTrack, CVATID: 13, Frame: trackFrame,
+			LabelID: 1, Fingerprint: trackFingerprintOfTrack},
+	}
+	if err := e.st.AddAnnotationObjects(context.Background(), objs); err != nil {
+		t.Fatal(err)
+	}
+	e.fc.setAnnotations(7, annotationsAll([]Tag{autoTag(11, 25)}, []Shape{shape}, []Track{track}))
+
+	res := e.do(t, chatID, http.MethodPost, platform.AnnotationPrefix+"/rollbacks", `{"source_id":"`+fillID+`"}`)
+	if res.Status != "ok" {
+		t.Fatalf("rollback: %+v", res)
+	}
+	var got rollbackAnswer
+	if json.Unmarshal([]byte(res.Body), &got) != nil {
+		t.Fatal(res.Body)
+	}
+	if got.Deleted != 3 || got.ChangedKept != 0 || got.Missing != 0 {
+		t.Fatalf("rollback: %+v", got)
+	}
+	body := lastWrite(t, e)
+	want := `{"version":0,` +
+		`"tags":[{"id":11,"frame":25,"label_id":1}],` +
+		`"shapes":[{"id":12,"frame":26,"label_id":2,"type":"rectangle"}],` +
+		`"tracks":[{"id":13,"frame":27,"label_id":1,"shapes":[]}]}`
+	if body != want {
+		t.Errorf("the delete body is not the form CVAT validates:\n got %s\nwant %s", body, want)
 	}
 }

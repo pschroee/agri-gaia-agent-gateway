@@ -109,7 +109,14 @@ func (s *Service) rollback(ctx context.Context, chatID string, req platform.Requ
 			out.ChangedKept++
 			continue
 		}
-		items = append(items, deleteItem{kind: row.Kind, cvatID: row.CVATID,
+		typ := now.typ
+		if row.Kind == store.ObjectShape && typ == "" {
+			// The serializer needs one of its shape types; the deletion itself goes by the id only, so a
+			// type a read did not carry is no reason to leave an object behind.
+			typ = "rectangle"
+		}
+		items = append(items, deleteItem{kind: row.Kind, cvatID: row.CVATID, frame: row.Frame,
+			labelID: row.LabelID, typ: typ,
 			ref: store.ObjectRef{TaskID: row.TaskID, Kind: row.Kind, CVATID: row.CVATID}})
 		frames[row.Frame] = true
 	}
@@ -119,16 +126,18 @@ func (s *Service) rollback(ctx context.Context, chatID string, req platform.Requ
 		if n > len(items) {
 			n = len(items)
 		}
-		part := AnnotationsDelete{}
+		part := AnnotationsDelete{Version: 0, Tags: []DeleteTag{}, Shapes: []DeleteShape{}, Tracks: []DeleteTrack{}}
 		refs := make([]store.ObjectRef, 0, n)
 		for _, item := range items[:n] {
 			switch item.kind {
 			case store.ObjectTag:
-				part.Tags = append(part.Tags, item.cvatID)
+				part.Tags = append(part.Tags, DeleteTag{ID: item.cvatID, Frame: item.frame, LabelID: item.labelID})
 			case store.ObjectShape:
-				part.Shapes = append(part.Shapes, item.cvatID)
+				part.Shapes = append(part.Shapes, DeleteShape{ID: item.cvatID, Frame: item.frame,
+					LabelID: item.labelID, Type: item.typ})
 			case store.ObjectTrack:
-				part.Tracks = append(part.Tracks, item.cvatID)
+				part.Tracks = append(part.Tracks, DeleteTrack{ID: item.cvatID, Frame: item.frame,
+					LabelID: item.labelID, Shapes: []any{}})
 			}
 			refs = append(refs, item.ref)
 		}
@@ -193,10 +202,12 @@ func (s *Service) suspiciousFrames(ctx context.Context, chatID, sourceID string)
 	return out, nil
 }
 
-// currentObject is one annotation of a task as the rollback reads it: what it stands with right now.
+// currentObject is one annotation of a task as the rollback reads it: what it stands with right now and,
+// for a shape, its type, which the delete body has to carry (V3b).
 type currentObject struct {
 	source      string
 	fingerprint string
+	typ         string
 }
 
 // objectKey names one annotation in the index of a task: its kind and the id CVAT gave it.
@@ -212,7 +223,7 @@ func currentObjects(ann Annotations) map[string]currentObject {
 		out[objectKey(store.ObjectTag, t.ID)] = currentObject{source: t.Source, fingerprint: tagFingerprint(t)}
 	}
 	for _, sh := range ann.Shapes {
-		out[objectKey(store.ObjectShape, sh.ID)] = currentObject{source: sh.Source,
+		out[objectKey(store.ObjectShape, sh.ID)] = currentObject{source: sh.Source, typ: sh.Type,
 			fingerprint: shapeFingerprint(sh.Type, sh.Frame, sh.LabelID, sh.Points, sh.Attributes)}
 	}
 	for _, tr := range ann.Tracks {
@@ -226,9 +237,14 @@ func currentObjects(ann Annotations) map[string]currentObject {
 	return out
 }
 
-// deleteItem is one registered annotation a rollback takes back, in the order of the batches.
+// deleteItem is one registered annotation a rollback takes back, in the order of the batches. Besides the
+// id it carries what CVAT's delete serializer requires of every element: the frame, the class and, for a
+// shape, its type (V3b).
 type deleteItem struct {
-	kind   string
-	cvatID int64
-	ref    store.ObjectRef
+	kind    string
+	cvatID  int64
+	frame   int
+	labelID int64
+	typ     string
+	ref     store.ObjectRef
 }
