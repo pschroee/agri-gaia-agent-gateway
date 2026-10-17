@@ -262,19 +262,22 @@ func knownClassificationVerdict(v string) bool {
 var suggestionFixLabels = Suggestion{ID: "fix_labels",
 	Text: "check the labels of the misclassified validation images: the image review finds some of them mislabelled"}
 
-// chatModel is the model the chat works with ("provider/model"), or "" when it is unknown.
+// chatModel is the model the chat works with ("provider/model"), or "" when it is unknown. A chat
+// without a model runs with the catalog's default, and so does the review: the capability overview
+// resolves the identifier the same way (config.Catalog.ChatModel, issue #163).
 func (s *Service) chatModel(ctx context.Context, chatID string) string {
+	id := ""
 	if s.ChatModel != nil {
-		return s.ChatModel(ctx, chatID)
+		id = s.ChatModel(ctx, chatID)
+	} else if s.St != nil {
+		if c, err := s.St.GetChat(ctx, chatID); err == nil {
+			id = c.Model
+		}
 	}
-	if s.St == nil {
-		return ""
+	if s.Cat == nil {
+		return id
 	}
-	c, err := s.St.GetChat(ctx, chatID)
-	if err != nil {
-		return ""
-	}
-	return c.Model
+	return s.Cat.ChatModel(id)
 }
 
 // reviewAllowed answers whether the chat's model may look at the images of this dataset: the rule of #111

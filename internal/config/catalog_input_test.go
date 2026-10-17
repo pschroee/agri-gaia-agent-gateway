@@ -31,3 +31,22 @@ func TestCatalogInputField(t *testing.T) {
 		t.Fatalf("catalog without the field: %v", err)
 	}
 }
+
+// A chat without a model works with the catalog's default, so every reader of the image capability has
+// to resolve the identifier the same way (issue #163).
+func TestCatalogChatModel(t *testing.T) {
+	cat, err := ParseCatalog([]byte(`{"default":"p/bild","providers":[{"id":"p","models":[
+		{"id":"bild","input":["text","image"]},{"id":"text","input":["text"]}]}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cat.ChatModel(""); got != "p/bild" {
+		t.Errorf("without a model: %q, want the default p/bild", got)
+	}
+	if got := cat.ChatModel("p/text"); got != "p/text" {
+		t.Errorf("with a model: %q, want the chat's own p/text", got)
+	}
+	if _, m, ok := cat.Lookup(cat.ChatModel("")); !ok || !m.ReadsImages() {
+		t.Errorf("the default is not the image model: %v %v", m.Input, ok)
+	}
+}

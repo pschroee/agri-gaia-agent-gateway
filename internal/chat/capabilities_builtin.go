@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 
+	"agw/internal/config"
 	"agw/internal/toolset"
 )
 
@@ -21,56 +22,58 @@ func init() {
 	registerCapability("bindings", capabilityBindings, setupBindings)
 }
 
-// chatModelID names the model a chat works with; empty when the chat is unknown or has none.
+// chatModelID names the model a chat works with; empty when the chat is unknown and the catalog names
+// no default. A chat without a model runs with the catalog's default (Manager.run), so the overview
+// resolves it the same way (config.Catalog.ChatModel).
 func (m *Manager) chatModelID(ctx context.Context, chatID string) string {
-	if c, err := m.st.GetChat(ctx, chatID); err == nil && c.Model != "" {
-		return c.Model
+	id := ""
+	if c, err := m.st.GetChat(ctx, chatID); err == nil {
+		id = c.Model
 	}
-	if m.cat != nil {
-		return m.cat.Default
+	if m.cat == nil {
+		return id
 	}
-	return ""
+	return m.cat.ChatModel(id)
 }
 
-// visionModel describes a catalog model for the overview; ok is false when the catalog does not know it.
-func (m *Manager) visionModel(id string) (name string, readsImages, ok bool) {
-	if m.cat == nil || id == "" {
-		return "", false, false
-	}
-	_, model, found := m.cat.Lookup(id)
-	if !found {
-		return "", false, false
-	}
-	name = model.Name
-	if name == "" {
-		name = model.ID
-	}
-	return name, model.ReadsImages(), true
-}
-
-// capabilityVision: can the current chat model read images (G1.12)? Bildeingabe ist optional: without
-// it everything else keeps working, the work with images then has to go through the user's words.
-func capabilityVision(ctx context.Context, m *Manager, chatID string) Capability {
+// visionFor answers the vision entry from the catalog alone (G1.12). The checks and the pre-annotation
+// ask the same catalog entry through assess.ReviewAllowed; both resolve the chat's model with
+// config.Catalog.ChatModel, so "capabilities" and an image review cannot disagree about the same model
+// (issue #163). modelID is already resolved; empty means the catalog names no model at all.
+func visionFor(cat *config.Catalog, modelID string) Capability {
 	c := Capability{
 		Without: "work from the user's description of the image, or ask them to describe what matters",
 	}
-	id := m.chatModelID(ctx, chatID)
-	if id == "" {
+	if modelID == "" {
 		c.Detail = "this chat has no model; whether images work is unknown"
 		return c
 	}
-	name, readsImages, known := m.visionModel(id)
-	if !known {
-		c.Detail = "the model " + id + " is not in the catalog; whether it reads images is unknown"
+	if cat == nil {
+		c.Detail = "the model " + modelID + " is not in the catalog; whether it reads images is unknown"
 		return c
 	}
-	c.Available = readsImages
-	if readsImages {
+	_, model, found := cat.Lookup(modelID)
+	if !found {
+		c.Detail = "the model " + modelID + " is not in the catalog; whether it reads images is unknown"
+		return c
+	}
+	name := model.Name
+	if name == "" {
+		name = model.ID
+	}
+	c.Available = model.ReadsImages()
+	if c.Available {
 		c.Detail = "the current model (" + name + ") reads images"
 	} else {
 		c.Detail = "the current model (" + name + ") reads text only"
 	}
 	return c
+}
+
+// capabilityVision: can the current chat model read images (G1.12)? Bildeingabe ist optional: without
+// it everything else keeps working, the work with images then has to go through the user's words.
+func capabilityVision(ctx context.Context, m *Manager, chatID string) Capability {
+	return visionFor(m.cat, m.chatModelID(ctx, chatID))
 }
 
 // setupVision: the part of vision that does not change during a chat, namely the model a slot starts

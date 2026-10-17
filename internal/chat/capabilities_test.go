@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"agw/internal/assess"
 	"agw/internal/config"
 	"agw/internal/platform"
 	"agw/internal/store"
@@ -106,6 +107,57 @@ func TestCapabilitiesBuiltIn(t *testing.T) {
 	}
 	if v := byName(e.m.Capabilities(ctx, c2.ID))["vision"]; !v.Available || !strings.Contains(v.Detail, "DeepSeek Bild") || !strings.Contains(v.Detail, "reads images") {
 		t.Errorf("vision with an image model: %+v", v)
+	}
+	// The exec path reads no catalog of its own (issue #163): agw-platform in the sandbox posts to the
+	// socket, and the gateway answers from the same catalog object. The CLI binding therefore reports
+	// the same answer as the overview above.
+	res, err := e.m.PlatformCall(ctx, c2.ID, e.m.live[c2.ID].slot.ID, "cli",
+		platform.Request{Method: "GET", Path: platform.CapabilitiesPath})
+	if err != nil || res.Status != "ok" {
+		t.Fatalf("cli capabilities: %+v %v", res, err)
+	}
+	var over2 Capabilities
+	if err := json.Unmarshal([]byte(res.Body), &over2); err != nil {
+		t.Fatalf("cli body is not JSON: %q", res.Body)
+	}
+	if v := byName(over2)["vision"]; !v.Available || !strings.Contains(v.Detail, "reads images") || !strings.Contains(over2.Summary, "vision: yes") {
+		t.Errorf("vision over the cli binding: %+v, %q", v, over2.Summary)
+	}
+}
+
+// The overview and the image review read one catalog entry (issue #163): for the same model and the
+// same dataset they answer the same. Both sides resolve the chat's model with config.Catalog.ChatModel,
+// so the default of a chat without a model cannot make them disagree.
+func TestVisionMatchesImageReview(t *testing.T) {
+	cat, err := config.ParseCatalog([]byte(`{"default":"p/bild","providers":[{"id":"p","models":[
+		{"id":"bild","input":["text","image"]},
+		{"id":"text","input":["text"]}]}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pattern, err := assess.VisionPattern("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for id, want := range map[string]bool{"p/bild": true, "p/text": false} {
+		v := visionFor(cat, id)
+		ok, why := assess.ReviewAllowed(cat, pattern, id, "mnist-mini")
+		if v.Available != want || ok != want {
+			t.Errorf("%s: vision available=%v, image review allowed=%v, want %v", id, v.Available, ok, want)
+		}
+		if want && why != "" {
+			t.Errorf("%s: review gave a reason although it may look: %q", id, why)
+		}
+		if !want && (!strings.Contains(v.Detail, "reads text only") || !strings.Contains(why, "reads text only")) {
+			t.Errorf("%s: the two answers disagree about text only: %q / %q", id, v.Detail, why)
+		}
+	}
+	// A chat without a model works with the catalog's default in both paths.
+	id := cat.ChatModel("")
+	v := visionFor(cat, id)
+	allowed, _ := assess.ReviewAllowed(cat, pattern, id, "mnist-mini")
+	if !v.Available || !allowed {
+		t.Errorf("default model: vision=%v, review=%v", v.Available, allowed)
 	}
 }
 

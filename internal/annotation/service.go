@@ -370,17 +370,21 @@ func (s *Service) user(ctx context.Context, chatID string) (string, error) {
 }
 
 // chatModel is the model the chat works with ("provider/model"); the image review runs with it and with
-// no other (V3d): what the user chose is what looks at the images. A chat without a model or a store that
-// does not answer leaves it empty, and the review then reports why it did not look at anything.
+// no other (V3d): what the user chose is what looks at the images. A chat without a model runs with the
+// catalog's default, and so does the review — the capability overview resolves the identifier the same
+// way (config.Catalog.ChatModel, issue #163). Without a catalog or a store that answers, it stays empty
+// and the review reports why it did not look at anything.
 func (s *Service) chatModel(ctx context.Context, chatID string) string {
-	if s.St == nil {
-		return ""
+	id := ""
+	if s.St != nil {
+		if c, err := s.St.GetChat(ctx, chatID); err == nil {
+			id = c.Model
+		}
 	}
-	c, err := s.St.GetChat(ctx, chatID)
-	if err != nil {
-		return ""
+	if s.Cat == nil {
+		return id
 	}
-	return c.Model
+	return s.Cat.ChatModel(id)
 }
 
 // currentSession returns the user's CVAT session, logging in through the platform when none is held
