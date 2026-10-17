@@ -178,11 +178,11 @@ func planOfChat(t *testing.T, e *env, chatID string) string {
 var watchOffset time.Duration
 
 // runWatchersOnce runs one pass of the watcher loop. The loop polls a young job only every
-// watchIntervalA (10 s), so the helper moves the watcher's clock forward: the next pass sees every job
-// due again.
+// watchIntervalA (10 s) and a job whose reads keep failing at a growing distance (up to watchMaxBackoff),
+// so the helper moves the watcher's clock forward by an hour: the next pass sees every job due again.
 func runWatchersOnce(t *testing.T, e *env) {
 	t.Helper()
-	watchOffset += 2 * time.Minute
+	watchOffset += time.Hour
 	watchNow = func() time.Time { return time.Now().Add(watchOffset) }
 	e.m.watchOnce(context.Background(), make(chan struct{}, watchParallel))
 }
