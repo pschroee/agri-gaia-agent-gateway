@@ -2,6 +2,7 @@ package delegation
 
 import (
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -11,13 +12,17 @@ import (
 
 func TestConformanceWithoutPlatform(t *testing.T) {
 	cases := ConformanceCases()
-	results := map[string]bool{}
+	meta := Meta{Version: BuildVersion(), Time: time.Now()}
+	results := make([]Result, 0, len(cases))
 	forbidden, allowedOK := 0, 0
 	for _, c := range cases {
-		got, why := Evaluate(c, time.Now())
-		results[c.Name] = got
+		got, why := Evaluate(c, meta.Time)
+		results = append(results, ResultFor(c, CheckPure, got, why))
 		if got != c.Allowed {
 			t.Errorf("%s [%s]: allowed=%v, expected %v (%s)", c.Name, c.Group, got, c.Allowed, why)
+		}
+		if c.Violation && !(got && strings.Contains(why, "allowed violation")) {
+			t.Errorf("%s: expected a logged violation (%s)", c.Name, why)
 		}
 		if !c.Allowed {
 			forbidden++
@@ -25,7 +30,11 @@ func TestConformanceWithoutPlatform(t *testing.T) {
 			allowedOK++
 		}
 	}
-	t.Logf("%d forbidden and %d allowed cases\n%s", forbidden, len(cases)-forbidden, Report(results, cases))
+	rep := NewReport(results, meta)
+	t.Logf("%d forbidden and %d allowed cases\n%s", forbidden, len(cases)-forbidden, rep.Markdown())
+	if err := WriteConformanceReport(os.Getenv("AGW_CONFORMANCE_REPORT"), meta, results); err != nil {
+		t.Errorf("conformance report: %v", err)
+	}
 	if forbidden < 30 {
 		t.Fatalf("too few forbidden cases: %d", forbidden)
 	}

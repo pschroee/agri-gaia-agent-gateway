@@ -109,8 +109,9 @@ func TestConformanceThroughManager(t *testing.T) {
 	expRaw, _ := json.Marshal(exp)
 	expiredID, expiredSlot := mk(string(expRaw))
 
-	results := map[string]bool{}
+	meta := delegation.Meta{Version: delegation.BuildVersion(), Time: time.Now()}
 	cases := delegation.ConformanceCases()
+	results := make([]delegation.Result, 0, len(cases))
 	byRules := map[string][2]string{}
 	for _, c := range cases {
 		before := len(f.reached())
@@ -134,9 +135,19 @@ func TestConformanceThroughManager(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		req, err := c.Build()
+		var req platform.Request
+		var err error
+		if c.Raw {
+			// The manager's own call check shall be what refuses it (X10.2, XE1).
+			req = c.Req
+		} else {
+			req, err = c.Build()
+		}
 		allowed := false
-		if err == nil {
+		why := ""
+		if err != nil {
+			why = "refused while checking the arguments: " + err.Error()
+		} else {
 			beforeExpired, _ := e.st.ListApprovals(ctx, store.ApprovalExpired, id)
 			res, cerr := e.m.PlatformCall(ctx, id, s, "cli", req)
 			if cerr != nil {
@@ -151,9 +162,27 @@ func TestConformanceThroughManager(t *testing.T) {
 					allowed = true
 				}
 			}
+			switch {
+			case res.Violation != "":
+				why = "allowed violation (only logged): " + res.Violation
+			case allowed && res.Status == "ok":
+				why = "allowed"
+			case allowed:
+				why = "allowed; the approval expired undecided: " + res.Message
+			case res.Message != "":
+				why = res.Message
+			default:
+				why = res.Status
+			}
+			if c.Violation && res.Violation == "" {
+				t.Errorf("%s: expected a violation that is only logged", c.Name)
+			}
+			if !c.Violation && res.Violation != "" {
+				t.Errorf("%s: unexpected logged violation %q", c.Name, res.Violation)
+			}
 		}
 		reached := len(f.reached()) > before
-		results[c.Name] = allowed
+		results = append(results, delegation.ResultFor(c, delegation.CheckManager, allowed, why))
 		if allowed != c.Allowed {
 			t.Errorf("%s [%s]: allowed=%v, want %v", c.Name, c.Group, allowed, c.Allowed)
 		}
@@ -166,10 +195,10 @@ func TestConformanceThroughManager(t *testing.T) {
 			t.Errorf("%s: allowed call did not reach the platform", c.Name)
 		}
 	}
-	report := delegation.Report(results, cases)
-	t.Logf("conformance check through the manager:\n%s", report)
-	if p := os.Getenv("AGW_CONFORMANCE_REPORT"); p != "" {
-		_ = os.WriteFile(p, []byte(report), 0o644)
+	report := delegation.NewReport(results, meta)
+	t.Logf("conformance check through the manager:\n%s", report.Markdown())
+	if err := delegation.WriteConformanceReport(os.Getenv("AGW_CONFORMANCE_REPORT"), meta, results); err != nil {
+		t.Errorf("conformance report: %v", err)
 	}
 }
 
