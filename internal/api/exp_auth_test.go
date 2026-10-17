@@ -21,7 +21,7 @@ const expTestKey = "0123456789abcdef0123456789abcdef-exp"
 // contacted: SessionUser only reads the cookie, and the experiment path does not use it.
 func expAuth(t *testing.T, owners Owners) http.Handler {
 	t.Helper()
-	auth, err := oidc.New(oidc.Config{Issuer: "http://127.0.0.1:1/realms/test", ClientID: "agw-agent", PublicURL: "http://127.0.0.1:18480"})
+	auth, err := oidc.New(oidc.Config{Issuer: "http://127.0.0.1:1/realms/test", ClientID: "agw-agent", ClientSecret: "secret", PublicURL: "http://127.0.0.1:18480"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +105,7 @@ func TestExpTokenOnlyExperimentChats(t *testing.T) {
 
 // A chat of another user stays invisible to the experiment key (X1.3).
 func TestExpTokenCannotReadUserChats(t *testing.T) {
-	auth, err := oidc.New(oidc.Config{Issuer: "http://127.0.0.1:1/realms/test", ClientID: "agw-agent", PublicURL: "http://127.0.0.1:18480"})
+	auth, err := oidc.New(oidc.Config{Issuer: "http://127.0.0.1:1/realms/test", ClientID: "agw-agent", ClientSecret: "secret", PublicURL: "http://127.0.0.1:18480"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,6 +120,7 @@ func TestExpTokenCannotReadUserChats(t *testing.T) {
 	h := s.auth(s.ownChat(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) }))
 	get := func(chat string) int {
 		r := httptest.NewRequest("GET", "http://127.0.0.1:18480/api/chats/"+chat, nil)
+		r.SetPathValue("id", chat) // the mux sets this in the running server
 		r.Header.Set("Authorization", "Bearer "+expTestKey)
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, r)
