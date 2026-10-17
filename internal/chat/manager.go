@@ -661,6 +661,12 @@ func (m *Manager) Create(ctx context.Context, req NewChat) (ChatView, error) {
 	if req.AutoCompact != nil {
 		autoCompact = *req.AutoCompact
 	}
+	if experiment != nil {
+		// X2.5: no compaction in experiment chats. The instruction of the treatment must stay in the
+		// context for the whole run; otherwise it could vanish with a summary and the levels would
+		// differ by run length. A run that exceeds the context window ends with an error.
+		autoCompact = false
+	}
 	lang, err := NormalizeLanguage(req.Language)
 	if err != nil {
 		return ChatView{}, err

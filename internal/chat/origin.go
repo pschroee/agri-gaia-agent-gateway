@@ -44,10 +44,11 @@ var newMarker = func() string {
 	return "agw-" + hex.EncodeToString(b[:])
 }
 
-// systemNote is an orchestrator note: the orchestrator builds Summary itself (one line), Body comes
-// wholly or partly from the sandbox and goes into the fence.
+// systemNote is an orchestrator note: the orchestrator builds Summary itself (usually one line; the
+// rights instruction of an experiment chat is deliberately several), Body comes wholly or partly
+// from the sandbox and goes into the fence.
 type systemNote struct {
-	Type    string // store.NoteBackground, store.NoteSandbox, store.NoteLanguage, store.NoteContext
+	Type    string // store.NoteBackground, store.NoteSandbox, store.NoteLanguage, store.NoteContext, store.NoteRightsInstruction
 	Refs    []string
 	Summary string
 	Body    string

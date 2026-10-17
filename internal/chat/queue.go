@@ -336,11 +336,12 @@ var errAbortedBeforePrompt = errors.New("aborted before delivery")
 // moment of deciding to send. The caller has set sending; deliver resets it.
 func (m *Manager) deliver(ctx context.Context, chatID string, entries []store.QueueEntry, claimed []string, trigger string, gen uint64) (SendResult, error) {
 	// One-off notices: preferred language (only on the chat's first turn; if it fails, it is rolled
-	// back and the next message is the first again) and background tasks that ended with an earlier
-	// sandbox.
+	// back and the next message is the first again), the rights instruction of an experiment chat
+	// (also only on the first turn, X2) and background tasks that ended with an earlier sandbox.
 	lang := m.firstTurnLanguage(ctx, chatID)
+	instr := m.firstTurnInstruction(ctx, chatID)
 	notice, noticed := m.backgroundNotice(ctx, chatID)
-	c := composeMessage(entries, lang, notice)
+	c := composeMessage(entries, lang, instr, notice)
 	tm := &turnMeta{trigger: trigger, origin: c.Origin, sources: c.Sources, text: c.Text, claimed: claimed,
 		entries: claimedEntries(entries, claimed), deliveredAt: time.Now()}
 	var err error
