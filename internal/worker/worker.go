@@ -733,7 +733,7 @@ func (f *Factory) Create(ctx context.Context, slotID, variant string) (chat.Agen
 	var piH, exH http.Handler = http.NotFoundHandler(), http.NotFoundHandler()
 	if f.Backend != nil {
 		piH = sock.NewPiHandlerFg(slotID, f.Backend, f.Env.ArtifactMaxBytes, w.box, f.Backend, w.bg, w.fg)
-		exH = sock.NewHandlerRun(slotID, f.Backend, f.Env.ArtifactMaxBytes, w.box)
+		exH = sock.NewHandlerRunFg(slotID, f.Backend, f.Env.ArtifactMaxBytes, w.box, w.fg)
 	}
 	if w.xsrv, err = sock.Listen(filepath.Join(w.dir, "exec"), exH); err != nil {
 		cleanup()

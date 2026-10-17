@@ -115,6 +115,12 @@ type handler struct {
 	max     int64
 	mcp     http.Handler
 	uploads chan struct{} // at most two concurrent uploads per slot (Review H2)
+	// trustedRef: this is pi's socket, whose requests come from the extensions, not from agent-controlled code
+	// (E9). Only there is X-Agw-Pi-Tool-Call accepted as the reference of a platform call (X5.3).
+	trustedRef bool
+	// fg: the running foreground commands of the slot. On the execution sandbox's socket they give the
+	// execution window that binds a CLI platform call to its tool call (X5.3).
+	fg *Foreground
 }
 
 // maxReason limits the reason of an internet request already at the socket.
@@ -145,8 +151,15 @@ func NewHandler(slotID string, b Backend, maxBytes int64) http.Handler {
 // NewHandlerRun is NewHandler with access to the execution sandbox, from which the
 // platform uploads (upload_dataset, upload_model) read their files.
 func NewHandlerRun(slotID string, b Backend, maxBytes int64, run ToolRunner) http.Handler {
+	return NewHandlerRunFg(slotID, b, maxBytes, run, nil)
+}
+
+// NewHandlerRunFg is NewHandlerRun with the register of the slot's running foreground commands, which gives the
+// execution window for platform calls of the CLI binding (X5.3).
+func NewHandlerRunFg(slotID string, b Backend, maxBytes int64, run ToolRunner, fg *Foreground) http.Handler {
 	h := newHandler(slotID, b, maxBytes)
 	h.run = run
+	h.fg = fg
 	h.apiVia = "cli" // curl --unix-socket from the shell
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /artifacts", h.upload)
@@ -206,7 +219,19 @@ var sessionHeaderRe = regexp.MustCompile(`^(main|[0-9a-fA-F-]{8,64}(#[0-9]{1,4})
 
 // callerCtx takes tool call and session from agw-artifact's headers (the orchestrator puts the values
 // into the environment of every bash command; for display only, the agent can change them).
-func callerCtx(r *http.Request) context.Context { return callerHeader(r.Context(), r.Header) }
+func (h *handler) callerCtx(r *http.Request) context.Context {
+	ctx := store.WithCallRef(callerHeader(r.Context(), r.Header), store.CallRef{Claimed: claimedToolCall(r.Header)})
+	// X5.3: only pi's socket is trusted with the extension's own header. The execution sandbox can send it too, but
+	// there it is agent-controlled and stays ignored (the claimed header is recorded separately).
+	if h.trustedRef {
+		if id := r.Header.Get("X-Agw-Pi-Tool-Call"); validToolCallID(id) {
+			ref, _ := store.CallRefFrom(ctx)
+			ref.Ref, ref.Source = id, "pi"
+			ctx = store.WithCallRef(ctx, ref)
+		}
+	}
+	return ctx
+}
 
 // callerHeader reads the tool call and the session from the headers a client sets: agw-artifact and agw-platform
 // send X-Agw-Tool-Call and X-Agw-Session, and the pi extensions do the same on their socket requests. The values
@@ -221,20 +246,56 @@ func callerHeader(ctx context.Context, h http.Header) context.Context {
 	return ctx
 }
 
+// claimedToolCall is the header the agent can set himself (X5.3: call_ref_claimed, never binding).
+func claimedToolCall(h http.Header) string {
+	if id := h.Get("X-Agw-Tool-Call"); validToolCallID(id) {
+		return id
+	}
+	return ""
+}
+
 // callerExtra is callerHeader for an MCP request: the pi extension sends the tool call of the session as a header
 // on POST /mcp, so that a plan proposed over MCP carries its tool_call_id like CLI and REST do (issue L2/#119).
-func callerExtra(ctx context.Context, req *mcp.CallToolRequest) context.Context {
+func (h *handler) callerExtra(ctx context.Context, req *mcp.CallToolRequest) context.Context {
 	if req != nil && req.Extra != nil && req.Extra.Header != nil {
-		return callerHeader(ctx, req.Extra.Header)
+		ctx = callerHeader(ctx, req.Extra.Header)
+		ref, _ := store.CallRefFrom(ctx)
+		ref.Claimed = claimedToolCall(req.Extra.Header)
+		if h.trustedRef {
+			if id := req.Extra.Header.Get("X-Agw-Pi-Tool-Call"); validToolCallID(id) {
+				ref.Ref, ref.Source = id, "pi"
+			}
+		}
+		ctx = store.WithCallRef(ctx, ref)
 	}
 	return ctx
+}
+
+// withExecRef binds a platform call on the execution sandbox's socket to its tool call through the execution window
+// (X5.3): exactly one running foreground command is the reference; several leave the call ambiguous; none leaves it
+// without one. The header is never used here.
+func (h *handler) withExecRef(ctx context.Context, chat string) context.Context {
+	if h.trustedRef || h.fg == nil || chat == "" {
+		return ctx
+	}
+	ref, _ := store.CallRefFrom(ctx)
+	ids := h.fg.Running(chat)
+	switch len(ids) {
+	case 1:
+		ref.Ref, ref.Source, ref.Candidates = ids[0], "exec_window", nil
+	case 0:
+		ref.Ref, ref.Source, ref.Candidates = "", "none", nil
+	default:
+		ref.Ref, ref.Source, ref.Candidates = "", "exec_ambiguous", ids
+	}
+	return store.WithCallRef(ctx, ref)
 }
 
 func (h *handler) upload(w http.ResponseWriter, r *http.Request) {
 	// The channel follows from the endpoint, not from a statement by the agent
 	// (Review M5): /artifacts is the CLI channel, MCP comes via /mcp.
 	via := "cli"
-	ctx := callerCtx(r)
+	ctx := h.callerCtx(r)
 	name := artifacts.SanitizeName(r.URL.Query().Get("name"))
 	chat, err := h.chat(via, "upload", name)
 	if err != nil {
@@ -339,7 +400,7 @@ func (h *handler) internet(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "not assigned"})
 		return
 	}
-	res, err := h.doInternet(callerCtx(r), chat, via, req.Reason)
+	res, err := h.doInternet(h.callerCtx(r), chat, via, req.Reason)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -368,7 +429,7 @@ func (h *handler) internetOff(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "not assigned"})
 		return
 	}
-	res, err := h.doInternetOff(callerCtx(r), chat, via)
+	res, err := h.doInternetOff(h.callerCtx(r), chat, via)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -391,7 +452,7 @@ func (h *handler) subagentRelayResult(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	res.Message = truncReason(res.Message)
-	if err := rb.SubagentRelayResult(callerCtx(r), chat, res); err != nil {
+	if err := rb.SubagentRelayResult(h.callerCtx(r), chat, res); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "unknown"})
 			return
@@ -514,7 +575,7 @@ func (h *handler) platform(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "not assigned"})
 		return
 	}
-	res, err := h.doPlatform(callerCtx(r), chat, "cli", tool, raw)
+	res, err := h.doPlatform(h.callerCtx(r), chat, "cli", tool, raw)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -556,27 +617,31 @@ func (h *handler) doPlatform(ctx context.Context, chat, via string, tool platfor
 // runPlatform executes a built call through the backend (delegation, confirmation, token) and
 // logs it; shared by the tools (MCP, agw-platform) and the REST endpoint.
 func (h *handler) runPlatform(ctx context.Context, chat, via string, req platform.Request) (platform.Result, error) {
+	ctx = h.withExecRef(ctx, chat)
 	pb, ok := h.b.(PlatformBackend)
 	if !ok {
-		h.logCall(ctx, chat, via, "platform", req.String(), "not configured")
-		return platform.Result{Status: "error", Message: platform.ErrNotConfigured.Error()}, nil
+		res := platform.Result{Status: "error", Message: platform.ErrNotConfigured.Error(), Decision: platform.DecisionError, Reason: "not_configured"}
+		h.logPlatform(ctx, chat, via, req.String(), "not configured", res)
+		return res, nil
 	}
 	if len(req.Files) > 0 {
 		if pc, ok := h.b.(PlatformPrechecker); ok {
 			if res, allowed := pc.PlatformPrecheck(ctx, chat, req); !allowed {
-				h.logCall(ctx, chat, via, "platform", req.String(), "violation blocked: "+res.Message)
+				h.logPlatform(ctx, chat, via, req.String(), "violation blocked: "+res.Message, res)
 				return res, nil
 			}
 		}
 		if err := h.readFiles(ctx, &req); err != nil {
-			h.logCall(ctx, chat, via, "platform", req.String(), "refused: "+err.Error())
-			return platform.Result{Status: "error", Message: err.Error()}, nil
+			res := platform.Result{Status: "error", Message: err.Error(), Decision: platform.DecisionError, Reason: "upload_failed"}
+			h.logPlatform(ctx, chat, via, req.String(), "refused: "+err.Error(), res)
+			return res, nil
 		}
 	}
 	if req.Path == platform.PlanPath {
 		if err := h.pinPlanFiles(ctx, &req); err != nil {
-			h.logCall(ctx, chat, via, "platform", req.String(), "refused: "+err.Error())
-			return platform.Result{Status: "error", Message: err.Error()}, nil
+			res := platform.Result{Status: "error", Message: err.Error(), Decision: platform.DecisionError, Reason: "plan_files_failed"}
+			h.logPlatform(ctx, chat, via, req.String(), "refused: "+err.Error(), res)
+			return res, nil
 		}
 	}
 	res, err := pb.PlatformCall(ctx, chat, h.slot, via, req)
@@ -584,7 +649,8 @@ func (h *handler) runPlatform(ctx context.Context, chat, via string, req platfor
 		// A virtual tool handed a file over instead of an answer (notebook_fetch, own code C-E3): it
 		// goes into the workspace, and the agent gets where it lies and what it is.
 		if serr := h.saveFile(ctx, &res); serr != nil {
-			h.logCall(ctx, chat, via, "platform", req.String(), "error: "+serr.Error())
+			res.Decision, res.Reason = platform.DecisionError, "save_failed"
+			h.logPlatform(ctx, chat, via, req.String(), "error: "+serr.Error(), res)
 			return platform.Result{Status: "error", Message: serr.Error()}, nil
 		}
 	}
@@ -609,8 +675,23 @@ func (h *handler) runPlatform(ctx context.Context, chat, via string, req platfor
 	if eff := delegation.Classify(req).Effect; eff.Valid() {
 		ctx = store.WithEffect(ctx, string(eff))
 	}
-	h.logCall(ctx, chat, via, "platform", req.String(), platform.RedactText(result))
+	h.logPlatform(ctx, chat, via, req.String(), platform.RedactText(result), res)
 	return res, err
+}
+
+// PlatformLogger records a platform call with its structured Result (X5, implemented by chat.Manager).
+type PlatformLogger interface {
+	LogPlatformCall(ctx context.Context, slotID, chatID, via, detail, result string, res platform.Result)
+}
+
+// logPlatform logs with the structured record when the backend offers it; the plain log stays the fallback for
+// tests and other backends.
+func (h *handler) logPlatform(ctx context.Context, chat, via, detail, result string, res platform.Result) {
+	if l, ok := h.b.(PlatformLogger); ok {
+		l.LogPlatformCall(ctx, h.slot, chat, via, detail, result, res)
+		return
+	}
+	h.logCall(ctx, chat, via, "platform", detail, result)
 }
 
 func (h *handler) list(w http.ResponseWriter, r *http.Request) {
@@ -624,7 +705,7 @@ func (h *handler) list(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	h.logCall(callerCtx(r), chat, "cli", "list", "", fmt.Sprintf("%d entries", len(items)))
+	h.logCall(h.callerCtx(r), chat, "cli", "list", "", fmt.Sprintf("%d entries", len(items)))
 	writeJSON(w, http.StatusOK, items)
 }
 
@@ -645,12 +726,12 @@ func (h *handler) get(w http.ResponseWriter, r *http.Request) {
 		if errors.Is(err, store.ErrNotFound) {
 			code = http.StatusNotFound
 		}
-		h.logCall(callerCtx(r), chat, "cli", "get", kind+"/"+name, "not found")
+		h.logCall(h.callerCtx(r), chat, "cli", "get", kind+"/"+name, "not found")
 		writeJSON(w, code, map[string]string{"error": err.Error()})
 		return
 	}
 	defer rc.Close()
-	h.logCall(callerCtx(r), chat, "cli", "get", kind+"/"+name, "ok")
+	h.logCall(h.callerCtx(r), chat, "cli", "get", kind+"/"+name, "ok")
 	w.Header().Set("Content-Length", fmt.Sprint(size))
 	w.Header().Set("Content-Type", "application/octet-stream")
 	_, _ = io.Copy(w, rc)
@@ -761,7 +842,7 @@ func (h *handler) mcpServer() *mcp.Server {
 				if err != nil {
 					return textResult(true, "error: %v", err), nil
 				}
-				res, err := h.doPlatform(callerExtra(ctx, req), chat, "mcp", t, req.Params.Arguments)
+				res, err := h.doPlatform(h.callerExtra(ctx, req), chat, "mcp", t, req.Params.Arguments)
 				if err != nil {
 					return textResult(true, "error: %v", err), nil
 				}
@@ -861,7 +942,7 @@ func (h *handler) platformAPI(w http.ResponseWriter, r *http.Request) {
 		fail(http.StatusConflict, "not assigned")
 		return
 	}
-	ctx := callerCtx(r)
+	ctx := h.callerCtx(r)
 	var res platform.Result
 	if path == "/_agw/paths" {
 		// Condensed path directory like the tool api_paths (the OpenAPI description is ~100 KB).

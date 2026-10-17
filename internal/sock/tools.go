@@ -197,8 +197,10 @@ func NewPiHandlerBg(slotID string, b Backend, maxBytes int64, run ToolRunner, re
 // stops a running command or converts it into a background task.
 func NewPiHandlerFg(slotID string, b Backend, maxBytes int64, run ToolRunner, rec ToolRecorder, bg BackgroundTasks, fg *Foreground) http.Handler {
 	h := newHandler(slotID, b, maxBytes)
-	h.run = run      // platform uploads via MCP read from the same execution sandbox
-	h.apiVia = "api" // REST endpoint at pi's socket: the HTTP tool of the variant api
+	h.run = run         // platform uploads via MCP read from the same execution sandbox
+	h.apiVia = "api"    // REST endpoint at pi's socket: the HTTP tool of the variant api
+	h.trustedRef = true // X5.3: requests here come from the extensions, not from agent-controlled code (E9)
+	h.fg = fg
 	th := &toolHandler{handler: h, run: run, rec: rec, slots: make(chan struct{}, maxToolRequests), bytes: semaphore.NewWeighted(toolByteBudget), bg: bg, fg: fg}
 	mux := http.NewServeMux()
 	mux.Handle("/mcp", h.mcp)
@@ -347,15 +349,32 @@ func (d *digest) Sum() string { return hex.EncodeToString(d.h.Sum(nil)) }
 
 const excerptBytes = 4096
 
+// maxLoggedCommand is the size up to which a command is stored in full (X5.4). Beyond it the row is marked as
+// truncated and keeps the length and checksum of the untruncated command.
+const maxLoggedCommand = 64 << 10
+
+// commandMeta describes the untruncated command for the log (X5.4).
+type commandMeta struct {
+	Truncated bool
+	Bytes     int64
+	SHA256    string
+}
+
 // summarize shortens the arguments for the log; file contents appear only as
-// size and checksum.
-func summarize(req execproto.Request) json.RawMessage {
+// size and checksum. Commands up to maxLoggedCommand are stored in full, so that ordinary heredocs stay
+// coddable; beyond that the truncation is marked and its facts travel next to the row.
+func summarize(req execproto.Request) (json.RawMessage, commandMeta) {
 	m := map[string]any{}
+	var meta commandMeta
 	switch req.Op {
 	case execproto.OpBash, execproto.OpBg:
 		c := req.Command
-		if len(c) > 4000 {
-			c = strings.ToValidUTF8(c[:4000], "") + " … [truncated]"
+		meta.Bytes = int64(len(c))
+		sum := sha256.Sum256([]byte(c))
+		meta.SHA256 = hex.EncodeToString(sum[:])
+		if len(c) > maxLoggedCommand {
+			c = strings.ToValidUTF8(c[:maxLoggedCommand], "") + " … [truncated]"
+			meta.Truncated = true
 		}
 		m["command"], m["cwd"] = c, req.Cwd
 		if req.Timeout > 0 {
@@ -380,13 +399,17 @@ func summarize(req execproto.Request) json.RawMessage {
 		}
 	}
 	b, _ := json.Marshal(m)
-	return b
+	return b, meta
 }
 
-func (th *toolHandler) record(chat string, tr toolRequest, op string, args json.RawMessage, f execproto.Frame, err error, d *digest, start time.Time) {
+func (th *toolHandler) record(chat string, tr toolRequest, op string, args json.RawMessage, f execproto.Frame, err error, d *digest, start time.Time, meta commandMeta) {
 	e := store.ToolExecution{ChatID: chat, SlotID: th.slot, Session: SessionKey(tr.SessionFile), ToolCallID: tr.ToolCallID,
 		Tool: tr.Tool, Op: op, Args: args, ExitCode: f.Exit, Error: f.Error, OutputExcerpt: d.Excerpt(), OutputSHA256: d.Sum(),
-		OutputBytes: d.n, StartedAt: start, DurationMs: time.Since(start).Milliseconds()}
+		OutputBytes: d.n, StartedAt: start, DurationMs: time.Since(start).Milliseconds(), ArgsTruncated: meta.Truncated,
+		CommandSHA256: meta.SHA256}
+	if meta.Bytes > 0 {
+		e.CommandBytes = &meta.Bytes
+	}
 	if err != nil && e.Error == "" {
 		e.Error = err.Error()
 	}
@@ -403,7 +426,7 @@ func (th *toolHandler) op(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	args := summarize(tr.Req)
+	args, meta := summarize(tr.Req)
 	start := time.Now()
 	f, err := th.run.Run(r.Context(), tr.Req, nil)
 	d := newDigest(excerptBytes)
@@ -415,7 +438,7 @@ func (th *toolHandler) op(w http.ResponseWriter, r *http.Request) {
 	} else {
 		d.Write(f.Result)
 	}
-	th.record(chat, tr, tr.Req.Op, args, f, err, d, start)
+	th.record(chat, tr, tr.Req.Op, args, f, err, d, start, meta)
 	if err != nil && f.Error == "" {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 		return
@@ -441,7 +464,7 @@ func (th *toolHandler) bash(w http.ResponseWriter, r *http.Request) {
 	// The full output ends up in a file whose path the orchestrator derives from the toolCallId
 	// (H1); the bridge tells the model the path, as pi does.
 	tr.Req.Spill = execproto.SpillPath(tr.ToolCallID)
-	args := summarize(tr.Req)
+	args, meta := summarize(tr.Req)
 	start := time.Now()
 	fl, _ := w.(http.Flusher)
 	w.Header().Set("Content-Type", "application/x-ndjson")
@@ -526,7 +549,7 @@ func (th *toolHandler) bash(w http.ResponseWriter, r *http.Request) {
 				f = execproto.Frame{Done: true, Error: "timeout", Code: "timeout", FullOutputPath: f.FullOutputPath, SpillError: f.SpillError}
 				err = nil
 			}
-			th.record(chat, tr, execproto.OpBash, args, f, err, d, start)
+			th.record(chat, tr, execproto.OpBash, args, f, err, d, start, meta)
 			if err != nil && f.Error == "" {
 				f = execproto.Frame{Done: true, Error: err.Error(), Code: "EIO"}
 				if errors.Is(err, context.Canceled) {
@@ -558,7 +581,7 @@ func (th *toolHandler) bash(w http.ResponseWriter, r *http.Request) {
 			}
 			th.fg.remove(tr.ToolCallID, op)
 			// The foreground part has been executed; the rest is in background_tasks.
-			th.record(chat, tr, execproto.OpBash, args, execproto.Frame{Error: "moved to background as " + a.Task.ID, Code: "backgrounded"}, nil, d, start)
+			th.record(chat, tr, execproto.OpBash, args, execproto.Frame{Error: "moved to background as " + a.Task.ID, Code: "backgrounded"}, nil, d, start, meta)
 			_ = enc.Encode(execproto.Frame{Done: true, Code: "backgrounded", Background: a.Task.ID, FullOutputPath: tr.Req.Spill})
 			mu.Unlock()
 			go func() {
@@ -636,7 +659,7 @@ func (th *toolHandler) upload(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	args := summarize(req)
+	args, meta := summarize(req)
 	start := time.Now()
 	f, err := th.run.Run(r.Context(), req, nil)
 	d := newDigest(excerptBytes)
@@ -645,7 +668,7 @@ func (th *toolHandler) upload(w http.ResponseWriter, r *http.Request) {
 		_ = json.Unmarshal(f.Result, &rr)
 		d.Write(rr.Data)
 	}
-	th.record(chat, tr, execproto.OpRead, args, f, err, d, start)
+	th.record(chat, tr, execproto.OpRead, args, f, err, d, start, meta)
 	if err != nil || f.Error != "" {
 		msg := f.Error
 		if msg == "" {
@@ -785,7 +808,7 @@ func (th *toolHandler) workflow(w http.ResponseWriter, r *http.Request) {
 		sc = strings.ToValidUTF8(sc[:4000], "") + " … [truncated]"
 	}
 	args, _ := json.Marshal(map[string]any{"workflowScript": noNUL(sc), "bytes": len(script), "sha256": hex.EncodeToString(sum[:])})
-	th.record(chat, toolRequest{ToolCallID: tr.ToolCallID, Tool: tr.Tool, SessionFile: tr.SessionFile}, execproto.OpWorkflow, args, f, err, d, start)
+	th.record(chat, toolRequest{ToolCallID: tr.ToolCallID, Tool: tr.Tool, SessionFile: tr.SessionFile}, execproto.OpWorkflow, args, f, err, d, start, commandMeta{})
 	if err != nil && f.Error == "" {
 		f = execproto.Frame{Done: true, Error: err.Error(), Code: "EIO"}
 		if errors.Is(err, context.Canceled) {

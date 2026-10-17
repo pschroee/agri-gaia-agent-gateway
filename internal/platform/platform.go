@@ -12,7 +12,9 @@ package platform
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -88,6 +90,9 @@ type Request struct {
 	// Full: do not truncate the response to MaxResult (REST endpoint; truncated JSON would be useless).
 	// The upper limit maxRead still applies.
 	Full bool `json:"-"`
+	// BodyInSHA256 is the checksum of the body as the agent sent it, taken in normalize before the body is
+	// compacted (X5.2). Kept across repeated normalize calls.
+	BodyInSHA256 string `json:"-"`
 }
 
 // File is a file uploaded with a call: form field and path in the
@@ -221,6 +226,74 @@ type Result struct {
 	// File: a file that goes into the execution sandbox instead of into the answer (notebook_fetch, own
 	// code C-E3). The socket writes it and replaces Body with a note; never part of the agent's answer.
 	File *FileData `json:"-"`
+	// X5: the structured record of the call. Decision is an enumeration (Decision* below), Reason a code and Rule
+	// the checked rule as JSON. WithinDelegation is computed independently of the protection level (nil: no
+	// delegation, or a call the gateway answers itself). SentBody is the body as the gateway sends it after the
+	// rebuild; BodyInSHA256 the checksum of the body as the agent sent it.
+	Decision         string          `json:"-"`
+	Reason           string          `json:"-"`
+	Rule             json.RawMessage `json:"-"`
+	WithinDelegation *bool           `json:"-"`
+	ApprovalID       string          `json:"-"`
+	ApprovalDecision string          `json:"-"` // user | experiment | none
+	PlanStep         *int            `json:"-"` // step of an approved plan, if the call matched one
+	SentBody         []byte          `json:"-"`
+	BodyTruncated    bool            `json:"-"`
+	BodyInSHA256     string          `json:"-"`
+}
+
+// Decisions of a platform call (X5.1). The executed violation counts only here, never from free text.
+const (
+	DecisionAllowed          = "allowed"
+	DecisionAllowedViolation = "allowed_violation"
+	DecisionDeniedDelegation = "denied_delegation"
+	DecisionDeniedFixed      = "denied_fixed"
+	DecisionDeniedCompute    = "denied_compute"
+	DecisionRejectedUser     = "rejected_user"
+	DecisionApprovedAuto     = "approved_auto"
+	DecisionError            = "error"
+	// DecisionPendingUser: the call waits for the user (parked step, A-E2) and is logged when it returns; the
+	// repeated call is logged again when the user decides. Added to the X5.1 enumeration so that each row has a
+	// decision.
+	DecisionPendingUser = "pending_user"
+)
+
+// MaxLoggedBody is the size up to which a request body is stored in full (X5.2).
+const MaxLoggedBody = 64 << 10
+
+// LogBody returns the body as the gateway sends it: the canonical JSON body, or for multipart the form fields and
+// the files as name, size and SHA-256. Bodies beyond MaxLoggedBody are cut and marked.
+func LogBody(r Request) (body []byte, truncated bool) {
+	if len(r.Form) > 0 || len(r.Files) > 0 || len(r.Uploads) > 0 {
+		type fileDesc struct {
+			Field  string `json:"field"`
+			Name   string `json:"name"`
+			Size   int    `json:"size"`
+			SHA256 string `json:"sha256"`
+		}
+		desc := struct {
+			Form  map[string][]string `json:"form,omitempty"`
+			Files []fileDesc          `json:"files,omitempty"`
+		}{Form: r.Form}
+		for _, u := range r.Uploads {
+			desc.Files = append(desc.Files, fileDesc{Field: u.Field, Name: u.Name, Size: len(u.Data), SHA256: u.SHA256})
+		}
+		if len(desc.Files) == 0 {
+			for _, f := range r.Files {
+				desc.Files = append(desc.Files, fileDesc{Field: f.Field, Name: path.Base(f.Path)})
+			}
+		}
+		b, err := json.Marshal(desc)
+		if err == nil {
+			body = b
+		}
+	} else {
+		body = append([]byte(nil), r.Body...)
+	}
+	if len(body) > MaxLoggedBody {
+		body, truncated = body[:MaxLoggedBody], true
+	}
+	return body, truncated
 }
 
 // RightsPath is the path under which the orchestrator itself answers the chat's delegated
@@ -272,8 +345,10 @@ func (r Result) Text() string {
 
 var (
 	ErrNotConfigured = errors.New("platform binding not configured (AGW_PLATFORM_API_URL)")
-	pathRe           = regexp.MustCompile(`^/[A-Za-z0-9_\-.:~/ ]*$`) // space: architecture "Mask R-CNN"
-	methods          = map[string]bool{"GET": true, "POST": true, "PUT": true, "PATCH": true, "DELETE": true}
+	// ErrBlocked marks a path of the fixed block list (X5.1: denied_fixed, reason blocked_path).
+	ErrBlocked = errors.New("path blocked")
+	pathRe     = regexp.MustCompile(`^/[A-Za-z0-9_\-.:~/ ]*$`) // space: architecture "Mask R-CNN"
+	methods    = map[string]bool{"GET": true, "POST": true, "PUT": true, "PATCH": true, "DELETE": true}
 	// Blocked areas: /urls returns credentials of integrated services (Fuseki admin,
 	// rechtemodell.md in the thesis repo), /service are internal callbacks of Keycloak and the registry,
 	// /users reveals the token profile of the orchestrator account, /network returns the password and
@@ -339,6 +414,11 @@ func bodyWithFile(r Request) bool {
 // (a tool or the REST binding). Registered blockers skip calls of the gateway itself (agent false),
 // which read platform state for summaries and for the capability overview.
 func normalize(r Request, agent bool) (Request, error) {
+	// X5.2: the checksum describes the body as the agent sent it, before compaction and across repeated calls.
+	if r.BodyInSHA256 == "" && len(r.Body) > 0 {
+		sum := sha256.Sum256(r.Body)
+		r.BodyInSHA256 = hex.EncodeToString(sum[:])
+	}
 	r.Method = strings.ToUpper(strings.TrimSpace(r.Method))
 	if r.Method == "" {
 		r.Method = http.MethodGet
@@ -417,7 +497,7 @@ func normalize(r Request, agent bool) (Request, error) {
 	lp := strings.ToLower(r.Path)
 	for _, b := range blocked {
 		if lp == b || strings.HasPrefix(lp, b+"/") {
-			return r, fmt.Errorf("path %q is blocked for the agent", r.Path)
+			return r, fmt.Errorf("path %q is blocked for the agent: %w", r.Path, ErrBlocked)
 		}
 	}
 	if why := blockedCall(r); why != "" { // inference container templates, issue #67

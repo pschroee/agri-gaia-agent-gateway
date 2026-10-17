@@ -74,13 +74,17 @@ func (th *toolHandler) decodeBg(w http.ResponseWriter, r *http.Request, tool str
 	return br, chat, rel, true
 }
 
-func (th *toolHandler) recordBg(chat string, br bgRequest, op string, args any, out string, bt *store.BackgroundTask, errText string, start time.Time) {
+func (th *toolHandler) recordBg(chat string, br bgRequest, op string, args any, out string, bt *store.BackgroundTask, errText string, start time.Time, meta commandMeta) {
 	a, _ := json.Marshal(args)
 	d := newDigest(excerptBytes)
 	d.Write([]byte(out))
 	e := store.ToolExecution{ChatID: chat, SlotID: th.slot, Session: SessionKey(br.SessionFile), ToolCallID: br.ToolCallID,
 		Tool: br.Tool, Op: op, Args: a, Error: noNUL(errText), OutputExcerpt: d.Excerpt(), OutputSHA256: d.Sum(),
-		OutputBytes: d.n, StartedAt: start, DurationMs: time.Since(start).Milliseconds()}
+		OutputBytes: d.n, StartedAt: start, DurationMs: time.Since(start).Milliseconds(), ArgsTruncated: meta.Truncated,
+		CommandSHA256: meta.SHA256}
+	if meta.Bytes > 0 {
+		e.CommandBytes = &meta.Bytes
+	}
 	if bt != nil && bt.ExitCode != nil && op != OpBgStart {
 		e.ExitCode = bt.ExitCode
 	}
@@ -100,7 +104,8 @@ func (th *toolHandler) bgStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	args := map[string]any{}
-	_ = json.Unmarshal(summarize(req), &args)
+	summary, meta := summarize(req)
+	_ = json.Unmarshal(summary, &args)
 	args["run_in_background"] = true
 	start := time.Now()
 	bt, err := th.bg.Start(r.Context(), bgtask.StartParams{ChatID: chat, Session: SessionKey(br.SessionFile), ToolCallID: br.ToolCallID,
@@ -114,7 +119,7 @@ func (th *toolHandler) bgStart(w http.ResponseWriter, r *http.Request) {
 		args["id"] = bt.ID
 	}
 	out, _ := json.Marshal(res)
-	th.recordBg(chat, br, OpBgStart, args, string(out), res.Task, res.Error, start)
+	th.recordBg(chat, br, OpBgStart, args, string(out), res.Task, res.Error, start, meta)
 	writeJSON(w, http.StatusOK, res)
 }
 
@@ -132,7 +137,7 @@ func (th *toolHandler) bgOutput(w http.ResponseWriter, r *http.Request) {
 	} else {
 		res.Task = &bt
 	}
-	th.recordBg(chat, br, OpBgOutput, map[string]any{"id": br.ID, "tail_lines": br.TailLines}, out, res.Task, res.Error, start)
+	th.recordBg(chat, br, OpBgOutput, map[string]any{"id": br.ID, "tail_lines": br.TailLines}, out, res.Task, res.Error, start, commandMeta{})
 	writeJSON(w, http.StatusOK, res)
 }
 
@@ -154,6 +159,6 @@ func (th *toolHandler) bgStop(w http.ResponseWriter, r *http.Request) {
 		res.Task = &bt
 	}
 	out, _ := json.Marshal(res)
-	th.recordBg(chat, br, OpBgStop, map[string]any{"id": br.ID}, string(out), res.Task, res.Error, start)
+	th.recordBg(chat, br, OpBgStop, map[string]any{"id": br.ID}, string(out), res.Task, res.Error, start, commandMeta{})
 	writeJSON(w, http.StatusOK, res)
 }
