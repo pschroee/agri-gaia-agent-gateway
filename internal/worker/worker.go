@@ -615,6 +615,11 @@ func (w *Worker) ContainerID() string      { return w.inst.ID }
 func (w *Worker) ContainerName() string    { return w.inst.Name }
 func (w *Worker) Image() string            { return w.image }
 
+// ImageID and ExecImageID are the Docker image IDs the two containers of the slot actually run (X8.2):
+// a slot that was started before a rebuild still reports the old image.
+func (w *Worker) ImageID() string     { return w.inst.ImageID }
+func (w *Worker) ExecImageID() string { return w.exec.ImageID }
+
 // BackgroundList returns the state of the background tasks (chat.BackgroundAgent).
 func (w *Worker) BackgroundList(chatID string) []store.BackgroundTask {
 	if w.bg == nil {

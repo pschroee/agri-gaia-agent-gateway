@@ -104,12 +104,15 @@ var ExecTmpfs = map[string]string{
 }
 
 type Instance struct {
-	ID     string
-	Name   string
-	Stdin  io.WriteCloser
-	Stdout io.Reader
-	Stderr *TailBuffer
-	done   chan struct{}
+	ID   string
+	Name string
+	// ImageID is the Docker image ID (sha256:…) the container actually runs (X8.2). It is read once at
+	// start, so a slot that still carries an older image after a rebuild is visible in the data.
+	ImageID string
+	Stdin   io.WriteCloser
+	Stdout  io.Reader
+	Stderr  *TailBuffer
+	done    chan struct{}
 }
 
 // Done is closed when the container's output stream ends.
@@ -304,6 +307,9 @@ func (r *Runtime) Start(ctx context.Context, s Spec) (*Instance, error) {
 		return nil, fmt.Errorf("creating container: %w", err)
 	}
 	id := res.ID
+	// X8.2: keep the image ID the container runs, not only the tag it was created from. After a rebuild,
+	// a slot that was started earlier keeps the old image; the experiment data has to show that.
+	imageID := r.imageID(ctx, id)
 	if s.NoAttach {
 		if _, err := r.cli.ContainerStart(ctx, id, client.ContainerStartOptions{}); err != nil {
 			_ = r.Remove(context.WithoutCancel(ctx), id)
@@ -311,7 +317,7 @@ func (r *Runtime) Start(ctx context.Context, s Spec) (*Instance, error) {
 		}
 		done := make(chan struct{})
 		go r.watch(id, done)
-		return &Instance{ID: id, Name: s.Name, Stderr: NewTailBuffer(1), done: done}, nil
+		return &Instance{ID: id, Name: s.Name, ImageID: imageID, Stderr: NewTailBuffer(1), done: done}, nil
 	}
 	att, err := r.cli.ContainerAttach(ctx, id, client.ContainerAttachOptions{Stream: true, Stdin: true, Stdout: true, Stderr: true})
 	if err != nil {
@@ -332,7 +338,17 @@ func (r *Runtime) Start(ctx context.Context, s Spec) (*Instance, error) {
 		_ = r.Remove(context.WithoutCancel(ctx), id)
 		return nil, fmt.Errorf("starting container: %w", err)
 	}
-	return &Instance{ID: id, Name: s.Name, Stdin: &hijackStdin{h: &att.HijackedResponse}, Stdout: outR, Stderr: errBuf, done: done}, nil
+	return &Instance{ID: id, Name: s.Name, ImageID: imageID, Stdin: &hijackStdin{h: &att.HijackedResponse}, Stdout: outR, Stderr: errBuf, done: done}, nil
+}
+
+// imageID reads the Docker image ID of a just-created container. A failure leaves the ID empty instead of
+// stopping the slot; the experiment then records an empty value and the lock check reports it.
+func (r *Runtime) imageID(ctx context.Context, id string) string {
+	ins, err := r.cli.ContainerInspect(ctx, id, client.ContainerInspectOptions{})
+	if err != nil {
+		return ""
+	}
+	return ins.Container.Image
 }
 
 // watch closes done as soon as the container is no longer running (containers without attached

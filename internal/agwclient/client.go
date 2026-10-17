@@ -342,6 +342,11 @@ func (c *Client) Jobs(ctx context.Context, id string) (out []WatchJob, err error
 
 // --- Experiment runner (X1) ----------------------------------------------------------------------
 
+// ExpEnvironment reads the gateway build and the images of the warm experiment slots (X8.5).
+func (c *Client) ExpEnvironment(ctx context.Context) (out ExpEnvironment, err error) {
+	return out, c.Do(ctx, "GET", "/api/exp/environment", nil, &out)
+}
+
 func (c *Client) ExpStartRun(ctx context.Context, run ExpRun) error {
 	return c.Do(ctx, "POST", "/api/exp/runs/start", run, nil)
 }

@@ -12,6 +12,7 @@ import (
 
 	"agw/internal/platform"
 	"agw/internal/store"
+	"agw/internal/version"
 )
 
 // The runner's routes (X1). They are reachable with the experiment key only; the key itself is
@@ -32,6 +33,7 @@ func (s *Server) expOnly(next http.HandlerFunc) http.HandlerFunc {
 }
 
 func (s *Server) registerExp(mux *http.ServeMux) {
+	mux.HandleFunc("GET /api/exp/environment", s.expOnly(s.expEnvironment))
 	mux.HandleFunc("GET /api/exp/runs", s.expOnly(s.expRuns))
 	mux.HandleFunc("GET /api/exp/run", s.expOnly(s.expRun))
 	mux.HandleFunc("POST /api/exp/runs/start", s.expOnly(s.expStartRun))
@@ -68,6 +70,8 @@ func (s *Server) expStartRun(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
+	// X8.1: the gateway itself states the version it runs with; a client value is not authoritative.
+	run.GatewayVersion = version.String()
 	if err := s.M.StartExpRun(r.Context(), run); err != nil {
 		if errors.Is(err, store.ErrExpRunExists) {
 			writeErr(w, http.StatusConflict, err.Error())
@@ -97,7 +101,18 @@ func (s *Server) expSetRunChat(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, store.ErrNotFound.Error())
 		return
 	}
-	if err := s.M.SetExpRunChat(r.Context(), req.ID, req.Chat); err != nil {
+	// X8.2: the image IDs of the slot that carries the run and the checksums of the environment are
+	// recorded with the run. A slot that is not visible leaves them empty; the runner's lock check then
+	// reports the deviation instead of the gateway inventing a value.
+	env := s.environment()
+	imagePi, imageExec := "", ""
+	if found, ok := env.SlotForChat(req.Chat); ok {
+		imagePi, imageExec = found.ImagePi, found.ImageExec
+	}
+	if err := s.M.SetExpRunChat(r.Context(), req.ID, req.Chat, store.ExpRunEnvironment{
+		ImagePi: imagePi, ImageExec: imageExec,
+		CatalogSHA256: env.CatalogSHA256, SkillsSHA256: env.SkillsSHA256,
+	}); err != nil {
 		fail(w, err)
 		return
 	}

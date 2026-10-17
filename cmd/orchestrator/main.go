@@ -420,9 +420,12 @@ func run() error {
 	if fixtures != nil {
 		expFixtures = fixtures
 	}
+	// X8: read the identity of this build once; the experiment environment endpoint and the lock check
+	// report it.
+	environment := api.BuildEnvironment(env)
 	apiSrv := &http.Server{Addr: env.HTTPAddr, Handler: (&api.Server{M: m, Pool: p, Cat: cat, Env: env, Web: webFS, Blocked: blocked, Token: env.APIToken, AllowedHosts: env.AllowedHosts,
 		OIDC: auth, FrameAncestors: env.FrameAncestors, Platform: plat, ExpFixtures: expFixtures,
-		ExpAPIToken: env.ExpAPIToken, ExpAccount: expAccount}).Handler(),
+		ExpAPIToken: env.ExpAPIToken, ExpAccount: expAccount, Environment: environment}).Handler(),
 		ReadHeaderTimeout: 10 * time.Second, MaxHeaderBytes: 64 << 10, BaseContext: func(net.Listener) context.Context { return baseCtx }}
 	proxy := llmproxy.New(cat)
 	proxy.SetRecorder(m) // assignment per slot, billing, hard limit of concurrent agents
@@ -441,7 +444,9 @@ func run() error {
 	go func() { errc <- apiSrv.ListenAndServe() }()
 	go func() { errc <- proxySrv.ListenAndServe() }()
 	go func() { errc <- webSrv.ListenAndServe() }()
-	slog.Info("orchestrator running", "api", env.HTTPAddr, "proxy", env.ProxyAddr, "toolsets", toolsets.Key(), "pool", env.PoolSize, "model", cat.Default, "image", env.Image)
+	slog.Info("orchestrator running", "api", env.HTTPAddr, "proxy", env.ProxyAddr, "toolsets", toolsets.Key(), "pool", env.PoolSize, "model", cat.Default, "image", env.Image,
+		"version", environment.GatewayVersion, "commit", environment.GatewayCommit, "describe", environment.GatewayDescribe,
+		"catalog_sha256", environment.CatalogSHA256, "skills_sha256", environment.SkillsSHA256)
 
 	select {
 	case <-ctx.Done():

@@ -7,18 +7,29 @@ COPY web/ ./
 RUN npm run build
 
 FROM golang:1.26-bookworm AS build
+# X8.1: the identity of this build goes into the binary; the deploy sets it from the submodule state
+# (`git describe --always --dirty` and the commit). Without arguments a local build reports "dev".
+ARG AGW_COMMIT=dev
+ARG AGW_DESCRIBE=dev
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 COPY --from=web /web/dist ./web/dist
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/orchestrator ./cmd/orchestrator
+RUN CGO_ENABLED=0 go build -trimpath \
+      -ldflags="-s -w -X agw/internal/version.Commit=${AGW_COMMIT} -X agw/internal/version.Describe=${AGW_DESCRIBE}" \
+      -o /out/orchestrator ./cmd/orchestrator
 # X1.4: the experiment runner runs in this image (docker exec -d … /agw exp run …); it needs no shell.
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/agw ./cmd/agw
+RUN CGO_ENABLED=0 go build -trimpath \
+      -ldflags="-s -w -X agw/internal/version.Commit=${AGW_COMMIT} -X agw/internal/version.Describe=${AGW_DESCRIBE}" \
+      -o /out/agw ./cmd/agw
 
 # Runs as root because it serves the Docker socket and the socket volume.
 FROM gcr.io/distroless/static-debian12
 COPY --from=build /out/orchestrator /orchestrator
 COPY --from=build /out/agw /agw
+# X8.2: the skills the slots of this gateway run with, so that GET /api/exp/environment can state their
+# checksum. The images for pi and the execution sandbox copy the same directory.
+COPY --from=build /src/images/agw-basis/skills /etc/agw/skills
 EXPOSE 18480 18481
 ENTRYPOINT ["/orchestrator"]

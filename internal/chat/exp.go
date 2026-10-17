@@ -16,8 +16,8 @@ func (m *Manager) StartExpRun(ctx context.Context, run store.ExpRun) error {
 	return m.st.StartExpRun(ctx, run)
 }
 
-func (m *Manager) SetExpRunChat(ctx context.Context, id, chatID string) error {
-	return m.st.SetExpRunChat(ctx, id, chatID)
+func (m *Manager) SetExpRunChat(ctx context.Context, id, chatID string, env store.ExpRunEnvironment) error {
+	return m.st.SetExpRunChat(ctx, id, chatID, env)
 }
 
 func (m *Manager) EndExpRun(ctx context.Context, id string, end store.ExpRunEnd) error {

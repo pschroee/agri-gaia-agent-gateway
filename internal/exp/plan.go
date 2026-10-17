@@ -105,9 +105,9 @@ func TraceValue(v string) string {
 
 // Limits are the bounds per run (X3). MaxDuration is a Go duration such as 90m.
 type Limits struct {
-	MaxCostUSD  float64 `yaml:"max_cost_usd"`
-	MaxTokens   int64   `yaml:"max_tokens"`
-	MaxDuration string  `yaml:"max_duration"`
+	MaxCostUSD  float64 `yaml:"max_cost_usd" json:"max_cost_usd"`
+	MaxTokens   int64   `yaml:"max_tokens" json:"max_tokens"`
+	MaxDuration string  `yaml:"max_duration" json:"max_duration"`
 }
 
 // Problem is one finding of Validate. Where names the file or object, Text the finding.

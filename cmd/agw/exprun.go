@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"hash/fnv"
 	"io"
-	"io/fs"
 	"math/rand/v2"
 	"net/url"
 	"os"
@@ -42,6 +41,7 @@ type expAPI interface {
 	CreateChat(ctx context.Context, req agwclient.CreateChatRequest) (agwclient.Chat, error)
 	Chat(ctx context.Context, id string) (agwclient.ChatDetail, error)
 	Jobs(ctx context.Context, id string) ([]agwclient.WatchJob, error)
+	ExpEnvironment(ctx context.Context) (agwclient.ExpEnvironment, error)
 	ExpStartRun(ctx context.Context, run agwclient.ExpRun) error
 	ExpSetRunChat(ctx context.Context, id, chatID string) error
 	ExpEndRun(ctx context.Context, end agwclient.ExpRunEnd) error
@@ -89,6 +89,7 @@ type expRunner struct {
 	manifests []exp.Manifest
 	planName  string
 	planSHA   string
+	lock      *exp.Lock // set for a main plan (X8.5); nil for a pilot
 	order     []expPlannedRun
 
 	taskByID map[string]exp.Task
@@ -133,11 +134,19 @@ func newExpRunner(api expAPI, opts expRunOptions, out, errw io.Writer) (*expRunn
 		}
 		return nil, errors.New("the material has problems:\n" + strings.TrimRight(b.String(), "\n"))
 	}
+	var lock *exp.Lock
 	if p.Purpose == exp.PurposeMain {
-		// X8.5: a main plan only starts when the material matches its lock. X8 writes the lock; the
-		// format checked here is its core (file → SHA-256).
-		if err := checkPlanLock(dir); err != nil {
+		// X8.5: a main plan only starts when the material matches its lock. The file checks are offline and
+		// run here; the environment checks follow in run(), where the API is available.
+		lock, err = exp.LoadLock(dir)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return nil, fmt.Errorf("%s is missing: a main plan starts only with a lock (X8)", filepath.Join(dir, "plan.lock"))
+			}
 			return nil, err
+		}
+		if problems := lock.CheckFiles(dir); len(problems) > 0 {
+			return nil, errors.New("the material deviates from plan.lock:\n" + problemLines(problems))
 		}
 	}
 	k := p.K
@@ -159,7 +168,7 @@ func newExpRunner(api expAPI, opts expRunOptions, out, errw io.Writer) (*expRunn
 	name := m.PlanID
 	r := &expRunner{
 		api: api, out: out, errw: errw,
-		plan: p, tasks: tasks, manifests: manifests, planName: name, planSHA: digest,
+		plan: p, tasks: tasks, manifests: manifests, planName: name, planSHA: digest, lock: lock,
 		order:    expRunOrder(name, tasks, cells, k, seed),
 		taskByID: map[string]exp.Task{}, cellByID: map[string]exp.Cell{}, models: map[string]string{},
 		k: k, seed: seed, dryRun: opts.DryRun,
@@ -286,6 +295,18 @@ func (r *expRunner) run(ctx context.Context) error {
 		return err
 	}
 	fmt.Fprintf(r.out, "%s: %d runs (k=%d), seed %d, material %s\n", r.planName, len(r.order), r.k, r.seed, shortID(r.planSHA))
+	if r.lock != nil && !r.dryRun {
+		// X8.5: the material matches the lock; now the environment must as well. A dry run prints the order
+		// without touching the gateway.
+		env, err := r.api.ExpEnvironment(ctx)
+		if err != nil {
+			return fmt.Errorf("the experiment environment is not readable: %w", err)
+		}
+		if problems := exp.CompareEnvironment(r.lock, expEnvironment(env)); len(problems) > 0 {
+			return errors.New("the environment deviates from plan.lock:\n" + problemLines(problems))
+		}
+		fmt.Fprintf(r.out, "environment: gateway %s, images match plan.lock\n", env.GatewayVersion)
+	}
 	counts := map[string]int{}
 	return r.runAll(ctx, counts)
 }
@@ -313,6 +334,30 @@ func (r *expRunner) checkModels(ctx context.Context) error {
 		fmt.Fprintln(&b, problem.String())
 	}
 	return errors.New(strings.TrimRight(b.String(), "\n"))
+}
+
+// expEnvironment converts the client's answer into the material package's view.
+func expEnvironment(e agwclient.ExpEnvironment) exp.Environment {
+	out := exp.Environment{
+		GatewayVersion: e.GatewayVersion, GatewayCommit: e.GatewayCommit, GatewayDescribe: e.GatewayDescribe,
+		CatalogSHA256: e.CatalogSHA256, SkillsSHA256: e.SkillsSHA256, InstructionSHA256: e.InstructionSHA256,
+		ImagesPi: e.ImagesPi, ImagesExec: e.ImagesExec,
+	}
+	for _, s := range e.Slots {
+		out.Slots = append(out.Slots, exp.EnvironmentSlot{
+			ID: s.ID, Variant: s.Variant, State: s.State, ChatID: s.ChatID, ImagePi: s.ImagePi, ImageExec: s.ImageExec,
+		})
+	}
+	return out
+}
+
+// problemLines renders findings of the lock check, one per line.
+func problemLines(problems []exp.Problem) string {
+	lines := make([]string, 0, len(problems))
+	for _, p := range problems {
+		lines = append(lines, p.String())
+	}
+	return strings.Join(lines, "\n")
 }
 
 // newExpRand seeds the order of one task and repetition (X1.6): the plan's seed and a hash of
@@ -412,6 +457,14 @@ func (r *expRunner) runOne(ctx context.Context, pr expPlannedRun, prev agwclient
 			return expOutcome{}, ctx.Err()
 		}
 		return fail("error", "chat: "+err.Error())
+	}
+	if r.lock != nil {
+		// X8.5: the slot that carries this run must use the frozen images. The warm slots were checked before
+		// the plan started; this catches a slot that started later (for example after a rebuild).
+		if reason := r.checkSlot(ctx, chat.ID); reason != "" {
+			r.abort(ctx, chat.ID)
+			return fail("error", reason)
+		}
 	}
 	if err := r.api.ExpSetRunChat(ctx, id, chat.ID); err != nil {
 		return expOutcome{}, fmt.Errorf("%s: recording the chat: %w", pr.Key, err)
@@ -582,6 +635,24 @@ func expLimitStatus(limit string) string {
 		return "limit_duration"
 	}
 	return "limit_" + limit
+}
+
+// checkSlot verifies the image IDs of the slot that carries the chat against the lock (X8.5). It returns
+// an empty string when the slot matches and an end reason otherwise.
+func (r *expRunner) checkSlot(ctx context.Context, chatID string) string {
+	env, err := r.api.ExpEnvironment(ctx)
+	if err != nil {
+		return "environment: " + err.Error()
+	}
+	slot, ok := expEnvironment(env).SlotForChat(chatID)
+	if !ok {
+		return "environment: the slot of chat " + shortID(chatID) + " is not visible; its images cannot be verified"
+	}
+	problems := exp.CompareSlot(r.lock, slot)
+	if len(problems) == 0 {
+		return ""
+	}
+	return "environment: " + problemLines(problems)
 }
 
 func (r *expRunner) abort(ctx context.Context, chatID string) {
@@ -776,94 +847,24 @@ func walkJSON(v any, fn func(key string, val any)) {
 	}
 }
 
-// expMaterialDigest hashes the material the plan uses (all files below the material directory,
-// without plan.lock, in a stable order). It identifies the state a run was started with.
+// expMaterialDigest names the material the plan uses: the same file set as plan.lock (X8.3), without
+// result folders and local caches, in a stable order. It identifies the state a run was started with.
 func expMaterialDigest(dir string) (string, error) {
-	var files []string
-	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			return nil
-		}
-		rel, err := filepath.Rel(dir, path)
-		if err != nil {
-			return err
-		}
-		if filepath.ToSlash(rel) == "plan.lock" {
-			return nil
-		}
-		files = append(files, rel)
-		return nil
-	})
+	files, err := exp.MaterialFiles(dir)
 	if err != nil {
 		return "", err
 	}
-	sort.Strings(files)
-	h := sha256.New()
-	for _, rel := range files {
-		b, err := os.ReadFile(filepath.Join(dir, rel))
-		if err != nil {
-			return "", err
-		}
-		io.WriteString(h, filepath.ToSlash(rel))
-		h.Write([]byte{0})
-		h.Write(b)
-		h.Write([]byte{0})
-	}
-	return hex.EncodeToString(h.Sum(nil)), nil
-}
-
-// checkPlanLock checks the material against plan.lock (X8.3/X8.5). The lock names each material file
-// with its SHA-256; a missing lock, a missing file or a differing digest stops a main plan.
-func checkPlanLock(dir string) error {
-	path := filepath.Join(dir, "plan.lock")
-	raw, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("%s is missing: a main plan starts only with a lock (X8)", path)
-	}
-	if err != nil {
-		return err
-	}
-	var lock struct {
-		Files map[string]string `json:"files"`
-	}
-	if err := json.Unmarshal(raw, &lock); err != nil {
-		return fmt.Errorf("%s: %w", path, err)
-	}
-	if len(lock.Files) == 0 {
-		return fmt.Errorf("%s lists no files", path)
-	}
-	names := make([]string, 0, len(lock.Files))
-	for name := range lock.Files {
+	names := make([]string, 0, len(files))
+	for name := range files {
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	for _, rel := range names {
-		if !expSafeRelative(rel) {
-			return fmt.Errorf("plan.lock: %q is not a relative path inside the material", rel)
-		}
-		b, err := os.ReadFile(filepath.Join(dir, rel))
-		if err != nil {
-			return fmt.Errorf("plan.lock: %s: %w", rel, err)
-		}
-		sum := sha256.Sum256(b)
-		if got := hex.EncodeToString(sum[:]); !strings.EqualFold(got, lock.Files[rel]) {
-			return fmt.Errorf("plan.lock: %s differs from the frozen material", rel)
-		}
+	h := sha256.New()
+	for _, name := range names {
+		io.WriteString(h, name)
+		h.Write([]byte{0})
+		io.WriteString(h, files[name])
+		h.Write([]byte{0})
 	}
-	return nil
-}
-
-func expSafeRelative(p string) bool {
-	if p == "" || filepath.IsAbs(p) || strings.HasPrefix(p, "/") {
-		return false
-	}
-	for _, part := range strings.Split(filepath.ToSlash(p), "/") {
-		if part == ".." {
-			return false
-		}
-	}
-	return true
+	return hex.EncodeToString(h.Sum(nil)), nil
 }

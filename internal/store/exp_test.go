@@ -26,6 +26,18 @@ func TestRunLifecycle(t *testing.T) {
 	if err != nil || got.Status != ExpStarted || got.EndedAt != nil || got.ChatID != "" {
 		t.Fatalf("new run: %+v %v", got, err)
 	}
+	// X8.2: the image IDs and checksums of the slot are recorded with the run when the chat is linked.
+	const chatID = "00000000-0000-0000-0000-000000000001"
+	if err := s.SetExpRunChat(ctx, run.ID, chatID, ExpRunEnvironment{
+		ImagePi: "sha256:pi", ImageExec: "sha256:exec", CatalogSHA256: "cat", SkillsSHA256: "skills",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, err = s.GetExpRun(ctx, run.ID)
+	if err != nil || got.ChatID != chatID || got.ImagePi != "sha256:pi" || got.ImageExec != "sha256:exec" ||
+		got.CatalogSHA256 != "cat" || got.SkillsSHA256 != "skills" {
+		t.Fatalf("environment: %+v %v", got, err)
+	}
 	pass := true
 	evidence := json.RawMessage(`{"pass":true}`)
 	if err := s.EndExpRun(ctx, run.ID, ExpRunEnd{Status: ExpDone, Pass: &pass, CheckEvidence: evidence}); err != nil {
