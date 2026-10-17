@@ -44,7 +44,7 @@ func TestEvaluateOps(t *testing.T) {
 		{"exists missing", Expectation{Path: "$.models[*].id", Op: "exists"}, false},
 		{"count", Expectation{Path: "$.datasets[*].id", Op: "count", Value: 2}, true},
 		{"count wrong", Expectation{Path: "$.datasets[*].id", Op: "count", Value: 3}, false},
-		{"contains string", Expectation{Path: "$.datasets[0].name", Op: "contains", Value: "nni"}, true},
+		{"contains string", Expectation{Path: "$.datasets[0].name", Op: "contains", Value: "nis"}, true},
 		{"contains array value", Expectation{Path: "$.datasets[*].name", Op: "contains", Value: "test"}, true},
 		{"contains array missing", Expectation{Path: "$.datasets[*].name", Op: "contains", Value: "dogs"}, false},
 	}

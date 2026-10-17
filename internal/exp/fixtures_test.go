@@ -26,7 +26,7 @@ import (
 // removal work like on the real service; truncate makes a field shorter than it was sent.
 type fakeCaller struct {
 	mu       sync.Mutex
-	objects  map[string]map[string]any // "dataset/1" -> object
+	objects  map[string]map[string]any // "datasets/1" -> object
 	nextID   int
 	reqs     []platform.Request
 	truncate string // field name to cut in half on creation
@@ -65,7 +65,7 @@ func (f *fakeCaller) Do(_ context.Context, _ string, r platform.Request) (platfo
 			"id": float64(f.nextID), "name": name, "dataset_type": field("dataset_type"),
 			"filecount": float64(len(r.Uploads)), "total_filesize": float64(size),
 		}
-		f.objects[fmt.Sprintf("dataset/%d", f.nextID)] = obj
+		f.objects[fmt.Sprintf("datasets/%d", f.nextID)] = obj
 		return jsonResult(201, obj)
 	case r.Method == "POST" && r.Path == "/models":
 		name := field("name")
@@ -78,7 +78,7 @@ func (f *fakeCaller) Do(_ context.Context, _ string, r platform.Request) (platfo
 			obj["file_name"] = r.Uploads[0].Name
 			obj["file_size"] = float64(len(r.Uploads[0].Data))
 		}
-		f.objects[fmt.Sprintf("model/%d", f.nextID)] = obj
+		f.objects[fmt.Sprintf("models/%d", f.nextID)] = obj
 		return jsonResult(201, obj)
 	case r.Method == "GET":
 		key := strings.TrimPrefix(r.Path, "/")
@@ -296,16 +296,16 @@ func TestUnseedOnlyRecordedIDs(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	primary.objects["dataset/1"] = map[string]any{"id": float64(1), "name": "placeholder-dataset"}
-	primary.objects["dataset/2"] = map[string]any{"id": float64(2), "name": "placeholder-dataset"}
+	primary.objects["datasets/1"] = map[string]any{"id": float64(1), "name": "placeholder-dataset"}
+	primary.objects["datasets/2"] = map[string]any{"id": float64(2), "name": "placeholder-dataset"}
 	rows, err := f.Unseed(ctx, "pilot", "c1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := primary.objects["dataset/1"]; ok {
+	if _, ok := primary.objects["datasets/1"]; ok {
 		t.Fatal("recorded object was not removed")
 	}
-	if _, ok := primary.objects["dataset/2"]; !ok {
+	if _, ok := primary.objects["datasets/2"]; !ok {
 		t.Fatal("an object with the same name but a foreign id was removed")
 	}
 	if len(rows) != 1 || rows[0].RemovedAt == nil {
@@ -319,7 +319,7 @@ func TestVerifyFindsMissingObject(t *testing.T) {
 	if _, err := f.Seed(ctx, "pilot", "c1", fixtureSpecs()[:1]); err != nil {
 		t.Fatal(err)
 	}
-	delete(primary.objects, "dataset/1") // deleted by a run inside the cell
+	delete(primary.objects, "datasets/1") // deleted by a run inside the cell
 	findings, err := f.Verify(ctx, "pilot", "c1")
 	if err != nil {
 		t.Fatal(err)
@@ -357,7 +357,7 @@ func TestVerifyDetectsChangedField(t *testing.T) {
 		t.Fatal(err)
 	}
 	primary.mu.Lock()
-	primary.objects["dataset/1"]["name"] = "something-else"
+	primary.objects["datasets/1"]["name"] = "something-else"
 	primary.mu.Unlock()
 	findings, err := f.Verify(ctx, "pilot", "c1")
 	if err != nil {
