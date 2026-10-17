@@ -148,6 +148,17 @@ func (f *Fixtures) Seed(ctx context.Context, plan, cell string, specs []FixtureS
 	if err := validateSpecs(specs); err != nil {
 		return nil, err
 	}
+	// A cell gets fresh objects for every run (X4.6). A second seed without an unseed would create a
+	// second set — and because the backend renames duplicates, the read-back would fail anyway.
+	if existing, err := f.Store.ListFixtures(ctx, plan, cell); err != nil {
+		return nil, err
+	} else {
+		for _, r := range existing {
+			if r.RemovedAt == nil {
+				return nil, fmt.Errorf("cell %s already has live fixtures (manifest %s); run unseed first", cell, r.ManifestID)
+			}
+		}
+	}
 	byKind := map[string][]FixtureSpec{}
 	for _, s := range specs {
 		byKind[s.Kind] = append(byKind[s.Kind], s)

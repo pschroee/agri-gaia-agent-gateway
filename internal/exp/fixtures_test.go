@@ -329,6 +329,25 @@ func TestVerifyFindsMissingObject(t *testing.T) {
 	}
 }
 
+func TestSeedRefusesLiveFixtures(t *testing.T) {
+	f, _, _, _ := newFixtures(nil)
+	ctx := context.Background()
+	if _, err := f.Seed(ctx, "pilot", "c1", fixtureSpecs()[:1]); err != nil {
+		t.Fatal(err)
+	}
+	// A second seed without an unseed would create a second set with a suffixed name.
+	if _, err := f.Seed(ctx, "pilot", "c1", fixtureSpecs()[:1]); err == nil || !strings.Contains(err.Error(), "unseed") {
+		t.Fatalf("second seed: %v", err)
+	}
+	// After the removal a new seed is allowed.
+	if _, err := f.Unseed(ctx, "pilot", "c1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Seed(ctx, "pilot", "c1", fixtureSpecs()[:1]); err != nil {
+		t.Fatalf("seed after unseed: %v", err)
+	}
+}
+
 // A run inside the cell may change a fixture; the next Verify compares with the manifest, not with
 // the read-back of the seeding (X4.6).
 func TestVerifyDetectsChangedField(t *testing.T) {
