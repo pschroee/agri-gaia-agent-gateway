@@ -522,10 +522,17 @@ refer to this repository.
 ## Experiment runs (X1)
 
 - **The experiment account has no browser session:** `oidc.PasswordSource` (`internal/oidc/password.go`) requests
-  its token with a password grant through the public client `frontend` and renews it before it expires. The
-  password never appears in a request log or an error text. Without `AGW_EXP_USER`/`AGW_EXP_PASSWORD` nothing changes;
-  with `AGW_EXP_API_TOKEN` both are required, the key needs at least 32 characters, and everything needs
+  its token with a password grant and renews it before it expires. The password and the client secret never appear
+  in a request log or an error text. Without `AGW_EXP_USER`/`AGW_EXP_PASSWORD` nothing changes; with
+  `AGW_EXP_API_TOKEN` both are required, the key needs at least 32 characters, and everything needs
   `AGW_AUTH_MODE=oidc` (a chat owner is a Keycloak `sub`).
+- **With `AGW_PLATFORM_TOKEN_EXCHANGE=true` the login client must be the exchanging one (`agw-agent`).** Keycloak
+  only exchanges a token of the requesting client and refuses a `frontend` token with 403 `Client is not within the
+  token audience` (measured live on 17.10.2026; the same account's password grant over `agw-agent` with its client
+  secret and the following exchange both answer 200). Set `AGW_EXP_CLIENT_ID=agw-agent`; the secret comes from
+  `AGW_PLATFORM_CLIENT_SECRET`. The default stays `frontend` (public, for deployments without exchange), and the
+  start logs a warning when it names another client than the exchanging one. The fixture client of X4 follows the
+  same setting.
 - **`ownerToken` sends chats of the experiment account to the password source**, all others to the OIDC session.
   The account's `sub` is read from its first token and cached; after a restart the first platform call of a product
   chat may wait for that one token request.
@@ -537,7 +544,9 @@ refer to this repository.
   `exp_runs` (`internal/store/exp.go`, `exp_schema.sql`). The logical run is `run_key = <plan>/<cell>/<task>/<rep>`;
   a crashed attempt keeps `status: "started"` until the next start supersedes it as `key#2`, `key#3`, … — a row
   that ended (also `aborted`) is never repeated. **The account must be in `AGW_EXPERIMENT_USERS`**, otherwise the
-  gateway refuses the experiment chat (`ErrExperimentNotAllowed`).
+  gateway refuses the experiment chat (`ErrExperimentNotAllowed`). **The start record carries no times:**
+  `started_at`/`ended_at` have `omitempty`; the gateway sets both, and an empty string fails its `time.Time` decoder
+  with 400 invalid JSON (seen live on 17.10.2026).
 - **`main` plans need `plan.lock`** (X8.5): the runner checks every listed file's SHA-256 before the first run and
   refuses a main plan without a lock. Pilot plans run without one. Cleanup deletes only identifiers from
   `delegation_objects` and `container_id` values from the chat's answers (training containers are not in the
