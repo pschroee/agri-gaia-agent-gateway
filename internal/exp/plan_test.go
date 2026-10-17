@@ -156,8 +156,10 @@ func TestValidateMissingFixture(t *testing.T) {
 		t.Fatalf("missing fixture: %v", problems)
 	}
 
+	// The manifest for the referenced fixture carries that id; the file name is the id (X9).
+	manifest := strings.Replace(fixtureDataset, "id: dataset-1", "id: missing", 1)
 	dir = material(t, planYAML("pilot", "list-datasets"), map[string]string{"list-datasets": task},
-		map[string]string{"missing": fixtureDataset})
+		map[string]string{"missing": manifest})
 	if problems := loadAndValidate(t, dir); len(problems) != 0 {
 		t.Fatalf("fixture with a manifest: %v", problems)
 	}
