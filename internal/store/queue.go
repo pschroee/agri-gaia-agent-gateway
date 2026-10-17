@@ -114,6 +114,9 @@ const (
 	NoteSandbox    = "sandbox"      // tasks were ended with the previous sandbox
 	NoteLanguage   = "language"     // the user's preferred language according to the browser (first request of the chat)
 	NoteContext    = "page_context" // page of the platform UI the user sent the message from (issue #13)
+	// NoteRightsInstruction: the delegated rights as an instruction to the agent, with the first message of
+	// an experiment chat in the levels "instruction" and "service" (X2). Context for the model only.
+	NoteRightsInstruction = "rights_instruction"
 	// NoteSubagentUser: the user wrote directly to a subagent (issue #81). Passive: it never wakes the agent.
 	NoteSubagentUser = "subagent_user"
 	// NoteSubagentStop: the user stopped a subagent (issue #120). Like NoteSubagentUser passive: the agent learns it

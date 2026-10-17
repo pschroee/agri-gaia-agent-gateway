@@ -30,7 +30,7 @@ const (
 // Source is a part of a request, in order.
 type Source struct {
 	Kind    string   `json:"kind"`               // QueueUser or QueueSystem
-	Type    string   `json:"type,omitempty"`     // for system: NoteBackground, NoteSandbox, NoteLanguage, NoteContext
+	Type    string   `json:"type,omitempty"`     // for system: NoteBackground, NoteSandbox, NoteLanguage, NoteContext, NoteRightsInstruction
 	Refs    []string `json:"refs,omitempty"`     // for system: affected tasks
 	QueueID string   `json:"queue_id,omitempty"` // queue entry, if enqueued
 	// Marker: marker of the fence around the data from the sandbox (only system, if there is data).
@@ -51,7 +51,7 @@ const AudienceAgent = "agent"
 // for notes the user should see (end of a background task, tasks ended with the sandbox, messages
 // from extensions in pi).
 func NoteAudience(noteType string) string {
-	if noteType == NoteLanguage || noteType == NoteContext {
+	if noteType == NoteLanguage || noteType == NoteContext || noteType == NoteRightsInstruction {
 		return AudienceAgent
 	}
 	return ""
@@ -112,6 +112,28 @@ func (s *Store) FirstTurnLanguage(ctx context.Context, chatID string) (string, e
 		return "", nil
 	}
 	return lang, err
+}
+
+// FirstTurnExperiment returns the experiment profile of a chat as long as it has no turn yet; nil
+// afterwards, for a product chat and for an unknown chat. The instruction for the protection level
+// (X2) hangs on the same condition as the language note: the chat's first message.
+func (s *Store) FirstTurnExperiment(ctx context.Context, chatID string) (*Experiment, error) {
+	if !isUUID(chatID) {
+		return nil, nil
+	}
+	var raw []byte
+	err := s.pool.QueryRow(ctx, `SELECT experiment FROM chats c WHERE id=$1 AND NOT EXISTS (SELECT 1 FROM chat_turns t WHERE t.chat_id=c.id)`, chatID).Scan(&raw)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil || len(raw) == 0 {
+		return nil, err
+	}
+	var exp Experiment
+	if err := json.Unmarshal(raw, &exp); err != nil {
+		return nil, err
+	}
+	return &exp, nil
 }
 
 // Turns returns a chat's turns in order.
