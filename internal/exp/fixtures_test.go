@@ -23,18 +23,22 @@ import (
 )
 
 // fakeCaller is a platform of two accounts. It keeps the objects so that the read-back and the
-// removal work like on the real service; truncate makes a field shorter than it was sent.
+// removal work like on the real service; truncate makes a field shorter than it was sent. meta
+// answers GET /<kind>s/<id>/metadata (X4, #146); noMetadataRoute makes it answer 404 like a backend
+// before that route.
 type fakeCaller struct {
-	mu       sync.Mutex
-	objects  map[string]map[string]any // "datasets/1" -> object
-	nextID   int
-	reqs     []platform.Request
-	truncate string // field name to cut in half on creation
-	failWith string // returned as a transport error, to test that no content reaches a log
+	mu              sync.Mutex
+	objects         map[string]map[string]any // "datasets/1" -> object
+	meta            map[string]map[string]any // "datasets/1" -> {"description", "metadata"}
+	nextID          int
+	reqs            []platform.Request
+	truncate        string // field name to cut in half on creation
+	failWith        string // returned as a transport error, to test that no content reaches a log
+	noMetadataRoute bool
 }
 
 func newFakeCaller() *fakeCaller {
-	return &fakeCaller{objects: map[string]map[string]any{}}
+	return &fakeCaller{objects: map[string]map[string]any{}, meta: map[string]map[string]any{}}
 }
 
 func (f *fakeCaller) Do(_ context.Context, _ string, r platform.Request) (platform.Result, error) {
@@ -61,11 +65,17 @@ func (f *fakeCaller) Do(_ context.Context, _ string, r platform.Request) (platfo
 			size += len(u.Data)
 		}
 		f.nextID++
+		key := fmt.Sprintf("datasets/%d", f.nextID)
 		obj := map[string]any{
 			"id": float64(f.nextID), "name": name, "dataset_type": field("dataset_type"),
 			"filecount": float64(len(r.Uploads)), "total_filesize": float64(size),
 		}
-		f.objects[fmt.Sprintf("datasets/%d", f.nextID)] = obj
+		f.objects[key] = obj
+		md := map[string]any{}
+		if raw := field("metadata"); raw != "" {
+			_ = json.Unmarshal([]byte(raw), &md)
+		}
+		f.meta[key] = map[string]any{"description": field("description"), "metadata": md}
 		return jsonResult(201, obj)
 	case r.Method == "POST" && r.Path == "/models":
 		name := field("name")
@@ -73,13 +83,25 @@ func (f *fakeCaller) Do(_ context.Context, _ string, r platform.Request) (platfo
 			name = name[:len(name)/2]
 		}
 		f.nextID++
+		key := fmt.Sprintf("models/%d", f.nextID)
 		obj := map[string]any{"id": float64(f.nextID), "name": name, "format": field("format")}
 		if len(r.Uploads) == 1 {
 			obj["file_name"] = r.Uploads[0].Name
 			obj["file_size"] = float64(len(r.Uploads[0].Data))
 		}
-		f.objects[fmt.Sprintf("models/%d", f.nextID)] = obj
+		f.objects[key] = obj
+		f.meta[key] = map[string]any{"description": field("description"), "metadata": map[string]any{}}
 		return jsonResult(201, obj)
+	case r.Method == "GET" && strings.HasSuffix(r.Path, "/metadata"):
+		if f.noMetadataRoute {
+			return platform.Result{Status: "error", HTTPStatus: 404, Body: `{"detail":"not found"}`}, nil
+		}
+		key := strings.TrimSuffix(strings.TrimPrefix(r.Path, "/"), "/metadata")
+		md, ok := f.meta[key]
+		if !ok {
+			return platform.Result{Status: "error", HTTPStatus: 404, Body: `{"detail":"not found"}`}, nil
+		}
+		return jsonResult(200, md)
 	case r.Method == "GET":
 		key := strings.TrimPrefix(r.Path, "/")
 		obj, ok := f.objects[key]
@@ -93,6 +115,7 @@ func (f *fakeCaller) Do(_ context.Context, _ string, r platform.Request) (platfo
 			return platform.Result{Status: "error", HTTPStatus: 404}, nil
 		}
 		delete(f.objects, key)
+		delete(f.meta, key)
 		return platform.Result{Status: "ok", HTTPStatus: 200}, nil
 	}
 	return platform.Result{Status: "error", HTTPStatus: 400}, nil
@@ -365,6 +388,70 @@ func TestVerifyDetectsChangedField(t *testing.T) {
 	}
 	if len(findings) != 1 || len(findings[0].Fields) != 1 || findings[0].Fields[0].Field != "name" {
 		t.Fatalf("findings: %+v", findings)
+	}
+}
+
+// #146: description and metadata come from the metadata route of the backend and are compared.
+// An unchanged fixture stays without a finding; a changed description or metadata is one.
+func TestVerifyComparesDescriptionAndMetadata(t *testing.T) {
+	f, primary, _, _ := newFixtures(nil)
+	ctx := context.Background()
+	if _, err := f.Seed(ctx, "pilot", "c1", fixtureSpecs()[:1]); err != nil {
+		t.Fatal(err)
+	}
+	if findings, err := f.Verify(ctx, "pilot", "c1"); err != nil {
+		t.Fatal(err)
+	} else if len(findings) != 0 {
+		t.Fatalf("unchanged fixture: %+v", findings)
+	}
+	primary.mu.Lock()
+	primary.meta["datasets/1"]["description"] = "placeholder-CHANGED"
+	primary.mu.Unlock()
+	findings, err := f.Verify(ctx, "pilot", "c1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(findings) != 1 || len(findings[0].Fields) != 1 || findings[0].Fields[0].Field != "description" {
+		t.Fatalf("changed description: %+v", findings)
+	}
+	primary.mu.Lock()
+	primary.meta["datasets/1"]["description"] = "placeholder-1"
+	primary.meta["datasets/1"]["metadata"] = map[string]any{"placeholder": "2"}
+	primary.mu.Unlock()
+	findings, err = f.Verify(ctx, "pilot", "c1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(findings) != 1 || len(findings[0].Fields) != 1 || findings[0].Fields[0].Field != "metadata" {
+		t.Fatalf("changed metadata: %+v", findings)
+	}
+	primary.mu.Lock()
+	primary.meta["datasets/1"]["metadata"] = map[string]any{"placeholder": "1"}
+	primary.mu.Unlock()
+	if findings, err := f.Verify(ctx, "pilot", "c1"); err != nil {
+		t.Fatal(err)
+	} else if len(findings) != 0 {
+		t.Fatalf("restored fixture: %+v", findings)
+	}
+}
+
+// A backend before #146 answers the metadata route with 404. The cell must still work: the two
+// fields stay recorded but unverified instead of reporting a mismatch.
+func TestVerifySkipsMetadataOnOlderBackend(t *testing.T) {
+	f, primary, _, _ := newFixtures(nil)
+	primary.noMetadataRoute = true
+	ctx := context.Background()
+	if _, err := f.Seed(ctx, "pilot", "c1", fixtureSpecs()[:1]); err != nil {
+		t.Fatalf("seed without the metadata route: %v", err)
+	}
+	if findings, err := f.Verify(ctx, "pilot", "c1"); err != nil {
+		t.Fatal(err)
+	} else if len(findings) != 0 {
+		t.Fatalf("older backend: %+v", findings)
+	}
+	// The description is still recorded, so a later backend can compare it.
+	if row, _ := f.List(ctx, "pilot", "c1"); len(row) == 0 || row[0].FieldSHA256["description"] == "" {
+		t.Fatalf("description not recorded: %+v", row)
 	}
 }
 

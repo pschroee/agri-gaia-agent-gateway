@@ -128,11 +128,14 @@ var fixtureFields = map[string]map[string]bool{
 }
 
 // readableFields are the fields the read-back of the backend exposes; only they can be compared in
-// Verify. Everything else (description and metadata, which live in the triple store, not in
-// Postgres) is recorded with its SHA-256 but cannot be read back through the platform API.
+// Verify. description and metadata live in the triple store; since #146 the backend serves them on
+// GET /<kind>s/<id>/metadata, and readBack merges them into the object. A backend without that route
+// answers 404, and the two fields stay recorded but unverified (see verifyObject).
 var readableFields = map[string]map[string]bool{
-	KindDataset: {"name": true, "dataset_type": true, "filecount": true, "total_filesize": true},
-	KindModel:   {"name": true, "format": true, "file.name": true, "file.size": true},
+	KindDataset: {"name": true, "dataset_type": true, "filecount": true, "total_filesize": true,
+		"description": true, "metadata": true},
+	KindModel: {"name": true, "format": true, "file.name": true, "file.size": true,
+		"description": true},
 }
 
 var modelFormats = map[string]bool{"onnx": true, "pytorch": true, "tensorflow": true, "tensorrt": true}
@@ -199,7 +202,7 @@ func (f *Fixtures) Seed(ctx context.Context, plan, cell string, specs []FixtureS
 			rows = append(rows, row)
 			continue
 		}
-		row, obj, err := f.seedOne(ctx, plan, cell, spec, datasetFiles[spec.ID])
+		row, obj, metadataRead, err := f.seedOne(ctx, plan, cell, spec, datasetFiles[spec.ID])
 		if row.ID != "" {
 			rows = append(rows, row)
 			parents[spec.ID] = row
@@ -207,7 +210,7 @@ func (f *Fixtures) Seed(ctx context.Context, plan, cell string, specs []FixtureS
 		if err != nil {
 			return rows, err
 		}
-		if bad := verifyObject(row, obj); len(bad.Fields) > 0 || bad.Missing {
+		if bad := verifyObject(row, obj, metadataRead); len(bad.Fields) > 0 || bad.Missing {
 			mismatch = append(mismatch, bad)
 		}
 	}
@@ -218,18 +221,18 @@ func (f *Fixtures) Seed(ctx context.Context, plan, cell string, specs []FixtureS
 }
 
 // seedOne creates one object and records it before it is read back.
-func (f *Fixtures) seedOne(ctx context.Context, plan, cell string, spec FixtureSpec, files []FixtureSpec) (store.Fixture, map[string]any, error) {
+func (f *Fixtures) seedOne(ctx context.Context, plan, cell string, spec FixtureSpec, files []FixtureSpec) (store.Fixture, map[string]any, bool, error) {
 	c, err := f.caller(spec.Owner)
 	if err != nil {
-		return store.Fixture{}, nil, fmt.Errorf("manifest %s: %w", spec.ID, err)
+		return store.Fixture{}, nil, false, fmt.Errorf("manifest %s: %w", spec.ID, err)
 	}
 	hashes, err := specHashes(spec)
 	if err != nil {
-		return store.Fixture{}, nil, err
+		return store.Fixture{}, nil, false, err
 	}
 	uploads, err := uploadsOf(spec, files)
 	if err != nil {
-		return store.Fixture{}, nil, err
+		return store.Fixture{}, nil, false, err
 	}
 	var (
 		req platform.Request
@@ -243,22 +246,22 @@ func (f *Fixtures) seedOne(ctx context.Context, plan, cell string, spec FixtureS
 		err = fmt.Errorf("manifest %s: kind %q cannot be created", spec.ID, spec.Kind)
 	}
 	if err != nil {
-		return store.Fixture{}, nil, fmt.Errorf("manifest %s: %w", spec.ID, err)
+		return store.Fixture{}, nil, false, fmt.Errorf("manifest %s: %w", spec.ID, err)
 	}
 	res, err := c.Do(ctx, "", req)
 	if err != nil {
-		return store.Fixture{}, nil, fmt.Errorf("manifest %s: %s: %w", spec.ID, req.String(), sanitize(err))
+		return store.Fixture{}, nil, false, fmt.Errorf("manifest %s: %s: %w", spec.ID, req.String(), sanitize(err))
 	}
 	if res.Status != "ok" || res.HTTPStatus < 200 || res.HTTPStatus >= 300 {
-		return store.Fixture{}, nil, fmt.Errorf("manifest %s: %s: platform responds %d", spec.ID, req.String(), res.HTTPStatus)
+		return store.Fixture{}, nil, false, fmt.Errorf("manifest %s: %s: platform responds %d", spec.ID, req.String(), res.HTTPStatus)
 	}
 	obj, err := decodeObject(res.Body)
 	if err != nil {
-		return store.Fixture{}, nil, fmt.Errorf("manifest %s: response of %s not readable: %w", spec.ID, req.String(), err)
+		return store.Fixture{}, nil, false, fmt.Errorf("manifest %s: response of %s not readable: %w", spec.ID, req.String(), err)
 	}
 	objectID := jsonID(obj)
 	if objectID == "" {
-		return store.Fixture{}, nil, fmt.Errorf("manifest %s: response of %s has no id", spec.ID, req.String())
+		return store.Fixture{}, nil, false, fmt.Errorf("manifest %s: response of %s has no id", spec.ID, req.String())
 	}
 	for name, up := range uploadHashes(uploads) {
 		hashes[name] = up
@@ -273,7 +276,7 @@ func (f *Fixtures) seedOne(ctx context.Context, plan, cell string, spec FixtureS
 	// only fields the manifest does not name are taken from the read-back, so that a later change to
 	// them shows up in Verify. If the read-back fails, the row is still written: the identifier is
 	// the only way to remove the object again.
-	read, readErr := f.readBack(ctx, c, spec.Kind, objectID)
+	read, metadataRead, readErr := f.readBack(ctx, c, spec.Kind, objectID)
 	if readErr == nil {
 		for name, h := range readableHashes(spec.Kind, read) {
 			if _, declared := hashes[name]; !declared {
@@ -286,14 +289,14 @@ func (f *Fixtures) seedOne(ctx context.Context, plan, cell string, spec FixtureS
 		ObjectID: objectID, FieldSHA256: hashes,
 	})
 	if err != nil {
-		return store.Fixture{}, nil, err
+		return store.Fixture{}, nil, false, err
 	}
 	f.log().Info("fixture seeded", "plan", plan, "cell", cell, "manifest", spec.ID, "kind", spec.Kind,
 		"owner", spec.Owner, "object_id", objectID, "field_sha256", hashes)
 	if readErr != nil {
-		return row, nil, fmt.Errorf("manifest %s: %w", spec.ID, readErr)
+		return row, nil, metadataRead, fmt.Errorf("manifest %s: %w", spec.ID, readErr)
 	}
-	return row, read, nil
+	return row, read, metadataRead, nil
 }
 
 // Unseed removes the live objects of a cell by the identifiers of exp_fixtures, models before
@@ -395,12 +398,12 @@ func (f *Fixtures) Verify(ctx context.Context, plan, cell string) ([]Mismatch, e
 			out = append(out, Mismatch{ManifestID: r.ManifestID, Kind: r.Kind, ObjectID: r.ObjectID, Missing: true})
 			continue
 		}
-		obj, err := f.readBack(ctx, c, r.Kind, r.ObjectID)
+		obj, metadataRead, err := f.readBack(ctx, c, r.Kind, r.ObjectID)
 		if err != nil {
 			out = append(out, Mismatch{ManifestID: r.ManifestID, Kind: r.Kind, ObjectID: r.ObjectID, Missing: errors.Is(err, errNotFound)})
 			continue
 		}
-		if bad := verifyObject(r, obj); len(bad.Fields) > 0 || bad.Missing {
+		if bad := verifyObject(r, obj, metadataRead); len(bad.Fields) > 0 || bad.Missing {
 			out = append(out, bad)
 		}
 	}
@@ -417,21 +420,48 @@ func (f *Fixtures) List(ctx context.Context, plan, cell string) ([]store.Fixture
 
 var errNotFound = errors.New("object not found")
 
-// readBack reads one object through the platform API. The result carries no description; see
-// readableFields for what can be checked.
-func (f *Fixtures) readBack(ctx context.Context, c PlatformCaller, kind, objectID string) (map[string]any, error) {
+// readBack reads one object and its description/metadata through the platform API. The second
+// return value says whether the backend answered the metadata route: a backend without it (before
+// #146) answers 404, and the two fields then stay recorded but unverified.
+func (f *Fixtures) readBack(ctx context.Context, c PlatformCaller, kind, objectID string) (map[string]any, bool, error) {
 	path := "/" + kind + "s/" + objectID
 	res, err := c.Do(ctx, "", platform.Request{Method: http.MethodGet, Path: path})
 	if err != nil {
-		return nil, fmt.Errorf("reading %s: %w", path, sanitize(err))
+		return nil, false, fmt.Errorf("reading %s: %w", path, sanitize(err))
 	}
 	if res.Status != "ok" || res.HTTPStatus < 200 || res.HTTPStatus >= 300 {
 		if res.HTTPStatus == http.StatusNotFound {
-			return nil, errNotFound
+			return nil, false, errNotFound
 		}
-		return nil, fmt.Errorf("reading %s: platform responds %d", path, res.HTTPStatus)
+		return nil, false, fmt.Errorf("reading %s: platform responds %d", path, res.HTTPStatus)
 	}
-	return decodeObject(res.Body)
+	obj, err := decodeObject(res.Body)
+	if err != nil {
+		return nil, false, err
+	}
+	metaPath := path + "/metadata"
+	mres, err := c.Do(ctx, "", platform.Request{Method: http.MethodGet, Path: metaPath, Full: true})
+	if err != nil {
+		return nil, false, fmt.Errorf("reading %s: %w", metaPath, sanitize(err))
+	}
+	if mres.HTTPStatus == http.StatusNotFound {
+		// The backend does not offer the route yet; the caller keeps the fields unverified.
+		return obj, false, nil
+	}
+	if mres.Status != "ok" || mres.HTTPStatus < 200 || mres.HTTPStatus >= 300 {
+		return nil, false, fmt.Errorf("reading %s: platform responds %d", metaPath, mres.HTTPStatus)
+	}
+	meta, err := decodeObject(mres.Body)
+	if err != nil {
+		return nil, false, fmt.Errorf("response of %s not readable: %w", metaPath, err)
+	}
+	// Both fields are top-level in the answer of the metadata route. "metadata" only exists for a
+	// dataset; a model carries no uploader metadata.
+	obj["description"] = meta["description"]
+	if kind == KindDataset {
+		obj["metadata"] = meta["metadata"]
+	}
+	return obj, true, nil
 }
 
 func (f *Fixtures) caller(owner string) (PlatformCaller, error) {
@@ -787,6 +817,12 @@ func readableHashes(kind string, obj map[string]any) map[string]string {
 		if v, ok := obj["total_filesize"]; ok {
 			set("total_filesize", v)
 		}
+		if v, ok := obj["description"]; ok {
+			set("description", v)
+		}
+		if v, ok := obj["metadata"]; ok {
+			set("metadata", v)
+		}
 	case KindModel:
 		if v, ok := obj["name"]; ok {
 			set("name", v)
@@ -800,12 +836,17 @@ func readableHashes(kind string, obj map[string]any) map[string]string {
 		if v, ok := obj["file_size"]; ok {
 			set("file.size", v)
 		}
+		if v, ok := obj["description"]; ok {
+			set("description", v)
+		}
 	}
 	return out
 }
 
-// verifyObject compares the recorded hashes with a read-back.
-func verifyObject(row store.Fixture, obj map[string]any) Mismatch {
+// verifyObject compares the recorded hashes with a read-back. metadataRead is false when the backend
+// answered the metadata route with 404 (before #146): then description and metadata stay recorded
+// but are not compared — a cell must not fail because the platform is older than the gateway.
+func verifyObject(row store.Fixture, obj map[string]any, metadataRead bool) Mismatch {
 	actual := readableHashes(row.Kind, obj)
 	bad := Mismatch{ManifestID: row.ManifestID, Kind: row.Kind, ObjectID: row.ObjectID}
 	names := make([]string, 0, len(row.FieldSHA256))
@@ -815,6 +856,9 @@ func verifyObject(row store.Fixture, obj map[string]any) Mismatch {
 	sort.Strings(names)
 	for _, name := range names {
 		if !readableFields[row.Kind][name] {
+			continue
+		}
+		if !metadataRead && (name == "description" || name == "metadata") {
 			continue
 		}
 		want := row.FieldSHA256[name]
