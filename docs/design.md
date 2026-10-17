@@ -1204,6 +1204,16 @@ login, and the token exchange per chat uses the token **of this user** instead o
   that they test the finding and not just the new interface.
 - **The pool creates the next sandbox immediately after the hand-back:** a test hook "for new
   sandboxes" does not reach the one already created; it must also be applied to the existing fakes.
+- **`strace -u` cannot trace as root under the sandbox's capabilities** (X6, 2026-10-17): with
+  `no-new-privileges`, `--cap-drop ALL` and only `SETUID`/`SETGID`/`KILL`, `ptrace(PTRACE_SEIZE)`
+  on a tracee of another uid fails with `EPERM`; the tracer would need `CAP_SYS_PTRACE`, which
+  would widen the sandbox. The supervisor therefore starts strace as root and `agw-exec op` drops
+  to uid 10001 itself before reading the request. `-f` also keeps strace alive until every
+  descendant has ended, so a background child of a foreground command would hold it for the whole
+  operation: the final frame is sent after the trace file has been read, and the tracer is then
+  killed (the remaining tracees are detached and keep running). Measured overhead per operation
+  in the exec image: `bash -c true` 1.3 → 5.7 ms, `python3 -c pass` 5.2 → 30.1 ms, `ls /workspace`
+  0.7 → 11.8 ms.
 
 ### Code review (2026-09-29) and what remains open
 
