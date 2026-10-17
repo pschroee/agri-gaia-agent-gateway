@@ -603,6 +603,20 @@ func (c expRunnerCheck) Get(ctx context.Context, path string) (json.RawMessage, 
 	return json.RawMessage(res.Body), nil
 }
 
+// LastAssistantText reads the stored chat and returns the text of its last assistant message
+// (#147). Tool outputs, thinking, tool calls and system notes are not part of it.
+func (c expRunnerCheck) LastAssistantText(ctx context.Context) (string, error) {
+	detail, err := c.api.Chat(ctx, c.chat)
+	if err != nil {
+		return "", err
+	}
+	messages := make([]exp.Message, len(detail.Messages))
+	for i, m := range detail.Messages {
+		messages[i] = exp.Message{Role: m.Role, Message: m.Message}
+	}
+	return exp.AssistantText(messages), nil
+}
+
 // createdObjects reads the chat's provenance register (X1.10). The check and the cleanup use only
 // these identifiers, never a name.
 func (r *expRunner) createdObjects(ctx context.Context, chatID string) ([]exp.Object, error) {

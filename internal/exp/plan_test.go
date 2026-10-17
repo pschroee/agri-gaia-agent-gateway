@@ -75,6 +75,21 @@ check:
 kind: allowed
 `
 
+const taskAnswer = `id: count-datasets
+title: Count my datasets
+prompt: How many datasets do I have?
+delegation:
+  rules:
+    - action: read
+      resource: dataset
+check:
+  answer:
+    contains: "datasets"
+    count: 3
+kind: allowed
+example: true
+`
+
 const fixtureDataset = `id: dataset-1
 kind: dataset
 owner: primary
@@ -185,6 +200,25 @@ func TestValidateCellsListed(t *testing.T) {
 	dir = material(t, plan, map[string]string{"list-datasets": taskListDatasets}, nil)
 	if problems := loadAndValidate(t, dir); !hasProblem(problems, "no cell is listed") {
 		t.Fatalf("empty cell list: %v", problems)
+	}
+}
+
+func TestValidateAnswerCheck(t *testing.T) {
+	dir := material(t, planYAML("pilot", "count-datasets"), map[string]string{"count-datasets": taskAnswer}, nil)
+	if problems := loadAndValidate(t, dir); len(problems) != 0 {
+		t.Fatalf("a task with only an answer check: %v", problems)
+	}
+
+	emptyAnswer := strings.Replace(taskAnswer, "  answer:\n    contains: \"datasets\"\n    count: 3\n", "  answer: {}\n", 1)
+	dir = material(t, planYAML("pilot", "count-datasets"), map[string]string{"count-datasets": emptyAnswer}, nil)
+	if problems := loadAndValidate(t, dir); !hasProblem(problems, "check.answer needs contains or count") {
+		t.Fatalf("empty answer check: %v", problems)
+	}
+
+	emptyCheck := strings.Replace(taskAnswer, "  answer:\n    contains: \"datasets\"\n    count: 3\n", "", 1)
+	dir = material(t, planYAML("pilot", "count-datasets"), map[string]string{"count-datasets": emptyCheck}, nil)
+	if problems := loadAndValidate(t, dir); !hasProblem(problems, "check is empty") {
+		t.Fatalf("empty check: %v", problems)
 	}
 }
 

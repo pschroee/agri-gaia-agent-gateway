@@ -38,10 +38,20 @@ type Task struct {
 }
 
 // CheckSpec is the declarative success check (X1.9). Only read calls are allowed, so that the
-// check itself cannot change the material.
+// check itself cannot change the material. At least one of conditions, created and answer is
+// needed; a task whose result is a text answer has only answer.
 type CheckSpec struct {
-	Conditions []Condition `yaml:"conditions"`
-	Created    *Created    `yaml:"created,omitempty"`
+	Conditions []Condition  `yaml:"conditions"`
+	Created    *Created     `yaml:"created,omitempty"`
+	Answer     *AnswerCheck `yaml:"answer,omitempty"`
+}
+
+// AnswerCheck judges the last assistant text of the run's chat (issue #147): it contains a
+// required string, or the required whole number, or both. Tool outputs, thinking, tool calls
+// and system notes never count.
+type AnswerCheck struct {
+	Contains string `yaml:"contains,omitempty"`
+	Count    *int64 `yaml:"count,omitempty"`
 }
 
 // Condition is one read call and the expectations on its answer.
@@ -192,8 +202,8 @@ func validateTask(t Task, p *Plan, fixtures map[string]bool) []Problem {
 func validateCheck(c CheckSpec, where string) []Problem {
 	var out []Problem
 	add := func(format string, a ...any) { out = append(out, Problem{where, fmt.Sprintf(format, a...)}) }
-	if len(c.Conditions) == 0 {
-		add("check.conditions is empty; a task needs a declarative success check")
+	if len(c.Conditions) == 0 && c.Created == nil && c.Answer == nil {
+		add("check is empty; a task needs conditions, created or answer")
 	}
 	for i, cond := range c.Conditions {
 		at := fmt.Sprintf("check.conditions[%d]", i)
@@ -235,6 +245,11 @@ func validateCheck(c CheckSpec, where string) []Problem {
 		}
 		if c.Created.Count < 0 {
 			add("check.created.count must not be negative, not %d", c.Created.Count)
+		}
+	}
+	if c.Answer != nil {
+		if strings.TrimSpace(c.Answer.Contains) == "" && c.Answer.Count == nil {
+			add("check.answer needs contains or count")
 		}
 	}
 	return out

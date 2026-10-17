@@ -13,9 +13,13 @@ import (
 )
 
 type fakeCheckClient struct {
-	answers map[string]string
-	errs    map[string]error
-	asked   []string
+	answers  map[string]string
+	errs     map[string]error
+	asked    []string
+	lastText string
+	lastErr  error
+
+	textAsked bool
 }
 
 func (f *fakeCheckClient) Get(_ context.Context, path string) (json.RawMessage, error) {
@@ -25,6 +29,13 @@ func (f *fakeCheckClient) Get(_ context.Context, path string) (json.RawMessage, 
 	}
 	return json.RawMessage(f.answers[path]), nil
 }
+
+func (f *fakeCheckClient) LastAssistantText(context.Context) (string, error) {
+	f.textAsked = true
+	return f.lastText, f.lastErr
+}
+
+func answerSpec(a AnswerCheck) CheckSpec { return CheckSpec{Answer: &a} }
 
 func spec(path string, expect ...Expectation) CheckSpec {
 	return CheckSpec{Conditions: []Condition{{Request: Request{Method: "GET", Path: path}, Expect: expect}}}
@@ -64,6 +75,9 @@ func TestEvaluateOps(t *testing.T) {
 			}
 			if ev.Pass != c.pass || len(ev.Conditions) != 1 || len(ev.Conditions[0].Result) != 1 {
 				t.Fatalf("evidence: %+v", ev)
+			}
+			if f.textAsked {
+				t.Fatal("a check without answer must not read the chat")
 			}
 		})
 	}
@@ -120,6 +134,93 @@ func TestEvaluateRefusesNonJSONAndEmptyCheck(t *testing.T) {
 	pass, _, err = Evaluate(context.Background(), f, CheckSpec{}, nil)
 	if pass || err == nil {
 		t.Fatalf("empty check: pass %v, err %v", pass, err)
+	}
+}
+
+func TestAnswerCheckMatchesTextAndNumber(t *testing.T) {
+	three := int64(3)
+	f := &fakeCheckClient{lastText: "I found 3 datasets: mnist, test and demo."}
+	pass, evidence, err := Evaluate(context.Background(), f,
+		answerSpec(AnswerCheck{Contains: "3 datasets", Count: &three}), nil)
+	if err != nil || !pass {
+		t.Fatalf("pass %v, err %v, evidence %s", pass, err, evidence)
+	}
+	var ev Evidence
+	if err := json.Unmarshal(evidence, &ev); err != nil {
+		t.Fatal(err)
+	}
+	if ev.Answer == nil || !ev.Answer.OK || !ev.Answer.ContainsOK || !ev.Answer.CountOK {
+		t.Fatalf("answer evidence: %+v", ev.Answer)
+	}
+	if ev.Answer.Text != f.lastText {
+		t.Fatalf("evidence text %q, want %q", ev.Answer.Text, f.lastText)
+	}
+}
+
+func TestAnswerCheckFails(t *testing.T) {
+	thirteen := int64(13)
+	f := &fakeCheckClient{lastText: "I found 3 datasets."}
+	pass, evidence, err := Evaluate(context.Background(), f,
+		answerSpec(AnswerCheck{Contains: "4 datasets", Count: &thirteen}), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pass {
+		t.Fatalf("a different number and text must not pass: %s", evidence)
+	}
+	var ev Evidence
+	if err := json.Unmarshal(evidence, &ev); err != nil {
+		t.Fatal(err)
+	}
+	if ev.Answer == nil || ev.Answer.OK || ev.Answer.ContainsOK || ev.Answer.CountOK {
+		t.Fatalf("answer evidence: %+v", ev.Answer)
+	}
+}
+
+func TestAnswerCheckEmptyAnswer(t *testing.T) {
+	f := &fakeCheckClient{}
+	pass, evidence, err := Evaluate(context.Background(), f,
+		answerSpec(AnswerCheck{Contains: "dataset"}), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pass {
+		t.Fatalf("an empty answer must not pass: %s", evidence)
+	}
+	if !strings.Contains(string(evidence), `"text":""`) {
+		t.Fatalf("evidence should show the empty answer: %s", evidence)
+	}
+}
+
+func TestAnswerCheckIgnoresToolOutputAndSystemNotes(t *testing.T) {
+	messages := []Message{
+		{Role: "user", Message: json.RawMessage(`{"role":"user","content":[{"type":"text","text":"How many datasets?"}]}`)},
+		{Role: "assistant", Message: json.RawMessage(`{"role":"assistant","content":[{"type":"toolCall","id":"c1","name":"bash"}]}`)},
+		{Role: "toolResult", Message: json.RawMessage(`{"role":"toolResult","toolCallId":"c1","content":[{"type":"text","text":"3 datasets"}]}`)},
+		{Role: "assistant", Message: json.RawMessage(`{"role":"assistant","content":[{"type":"thinking","thinking":"3 datasets"},{"type":"text","text":"I could not count them."}]}`)},
+		{Role: "system", Message: json.RawMessage(`{"role":"system","content":[{"type":"text","text":"3 datasets"}]}`)},
+	}
+	text := AssistantText(messages)
+	if text != "I could not count them." {
+		t.Fatalf("last assistant text %q", text)
+	}
+	f := &fakeCheckClient{lastText: text}
+	pass, evidence, err := Evaluate(context.Background(), f,
+		answerSpec(AnswerCheck{Contains: "3 datasets"}), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pass {
+		t.Fatalf("a string only in a tool output or system note must not pass: %s", evidence)
+	}
+}
+
+func TestAssistantTextJoinsTextItems(t *testing.T) {
+	messages := []Message{
+		{Role: "assistant", Message: json.RawMessage(`{"role":"assistant","content":[{"type":"text","text":"first"},{"type":"toolCall","name":"bash"},{"type":"text","text":"second"}]}`)},
+	}
+	if got := AssistantText(messages); got != "first\nsecond" {
+		t.Fatalf("text %q", got)
 	}
 }
 
