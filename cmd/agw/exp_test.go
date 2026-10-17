@@ -219,7 +219,7 @@ func TestExpUnseedUsesPlanAndCell(t *testing.T) {
 			t.Errorf("body: %v", err)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{"fixtures":[{"id":"row-1","plan":"plan","cell":"cli-instruction-no-main",`+
+		fmt.Fprint(w, `{"removed":1,"fixtures":[{"id":"row-1","plan":"plan","cell":"cli-instruction-no-main",`+
 			`"manifest_id":"dataset-1","kind":"dataset","owner":"primary","object_id":"7",`+
 			`"field_sha256":{},"created_at":"2026-10-17T12:00:00Z",`+
 			`"removed_at":"2026-10-17T12:05:00Z","remove_result":"deleted"}]}`)
@@ -235,6 +235,70 @@ func TestExpUnseedUsesPlanAndCell(t *testing.T) {
 	}
 	if !strings.Contains(out, "removed: deleted") {
 		t.Fatalf("output: %q", out)
+	}
+}
+
+// Issue #149: unseed of a cell without live fixtures says that there is nothing to remove.
+func TestExpUnseedEmptyCell(t *testing.T) {
+	dir := writeExpMaterial(t, "pilot", 1)
+	t.Setenv("AGW_EXP_API_TOKEN", "exp-key")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"removed":0,"fixtures":[]}`)
+	}))
+	defer srv.Close()
+	code, out, errw := runAgw(t, "exp", "unseed", "--plan", dir, "--cell", "cli-instruction-no-main", "--url", srv.URL)
+	if code != 0 || !strings.Contains(out, "nothing to remove") {
+		t.Fatalf("empty unseed: exit %d, out %q, err %q", code, out, errw)
+	}
+}
+
+// Issue #149: verify names the empty cell instead of "all fixtures match".
+func TestExpVerifyEmptyCell(t *testing.T) {
+	dir := writeExpMaterial(t, "pilot", 1)
+	t.Setenv("AGW_EXP_API_TOKEN", "exp-key")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"state":"empty","checked":0,"mismatches":[]}`)
+	}))
+	defer srv.Close()
+	code, out, errw := runAgw(t, "exp", "verify", "--plan", dir, "--cell", "cli-instruction-no-main", "--url", srv.URL)
+	if code != 0 || !strings.Contains(out, "no fixtures recorded for this cell") {
+		t.Fatalf("empty verify: exit %d, out %q, err %q", code, out, errw)
+	}
+	if strings.Contains(out, "all") {
+		t.Fatalf("empty verify must not claim a passed check: %q", out)
+	}
+}
+
+func TestExpVerifyMatchingCell(t *testing.T) {
+	dir := writeExpMaterial(t, "pilot", 1)
+	t.Setenv("AGW_EXP_API_TOKEN", "exp-key")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"state":"ok","checked":2,"mismatches":[]}`)
+	}))
+	defer srv.Close()
+	code, out, errw := runAgw(t, "exp", "verify", "--plan", dir, "--cell", "cli-instruction-no-main", "--url", srv.URL)
+	if code != 0 || !strings.Contains(out, "all 2 fixtures match their checksums") {
+		t.Fatalf("matching verify: exit %d, out %q, err %q", code, out, errw)
+	}
+}
+
+func TestExpVerifyReportsMismatch(t *testing.T) {
+	dir := writeExpMaterial(t, "pilot", 1)
+	t.Setenv("AGW_EXP_API_TOKEN", "exp-key")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		fmt.Fprint(w, `{"error":"fixture_mismatch","state":"mismatch","checked":1,"mismatches":[`+
+			`{"manifest_id":"dataset-1","kind":"dataset","object_id":"7","fields":[`+
+			`{"field":"description","expected":"abc","actual":"def"}]}]}`)
+	}))
+	defer srv.Close()
+	code, _, errw := runAgw(t, "exp", "verify", "--plan", dir, "--cell", "cli-instruction-no-main", "--url", srv.URL)
+	if code != 1 || !strings.Contains(errw, "fixture_mismatch") || !strings.Contains(errw, "field description") {
+		t.Fatalf("mismatch verify: exit %d, err %q", code, errw)
 	}
 }
 

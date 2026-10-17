@@ -299,21 +299,31 @@ func (f *Fixtures) seedOne(ctx context.Context, plan, cell string, spec FixtureS
 	return row, read, metadataRead, nil
 }
 
+// UnseedResult is what Unseed did in one cell: how many live fixtures it removed and the recorded
+// rows afterwards (removed ones included). Removed counts objects that were live at the start and
+// carry a removed_at afterwards, not the historical rows of earlier cells.
+type UnseedResult struct {
+	Removed  int             `json:"removed"`
+	Fixtures []store.Fixture `json:"fixtures"`
+}
+
 // Unseed removes the live objects of a cell by the identifiers of exp_fixtures, models before
 // datasets. It never looks at a name (CLAUDE.md); an object of the same name that this cell did not
 // create stays. A dataset_file row is removed together with its dataset and has no call of its own.
-func (f *Fixtures) Unseed(ctx context.Context, plan, cell string) ([]store.Fixture, error) {
+func (f *Fixtures) Unseed(ctx context.Context, plan, cell string) (UnseedResult, error) {
 	if strings.TrimSpace(plan) == "" || strings.TrimSpace(cell) == "" {
-		return nil, errors.New("plan and cell are required")
+		return UnseedResult{}, errors.New("plan and cell are required")
 	}
 	rows, err := f.Store.ListFixtures(ctx, plan, cell)
 	if err != nil {
-		return nil, err
+		return UnseedResult{}, err
 	}
 	live := make([]store.Fixture, 0, len(rows))
+	liveIDs := make(map[string]bool, len(rows))
 	for _, r := range rows {
 		if r.RemovedAt == nil {
 			live = append(live, r)
+			liveIDs[r.ID] = true
 		}
 	}
 	// Models before datasets (CLAUDE.md, order of the cleanup). dataset_file goes with its dataset.
@@ -349,7 +359,13 @@ func (f *Fixtures) Unseed(ctx context.Context, plan, cell string) ([]store.Fixtu
 	// Read again so that the caller sees removed_at and remove_result, also after a partial failure.
 	after, listErr := f.Store.ListFixtures(ctx, plan, cell)
 	errs = append(errs, listErr)
-	return after, errors.Join(errs...)
+	removed := 0
+	for _, r := range after {
+		if liveIDs[r.ID] && r.RemovedAt != nil {
+			removed++
+		}
+	}
+	return UnseedResult{Removed: removed, Fixtures: after}, errors.Join(errs...)
 }
 
 func (f *Fixtures) removeOne(ctx context.Context, r store.Fixture) error {
@@ -381,30 +397,39 @@ func (f *Fixtures) removeOne(ctx context.Context, r store.Fixture) error {
 	return nil
 }
 
+// VerifyResult is what Verify found: how many live fixtures were examined and the deviations.
+// Checked 0 means the cell has no live fixtures; that is not a passed check but an empty one
+// (issue #149), so the caller can say so instead of "all fixtures match".
+type VerifyResult struct {
+	Checked    int        `json:"checked"`
+	Mismatches []Mismatch `json:"mismatches"`
+}
+
 // Verify compares the live fixtures of a cell with the checksums recorded at seeding time. It is
 // called before every run (X4.6); a change made inside a cell shows up here before the next run.
-func (f *Fixtures) Verify(ctx context.Context, plan, cell string) ([]Mismatch, error) {
+func (f *Fixtures) Verify(ctx context.Context, plan, cell string) (VerifyResult, error) {
 	rows, err := f.Store.ListFixtures(ctx, plan, cell)
 	if err != nil {
-		return nil, err
+		return VerifyResult{}, err
 	}
-	var out []Mismatch
+	out := VerifyResult{Mismatches: []Mismatch{}}
 	for _, r := range rows {
 		if r.RemovedAt != nil || r.Kind == KindDatasetFile {
 			continue
 		}
+		out.Checked++
 		c, err := f.caller(r.Owner)
 		if err != nil {
-			out = append(out, Mismatch{ManifestID: r.ManifestID, Kind: r.Kind, ObjectID: r.ObjectID, Missing: true})
+			out.Mismatches = append(out.Mismatches, Mismatch{ManifestID: r.ManifestID, Kind: r.Kind, ObjectID: r.ObjectID, Missing: true})
 			continue
 		}
 		obj, metadataRead, err := f.readBack(ctx, c, r.Kind, r.ObjectID)
 		if err != nil {
-			out = append(out, Mismatch{ManifestID: r.ManifestID, Kind: r.Kind, ObjectID: r.ObjectID, Missing: errors.Is(err, errNotFound)})
+			out.Mismatches = append(out.Mismatches, Mismatch{ManifestID: r.ManifestID, Kind: r.Kind, ObjectID: r.ObjectID, Missing: errors.Is(err, errNotFound)})
 			continue
 		}
 		if bad := verifyObject(r, obj, metadataRead); len(bad.Fields) > 0 || bad.Missing {
-			out = append(out, bad)
+			out.Mismatches = append(out.Mismatches, bad)
 		}
 	}
 	return out, nil

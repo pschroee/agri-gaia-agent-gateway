@@ -118,6 +118,9 @@ type fixtureRow struct {
 
 type fixtureAnswer struct {
 	Fixtures   []fixtureRow  `json:"fixtures"`
+	Removed    int           `json:"removed"`
+	Checked    int           `json:"checked"`
+	State      string        `json:"state"`
 	Error      string        `json:"error"`
 	Mismatches []mismatchRow `json:"mismatches"`
 }
@@ -213,8 +216,8 @@ func (a *app) cmdExpUnseed(args []string) error {
 	if a.json {
 		return a.printJSON(out)
 	}
-	if len(out.Fixtures) == 0 {
-		fmt.Fprintf(a.stdout, "no live fixtures for cell %s\n", *cell)
+	if out.Removed == 0 {
+		fmt.Fprintf(a.stdout, "nothing to remove for this cell\n")
 		return nil
 	}
 	printFixtures(a, out.Fixtures)
@@ -250,10 +253,21 @@ func (a *app) cmdExpVerify(args []string) error {
 		if err := a.printJSON(out); err != nil {
 			return err
 		}
-	} else if status != 409 {
-		fmt.Fprintf(a.stdout, "cell %s: all fixtures match their checksums\n", *cell)
+	} else {
+		switch {
+		case out.State == "empty":
+			// No fixture was examined; that is not a passed check (issue #149).
+			fmt.Fprintf(a.stdout, "no fixtures recorded for this cell\n")
+		case out.State == "mismatch":
+			// The findings go to stderr below.
+		case out.State == "" && out.Checked == 0 && len(out.Mismatches) == 0:
+			// An older gateway without the state field: no mismatch, but nothing was checked either.
+			fmt.Fprintf(a.stdout, "no fixtures recorded for this cell\n")
+		default:
+			fmt.Fprintf(a.stdout, "all %d fixtures match their checksums\n", out.Checked)
+		}
 	}
-	if status == 409 {
+	if status == 409 || out.State == "mismatch" {
 		printMismatches(a, out.Mismatches)
 		return errSilentFailure
 	}

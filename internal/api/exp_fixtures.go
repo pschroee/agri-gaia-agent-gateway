@@ -22,8 +22,8 @@ import (
 // implemented by *exp.Fixtures.
 type ExpFixtures interface {
 	Seed(ctx context.Context, plan, cell string, specs []exp.FixtureSpec) ([]store.Fixture, error)
-	Unseed(ctx context.Context, plan, cell string) ([]store.Fixture, error)
-	Verify(ctx context.Context, plan, cell string) ([]exp.Mismatch, error)
+	Unseed(ctx context.Context, plan, cell string) (exp.UnseedResult, error)
+	Verify(ctx context.Context, plan, cell string) (exp.VerifyResult, error)
 	List(ctx context.Context, plan, cell string) ([]store.Fixture, error)
 }
 
@@ -79,17 +79,20 @@ func (s *Server) expUnseed(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusServiceUnavailable, "experiment fixtures are not configured on this instance")
 		return
 	}
-	rows, err := s.ExpFixtures.Unseed(r.Context(), req.Plan, req.Cell)
+	result, err := s.ExpFixtures.Unseed(r.Context(), req.Plan, req.Cell)
 	if err != nil {
 		slog.Warn("experiment fixtures: unseed incomplete", "plan", req.Plan, "cell", req.Cell, "error", err)
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error(), "fixtures": rows})
+		writeJSON(w, http.StatusInternalServerError, map[string]any{
+			"error": err.Error(), "removed": result.Removed, "fixtures": result.Fixtures,
+		})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"fixtures": rows})
+	writeJSON(w, http.StatusOK, map[string]any{"removed": result.Removed, "fixtures": result.Fixtures})
 }
 
 // expVerify compares the live fixtures with the checksums of the seeding (POST /api/exp/fixtures/verify).
-// It answers 409 with the findings when a field or an object deviates.
+// state is "empty" (no live fixture, not a passed check, issue #149), "ok" or "mismatch"; a mismatch
+// answers 409 with the findings.
 func (s *Server) expVerify(w http.ResponseWriter, r *http.Request) {
 	req, ok := s.expFixtureRequest(w, r)
 	if !ok {
@@ -99,16 +102,25 @@ func (s *Server) expVerify(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusServiceUnavailable, "experiment fixtures are not configured on this instance")
 		return
 	}
-	findings, err := s.ExpFixtures.Verify(r.Context(), req.Plan, req.Cell)
+	result, err := s.ExpFixtures.Verify(r.Context(), req.Plan, req.Cell)
 	if err != nil {
 		fail(w, err)
 		return
 	}
-	if len(findings) > 0 {
-		writeJSON(w, http.StatusConflict, map[string]any{"error": "fixture_mismatch", "mismatches": findings})
+	state := "ok"
+	switch {
+	case len(result.Mismatches) > 0:
+		state = "mismatch"
+	case result.Checked == 0:
+		state = "empty"
+	}
+	body := map[string]any{"state": state, "checked": result.Checked, "mismatches": result.Mismatches}
+	if state == "mismatch" {
+		body["error"] = "fixture_mismatch"
+		writeJSON(w, http.StatusConflict, body)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"mismatches": []exp.Mismatch{}})
+	writeJSON(w, http.StatusOK, body)
 }
 
 // expList returns the recorded fixtures of a cell, removed ones included.
