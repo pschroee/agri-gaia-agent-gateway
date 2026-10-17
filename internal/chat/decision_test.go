@@ -71,15 +71,37 @@ func TestDecisionPerExit(t *testing.T) {
 		}
 	})
 
-	t.Run("approved automatically", func(t *testing.T) {
+	// X0.7/X0.9: an experiment chat runs with confirm "none", so a plain write executes without any
+	// approval. There is nothing to approve automatically; the decision is "allowed".
+	t.Run("allowed without approval", func(t *testing.T) {
 		e := setup(t)
 		withPlatform(t, e)
 		allowExperiment(e)
 		c := createExperiment(t, e, "service", NewChat{Delegation: json.RawMessage(`{"rules":[{"action":"create","resource":"dataset","ids":[]}]}`)})
 		res, _ := e.m.PlatformCall(context.Background(), c.ID, e.m.live[c.ID].slot.ID, "api",
 			platform.Request{Method: "POST", Path: "/datasets", Body: json.RawMessage(`{"name":"x","metadata":"{}"}`)})
+		if res.Decision != platform.DecisionAllowed || res.ApprovalID != "" || res.ApprovalDecision != "none" {
+			t.Fatalf("res: %+v", res)
+		}
+		if aps, _ := e.st.ListApprovals(context.Background(), "", c.ID); len(aps) != 0 {
+			t.Fatalf("an experiment chat with confirm none must not create an approval: %+v", aps)
+		}
+	})
+
+	// X0.9: an approval that arises despite confirm "none" — here an irreversible delete — is decided by
+	// the gateway and recorded as such.
+	t.Run("approved automatically", func(t *testing.T) {
+		e := setup(t)
+		withPlatform(t, e)
+		allowExperiment(e)
+		c := createExperiment(t, e, "service", NewChat{Delegation: json.RawMessage(`{"rules":[{"action":"delete","resource":"dataset","ids":["*"]}]}`)})
+		res, _ := e.m.PlatformCall(context.Background(), c.ID, e.m.live[c.ID].slot.ID, "cli",
+			platform.Request{Method: "DELETE", Path: "/datasets/3"})
 		if res.Decision != platform.DecisionApprovedAuto || res.ApprovalDecision != "experiment" || res.ApprovalID == "" {
 			t.Fatalf("res: %+v", res)
+		}
+		if aps, _ := e.st.ListApprovals(context.Background(), "", c.ID); len(aps) != 1 || aps[0].DecidedBy != "experiment" {
+			t.Fatalf("approval: %+v", aps)
 		}
 	})
 }
