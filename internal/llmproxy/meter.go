@@ -44,6 +44,10 @@ type Call struct {
 	// ModelReported: the model the provider reported in the response, with its system fingerprint where it
 	// reports one (X3.7). Empty: the response carried neither.
 	ModelReported string `json:"model_reported,omitempty"`
+	// X5.6: ToolsSHA256 is the checksum of the canonical tool list of the request; Tools carries the list itself
+	// so that the recorder can store it once in llm_toolsets.
+	ToolsSHA256 string          `json:"tools_sha256,omitempty"`
+	Tools       json.RawMessage `json:"-"`
 }
 
 // ToolCall is a tool call requested by the model. ID is the

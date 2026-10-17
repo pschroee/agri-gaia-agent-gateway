@@ -5,8 +5,14 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/csv"
+	"encoding/hex"
+	"encoding/json"
 	"flag"
 	"fmt"
+	"hash"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -17,11 +23,11 @@ import (
 	"agw/internal/exp"
 )
 
-// cmdExp dispatches the experiment subcommands: validate (X9), seed, unseed and verify of the
-// fixtures (X4, issue #129), and run, status and abort of the runner (X1).
+// cmdExp dispatches the experiment subcommands: validate (X9), seed, unseed and verify of the fixtures (X4,
+// issue #129), run, status and abort of the runner (X1), and export of the protocol (X5).
 func (a *app) cmdExp(args []string) error {
 	if len(args) == 0 {
-		return usagef("exp: subcommand missing (validate, seed, unseed, verify, run, status, abort)")
+		return usagef("exp: subcommand missing (validate, seed, unseed, verify, run, status, abort, export)")
 	}
 	switch args[0] {
 	case "validate":
@@ -38,6 +44,8 @@ func (a *app) cmdExp(args []string) error {
 		return a.cmdExpStatus(args[1:])
 	case "abort":
 		return a.cmdExpAbort(args[1:])
+	case "export":
+		return a.cmdExpExport(args[1:])
 	}
 	return usagef("unknown command \"exp %s\" – agw help shows all commands", args[0])
 }
@@ -465,4 +473,266 @@ func (a *app) cmdExpValidate(args []string) error {
 	fmt.Fprintf(a.stdout, "%s: %d tasks, %d cells, %d fixtures, no problems\n",
 		m.Plan.Purpose, len(m.Tasks), len(m.Plan.Cells), len(m.Manifests))
 	return nil
+}
+
+// cmdExpExport writes the protocol of one plan as JSONL and CSV and a manifest with checksums (X5.7).
+//
+// --plan takes the plan name stored with the runs or the plan file itself (then its purpose names the plan and its
+// models supply model_role). --format is a comma-separated list of jsonl and csv.
+func (a *app) cmdExpExport(args []string) error {
+	fs := a.flags("exp export")
+	planArg := fs.String("plan", "", "plan name or plan file (plan.yaml)")
+	planFile := fs.String("plan-file", "", "plan file for model roles and cell factors")
+	out := fs.String("out", "", "directory for the export")
+	format := fs.String("format", "jsonl,csv", "comma-separated: jsonl, csv")
+	if _, err := a.parse(fs, args, 0, 0, "agw exp export --plan <name|file> --out <dir> [--format jsonl,csv]"); err != nil {
+		return err
+	}
+	if *planArg == "" || *out == "" {
+		return usagef("--plan and --out are required")
+	}
+	formats := map[string]bool{}
+	for _, f := range strings.Split(*format, ",") {
+		switch f = strings.TrimSpace(f); f {
+		case "jsonl", "csv":
+			formats[f] = true
+		case "":
+		default:
+			return usagef("unknown format %q (jsonl, csv)", f)
+		}
+	}
+	plan, materialPath := *planArg, *planFile
+	planFromFile := false
+	if materialPath == "" {
+		if st, err := os.Stat(plan); err == nil {
+			planFromFile = true
+			materialPath = plan
+			if st.IsDir() {
+				materialPath = filepath.Join(plan, "plan.yaml")
+			}
+		}
+	}
+	var roles map[string]string
+	var cells map[string]exp.Cell
+	var planSHA string
+	if materialPath != "" {
+		m, err := loadMaterial(materialPath)
+		if err != nil {
+			return err
+		}
+		if raw, err := os.ReadFile(m.Path); err == nil {
+			sum := sha256.Sum256(raw)
+			planSHA = hex.EncodeToString(sum[:])
+		}
+		if planFromFile {
+			// X1 records the plan under its file name without extension (plan or pilot); a separate --plan-file
+			// leaves --plan as the stored name.
+			plan = m.PlanID
+		}
+		roles = map[string]string{}
+		for _, mod := range m.Plan.Models {
+			roles[mod.ID] = mod.Role
+		}
+		cells = map[string]exp.Cell{}
+		for _, c := range m.Plan.Cells {
+			cells[c.ID] = c
+		}
+	}
+	if err := os.MkdirAll(*out, 0o755); err != nil {
+		return err
+	}
+	// The export takes its own key; without one it falls back to the API token (local use).
+	if tok := os.Getenv("AGW_EXP_API_TOKEN"); tok != "" {
+		a.c.Token = tok
+	}
+	files := make([]map[string]any, 0, len(agwExportNames)*2)
+	version := ""
+	for _, table := range agwExportNames {
+		tbl, err := a.c.ExportTable(a.ctx, plan, table)
+		if err != nil {
+			return fmt.Errorf("%s: %w", table, err)
+		}
+		if tbl.Version != "" {
+			version = tbl.Version
+		}
+		rows, err := readExportRows(tbl.Body)
+		tbl.Body.Close()
+		if err != nil {
+			return fmt.Errorf("%s: %w", table, err)
+		}
+		if table == "runs" {
+			enrichRuns(rows, roles, cells)
+			if planSHA == "" {
+				for _, row := range rows {
+					if s, _ := row["plan_sha256"].(string); s != "" {
+						planSHA = s
+						break
+					}
+				}
+			}
+		}
+		entry, err := writeExportFiles(*out, table, tbl.Columns, rows, formats)
+		if err != nil {
+			return err
+		}
+		files = append(files, entry...)
+		fmt.Fprintf(a.stdout, "%s: %d rows\n", table, len(rows))
+	}
+	manifest := map[string]any{
+		"gateway_version": version,
+		"plan":            plan,
+		"plan_sha256":     planSHA,
+		"exported_at":     time.Now().UTC().Format(time.RFC3339),
+		"synthetic":       false,
+		"files":           files,
+	}
+	raw, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(*out, "manifest.json")
+	if err := os.WriteFile(path, append(raw, '\n'), 0o644); err != nil {
+		return err
+	}
+	fmt.Fprintf(a.stdout, "manifest.json: %d files\n", len(files))
+	return nil
+}
+
+// agwExportNames lists the files of the export in the order of the manifest (X5.7).
+var agwExportNames = []string{"runs", "platform_calls", "tool_executions", "llm_calls", "reconcile", "fixtures", "syscalls", "turns"}
+
+// readExportRows decodes a JSONL stream.
+func readExportRows(r io.Reader) ([]map[string]any, error) {
+	dec := json.NewDecoder(r)
+	dec.UseNumber()
+	out := []map[string]any{}
+	for {
+		var row map[string]any
+		err := dec.Decode(&row)
+		if err == io.EOF {
+			return out, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+}
+
+// enrichRuns fills model_role and the factors from plan.yaml when the server could not know them. A value the
+// server already set wins.
+func enrichRuns(rows []map[string]any, roles map[string]string, cells map[string]exp.Cell) {
+	for _, row := range rows {
+		cell, _ := row["cell"].(string)
+		c, ok := cells[cell]
+		if ok {
+			// The plan is authoritative: the server only derives the factors from the cell identifier, which cannot
+			// express a combined binding such as mcp-cli reliably.
+			row["binding"] = c.Binding
+			row["protection"] = c.Protection
+			if c.Attack {
+				row["attack"] = "attack"
+			} else {
+				row["attack"] = "none"
+			}
+		}
+		if s, _ := row["model_role"].(string); s != "" {
+			continue
+		}
+		model, _ := row["model"].(string)
+		if role := roles[model]; role != "" {
+			row["model_role"] = role
+		}
+	}
+}
+
+// writeExportFiles writes one table as JSONL and/or CSV and returns the manifest entries with row counts and
+// checksums.
+func writeExportFiles(dir, table string, columns []string, rows []map[string]any, formats map[string]bool) ([]map[string]any, error) {
+	entries := []map[string]any{}
+	if formats["jsonl"] {
+		e, err := writeOneFile(filepath.Join(dir, table+".jsonl"), len(rows), func(w io.Writer) error {
+			enc := json.NewEncoder(w)
+			enc.SetEscapeHTML(false)
+			for _, row := range rows {
+				if err := enc.Encode(row); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			return nil, err
+		}
+		e["name"] = table + ".jsonl"
+		entries = append(entries, e)
+	}
+	if formats["csv"] {
+		e, err := writeOneFile(filepath.Join(dir, table+".csv"), len(rows), func(w io.Writer) error {
+			cw := csv.NewWriter(w)
+			if err := cw.Write(columns); err != nil {
+				return err
+			}
+			for _, row := range rows {
+				rec := make([]string, len(columns))
+				for i, c := range columns {
+					rec[i] = csvValue(row[c])
+				}
+				if err := cw.Write(rec); err != nil {
+					return err
+				}
+			}
+			cw.Flush()
+			return cw.Error()
+		})
+		if err != nil {
+			return nil, err
+		}
+		e["name"] = table + ".csv"
+		entries = append(entries, e)
+	}
+	return entries, nil
+}
+
+// writeOneFile writes and hashes in one pass.
+func writeOneFile(path string, rows int, write func(io.Writer) error) (map[string]any, error) {
+	f, err := os.Create(path)
+	if err != nil {
+		return nil, err
+	}
+	h := sha256.New()
+	if err := write(io.MultiWriter(f, h)); err != nil {
+		f.Close()
+		return nil, err
+	}
+	if err := f.Close(); err != nil {
+		return nil, err
+	}
+	return map[string]any{"rows": rows, "sha256": sumHex(h)}, nil
+}
+
+func sumHex(h hash.Hash) string { return hex.EncodeToString(h.Sum(nil)) }
+
+// csvValue renders a value for a spreadsheet; nested fields become JSON text.
+func csvValue(v any) string {
+	switch x := v.(type) {
+	case nil:
+		return ""
+	case string:
+		return x
+	case bool:
+		if x {
+			return "true"
+		}
+		return "false"
+	case float64:
+		return fmt.Sprint(x)
+	case json.Number:
+		return x.String()
+	case map[string]any, []any:
+		b, _ := json.Marshal(x)
+		return string(b)
+	default:
+		return fmt.Sprint(x)
+	}
 }

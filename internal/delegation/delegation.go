@@ -496,13 +496,38 @@ type Decision struct {
 	Allowed bool
 	Access  Access
 	Reason  string // for violations: why
+	// X5.1: Code is a stable reason code for the protocol, Rule the checked rule as JSON. They never replace
+	// Reason (the text for the agent); the evaluation counts on the code.
+	Code string
+	Rule json.RawMessage
+}
+
+// Reason codes of the protocol (X5.1).
+const (
+	CodeFieldRule         = "field_rule"
+	CodeDelegationExpired = "delegation_expired"
+	CodeRuleMissing       = "rule_missing"
+	CodeForeignObject     = "foreign_object"
+)
+
+// ruleJSON renders the checked access and the matching rule (if any) for the protocol.
+func ruleJSON(a Access, rule *Rule) json.RawMessage {
+	payload := struct {
+		Access Access `json:"access"`
+		Rule   *Rule  `json:"rule,omitempty"`
+	}{Access: a, Rule: rule}
+	b, err := json.Marshal(payload)
+	if err != nil {
+		return nil
+	}
+	return b
 }
 
 // Check checks an access. own reports whether an object was created under this delegation.
 func (d *Delegation) Check(a Access, now time.Time, own func(resource, id string) bool) Decision {
-	dec := Decision{Access: a}
+	dec := Decision{Access: a, Rule: ruleJSON(a, nil)}
 	if a.Problem != "" {
-		dec.Reason = a.Problem
+		dec.Reason, dec.Code = a.Problem, CodeFieldRule
 		return dec
 	}
 	if a.Resource == Docs {
@@ -510,41 +535,63 @@ func (d *Delegation) Check(a Access, now time.Time, own func(resource, id string
 		return dec
 	}
 	if d.ExpiresAt != nil && !now.Before(*d.ExpiresAt) {
-		dec.Reason = "delegation expired since " + d.ExpiresAt.Format(time.RFC3339)
+		dec.Reason, dec.Code = "delegation expired since "+d.ExpiresAt.Format(time.RFC3339), CodeDelegationExpired
 		return dec
 	}
 	for _, x := range a.Also {
-		if sub := d.checkOne(x, own); !sub {
+		if rule, sub := d.checkOne(x, own); !sub {
 			dec.Reason = "not in the delegated rights: " + x.Action + " " + x.Resource + " " + x.ID + " (touched by " + a.Action + " " + a.Resource + ")"
+			dec.Code = CodeRuleMissing
+			if rule != nil {
+				dec.Code = CodeForeignObject
+			}
+			dec.Rule = ruleJSON(a, rule)
 			return dec
 		}
 	}
-	if d.checkOne(a, own) {
+	if rule, ok := d.checkOne(a, own); ok {
 		dec.Allowed = true
+		dec.Rule = ruleJSON(a, rule)
 		return dec
+	} else if rule != nil {
+		dec.Code = CodeForeignObject
+		dec.Rule = ruleJSON(a, rule)
+	} else {
+		dec.Code = CodeRuleMissing
 	}
 	dec.Reason = "not in the delegated rights: " + Access{Action: a.Action, Resource: a.Resource, ID: a.ID}.String()
 	return dec
 }
 
-func (d *Delegation) checkOne(a Access, own func(resource, id string) bool) bool {
-	for _, r := range d.Rules {
+// checkOne reports whether a rule allows the access and, when a rule covers action and resource, which one.
+func (d *Delegation) checkOne(a Access, own func(resource, id string) bool) (*Rule, bool) {
+	var covering *Rule
+	for i := range d.Rules {
+		r := &d.Rules[i]
 		if r.Action != a.Action || r.Resource != a.Resource {
 			continue
 		}
 		if a.ID == "" {
 			if len(r.IDs) == 0 || contains(r.IDs, All) {
-				return true
+				return r, true
+			}
+			if covering == nil {
+				covering = r
 			}
 			continue
 		}
 		for _, id := range r.IDs {
 			if id == All || id == a.ID || (id == Own && own != nil && a.ID != unknownID && own(a.Resource, a.ID)) {
-				return true
+				return r, true
 			}
 		}
+		// A rule covers the action and resource but not this object: keep it as a candidate so that the protocol
+		// can tell a foreign object from a missing rule. Later rules may still allow it.
+		if covering == nil {
+			covering = r
+		}
 	}
-	return false
+	return covering, false
 }
 
 func contains(l []string, s string) bool {

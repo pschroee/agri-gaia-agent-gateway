@@ -52,7 +52,12 @@ function rpc(method: string, params: unknown, signal?: AbortSignal, callTool?: s
 		"content-length": String(Buffer.byteLength(body)),
 		"mcp-protocol-version": "2025-06-18",
 	};
-	if (callTool) headers["X-Agw-Tool-Call"] = callTool;
+	// X-Agw-Pi-Tool-Call binds the platform call to this tool call (X5.3); X-Agw-Tool-Call stays for approvals and
+	// plans (recorded as the claimed reference only).
+	if (callTool) {
+		headers["X-Agw-Tool-Call"] = callTool;
+		headers["X-Agw-Pi-Tool-Call"] = callTool;
+	}
 	return new Promise((resolvePromise, reject) => {
 		const req = request(
 			{

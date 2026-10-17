@@ -39,7 +39,12 @@ function call(method: string, path: string, query: Record<string, string> | unde
 		headers["content-type"] = "application/json";
 		headers["content-length"] = String(Buffer.byteLength(payload));
 	}
-	if (toolCallId) headers["X-Agw-Tool-Call"] = toolCallId;
+	// X-Agw-Pi-Tool-Call is the binding reference of the protocol (X5.3): the socket trusts it only on pi's socket,
+	// where this extension runs. X-Agw-Tool-Call stays for approvals and plans and is recorded as claimed only.
+	if (toolCallId) {
+		headers["X-Agw-Tool-Call"] = toolCallId;
+		headers["X-Agw-Pi-Tool-Call"] = toolCallId;
+	}
 	return new Promise((resolve, reject) => {
 		const req = request(
 			{

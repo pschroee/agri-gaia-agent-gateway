@@ -185,9 +185,11 @@ WHERE sc.chat_id = $1 AND sc.op = 'internet' AND sc.result LIKE 'rejected%'
   detail = CASE WHEN op = 'platform' THEN split_part(split_part(detail, '?', 1), ' (', 1) ELSE '' END,
   result = CASE WHEN position('` + suffix + `' IN result) > 0
     THEN split_part(replace(result, '` + suffix + `', ''), ':', 1) || '` + suffix + `'
-    ELSE split_part(result, ':', 1) END
+    ELSE split_part(result, ':', 1) END,
+  rule = NULL, body = NULL, call_ref_candidates = NULL, call_ref = NULL, call_ref_claimed = NULL
 WHERE chat_id = $1`,
 		`UPDATE tool_executions SET chat_id = NULL, deleted_chat = $2, args = '{}', output_excerpt = '', output_sha256 = '',
+  command_sha256 = NULL, command_bytes = NULL,
   error = CASE WHEN error <> '' THEN 'error' ELSE '' END
 WHERE chat_id = $1`,
 		`UPDATE llm_calls SET chat_id = NULL, deleted_chat = $2,

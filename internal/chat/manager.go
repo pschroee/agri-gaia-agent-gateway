@@ -2009,6 +2009,9 @@ func (m *Manager) ChatForSlot(slotID string) string { return m.SlotChat(slotID) 
 // archives it streams, own code C-E3).
 func (m *Manager) SlotOf(chatID string) string { return m.slotOf(chatID) }
 
+// Store gives read access to the store for the experiment export (X5.7); the API uses it for runs and tables.
+func (m *Manager) Store() *store.Store { return m.st }
+
 func (m *Manager) LogCall(slotID, chatID, via, op, detail, result string) {
 	m.LogCallBy(context.Background(), slotID, chatID, via, op, detail, result)
 }
@@ -2016,16 +2019,39 @@ func (m *Manager) LogCall(slotID, chatID, via, op, detail, result string) {
 // LogCallBy logs a socket call together with session and tool call from the context
 // (sock.CallerLogger): this way the log shows whether the main agent or a subagent asked.
 func (m *Manager) LogCallBy(ctx context.Context, slotID, chatID, via, op, detail, result string) {
-	sc, err := m.st.AddSocketCall(context.WithoutCancel(ctx), store.SocketCall{ChatID: chatID, SlotID: slotID, Via: via, Op: op, Detail: detail, Result: result,
+	rec := store.CallRecord{SlotID: slotID, ChatID: chatID, Via: via, Op: op, Detail: detail, Result: result,
 		Session: store.SessionFrom(ctx), ToolCallID: store.ToolCallFrom(ctx), DurationMs: store.DurationMsFrom(ctx),
-		Effect: store.EffectFrom(ctx)})
+		Effect: store.EffectFrom(ctx)}
+	if ref, ok := store.CallRefFrom(ctx); ok {
+		rec.CallRef, rec.CallRefSource, rec.CallRefCandidates, rec.CallRefClaimed = ref.Ref, ref.Source, ref.Candidates, ref.Claimed
+	}
+	m.insertCall(ctx, rec)
+}
+
+// LogPlatformCall logs a platform call with its structured record (X5): decision, reason, rule, body and the facts
+// FF4 needs. sock.PlatformLogger reaches it through the socket backend; the rendering in result stays for display.
+func (m *Manager) LogPlatformCall(ctx context.Context, slotID, chatID, via, detail, result string, res platform.Result) {
+	rec := store.CallRecord{SlotID: slotID, ChatID: chatID, Via: via, Op: "platform", Detail: detail, Result: result,
+		Session: store.SessionFrom(ctx), ToolCallID: store.ToolCallFrom(ctx), DurationMs: store.DurationMsFrom(ctx),
+		Effect: store.EffectFrom(ctx), Decision: res.Decision, Reason: res.Reason, Rule: res.Rule, Body: res.SentBody,
+		BodyTruncated: res.BodyTruncated, BodyInSHA256: res.BodyInSHA256, WithinDelegation: res.WithinDelegation,
+		ApprovalID: res.ApprovalID, ApprovalDecision: res.ApprovalDecision}
+	if ref, ok := store.CallRefFrom(ctx); ok {
+		rec.CallRef, rec.CallRefSource, rec.CallRefCandidates, rec.CallRefClaimed = ref.Ref, ref.Source, ref.Candidates, ref.Claimed
+	}
+	m.insertCall(ctx, rec)
+}
+
+func (m *Manager) insertCall(ctx context.Context, rec store.CallRecord) {
+	sc, err := m.st.AddSocketCallRecord(context.WithoutCancel(ctx), rec)
 	if err != nil {
 		slog.Error("socket call not logged", "error", err)
 		return
 	}
-	slog.Info("socket call", "slot", slotID, "chat", chatID, "via", via, "op", op, "detail", detail, "result", result)
-	if chatID != "" {
-		m.publish(chatID, Event{Kind: "socket_call", Data: sc})
+	slog.Info("socket call", "slot", rec.SlotID, "chat", rec.ChatID, "via", rec.Via, "op", rec.Op, "detail", rec.Detail,
+		"result", rec.Result, "decision", rec.Decision)
+	if rec.ChatID != "" {
+		m.publish(rec.ChatID, Event{Kind: "socket_call", Data: sc})
 	}
 }
 
@@ -2185,37 +2211,58 @@ func (m *Manager) PlatformExchanged(chatID string, cl platform.Claims) {
 // issue #63): read calls go straight through; write and compute calls wait for the user's approval unless the
 // delegation says confirm none; irreversible calls always wait; compute calls are limited per chat. The
 // approval shows method, path, the class and the body. A call whose class cannot be determined is refused.
-func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, req platform.Request) (platform.Result, error) {
+func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, req platform.Request) (res platform.Result, err error) {
 	if m.opt.Platform == nil {
-		return platform.Result{Status: "error", Message: platform.ErrNotConfigured.Error()}, nil
+		return platform.Result{Status: "error", Message: platform.ErrNotConfigured.Error(), Decision: platform.DecisionError, Reason: "not_configured"}, nil
 	}
 	if m.inTrash(ctx, chatID) {
-		return platform.Result{Status: "error", Message: platform.RefusedPrefix + trashRefusal}, nil
+		return platform.Result{Status: "error", Message: platform.RefusedPrefix + trashRefusal, Decision: platform.DecisionError, Reason: "trashed"}, nil
 	}
 	// Check here too, not only at the caller: Writes() assumes a normalized method (Review W2).
-	req, err := platform.Normalize(req)
+	req, err = platform.Normalize(req)
 	if err != nil {
-		return platform.Result{Status: "error", Message: err.Error()}, nil
+		decision, reason := platform.DecisionDeniedFixed, "invalid_call"
+		if errors.Is(err, platform.ErrBlocked) {
+			reason = "blocked_path"
+		}
+		return platform.Result{Status: "error", Message: err.Error(), Decision: decision, Reason: reason}, nil
 	}
+	// X5.2: the body as the gateway sends it, and the checksum of what the agent sent.
+	sentBody, sentTruncated := platform.LogBody(req)
+	defer func() {
+		res.SentBody, res.BodyTruncated, res.BodyInSHA256 = sentBody, sentTruncated, req.BodyInSHA256
+	}()
 	del, err := m.delegationOf(ctx, chatID)
 	if err != nil {
 		// An unreadable delegation grants nothing.
-		return platform.Result{Status: "denied", Message: err.Error()}, nil
+		return platform.Result{Status: "denied", Message: err.Error(), Decision: platform.DecisionDeniedDelegation, Reason: "delegation_unreadable"}, nil
+	}
+	// withinDelegation is computed independently of the protection level and of the decision below (X5.5).
+	// Without a delegation there are no transferred rights to compare with; nil means "not computable".
+	var within *bool
+	own := func(res, id string) bool {
+		ok, _ := m.st.IsDelegationObject(ctx, chatID, res, id)
+		return ok
 	}
 	if req.Path == platform.RightsPath {
-		return platform.Result{Status: "ok", HTTPStatus: 200, Body: m.rightsText(ctx, chatID, del)}, nil
+		return platform.Result{Status: "ok", HTTPStatus: 200, Body: m.rightsText(ctx, chatID, del), Decision: platform.DecisionAllowed, Reason: "virtual"}, nil
 	}
 	if req.Path == platform.PlanPath {
-		return m.ProposePlan(ctx, chatID, slotID, via, req)
+		// A plan proposal is answered by the gateway; it is no call to the platform.
+		pres, perr := m.ProposePlan(ctx, chatID, slotID, via, req)
+		pres.Decision, pres.Reason = platform.DecisionAllowed, "virtual"
+		return pres, perr
 	}
 	if req.Path == platform.CapabilitiesPath {
 		// The overview of this chat's setup (G1.10): reading, without approval, like the rights.
 		res, _ := m.capabilitiesResult(ctx, chatID)
+		res.Decision, res.Reason = platform.DecisionAllowed, "virtual"
 		return res, nil
 	}
 	// A /_agw/ path that no doer answers belongs to the gateway and is answered here (G1.5): no
 	// delegation check, no approval, no compute call — there is no platform route behind it (G1.13).
 	if res, unavailable := m.virtualUnavailable(req.Path); unavailable {
+		res.Decision, res.Reason = platform.DecisionError, "unavailable"
 		return res, nil
 	}
 	// Delegation (step 1): classification from method and path alone, check before any confirmation.
@@ -2223,37 +2270,47 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 	// Field allowlists hold without a delegation too (issue #65): a body with a field the platform would take
 	// over is refused before the delegation check and before any approval.
 	if access.Problem != "" {
-		return platform.Result{Status: "denied", Message: "refused: " + access.Problem}, nil
+		rule, _ := json.Marshal(access)
+		return platform.Result{Status: "denied", Message: "refused: " + access.Problem, Decision: platform.DecisionDeniedFixed,
+			Reason: delegation.CodeFieldRule, Rule: rule}, nil
 	}
 	if refusal, refused := effectRefusal(access.Effect); refused {
+		refusal.Decision, refusal.Reason = platform.DecisionDeniedFixed, "unclassified"
 		return refusal, nil
 	}
+	// The delegation is checked even in a stage without protective measure, so that within_delegation is
+	// known for every call (X5.5).
 	violation := ""
+	delDecision := delegation.Decision{Allowed: del == nil}
 	if del != nil {
-		own := func(res, id string) bool {
-			ok, _ := m.st.IsDelegationObject(ctx, chatID, res, id)
-			return ok
-		}
-		if dec := del.Check(access, time.Now(), own); !dec.Allowed {
+		delDecision = del.Check(access, time.Now(), own)
+		allowed := delDecision.Allowed
+		within = &allowed
+		if !delDecision.Allowed {
 			if del.Enforcing() {
-				return platform.Result{Status: "denied", Message: dec.Reason}, nil
+				return platform.Result{Status: "denied", Message: delDecision.Reason, Decision: platform.DecisionDeniedDelegation,
+					Reason: delDecision.Code, Rule: delDecision.Rule, WithinDelegation: within}, nil
 			}
-			violation = dec.Reason // stage without protective measure: only log
+			violation = delDecision.Reason // stage without protective measure: only log
 		}
 	}
+	rule := delDecision.Rule
 	// Guards of features (G1.4): after the delegation, before the compute limit, the plan match and
 	// the approval. A guard's error fails closed.
 	if res, refused, err := m.guardRefusal(ctx, chatID, req, access); err != nil {
-		return platform.Result{}, err
+		return platform.Result{Decision: platform.DecisionError, Reason: "guard_error"}, err
 	} else if refused {
+		ruleJSON, _ := json.Marshal(access)
+		res.Decision, res.Reason, res.Rule, res.WithinDelegation = platform.DecisionDeniedFixed, "guard", ruleJSON, within
 		return res, nil
 	}
 	if access.Effect == delegation.EffectCompute {
 		res, allowed, err := m.computeAllowed(ctx, chatID)
 		if err != nil {
-			return platform.Result{}, err
+			return platform.Result{Decision: platform.DecisionError, Reason: "compute_check_failed"}, err
 		}
 		if !allowed {
+			res.Decision, res.Reason, res.Rule, res.WithinDelegation = platform.DecisionDeniedCompute, "compute_limit", rule, within
 			return res, nil
 		}
 	}
@@ -2262,6 +2319,13 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 	var step *store.PlanStep
 	if access.Effect != delegation.EffectRead || req.Writes() {
 		step = m.planMatch(ctx, chatID, req) // nil: no plan step applies
+	}
+	planStep := func(s *store.PlanStep) *int {
+		if s == nil {
+			return nil
+		}
+		idx := s.Idx
+		return &idx
 	}
 	// A claimed step must end up finished: every return before the call to the platform fails it and the plan.
 	stepFinished := false
@@ -2275,15 +2339,17 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 	// The gateway repeating a parked step (A-E2, D2.8): the user decided, and the marker names the
 	// approval the step was parked with. Only then does the repeated call not ask again.
 	approvedHere := m.parkedHere(ctx, chatID, req)
+	approvalID, approvalBy, executedDecision := "", "none", platform.DecisionAllowed
 	if needsApproval(access, req.Writes(), del) && (step == nil || !step.Covered) && !approvedHere {
 		// A step that already waits for the user's decision is not asked a second time (A-E2, D2.8): its
 		// approval stays open until the plan expires, and a second one would run the same irreversible call
 		// twice. The same answer as at the first call, so that the agent ends its turn either way.
 		if res, waiting := m.parkedAgain(ctx, step); waiting {
+			res.Decision, res.Reason, res.Rule, res.WithinDelegation, res.PlanStep = platform.DecisionPendingUser, "user_approval_pending", rule, within, planStep(step)
 			return res, nil
 		}
 		if err := m.checkPendingLimit(ctx, chatID); err != nil {
-			return platform.Result{}, err
+			return platform.Result{Decision: platform.DecisionError, Reason: "pending_limit"}, err
 		}
 		preview := req.String() + "\n" + effectLine(access.Effect, m.computeMax()) + "\nClassification: " + access.String()
 		if del != nil && violation == "" {
@@ -2295,7 +2361,8 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 			// what will run (own code C-E3).
 			code, err := platform.NotebookPreview(req)
 			if err != nil {
-				return platform.Result{Status: "error", Message: platform.RefusedPrefix + err.Error()}, nil
+				return platform.Result{Status: "error", Message: platform.RefusedPrefix + err.Error(), Decision: platform.DecisionDeniedFixed,
+					Reason: "invalid_run", Rule: rule, WithinDelegation: within, PlanStep: planStep(step)}, nil
 			}
 			preview += "\n\n" + code
 			limit = maxNotebookPreview
@@ -2316,9 +2383,11 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 		if n := len([]rune(preview)); n > limit {
 			if limit == maxNotebookPreview {
 				return platform.Result{Status: "error", Message: fmt.Sprintf(
-					"the code is too long for one approval (%d characters, at most %d); shorten it or split it into runs", n, limit)}, nil
+					"the code is too long for one approval (%d characters, at most %d); shorten it or split it into runs", n, limit),
+					Decision: platform.DecisionDeniedFixed, Reason: "preview_too_large", Rule: rule, WithinDelegation: within, PlanStep: planStep(step)}, nil
 			}
-			return platform.Result{Status: "error", Message: fmt.Sprintf("call too large for an approval (%d characters, at most %d); shrink the body", n, limit)}, nil
+			return platform.Result{Status: "error", Message: fmt.Sprintf("call too large for an approval (%d characters, at most %d); shrink the body", n, limit),
+				Decision: platform.DecisionDeniedFixed, Reason: "preview_too_large", Rule: rule, WithinDelegation: within, PlanStep: planStep(step)}, nil
 		}
 		// What will happen, written by the gateway from this request and platform state it reads now (issue #72).
 		tool := ""
@@ -2339,11 +2408,13 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 		var notebookData json.RawMessage
 		if notebookRun(req) {
 			if m.opt.Notebook == nil {
-				return platform.Result{Status: "error", Message: platform.RefusedPrefix + "the notebook service of this gateway is not available"}, nil
+				return platform.Result{Status: "error", Message: platform.RefusedPrefix + "the notebook service of this gateway is not available",
+					Decision: platform.DecisionError, Reason: "notebook_unavailable", Rule: rule, WithinDelegation: within, PlanStep: planStep(step)}, nil
 			}
 			data, err := m.opt.Notebook.ApprovalData(ctx, req, read)
 			if err != nil {
-				return platform.Result{Status: "error", Message: platform.RefusedPrefix + err.Error()}, nil
+				return platform.Result{Status: "error", Message: platform.RefusedPrefix + err.Error(),
+					Decision: platform.DecisionError, Reason: "notebook_error", Rule: rule, WithinDelegation: within, PlanStep: planStep(step)}, nil
 			}
 			notebookData = data
 		}
@@ -2355,8 +2426,9 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 			ContentType: "application/json", PendingKey: "-", Preview: preview, Session: store.SessionFrom(ctx), ToolCallID: store.ToolCallFrom(ctx),
 			Effect: string(access.Effect), Summary: summary, Notebook: notebookData})
 		if err != nil {
-			return platform.Result{}, err
+			return platform.Result{Decision: platform.DecisionError, Reason: "approval_failed"}, err
 		}
+		approvalID, approvalBy = ap.ID, "user"
 		// The reads of the summary are one activity entry of the system (issue L2/#119), and while the call waits,
 		// approving re-reads them first (DL2.1).
 		m.logSummaryReads(ctx, chatID, ap.ID, "proposed", rl)
@@ -2372,6 +2444,8 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 			}
 			ap = decided
 			final = store.ApprovalApproved
+			approvalBy = store.DecidedByExperiment
+			executedDecision = platform.DecisionApprovedAuto
 			m.publish(chatID, Event{Kind: "approval", Data: ap})
 			slog.Info("platform call approved by the experiment profile", "chat", chatID, "approval", ap.ID, "call", req.String(), "via", via)
 		} else {
@@ -2403,7 +2477,9 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 					m.publishPlan(ctx, step.PlanID)
 					m.parkApproval(ctx, chatID, slotID, via, req, step, ap, w)
 					return platform.Result{Status: "pending_user", Message: fmt.Sprintf(
-						"waiting for the user's approval of step %d; end your turn, you will be woken when the user decides", step.Idx)}, nil
+						"waiting for the user's approval of step %d; end your turn, you will be woken when the user decides", step.Idx),
+						Decision: platform.DecisionPendingUser, Reason: "user_approval_parked", Rule: rule, WithinDelegation: within,
+						ApprovalID: approvalID, ApprovalDecision: "none", PlanStep: planStep(step)}, nil
 				}
 			}
 			approved, werr := w.Wait(ctx, m.opt.ApprovalTimeout)
@@ -2414,24 +2490,33 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 		}
 		m.publishChat(bg, chatID)
 		if final == store.ApprovalExpired {
-			return platform.Result{Status: "rejected", Message: "no decision within the waiting time; nothing executed"}, nil
+			return platform.Result{Status: "rejected", Message: "no decision within the waiting time; nothing executed",
+				Decision: platform.DecisionRejectedUser, Reason: "approval_expired", Rule: rule, WithinDelegation: within,
+				ApprovalID: approvalID, ApprovalDecision: approvalBy, PlanStep: planStep(step)}, nil
 		}
 		if final != store.ApprovalApproved {
-			return platform.Result{Status: "rejected", Message: "rejected by the user; nothing executed"}, nil
+			return platform.Result{Status: "rejected", Message: "rejected by the user; nothing executed",
+				Decision: platform.DecisionRejectedUser, Reason: "approval_rejected", Rule: rule, WithinDelegation: within,
+				ApprovalID: approvalID, ApprovalDecision: approvalBy, PlanStep: planStep(step)}, nil
 		}
 		ctx = bg
 		// The delegation may have expired during the waiting time (Review 5, W3): reload and check again.
 		if del != nil {
 			fresh, err := m.delegationOf(ctx, chatID)
 			if err != nil || fresh == nil {
-				return platform.Result{Status: "denied", Message: "delegation no longer readable after the approval"}, nil
+				return platform.Result{Status: "denied", Message: "delegation no longer readable after the approval",
+					Decision: platform.DecisionDeniedDelegation, Reason: "delegation_unreadable", Rule: rule, WithinDelegation: within,
+					ApprovalID: approvalID, ApprovalDecision: approvalBy, PlanStep: planStep(step)}, nil
 			}
 			own := func(res, id string) bool {
 				ok, _ := m.st.IsDelegationObject(ctx, chatID, res, id)
 				return ok
 			}
 			if dec := fresh.Check(access, time.Now(), own); !dec.Allowed && fresh.Enforcing() {
-				return platform.Result{Status: "denied", Message: dec.Reason + " (checked again after the approval)"}, nil
+				allowed := false
+				return platform.Result{Status: "denied", Message: dec.Reason + " (checked again after the approval)",
+					Decision: platform.DecisionDeniedDelegation, Reason: dec.Code, Rule: dec.Rule, WithinDelegation: &allowed,
+					ApprovalID: approvalID, ApprovalDecision: approvalBy, PlanStep: planStep(step)}, nil
 			}
 		}
 	}
@@ -2441,16 +2526,19 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 	if access.Effect == delegation.EffectCompute {
 		ok, rerr := m.st.ReserveCompute(context.WithoutCancel(ctx), chatID, m.computeMax())
 		if rerr != nil {
-			return platform.Result{}, rerr
+			return platform.Result{Decision: platform.DecisionError, Reason: "compute_reservation_failed"}, rerr
 		}
 		if !ok {
-			return computeLimitResult(m.computeMax()), nil
+			res := computeLimitResult(m.computeMax())
+			res.Decision, res.Reason, res.Rule, res.WithinDelegation, res.PlanStep = platform.DecisionDeniedCompute, "compute_limit", rule, within, planStep(step)
+			res.ApprovalID, res.ApprovalDecision = approvalID, approvalBy
+			return res, nil
 		}
 		reserved = true
 	}
 	// Duration of the round trip to the platform (token exchange included), without the approval's waiting time.
 	t0 := time.Now()
-	res, err := m.platformDo(ctx, chatID, req)
+	res, err = m.platformDo(ctx, chatID, req)
 	took := time.Since(t0)
 	stepFinished = true
 	// nil step: nothing to record. A step that waits for an observed platform job from here on says so in
@@ -2480,10 +2568,18 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 				m.pausePlanForLogin(ctx, ap.ID)
 			}
 		}
-		return platform.Result{Status: "error", Message: err.Error(), Violation: violation, Duration: took}, nil
+		return platform.Result{Status: "error", Message: err.Error(), Violation: violation, Duration: took,
+			Decision: platform.DecisionError, Reason: "call_failed", Rule: rule, WithinDelegation: within,
+			ApprovalID: approvalID, ApprovalDecision: approvalBy, PlanStep: planStep(step)}, nil
 	}
 	res.Violation = violation
 	res.Duration = took
+	// X5.1: the decision of the executed call. A violation that was only logged is its own value.
+	res.Decision, res.Reason, res.Rule, res.WithinDelegation = executedDecision, "", rule, within
+	if violation != "" {
+		res.Decision, res.Reason, res.Rule = platform.DecisionAllowedViolation, delDecision.Code, delDecision.Rule
+	}
+	res.ApprovalID, res.ApprovalDecision, res.PlanStep = approvalID, approvalBy, planStep(step)
 	// Provenance (edge D1.7, D1.9): images, container deployments and the tasks of a deployment are
 	// recorded in every chat, also without a delegation, because the edge guard needs them live.
 	// Every other object keeps the old rule and is recorded only with a delegation.
@@ -2518,17 +2614,21 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 func (m *Manager) PlatformPrecheck(ctx context.Context, chatID string, req platform.Request) (platform.Result, bool) {
 	del, err := m.delegationOf(ctx, chatID)
 	if err != nil {
-		return platform.Result{Status: "denied", Message: err.Error()}, false
+		return platform.Result{Status: "denied", Message: err.Error(), Decision: platform.DecisionDeniedDelegation, Reason: "delegation_unreadable"}, false
 	}
 	access := delegation.Classify(req)
 	if access.Problem != "" { // field allowlists hold without a delegation (issue #65)
-		return platform.Result{Status: "denied", Message: "refused: " + access.Problem}, false
+		rule, _ := json.Marshal(access)
+		return platform.Result{Status: "denied", Message: "refused: " + access.Problem, Decision: platform.DecisionDeniedFixed,
+			Reason: delegation.CodeFieldRule, Rule: rule}, false
 	}
 	// The guards run here too (G1.4), also without an enforcing delegation: they can refuse a call
 	// that the delegation alone would allow.
 	if res, refused, err := m.guardRefusal(ctx, chatID, req, access); err != nil {
-		return platform.Result{Status: "error", Message: err.Error()}, false
+		return platform.Result{Status: "error", Message: err.Error(), Decision: platform.DecisionError, Reason: "guard_error"}, false
 	} else if refused {
+		rule, _ := json.Marshal(access)
+		res.Decision, res.Reason, res.Rule = platform.DecisionDeniedFixed, "guard", rule
 		return res, false
 	}
 	if del == nil || !del.Enforcing() {
@@ -2539,7 +2639,9 @@ func (m *Manager) PlatformPrecheck(ctx context.Context, chatID string, req platf
 		return ok
 	}
 	if dec := del.Check(access, time.Now(), own); !dec.Allowed {
-		return platform.Result{Status: "denied", Message: dec.Reason}, false
+		allowed := false
+		return platform.Result{Status: "denied", Message: dec.Reason, Decision: platform.DecisionDeniedDelegation, Reason: dec.Code,
+			Rule: dec.Rule, WithinDelegation: &allowed}, false
 	}
 	return platform.Result{}, true
 }

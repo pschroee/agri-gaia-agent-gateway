@@ -238,6 +238,29 @@ func ToolCallFrom(ctx context.Context) string {
 	return id
 }
 
+type callRefKey struct{}
+
+// CallRef is the reference of a platform call to the tool call of the session (X5.3). Source says how it was
+// obtained: "pi" (the extension on pi's socket), "exec_window" (exactly one running execution of the sandbox),
+// "exec_ambiguous" (several; Candidates names them), "none" (no running execution). Claimed is the header the agent
+// can set himself and therefore never binds.
+type CallRef struct {
+	Ref        string
+	Source     string
+	Candidates []string
+	Claimed    string
+}
+
+func WithCallRef(ctx context.Context, r CallRef) context.Context {
+	return context.WithValue(ctx, callRefKey{}, r)
+}
+
+// CallRefFrom returns the reference from WithCallRef.
+func CallRefFrom(ctx context.Context) (CallRef, bool) {
+	r, ok := ctx.Value(callRefKey{}).(CallRef)
+	return r, ok
+}
+
 type Approval struct {
 	ID          string     `json:"id"`
 	ChatID      string     `json:"chat_id"`
@@ -294,6 +317,41 @@ type SocketCall struct {
 	DurationMs *float64 `json:"duration_ms,omitempty"`
 	// Effect: class of the platform call (see Approval.Effect).
 	Effect string `json:"effect,omitempty"`
+	// X5: the structured record of a platform call.
+	Decision          string          `json:"decision,omitempty"`
+	Reason            string          `json:"reason,omitempty"`
+	Rule              json.RawMessage `json:"rule,omitempty"`
+	Body              []byte          `json:"-"`
+	BodyTruncated     bool            `json:"body_truncated,omitempty"`
+	BodyInSHA256      string          `json:"body_in_sha256,omitempty"`
+	CallRef           string          `json:"call_ref,omitempty"`
+	CallRefSource     string          `json:"call_ref_source,omitempty"`
+	CallRefCandidates []string        `json:"call_ref_candidates,omitempty"`
+	CallRefClaimed    string          `json:"call_ref_claimed,omitempty"`
+	WithinDelegation  *bool           `json:"within_delegation,omitempty"`
+	ApprovalID        string          `json:"approval_id,omitempty"`
+	ApprovalDecision  string          `json:"approval_decision,omitempty"`
+	PlanStep          *int            `json:"plan_step,omitempty"`
+}
+
+// CallRecord is what the orchestrator writes into socket_calls (X5). The old LogCall signatures build one from
+// their single values; a platform call adds decision, body and reference.
+type CallRecord struct {
+	SlotID, ChatID, Via, Op, Detail, Result string
+	Session, ToolCallID                     string
+	DurationMs                              *float64
+	Effect                                  string
+	Decision, Reason                        string
+	Rule                                    json.RawMessage
+	Body                                    []byte
+	BodyTruncated                           bool
+	BodyInSHA256                            string
+	CallRef, CallRefSource                  string
+	CallRefCandidates                       []string
+	CallRefClaimed                          string
+	WithinDelegation                        *bool
+	ApprovalID, ApprovalDecision            string
+	PlanStep                                *int
 }
 
 type Store struct {
@@ -1009,18 +1067,68 @@ func (s *Store) ExpirePendingApprovals(ctx context.Context) (int64, error) {
 	return tag.RowsAffected(), err
 }
 
+// AddSocketCall stores a call; the old signature stays a thin wrapper (X5: CallRecord is the write type).
 func (s *Store) AddSocketCall(ctx context.Context, c SocketCall) (SocketCall, error) {
+	rec, err := s.AddSocketCallRecord(ctx, CallRecord{SlotID: c.SlotID, ChatID: c.ChatID, Via: c.Via, Op: c.Op, Detail: c.Detail,
+		Result: c.Result, Session: c.Session, ToolCallID: c.ToolCallID, DurationMs: c.DurationMs, Effect: c.Effect,
+		Decision: c.Decision, Reason: c.Reason, Rule: c.Rule, Body: c.Body, BodyTruncated: c.BodyTruncated,
+		BodyInSHA256: c.BodyInSHA256, CallRef: c.CallRef, CallRefSource: c.CallRefSource, CallRefCandidates: c.CallRefCandidates,
+		CallRefClaimed: c.CallRefClaimed, WithinDelegation: c.WithinDelegation, ApprovalID: c.ApprovalID,
+		ApprovalDecision: c.ApprovalDecision, PlanStep: c.PlanStep})
+	if err != nil {
+		return c, err
+	}
+	c.ID, c.CreatedAt = rec.ID, rec.CreatedAt
+	return c, nil
+}
+
+// AddSocketCallRecord stores one call with its structured fields.
+func (s *Store) AddSocketCallRecord(ctx context.Context, c CallRecord) (SocketCall, error) {
 	var chat any
 	if c.ChatID != "" {
 		chat = c.ChatID
 	}
-	err := s.pool.QueryRow(ctx, `INSERT INTO socket_calls (chat_id, slot_id, via, op, detail, result, session, tool_call_id, duration_ms, effect) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NULLIF($10,'')) RETURNING id, created_at`,
-		chat, c.SlotID, c.Via, c.Op, c.Detail, c.Result, c.Session, c.ToolCallID, c.DurationMs, c.Effect).Scan(&c.ID, &c.CreatedAt)
-	return c, err
+	var rule, candidates any
+	if len(c.Rule) > 0 {
+		rule = []byte(c.Rule)
+	}
+	if len(c.CallRefCandidates) > 0 {
+		b, err := json.Marshal(c.CallRefCandidates)
+		if err != nil {
+			return SocketCall{}, err
+		}
+		candidates = b
+	}
+	var approval, planStep any
+	if c.ApprovalID != "" {
+		approval = c.ApprovalID
+	}
+	if c.PlanStep != nil {
+		planStep = *c.PlanStep
+	}
+	out := SocketCall{SlotID: c.SlotID, ChatID: c.ChatID, Via: c.Via, Op: c.Op, Detail: c.Detail, Result: c.Result,
+		Session: c.Session, ToolCallID: c.ToolCallID, DurationMs: c.DurationMs, Effect: c.Effect,
+		Decision: c.Decision, Reason: c.Reason, Rule: c.Rule, Body: c.Body, BodyTruncated: c.BodyTruncated,
+		BodyInSHA256: c.BodyInSHA256, CallRef: c.CallRef, CallRefSource: c.CallRefSource,
+		CallRefCandidates: c.CallRefCandidates, CallRefClaimed: c.CallRefClaimed, WithinDelegation: c.WithinDelegation,
+		ApprovalID: c.ApprovalID, ApprovalDecision: c.ApprovalDecision, PlanStep: c.PlanStep}
+	err := s.pool.QueryRow(ctx, `INSERT INTO socket_calls (chat_id, slot_id, via, op, detail, result, session, tool_call_id,
+duration_ms, effect, decision, reason, rule, body, body_truncated, body_in_sha256, call_ref, call_ref_source,
+call_ref_candidates, call_ref_claimed, within_delegation, approval_id, approval_decision, plan_step)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NULLIF($10,''),NULLIF($11,''),NULLIF($12,''),$13,$14,$15,NULLIF($16,''),
+NULLIF($17,''),NULLIF($18,''),$19,NULLIF($20,''),$21,$22,NULLIF($23,''),$24) RETURNING id, created_at`,
+		chat, c.SlotID, c.Via, c.Op, c.Detail, c.Result, c.Session, c.ToolCallID, c.DurationMs, c.Effect,
+		c.Decision, c.Reason, rule, c.Body, c.BodyTruncated, c.BodyInSHA256, c.CallRef, c.CallRefSource,
+		candidates, c.CallRefClaimed, c.WithinDelegation, approval, c.ApprovalDecision, planStep).Scan(&out.ID, &out.CreatedAt)
+	return out, err
 }
 
 func (s *Store) ListSocketCalls(ctx context.Context, chatID string) ([]SocketCall, error) {
-	rows, err := s.pool.Query(ctx, `SELECT id, COALESCE(chat_id::text,''), slot_id, via, op, detail, result, created_at, session, tool_call_id, duration_ms, COALESCE(effect,'') FROM socket_calls WHERE chat_id=$1 ORDER BY id`, chatID)
+	rows, err := s.pool.Query(ctx, `SELECT id, COALESCE(chat_id::text,''), slot_id, via, op, detail, result, created_at, session,
+tool_call_id, duration_ms, COALESCE(effect,''), COALESCE(decision,''), COALESCE(reason,''), rule, body, body_truncated,
+COALESCE(body_in_sha256,''), COALESCE(call_ref,''), COALESCE(call_ref_source,''), call_ref_candidates,
+COALESCE(call_ref_claimed,''), within_delegation, COALESCE(approval_id::text,''), COALESCE(approval_decision,''), plan_step
+FROM socket_calls WHERE chat_id=$1 ORDER BY id`, chatID)
 	if err != nil {
 		return nil, err
 	}
@@ -1028,8 +1136,16 @@ func (s *Store) ListSocketCalls(ctx context.Context, chatID string) ([]SocketCal
 	out := []SocketCall{}
 	for rows.Next() {
 		var c SocketCall
-		if err := rows.Scan(&c.ID, &c.ChatID, &c.SlotID, &c.Via, &c.Op, &c.Detail, &c.Result, &c.CreatedAt, &c.Session, &c.ToolCallID, &c.DurationMs, &c.Effect); err != nil {
+		var rule, candidates []byte
+		if err := rows.Scan(&c.ID, &c.ChatID, &c.SlotID, &c.Via, &c.Op, &c.Detail, &c.Result, &c.CreatedAt, &c.Session,
+			&c.ToolCallID, &c.DurationMs, &c.Effect, &c.Decision, &c.Reason, &rule, &c.Body, &c.BodyTruncated,
+			&c.BodyInSHA256, &c.CallRef, &c.CallRefSource, &candidates, &c.CallRefClaimed, &c.WithinDelegation,
+			&c.ApprovalID, &c.ApprovalDecision, &c.PlanStep); err != nil {
 			return nil, err
+		}
+		c.Rule = rule
+		if len(candidates) > 0 {
+			_ = json.Unmarshal(candidates, &c.CallRefCandidates)
 		}
 		out = append(out, c)
 	}
@@ -1097,6 +1213,8 @@ type LLMCall struct {
 	// ModelReported: the model the provider reported in the response, with the system fingerprint where it
 	// reports one (X3.7). Empty for older rows and for responses without either.
 	ModelReported string `json:"model_reported,omitempty"`
+	// ToolsSHA256: checksum of the canonical tool list of this call (X5.6); the list itself is in llm_toolsets.
+	ToolsSHA256 string `json:"tools_sha256,omitempty"`
 }
 
 func (s *Store) AddLLMCall(ctx context.Context, c LLMCall) (LLMCall, error) {
@@ -1108,9 +1226,9 @@ func (s *Store) AddLLMCall(ctx context.Context, c LLMCall) (LLMCall, error) {
 		c.ToolCalls = json.RawMessage("[]")
 	}
 	err := s.pool.QueryRow(ctx, `
-INSERT INTO llm_calls (chat_id, slot_id, source_ip, model, response_id, status, input, output, cache_read, cache_write, cost, peak, tool_calls, started_at, duration_ms, finish_reason, complete, request_bytes, temperature, seed, model_reported)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21) RETURNING id`,
-		chat, c.SlotID, c.SourceIP, c.Model, c.ResponseID, c.Status, c.Input, c.Output, c.CacheRead, c.CacheWrite, c.Cost, c.Peak, []byte(c.ToolCalls), c.StartedAt, c.DurationMs, noNUL(c.FinishReason), c.Complete, c.RequestBytes, c.Temperature, c.Seed, noNUL(c.ModelReported)).Scan(&c.ID)
+INSERT INTO llm_calls (chat_id, slot_id, source_ip, model, response_id, status, input, output, cache_read, cache_write, cost, peak, tool_calls, started_at, duration_ms, finish_reason, complete, request_bytes, temperature, seed, model_reported, tools_sha256)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,NULLIF($22,'')) RETURNING id`,
+		chat, c.SlotID, c.SourceIP, c.Model, c.ResponseID, c.Status, c.Input, c.Output, c.CacheRead, c.CacheWrite, c.Cost, c.Peak, []byte(c.ToolCalls), c.StartedAt, c.DurationMs, noNUL(c.FinishReason), c.Complete, c.RequestBytes, c.Temperature, c.Seed, noNUL(c.ModelReported), c.ToolsSHA256).Scan(&c.ID)
 	return c, err
 }
 
@@ -1121,11 +1239,30 @@ func (s *Store) ChatLLMUsage(ctx context.Context, chatID string) (cost float64, 
 	return cost, tokens, err
 }
 
+// PutToolset stores a tool list once, keyed by its checksum (X5.6).
+func (s *Store) PutToolset(ctx context.Context, sha string, tools json.RawMessage) error {
+	if sha == "" || len(tools) == 0 {
+		return nil
+	}
+	_, err := s.pool.Exec(ctx, `INSERT INTO llm_toolsets (sha256, tools) VALUES ($1,$2) ON CONFLICT (sha256) DO NOTHING`, sha, []byte(tools))
+	return err
+}
+
+// Toolset reads a stored tool list.
+func (s *Store) Toolset(ctx context.Context, sha string) (json.RawMessage, error) {
+	var b []byte
+	err := s.pool.QueryRow(ctx, `SELECT tools FROM llm_toolsets WHERE sha256=$1`, sha).Scan(&b)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	return b, err
+}
+
 func (s *Store) ListLLMCalls(ctx context.Context, chatID string) ([]LLMCall, error) {
 	rows, err := s.pool.Query(ctx, `
 SELECT x.id, x.slot_id, x.source_ip, x.model, x.response_id, x.status, x.input, x.output, x.cache_read, x.cache_write, x.cost, x.peak, x.tool_calls, x.started_at, x.duration_ms,
   (x.response_id <> '' AND EXISTS (SELECT 1 FROM chat_messages m WHERE m.chat_id = x.chat_id AND m.role = 'assistant' AND m.message->>'responseId' = x.response_id)),
-  x.finish_reason, x.complete, x.request_bytes, x.temperature, x.seed, x.model_reported
+  x.finish_reason, x.complete, x.request_bytes, x.temperature, x.seed, x.model_reported, COALESCE(x.tools_sha256,'')
 FROM llm_calls x WHERE x.chat_id = $1 ORDER BY x.id`, chatID)
 	if err != nil {
 		return nil, err
@@ -1135,7 +1272,9 @@ FROM llm_calls x WHERE x.chat_id = $1 ORDER BY x.id`, chatID)
 	for rows.Next() {
 		var c LLMCall
 		var tc []byte
-		if err := rows.Scan(&c.ID, &c.SlotID, &c.SourceIP, &c.Model, &c.ResponseID, &c.Status, &c.Input, &c.Output, &c.CacheRead, &c.CacheWrite, &c.Cost, &c.Peak, &tc, &c.StartedAt, &c.DurationMs, &c.Main, &c.FinishReason, &c.Complete, &c.RequestBytes, &c.Temperature, &c.Seed, &c.ModelReported); err != nil {
+		if err := rows.Scan(&c.ID, &c.SlotID, &c.SourceIP, &c.Model, &c.ResponseID, &c.Status, &c.Input, &c.Output,
+			&c.CacheRead, &c.CacheWrite, &c.Cost, &c.Peak, &tc, &c.StartedAt, &c.DurationMs, &c.Main, &c.FinishReason,
+			&c.Complete, &c.RequestBytes, &c.Temperature, &c.Seed, &c.ModelReported, &c.ToolsSHA256); err != nil {
 			return nil, err
 		}
 		c.ChatID, c.ToolCalls = chatID, tc
@@ -1521,6 +1660,10 @@ type ToolExecution struct {
 	OutputBytes   int64           `json:"output_bytes"`
 	StartedAt     time.Time       `json:"started_at"`
 	DurationMs    int64           `json:"duration_ms"`
+	// X5.4: truncated commands say so and keep length and checksum of the untruncated command.
+	ArgsTruncated bool   `json:"args_truncated,omitempty"`
+	CommandBytes  *int64 `json:"command_bytes,omitempty"`
+	CommandSHA256 string `json:"command_sha256,omitempty"`
 }
 
 // AddToolExecution stores an execution. Postgres accepts no NUL in text
@@ -1561,9 +1704,11 @@ func (s *Store) insertToolExecution(ctx context.Context, e ToolExecution) (int64
 	}
 	var id int64
 	err := s.pool.QueryRow(ctx, `
-INSERT INTO tool_executions (chat_id, slot_id, session, tool_call_id, tool, op, args, exit_code, error, output_excerpt, output_sha256, output_bytes, started_at, duration_ms)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING id`,
-		chat, e.SlotID, e.Session, e.ToolCallID, e.Tool, e.Op, []byte(e.Args), e.ExitCode, e.Error, e.OutputExcerpt, e.OutputSHA256, e.OutputBytes, e.StartedAt, e.DurationMs).Scan(&id)
+INSERT INTO tool_executions (chat_id, slot_id, session, tool_call_id, tool, op, args, exit_code, error, output_excerpt,
+output_sha256, output_bytes, started_at, duration_ms, args_truncated, command_bytes, command_sha256)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,NULLIF($17,'')) RETURNING id`,
+		chat, e.SlotID, e.Session, e.ToolCallID, e.Tool, e.Op, []byte(e.Args), e.ExitCode, e.Error, e.OutputExcerpt,
+		e.OutputSHA256, e.OutputBytes, e.StartedAt, e.DurationMs, e.ArgsTruncated, e.CommandBytes, e.CommandSHA256).Scan(&id)
 	return id, err
 }
 
@@ -1610,7 +1755,8 @@ func jsonNoNUL(raw json.RawMessage) json.RawMessage {
 
 func (s *Store) ListToolExecutions(ctx context.Context, chatID string) ([]ToolExecution, error) {
 	rows, err := s.pool.Query(ctx, `
-SELECT id, slot_id, session, tool_call_id, tool, op, args, exit_code, error, output_excerpt, output_sha256, output_bytes, started_at, duration_ms
+SELECT id, slot_id, session, tool_call_id, tool, op, args, exit_code, error, output_excerpt, output_sha256, output_bytes,
+started_at, duration_ms, args_truncated, command_bytes, COALESCE(command_sha256,'')
 FROM tool_executions WHERE chat_id = $1 ORDER BY id`, chatID)
 	if err != nil {
 		return nil, err
@@ -1620,7 +1766,9 @@ FROM tool_executions WHERE chat_id = $1 ORDER BY id`, chatID)
 	for rows.Next() {
 		e := ToolExecution{ChatID: chatID}
 		var args []byte
-		if err := rows.Scan(&e.ID, &e.SlotID, &e.Session, &e.ToolCallID, &e.Tool, &e.Op, &args, &e.ExitCode, &e.Error, &e.OutputExcerpt, &e.OutputSHA256, &e.OutputBytes, &e.StartedAt, &e.DurationMs); err != nil {
+		if err := rows.Scan(&e.ID, &e.SlotID, &e.Session, &e.ToolCallID, &e.Tool, &e.Op, &args, &e.ExitCode, &e.Error,
+			&e.OutputExcerpt, &e.OutputSHA256, &e.OutputBytes, &e.StartedAt, &e.DurationMs, &e.ArgsTruncated,
+			&e.CommandBytes, &e.CommandSHA256); err != nil {
 			return nil, err
 		}
 		e.Args = args

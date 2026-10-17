@@ -5,6 +5,8 @@ package llmproxy
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -103,6 +105,29 @@ func modelOf(body []byte) (string, error) {
 		return "", errors.New("field model missing or present more than once")
 	}
 	return model, nil
+}
+
+// toolsetOf extracts the tools of a request body and returns their canonical form (keys sorted by encoding/json,
+// which sorts map keys) with its SHA-256 (X5.6). ok is false when the request carries no tools list.
+func toolsetOf(body []byte) (sha string, tools json.RawMessage, ok bool) {
+	var req map[string]json.RawMessage
+	if json.Unmarshal(body, &req) != nil {
+		return "", nil, false
+	}
+	raw, found := req["tools"]
+	if !found {
+		return "", nil, false
+	}
+	var v any
+	if json.Unmarshal(raw, &v) != nil {
+		return "", nil, false
+	}
+	canon, err := json.Marshal(v)
+	if err != nil {
+		return "", nil, false
+	}
+	sum := sha256.Sum256(canon)
+	return hex.EncodeToString(sum[:]), canon, true
 }
 
 func deny(w http.ResponseWriter, code int, msg string) {
@@ -223,6 +248,8 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		body = rewritten
 	}
+	// X5.6: the tool list of the request as sent (the sampling fields do not touch it).
+	toolsSHA, toolsJSON, hasTools := toolsetOf(body)
 	target, err := url.Parse(prov.Upstream)
 	if err != nil {
 		deny(w, http.StatusBadGateway, "upstream address invalid")
@@ -243,6 +270,9 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				c.StartedAt, c.Duration = started, time.Since(started)
 				c.DurationMs = c.Duration.Milliseconds()
 				c.RequestBytes = int64(len(body))
+				if hasTools {
+					c.ToolsSHA256, c.Tools = toolsSHA, toolsJSON
+				}
 				if cost, peak, ok := p.cat.Cost(c.Model, c.Usage, started); ok {
 					c.Cost, c.Peak = cost, peak
 				}

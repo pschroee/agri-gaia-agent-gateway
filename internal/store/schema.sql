@@ -489,3 +489,35 @@ ALTER TABLE llm_calls ADD COLUMN IF NOT EXISTS model_reported text NOT NULL DEFA
 
 -- The limit that ended an experiment run (X3.5), inside chats.experiment ('cost', 'tokens' or 'duration'). The
 -- gateway sets it once, when the run crosses a limit; a value in a request is discarded.
+
+-- X5 (protocol for the evaluation): every platform call carries its decision as an enumeration instead of free
+-- text, the body as the gateway sent it (after rebuilding), the reference to the tool call (never an agent-supplied
+-- header) and the facts FF4 needs. Truncation is marked on the row itself.
+ALTER TABLE socket_calls ADD COLUMN IF NOT EXISTS decision text;
+ALTER TABLE socket_calls ADD COLUMN IF NOT EXISTS reason text;
+ALTER TABLE socket_calls ADD COLUMN IF NOT EXISTS rule jsonb;
+ALTER TABLE socket_calls ADD COLUMN IF NOT EXISTS body bytea;
+ALTER TABLE socket_calls ADD COLUMN IF NOT EXISTS body_truncated boolean NOT NULL DEFAULT false;
+ALTER TABLE socket_calls ADD COLUMN IF NOT EXISTS body_in_sha256 text;
+ALTER TABLE socket_calls ADD COLUMN IF NOT EXISTS call_ref text;
+ALTER TABLE socket_calls ADD COLUMN IF NOT EXISTS call_ref_source text;
+ALTER TABLE socket_calls ADD COLUMN IF NOT EXISTS call_ref_candidates jsonb;
+ALTER TABLE socket_calls ADD COLUMN IF NOT EXISTS call_ref_claimed text;
+ALTER TABLE socket_calls ADD COLUMN IF NOT EXISTS within_delegation boolean;
+ALTER TABLE socket_calls ADD COLUMN IF NOT EXISTS approval_id uuid;
+ALTER TABLE socket_calls ADD COLUMN IF NOT EXISTS approval_decision text;
+ALTER TABLE socket_calls ADD COLUMN IF NOT EXISTS plan_step integer;
+
+-- X5.4: commands up to 64 KiB are stored in full; beyond that the row says so and keeps the length and checksum of
+-- the untruncated command (the truncation itself is an observation of the evaluation).
+ALTER TABLE tool_executions ADD COLUMN IF NOT EXISTS args_truncated boolean NOT NULL DEFAULT false;
+ALTER TABLE tool_executions ADD COLUMN IF NOT EXISTS command_bytes bigint;
+ALTER TABLE tool_executions ADD COLUMN IF NOT EXISTS command_sha256 text;
+
+-- X5.6: the tool list of every model call as a checksum; the lists themselves once, keyed by that checksum.
+ALTER TABLE llm_calls ADD COLUMN IF NOT EXISTS tools_sha256 text;
+CREATE TABLE IF NOT EXISTS llm_toolsets (
+    sha256     text PRIMARY KEY,
+    tools      jsonb NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now()
+);

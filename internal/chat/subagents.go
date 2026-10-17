@@ -66,12 +66,18 @@ func (m *Manager) Record(c llmproxy.Call) {
 		tc = []byte("[]")
 	}
 	ctx := context.Background()
+	if c.ToolsSHA256 != "" && len(c.Tools) > 0 {
+		// X5.6: the list itself once, keyed by the checksum on the call.
+		if err := m.st.PutToolset(ctx, c.ToolsSHA256, c.Tools); err != nil {
+			slog.Error("toolset not stored", "chat", c.ChatID, "sha256", c.ToolsSHA256, "err", err)
+		}
+	}
 	rec, err := m.st.AddLLMCall(ctx, store.LLMCall{
 		ChatID: c.ChatID, SlotID: c.SlotID, SourceIP: c.SourceIP, Model: c.Model, ResponseID: c.ResponseID,
 		Status: c.Status, Input: c.Usage.Input, Output: c.Usage.Output, CacheRead: c.Usage.CacheRead, CacheWrite: c.Usage.CacheWrite,
 		Cost: c.Cost, Peak: c.Peak, ToolCalls: tc, StartedAt: c.StartedAt, DurationMs: c.DurationMs,
 		FinishReason: c.FinishReason, Complete: c.Complete, RequestBytes: requestBytes(c.RequestBytes),
-		Temperature: c.Temperature, Seed: c.Seed, ModelReported: c.ModelReported,
+		Temperature: c.Temperature, Seed: c.Seed, ModelReported: c.ModelReported, ToolsSHA256: c.ToolsSHA256,
 	})
 	if err != nil {
 		slog.Error("model call not stored", "chat", c.ChatID, "err", err)

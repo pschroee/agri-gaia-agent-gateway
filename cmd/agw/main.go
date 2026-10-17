@@ -63,6 +63,8 @@ Commands:
                                 run the plan's runs, one after the other, each in a fresh chat
   exp status --plan <dir|file>  runs per cell and status
   exp abort <run>               abort a run's chat and close the run as aborted
+  exp export --plan <name|file> --out <dir> [--format jsonl,csv]
+                                write the protocol of a plan as JSONL and CSV plus manifest.json
                                 the exp commands use AGW_EXP_API_TOKEN when it is set
 
 --verbose additionally shows every model call (LLM proxy) with costs and the interventions of the subagent limit.
