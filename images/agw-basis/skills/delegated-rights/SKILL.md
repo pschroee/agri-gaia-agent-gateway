@@ -1,6 +1,6 @@
 ---
 name: delegated-rights
-description: The user may delegate rights for a chat: which actions on which platform objects. The rights tool shows the rights of this chat, if any, and the objects you created in it.
+description: The user may delegate rights for a chat (which actions on which platform objects). The rights tool shows the rights of this chat, if any, and the objects you created in it.
 ---
 
 <!-- SPDX-FileCopyrightText: 2026 Philipp Schröer
