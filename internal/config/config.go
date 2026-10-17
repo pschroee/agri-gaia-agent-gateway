@@ -44,7 +44,24 @@ type Model struct {
 	// SelfHosted: the model runs on the user's own hardware (R0.9). Only then may it look at any
 	// dataset's images; a cloud model only at the public ones (AGW_VISION_DATASET_PATTERN, P14).
 	SelfHosted bool `json:"self_hosted,omitempty"`
+	// Sampling lists which sampling fields the model takes (X3.6). A field that is false or absent is not
+	// sent for an experiment run, because some providers reject unknown fields. The proxy only sets the
+	// values; everything else of the request stays untouched.
+	Sampling *Sampling `json:"sampling,omitempty"`
 }
+
+// Sampling: the sampling fields a model accepts (X3.6). The catalog states them per model; nothing is
+// guessed from the model's name.
+type Sampling struct {
+	Temperature bool `json:"temperature"`
+	Seed        bool `json:"seed"`
+}
+
+// TakesTemperature reports whether temperature may be sent to the model.
+func (m Model) TakesTemperature() bool { return m.Sampling != nil && m.Sampling.Temperature }
+
+// TakesSeed reports whether seed may be sent to the model.
+func (m Model) TakesSeed() bool { return m.Sampling != nil && m.Sampling.Seed }
 
 // ReadsImages reports whether the model accepts images. Without the field it does not: a model the
 // catalog does not describe as reading images must not be promised to the user.
@@ -363,6 +380,16 @@ type Env struct {
 	PlanMaxDuration time.Duration
 	PlanMaxLLMCost  float64
 
+	// X3: limits of an experiment run at the model pass-through. The model, the provider and the upstream
+	// address stay per run (the chat's model and the catalog), so a self hosted model can come later without
+	// a change here. The values below are placeholders until the pilot runs fix them (XE5).
+	ExpMaxCostUSD  float64       // AGW_EXP_MAX_COST_USD, default 0.50
+	ExpMaxTokens   int64         // AGW_EXP_MAX_TOKENS, default 2 000 000 (input + output, without cache reads)
+	ExpMaxDuration time.Duration // AGW_EXP_MAX_DURATION, default 90m, counted from the chat's creation
+	ExpTemperature float64       // AGW_EXP_TEMPERATURE, default 0; sent where the catalog says the model takes it
+	// ExpPlaceholderLimits: none of the limit variables was set, the defaults apply. The start logs a warning.
+	ExpPlaceholderLimits bool
+
 	// C-E3 (own code in the agent's notebook server). JupyterHubAPIURL empty: notebooks are off and
 	// every notebook tool answers "not configured on this instance".
 	JupyterHubAPIURL    string // AGW_JUPYTERHUB_API_URL: …/hub/api of the instance's JupyterHub
@@ -544,6 +571,7 @@ func planMaxLLMCost() float64 {
 }
 
 func FromEnv() Env {
+	exp := expLimits()
 	return Env{
 		HTTPAddr:             ":" + str("AGW_HTTP_PORT", "18480"),
 		ProxyAddr:            ":" + str("AGW_PROXY_PORT", "18481"),
@@ -593,6 +621,13 @@ func FromEnv() Env {
 		ComputeMaxPerChat:    max(1, num("AGW_COMPUTE_MAX_PER_CHAT", DefaultComputeMaxPerChat)),
 		PlanMaxDuration:      planMaxDuration(),
 		PlanMaxLLMCost:       planMaxLLMCost(),
+
+		// X3: limits of an experiment run (placeholders until XE5).
+		ExpMaxCostUSD:        exp.MaxCostUSD,
+		ExpMaxTokens:         exp.MaxTokens,
+		ExpMaxDuration:       exp.MaxDuration,
+		ExpTemperature:       exp.Temperature,
+		ExpPlaceholderLimits: exp.PlaceholderSet,
 
 		// C-E3 (own code in the agent's notebook server).
 		JupyterHubAPIURL:      strings.TrimRight(str("AGW_JUPYTERHUB_API_URL", ""), "/"),

@@ -58,6 +58,12 @@ func run() error {
 			slog.Warn("variable ignored since AGW_TOOLSETS; use AGW_POOL_SIZE", "variable", k)
 		}
 	}
+	// X3: the defaults of the experiment run limits are placeholders until the pilot runs (XE5) fix them.
+	if env.ExpPlaceholderLimits {
+		slog.Warn("experiment limits are placeholders; set them after the pilot runs",
+			"max_cost_usd", env.ExpMaxCostUSD, "max_tokens", env.ExpMaxTokens,
+			"max_duration", env.ExpMaxDuration.String(), "temperature", env.ExpTemperature)
+	}
 	cat, err := config.LoadCatalog(env.CatalogPath)
 	if err != nil {
 		return err
@@ -200,11 +206,16 @@ func run() error {
 	m := chat.NewManager(st, p, cat, blobs, artifacts.NewBroker(), chat.Options{
 		IdleTimeout: env.IdleTimeout, ApprovalTimeout: env.ApprovalTimeout,
 		ArtifactMaxBytes: env.ArtifactMaxBytes, InternetDefault: env.InternetDefault, ImageMaxBytes: env.ImageMaxBytes,
-		WorkspaceMaxBytes:  env.WorkspaceMaxBytes,
-		MaxSubagents:       env.MaxSubagents,
-		ComputeMaxPerChat:  env.ComputeMaxPerChat,
-		PlanMaxDuration:    env.PlanMaxDuration, // A-E1: budget limits of autonomous plans
-		PlanMaxLLMCost:     env.PlanMaxLLMCost,
+		WorkspaceMaxBytes: env.WorkspaceMaxBytes,
+		MaxSubagents:      env.MaxSubagents,
+		ComputeMaxPerChat: env.ComputeMaxPerChat,
+		PlanMaxDuration:   env.PlanMaxDuration, // A-E1: budget limits of autonomous plans
+		PlanMaxLLMCost:    env.PlanMaxLLMCost,
+		// X3: limits of an experiment run at the model pass-through.
+		ExpMaxCostUSD:      env.ExpMaxCostUSD,
+		ExpMaxTokens:       env.ExpMaxTokens,
+		ExpMaxDuration:     env.ExpMaxDuration,
+		ExpTemperature:     env.ExpTemperature,
 		TrashRetentionDays: env.TrashRetentionDays,
 		AutoCompactDefault: env.AutoCompactDefault, CompactReserveTokens: env.CompactReserveTokens, CompactKeepRecent: env.CompactKeepRecent,
 		BgWakesPerHour: env.BgWakesPerHour, BgKeepAlive: env.BgKeepAlive, AutoTurnsMax: env.AutoTurnsMax,

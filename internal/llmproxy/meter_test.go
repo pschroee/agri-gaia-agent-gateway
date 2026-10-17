@@ -66,6 +66,9 @@ type fakeRecorder struct {
 	chat  string
 	max   int
 	limit []string
+	// attr carries what the attribution says about an experiment run (X3): Model, Experiment,
+	// Temperature, Seed.
+	attr Attribution
 }
 
 func (f *fakeRecorder) Attribute(ip string) Attribution {
@@ -76,7 +79,9 @@ func (f *fakeRecorder) Attribute(ip string) Attribution {
 	if m == 0 {
 		m = 4
 	}
-	return Attribution{ChatID: f.chat, SlotID: "p-1", MaxConcurrent: m}
+	a := Attribution{ChatID: f.chat, SlotID: "p-1", MaxConcurrent: m}
+	a.Model, a.Experiment, a.Temperature, a.Seed = f.attr.Model, f.attr.Experiment, f.attr.Temperature, f.attr.Seed
+	return a
 }
 func (f *fakeRecorder) LimitHit(chatID string, max int) {
 	f.mu.Lock()
