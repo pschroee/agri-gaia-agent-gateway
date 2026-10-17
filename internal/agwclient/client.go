@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -50,6 +51,12 @@ func New(baseURL string) *Client {
 func esc(s string) string { return url.PathEscape(s) }
 
 func (c *Client) request(ctx context.Context, method, path string, body io.Reader, contentType string) (*http.Response, error) {
+	return c.requestAllowed(ctx, method, path, body, contentType)
+}
+
+// requestAllowed is request with status codes that are not errors. X4 uses 409 for
+// fixture_mismatch, whose body carries the findings.
+func (c *Client) requestAllowed(ctx context.Context, method, path string, body io.Reader, contentType string, allowed ...int) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, method, c.BaseURL+path, body)
 	if err == nil && c.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.Token)
@@ -67,7 +74,7 @@ func (c *Client) request(ctx context.Context, method, path string, body io.Reade
 		}
 		return nil, fmt.Errorf("orchestrator at %s not reachable: %w", c.BaseURL, err)
 	}
-	if resp.StatusCode >= 300 {
+	if resp.StatusCode >= 300 && !slices.Contains(allowed, resp.StatusCode) {
 		defer resp.Body.Close()
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 		ae := &APIError{Status: resp.StatusCode}
@@ -109,6 +116,33 @@ func (c *Client) Do(ctx context.Context, method, path string, in, out any) error
 		return fmt.Errorf("response from %s %s not readable: %w", method, path, err)
 	}
 	return nil
+}
+
+// DoStatus is Do with status codes that are findings rather than errors (X4: 409 fixture_mismatch
+// still carries the fixtures and the differing fields). It returns the status code.
+func (c *Client) DoStatus(ctx context.Context, method, path string, in, out any, allowed ...int) (int, error) {
+	var body io.Reader
+	ct := ""
+	if in != nil {
+		b, err := json.Marshal(in)
+		if err != nil {
+			return 0, err
+		}
+		body, ct = bytes.NewReader(b), "application/json"
+	}
+	resp, err := c.requestAllowed(ctx, method, path, body, ct, allowed...)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	if out != nil {
+		if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+			return resp.StatusCode, fmt.Errorf("response from %s %s not readable: %w", method, path, err)
+		}
+	} else {
+		_, _ = io.Copy(io.Discard, resp.Body)
+	}
+	return resp.StatusCode, nil
 }
 
 func (c *Client) Models(ctx context.Context) (out []Model, err error) {

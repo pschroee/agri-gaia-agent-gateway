@@ -56,6 +56,10 @@ Commands:
   watch <chat-id> [--verbose]   follow events live (Ctrl+C ends)
   run [--model M] [--variant V] [--internet=…] [--auto-approve|--auto-reject] [--thinking] [--verbose] "<task>"
   exp validate --plan <dir|file>  check the experiment material: plan, tasks and fixture manifests
+  exp seed --plan <dir|file> --cell <id>    create the fixtures of a cell, print ids and checksums
+  exp unseed --plan <dir|file> --cell <id>  remove that cell's fixtures by their recorded ids
+  exp verify --plan <dir|file> --cell <id>  compare the live fixtures with the recorded checksums
+                                the exp commands use AGW_EXP_API_TOKEN when it is set
 
 --verbose additionally shows every model call (LLM proxy) with costs and the interventions of the subagent limit.
 

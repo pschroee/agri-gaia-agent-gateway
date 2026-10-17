@@ -411,3 +411,25 @@ func TestEnvExperimentPool(t *testing.T) {
 		t.Fatalf("experiment users: %q", got)
 	}
 }
+
+// X4 (#129): the two experiment accounts and the key of the fixture routes come from their own
+// variables; the existing platform account is not reused.
+func TestEnvExperimentFixtures(t *testing.T) {
+	t.Setenv("AGW_PLATFORM_USER", "agent-test")
+	t.Setenv("AGW_PLATFORM_PASSWORD", "pw")
+	t.Setenv("AGW_EXP_USER", "agent-exp")
+	t.Setenv("AGW_EXP_PASSWORD", "pw2")
+	t.Setenv("AGW_EXP2_USER", "agent-exp-2")
+	t.Setenv("AGW_EXP2_PASSWORD", "pw3")
+	t.Setenv("AGW_EXP_API_TOKEN", "exp-key")
+	e := FromEnv()
+	if e.ExpUser != "agent-exp" || e.ExpPassword != "pw2" || e.Exp2User != "agent-exp-2" || e.Exp2Password != "pw3" {
+		t.Fatalf("accounts: %+v", e)
+	}
+	if e.ExpAPIToken != "exp-key" {
+		t.Fatalf("key: %q", e.ExpAPIToken)
+	}
+	if e.PlatformUser != "agent-test" {
+		t.Fatalf("platform account was overwritten: %q", e.PlatformUser)
+	}
+}

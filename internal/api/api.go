@@ -57,6 +57,12 @@ type Server struct {
 
 	// Platform is the binding to the Agri-Gaia platform for GET /api/platform (nil: binding off).
 	Platform *platform.Client
+	// ExpFixtures seeds and removes the fixture objects of an experiment cell (X4, issue #129);
+	// nil: the experiment accounts are not configured and the routes answer 503.
+	ExpFixtures ExpFixtures
+	// ExpAPIToken protects /api/exp/*. It is separate from Token: the experiment runner on the server
+	// uses it, the browser and the sandbox never see it (X1.3, X4).
+	ExpAPIToken string
 }
 
 type userKey struct{}
@@ -119,7 +125,14 @@ func (s *Server) auth(next http.Handler) http.Handler {
 			writeErr(w, http.StatusForbidden, "unknown host")
 			return
 		}
-		if s.OIDC != nil {
+		if strings.HasPrefix(r.URL.Path, "/api/exp/") {
+			// The experiment runner carries its own key (AGW_EXP_API_TOKEN, X1.3/X4): it reaches the
+			// fixture routes and nothing else, and a session of the UI does not reach them.
+			if !s.expTokenOK(r) {
+				writeErr(w, http.StatusUnauthorized, "experiment API: missing or wrong AGW_EXP_API_TOKEN")
+				return
+			}
+		} else if s.OIDC != nil {
 			u, ok := s.OIDC.SessionUser(r)
 			if !ok {
 				// login tells the UI where to navigate for the silent login (prompt=none).
@@ -153,6 +166,16 @@ func (s *Server) tokenOK(r *http.Request) bool {
 	return subtle.ConstantTimeCompare([]byte(given), []byte(s.Token)) == 1
 }
 
+// expTokenOK checks the bearer key of the experiment routes. It is only accepted as a bearer
+// header, never as a cookie: the browser has no business on these routes.
+func (s *Server) expTokenOK(r *http.Request) bool {
+	if s.ExpAPIToken == "" {
+		return false
+	}
+	given, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+	return ok && subtle.ConstantTimeCompare([]byte(given), []byte(s.ExpAPIToken)) == 1
+}
+
 // login sets the login cookie and redirects to the UI.
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	if s.OIDC != nil {
@@ -184,6 +207,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/config", s.config)
 	mux.HandleFunc("GET /api/pool", s.pool)
 	mux.HandleFunc("GET /api/platform", s.platformStatus)
+	// X4 (issue #129): fixtures of an experiment cell, only through AGW_EXP_API_TOKEN.
+	mux.HandleFunc("POST /api/exp/fixtures/seed", s.expSeed)
+	mux.HandleFunc("POST /api/exp/fixtures/unseed", s.expUnseed)
+	mux.HandleFunc("POST /api/exp/fixtures/verify", s.expVerify)
+	mux.HandleFunc("GET /api/exp/fixtures", s.expList)
 	mux.HandleFunc("GET /api/chats", s.listChats)
 	mux.HandleFunc("POST /api/chats", s.createChat)
 	chat("GET /api/chats/{id}", s.getChat)
