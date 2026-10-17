@@ -476,6 +476,41 @@ func (s *Store) ChatOwner(ctx context.Context, id string) (string, error) {
 	return owner, err
 }
 
+// ChatGate returns what the LLM proxy needs about a chat (X3): its model, its experiment profile (nil for a
+// product chat) and the moment the chat was created (the run's duration counts from there).
+func (s *Store) ChatGate(ctx context.Context, id string) (model string, exp *Experiment, created time.Time, err error) {
+	if !isUUID(id) {
+		return "", nil, time.Time{}, ErrNotFound
+	}
+	var raw []byte
+	err = s.pool.QueryRow(ctx, `SELECT model, experiment, created_at FROM chats WHERE id = $1`, id).Scan(&model, &raw, &created)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil, time.Time{}, ErrNotFound
+	}
+	if err != nil {
+		return "", nil, time.Time{}, err
+	}
+	if len(raw) > 0 {
+		var e Experiment
+		if json.Unmarshal(raw, &e) == nil {
+			exp = &e
+		}
+	}
+	return model, exp, created, nil
+}
+
+// SetExperimentLimit records the limit that ended an experiment run (X3.5) in chats.experiment; false if one was
+// already set or the chat is not an experiment chat. The gateway writes this, never a request.
+func (s *Store) SetExperimentLimit(ctx context.Context, id, reason string) (bool, error) {
+	if !isUUID(id) {
+		return false, ErrNotFound
+	}
+	tag, err := s.pool.Exec(ctx, `
+UPDATE chats SET experiment = jsonb_set(experiment, '{limit}', to_jsonb($2::text))
+WHERE id = $1 AND experiment IS NOT NULL AND COALESCE(experiment->>'limit', '') = ''`, id, reason)
+	return tag.RowsAffected() > 0, err
+}
+
 // ListChats returns the chats that are not in the trash, newest first (the trash lists them: ListTrash).
 func (s *Store) ListChats(ctx context.Context) ([]Chat, error) {
 	rows, err := s.pool.Query(ctx, chatSelect+` WHERE c.trashed_at IS NULL ORDER BY c.updated_at DESC`)
@@ -1055,6 +1090,13 @@ type LLMCall struct {
 	Complete     bool   `json:"complete"`
 	// RequestBytes: size of the request body sent to the provider (issue #69); nil for older rows.
 	RequestBytes *int64 `json:"request_bytes,omitempty"`
+	// Temperature and Seed: the values the proxy actually sent for an experiment run (X3.6); nil = not sent,
+	// because the model does not take the field. Older rows and product chats: nil.
+	Temperature *float64 `json:"temperature,omitempty"`
+	Seed        *int64   `json:"seed,omitempty"`
+	// ModelReported: the model the provider reported in the response, with the system fingerprint where it
+	// reports one (X3.7). Empty for older rows and for responses without either.
+	ModelReported string `json:"model_reported,omitempty"`
 }
 
 func (s *Store) AddLLMCall(ctx context.Context, c LLMCall) (LLMCall, error) {
@@ -1066,17 +1108,24 @@ func (s *Store) AddLLMCall(ctx context.Context, c LLMCall) (LLMCall, error) {
 		c.ToolCalls = json.RawMessage("[]")
 	}
 	err := s.pool.QueryRow(ctx, `
-INSERT INTO llm_calls (chat_id, slot_id, source_ip, model, response_id, status, input, output, cache_read, cache_write, cost, peak, tool_calls, started_at, duration_ms, finish_reason, complete, request_bytes)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) RETURNING id`,
-		chat, c.SlotID, c.SourceIP, c.Model, c.ResponseID, c.Status, c.Input, c.Output, c.CacheRead, c.CacheWrite, c.Cost, c.Peak, []byte(c.ToolCalls), c.StartedAt, c.DurationMs, noNUL(c.FinishReason), c.Complete, c.RequestBytes).Scan(&c.ID)
+INSERT INTO llm_calls (chat_id, slot_id, source_ip, model, response_id, status, input, output, cache_read, cache_write, cost, peak, tool_calls, started_at, duration_ms, finish_reason, complete, request_bytes, temperature, seed, model_reported)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21) RETURNING id`,
+		chat, c.SlotID, c.SourceIP, c.Model, c.ResponseID, c.Status, c.Input, c.Output, c.CacheRead, c.CacheWrite, c.Cost, c.Peak, []byte(c.ToolCalls), c.StartedAt, c.DurationMs, noNUL(c.FinishReason), c.Complete, c.RequestBytes, c.Temperature, c.Seed, noNUL(c.ModelReported)).Scan(&c.ID)
 	return c, err
+}
+
+// ChatLLMUsage sums what a chat's model calls cost and how many tokens they used (X3.2, X3.3): llm_calls is the
+// authoritative source, subagent runs included. Tokens are input + output without the cache reads.
+func (s *Store) ChatLLMUsage(ctx context.Context, chatID string) (cost float64, tokens int64, err error) {
+	err = s.pool.QueryRow(ctx, `SELECT COALESCE(SUM(cost),0), COALESCE(SUM(input + output),0) FROM llm_calls WHERE chat_id=$1`, chatID).Scan(&cost, &tokens)
+	return cost, tokens, err
 }
 
 func (s *Store) ListLLMCalls(ctx context.Context, chatID string) ([]LLMCall, error) {
 	rows, err := s.pool.Query(ctx, `
 SELECT x.id, x.slot_id, x.source_ip, x.model, x.response_id, x.status, x.input, x.output, x.cache_read, x.cache_write, x.cost, x.peak, x.tool_calls, x.started_at, x.duration_ms,
   (x.response_id <> '' AND EXISTS (SELECT 1 FROM chat_messages m WHERE m.chat_id = x.chat_id AND m.role = 'assistant' AND m.message->>'responseId' = x.response_id)),
-  x.finish_reason, x.complete, x.request_bytes
+  x.finish_reason, x.complete, x.request_bytes, x.temperature, x.seed, x.model_reported
 FROM llm_calls x WHERE x.chat_id = $1 ORDER BY x.id`, chatID)
 	if err != nil {
 		return nil, err
@@ -1086,7 +1135,7 @@ FROM llm_calls x WHERE x.chat_id = $1 ORDER BY x.id`, chatID)
 	for rows.Next() {
 		var c LLMCall
 		var tc []byte
-		if err := rows.Scan(&c.ID, &c.SlotID, &c.SourceIP, &c.Model, &c.ResponseID, &c.Status, &c.Input, &c.Output, &c.CacheRead, &c.CacheWrite, &c.Cost, &c.Peak, &tc, &c.StartedAt, &c.DurationMs, &c.Main, &c.FinishReason, &c.Complete, &c.RequestBytes); err != nil {
+		if err := rows.Scan(&c.ID, &c.SlotID, &c.SourceIP, &c.Model, &c.ResponseID, &c.Status, &c.Input, &c.Output, &c.CacheRead, &c.CacheWrite, &c.Cost, &c.Peak, &tc, &c.StartedAt, &c.DurationMs, &c.Main, &c.FinishReason, &c.Complete, &c.RequestBytes, &c.Temperature, &c.Seed, &c.ModelReported); err != nil {
 			return nil, err
 		}
 		c.ChatID, c.ToolCalls = chatID, tc

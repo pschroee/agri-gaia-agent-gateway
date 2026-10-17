@@ -223,6 +223,12 @@ type Options struct {
 	// zero takes the config defaults.
 	PlanMaxDuration time.Duration
 	PlanMaxLLMCost  float64
+	// X3: limits of an experiment run at the model pass-through (AGW_EXP_*, placeholders until XE5). A value
+	// of 0 turns the limit off; the proxy sets temperature only where the catalog says the model takes it.
+	ExpMaxCostUSD  float64
+	ExpMaxTokens   int64
+	ExpMaxDuration time.Duration
+	ExpTemperature float64
 	// TrashRetentionDays: chats in the trash are deleted for good after this many days (AGW_TRASH_RETENTION_DAYS,
 	// 0 = never; issue #76).
 	TrashRetentionDays int
@@ -328,6 +334,9 @@ type Manager struct {
 	// planCache: the active autonomous plan of a chat, held in memory for planCacheTTL so that the
 	// guard and the LLM proxy's budget do not put a query behind every call (A-E1).
 	planCache map[string]planCacheEntry
+	// expCache: the model and experiment profile of a chat, held in memory for planCacheTTL so that the
+	// LLM proxy does not put a query behind every call (X3).
+	expCache map[string]expGateEntry
 	// planAlertMarks: the state each autonomous plan was last published in, so that its alert goes out
 	// once per state change (A-E4, D4.3); by plan id.
 	planAlertMarks map[string]string
@@ -369,7 +378,8 @@ func NewManager(st *store.Store, p *pool.Pool[Agent], cat *config.Catalog, blobs
 		live: map[string]*live{}, subs: map[string]map[chan Event]struct{}{}, allSubs: map[chan ChatEvent]struct{}{}, chatMu: map[string]*sync.Mutex{},
 		imgMu: map[string]*sync.Mutex{}, wsMu: map[string]*sync.Mutex{}, qMu: map[string]*sync.Mutex{},
 		sending: map[string]bool{}, delivering: map[string][]*turnMeta{}, resuming: map[string]bool{}, starting: map[string]bool{}, pendingModel: map[string]string{}, levels: map[string][]string{}, userAt: map[string]time.Time{}, aborts: map[string]uint64{},
-		rechecks: map[string]recheck{}, apMu: map[string]*sync.Mutex{}, planCache: map[string]planCacheEntry{}}
+		rechecks: map[string]recheck{}, apMu: map[string]*sync.Mutex{}, planCache: map[string]planCacheEntry{},
+		expCache: map[string]expGateEntry{}}
 }
 
 // userActive records an action of the user (postponement by background tasks, M1).
@@ -1879,6 +1889,11 @@ func (m *Manager) autoTitle(ctx context.Context, chatID, text string) {
 	}
 	c, err := m.st.GetChat(ctx, chatID)
 	if err != nil {
+		return
+	}
+	if c.Experiment != nil {
+		// X3.1: no title from the model in an experiment run; the runner sets the title, and a second
+		// model would distort the run's tokens and cost.
 		return
 	}
 	go m.modelTitle(chatID, c.Model, text)

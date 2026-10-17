@@ -36,14 +36,27 @@ func (m *Manager) Attribute(ip string) llmproxy.Attribution {
 		return llmproxy.Attribution{}
 	}
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	for chatID, l := range m.live {
+	var chatID, slotID string
+	maxSub := 0
+	for id, l := range m.live {
 		if l.ip == ip {
-			// Budget: the model-cost budget of an autonomous plan is enforced at the proxy (A-E1, D1.9).
-			return llmproxy.Attribution{ChatID: chatID, SlotID: l.slot.ID, MaxConcurrent: 1 + l.maxSub, Budget: m.planBudget}
+			chatID, slotID, maxSub = id, l.slot.ID, l.maxSub
+			break
 		}
 	}
-	return llmproxy.Attribution{}
+	m.mu.Unlock()
+	if chatID == "" {
+		return llmproxy.Attribution{}
+	}
+	// Budget: the model-cost budget of an autonomous plan (A-E1, D1.9) or the limits of an experiment run
+	// (X3), both enforced at the proxy.
+	a := llmproxy.Attribution{ChatID: chatID, SlotID: slotID, MaxConcurrent: 1 + maxSub, Budget: m.chatBudget}
+	// X3: an experiment run accepts only the chat's model, and the proxy sets temperature and seed where the
+	// model takes them. The gate is read outside the lock because it queries the store.
+	if model, exp, _ := m.chatGate(chatID); exp != nil {
+		a.Model, a.Experiment, a.Temperature, a.Seed = model, true, m.opt.ExpTemperature, exp.Seed
+	}
+	return a
 }
 
 // Record stores a model call recorded at the proxy.
@@ -58,6 +71,7 @@ func (m *Manager) Record(c llmproxy.Call) {
 		Status: c.Status, Input: c.Usage.Input, Output: c.Usage.Output, CacheRead: c.Usage.CacheRead, CacheWrite: c.Usage.CacheWrite,
 		Cost: c.Cost, Peak: c.Peak, ToolCalls: tc, StartedAt: c.StartedAt, DurationMs: c.DurationMs,
 		FinishReason: c.FinishReason, Complete: c.Complete, RequestBytes: requestBytes(c.RequestBytes),
+		Temperature: c.Temperature, Seed: c.Seed, ModelReported: c.ModelReported,
 	})
 	if err != nil {
 		slog.Error("model call not stored", "chat", c.ChatID, "err", err)

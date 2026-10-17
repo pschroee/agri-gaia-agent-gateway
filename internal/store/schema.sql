@@ -479,3 +479,13 @@ ALTER TABLE chats ADD COLUMN IF NOT EXISTS experiment jsonb;
 -- Who decided an approval (X0.9): "user" normally, "experiment" when the gateway approved it automatically in an
 -- experiment chat. Entries from before the column count as decided by the user.
 ALTER TABLE approvals ADD COLUMN IF NOT EXISTS decided_by text NOT NULL DEFAULT 'user';
+
+-- Sampling values and the model version the provider reported per model call (X3): the values the proxy actually
+-- sent for an experiment run (NULL = not sent, because the model does not take the field), and the model (plus
+-- system_fingerprint where the provider reports one) from the response.
+ALTER TABLE llm_calls ADD COLUMN IF NOT EXISTS temperature double precision;
+ALTER TABLE llm_calls ADD COLUMN IF NOT EXISTS seed bigint;
+ALTER TABLE llm_calls ADD COLUMN IF NOT EXISTS model_reported text NOT NULL DEFAULT '';
+
+-- The limit that ended an experiment run (X3.5), inside chats.experiment ('cost', 'tokens' or 'duration'). The
+-- gateway sets it once, when the run crosses a limit; a value in a request is discarded.
