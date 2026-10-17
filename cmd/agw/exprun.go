@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"hash/fnv"
 	"io"
-	"io/fs"
 	"math/rand/v2"
 	"net/url"
 	"os"
@@ -848,40 +847,23 @@ func walkJSON(v any, fn func(key string, val any)) {
 	}
 }
 
-// expMaterialDigest hashes the material the plan uses (all files below the material directory,
-// without plan.lock, in a stable order). It identifies the state a run was started with.
+// expMaterialDigest names the material the plan uses: the same file set as plan.lock (X8.3), without
+// result folders and local caches, in a stable order. It identifies the state a run was started with.
 func expMaterialDigest(dir string) (string, error) {
-	var files []string
-	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			return nil
-		}
-		rel, err := filepath.Rel(dir, path)
-		if err != nil {
-			return err
-		}
-		if filepath.ToSlash(rel) == "plan.lock" {
-			return nil
-		}
-		files = append(files, rel)
-		return nil
-	})
+	files, err := exp.MaterialFiles(dir)
 	if err != nil {
 		return "", err
 	}
-	sort.Strings(files)
+	names := make([]string, 0, len(files))
+	for name := range files {
+		names = append(names, name)
+	}
+	sort.Strings(names)
 	h := sha256.New()
-	for _, rel := range files {
-		b, err := os.ReadFile(filepath.Join(dir, rel))
-		if err != nil {
-			return "", err
-		}
-		io.WriteString(h, filepath.ToSlash(rel))
+	for _, name := range names {
+		io.WriteString(h, name)
 		h.Write([]byte{0})
-		h.Write(b)
+		io.WriteString(h, files[name])
 		h.Write([]byte{0})
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
