@@ -158,10 +158,11 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		defer p.leave(chatID)
-		// The model-cost budget of an autonomous plan is checked before the call is forwarded (A-E1, D1.9).
+		// The model-cost budget of an autonomous plan (A-E1, D1.9) or the limits of an experiment run (X3) are
+		// checked before the call is forwarded.
 		if att.Budget != nil {
 			if err := att.Budget(chatID); err != nil {
-				slog.Warn("LLM proxy: plan budget used up", "chat", chatID, "reason", err)
+				slog.Warn("LLM proxy: budget refused the call", "chat", chatID, "reason", err)
 				deny(w, http.StatusTooManyRequests, err.Error())
 				return
 			}
@@ -185,10 +186,42 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		deny(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if _, _, ok := p.cat.Lookup(provID + "/" + model); !ok {
+	// X3.1: an experiment run accepts only the chat's model, not just any model of the catalog (the title
+	// model included, which is why titles are off for experiment chats).
+	modelID := provID + "/" + model
+	_, mcfg, known := p.cat.Lookup(modelID)
+	if att.Model != "" && modelID != att.Model {
+		slog.Warn("LLM proxy: model refused in experiment run", "chat", chatID, "model", model)
+		deny(w, http.StatusForbidden, "model not allowed in this experiment run: "+model)
+		return
+	}
+	if !known {
 		slog.Warn("LLM proxy: model refused", "provider", provID, "model", model)
 		deny(w, http.StatusForbidden, "model not allowed: "+model)
 		return
+	}
+	// X3.6: for an experiment run the proxy sets temperature and seed, but only where the catalog says the
+	// model takes them; the values actually sent are recorded with the call.
+	var sentTemp *float64
+	var sentSeed *int64
+	if att.Experiment {
+		if mcfg.TakesTemperature() {
+			t := att.Temperature
+			sentTemp = &t
+		}
+		if mcfg.TakesSeed() && att.Seed != 0 {
+			s := att.Seed
+			sentSeed = &s
+		}
+	}
+	if sentTemp != nil || sentSeed != nil {
+		rewritten, err := setSampling(body, sentTemp, sentSeed)
+		if err != nil {
+			slog.Warn("LLM proxy: request refused", "provider", provID, "reason", err)
+			deny(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		body = rewritten
 	}
 	target, err := url.Parse(prov.Upstream)
 	if err != nil {
@@ -206,6 +239,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			resp.Body = &meteredBody{ReadCloser: resp.Body, m: m, done: func(c Call) {
 				c.ChatID, c.SlotID, c.SourceIP, c.Status = chatID, slotID, srcIP, status
 				c.Model = provID + "/" + model
+				c.Temperature, c.Seed = sentTemp, sentSeed
 				c.StartedAt, c.Duration = started, time.Since(started)
 				c.DurationMs = c.Duration.Milliseconds()
 				c.RequestBytes = int64(len(body))

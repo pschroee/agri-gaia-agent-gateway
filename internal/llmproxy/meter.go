@@ -34,9 +34,16 @@ type Call struct {
 	StartedAt  time.Time     `json:"started_at"`
 	Duration   time.Duration `json:"-"`
 	DurationMs int64         `json:"duration_ms"`
-	// RequestBytes: size in bytes of the request body the proxy read from the sandbox and
-	// forwarded unchanged to the provider (issue #69). Sizes only, never contents.
+	// RequestBytes: size in bytes of the request body the proxy forwarded to the provider (issue #69).
+	// Sizes only, never contents.
 	RequestBytes int64 `json:"request_bytes"`
+	// Temperature and Seed: the values the proxy actually sent to the provider for an experiment run (X3.6);
+	// nil = not sent (product chat, or the model does not take the field).
+	Temperature *float64 `json:"temperature,omitempty"`
+	Seed        *int64   `json:"seed,omitempty"`
+	// ModelReported: the model the provider reported in the response, with its system fingerprint where it
+	// reports one (X3.7). Empty: the response carried neither.
+	ModelReported string `json:"model_reported,omitempty"`
 }
 
 // ToolCall is a tool call requested by the model. ID is the
@@ -59,6 +66,15 @@ type Attribution struct {
 	// Budget refuses a model call when the chat's autonomous plan has used up its model-cost budget
 	// (A-E1, D1.9); the returned error is the refusal the proxy answers with 429. nil: no budget.
 	Budget func(chatID string) error
+	// Model: only this "provider/model" is accepted (X3.1, experiment runs); empty: any model of the catalog.
+	Model string
+	// Experiment: the chat is an experiment run. The proxy then sets temperature and seed where the model
+	// takes them (X3.6).
+	Experiment bool
+	// Temperature: the value set for an experiment run when the model takes temperature (AGW_EXP_TEMPERATURE).
+	Temperature float64
+	// Seed: the run's seed from the chat's experiment profile; 0 = none.
+	Seed int64
 }
 
 // Recorder attributes calls to chats and stores them.
@@ -88,6 +104,9 @@ type meter struct {
 	finish  string
 	stopped bool // Anthropic message_stop
 	jsonOK  bool // whole JSON response read
+	// model and fingerprint: what the provider reported about the model (X3.7); the first non-empty wins.
+	model       string
+	fingerprint string
 }
 
 type rawUsage struct {
@@ -153,9 +172,12 @@ func (m *meter) sseLine(line []byte) {
 // chunk evaluates a JSON chunk (SSE event or whole response).
 func (m *meter) chunk(data []byte) {
 	var c struct {
-		ID      string    `json:"id"`
-		Usage   *rawUsage `json:"usage"`
-		Choices []struct {
+		ID    string    `json:"id"`
+		Model string    `json:"model"`
+		Usage *rawUsage `json:"usage"`
+		// SystemFingerprint: reported by OpenAI-compatible providers when the model build changes (X3.7).
+		SystemFingerprint string `json:"system_fingerprint"`
+		Choices           []struct {
 			Delta        *msgPart `json:"delta"`
 			Message      *msgPart `json:"message"`
 			FinishReason *string  `json:"finish_reason"`
@@ -164,6 +186,7 @@ func (m *meter) chunk(data []byte) {
 		Type    string `json:"type"`
 		Message *struct {
 			ID    string    `json:"id"`
+			Model string    `json:"model"`
 			Usage *rawUsage `json:"usage"`
 		} `json:"message"`
 		AnthropicDelta *struct {
@@ -175,6 +198,15 @@ func (m *meter) chunk(data []byte) {
 	}
 	if !m.sse {
 		m.jsonOK = true
+	}
+	if c.Model != "" && m.model == "" {
+		m.model = c.Model
+	}
+	if c.SystemFingerprint != "" && m.fingerprint == "" {
+		m.fingerprint = c.SystemFingerprint
+	}
+	if c.Message != nil && c.Message.Model != "" && m.model == "" {
+		m.model = c.Message.Model
 	}
 	if c.Type == "message_stop" {
 		m.stopped = true
@@ -313,6 +345,7 @@ func (m *meter) Result() Call {
 		}
 	}
 	c.FinishReason = strings.ToValidUTF8(m.finish, "")
+	c.ModelReported = strings.ToValidUTF8(strings.TrimSpace(m.model+" "+m.fingerprint), "")
 	c.Complete = m.finish != "" || m.stopped || m.jsonOK
 	// Calls with index by index, those without in the order they appeared.
 	sort.SliceStable(m.order, func(i, j int) bool {
