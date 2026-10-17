@@ -20,6 +20,7 @@ import (
 	"agw/internal/config"
 	"agw/internal/pool"
 	"agw/internal/store"
+	"agw/internal/testpg"
 )
 
 // Messages to subagents (issue #81): the route belongs to the owner's chat, refuses a chat in the trash and an
@@ -30,7 +31,7 @@ func TestSubagentMessageRoute(t *testing.T) {
 		t.Skip("AGW_TEST_DATABASE_URL not set")
 	}
 	ctx := context.Background()
-	st, err := store.OpenSchema(ctx, url, "apitest_msgs_"+strings.ReplaceAll(time.Now().Format("150405.000000"), ".", "_"))
+	st, err := store.OpenSchema(ctx, url, testpg.Schema("apitest_msgs"))
 	if err != nil {
 		t.Fatal(err)
 	}

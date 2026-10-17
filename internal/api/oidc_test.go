@@ -21,6 +21,7 @@ import (
 	"agw/internal/oidc/oidctest"
 	"agw/internal/pool"
 	"agw/internal/store"
+	"agw/internal/testpg"
 )
 
 var (
@@ -178,7 +179,7 @@ func ownershipEnv(t *testing.T) (*chat.Manager, *pool.Pool[chat.Agent], *config.
 		t.Skip("AGW_TEST_DATABASE_URL not set")
 	}
 	ctx := context.Background()
-	st, err := store.OpenSchema(ctx, url, "apitest_"+strings.ReplaceAll(time.Now().Format("150405.000000"), ".", "_"))
+	st, err := store.OpenSchema(ctx, url, testpg.Schema("apitest"))
 	if err != nil {
 		t.Fatal(err)
 	}

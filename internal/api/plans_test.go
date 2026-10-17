@@ -18,6 +18,7 @@ import (
 	"agw/internal/config"
 	"agw/internal/pool"
 	"agw/internal/store"
+	"agw/internal/testpg"
 )
 
 // GET /api/chats/{id}/plans: own chats only, an empty list for a chat without plans (issue #70).
@@ -27,7 +28,7 @@ func TestPlansEndpoint(t *testing.T) {
 		t.Skip("AGW_TEST_DATABASE_URL not set")
 	}
 	ctx := context.Background()
-	st, err := store.OpenSchema(ctx, url, "apitest_plans_"+strings.ReplaceAll(time.Now().Format("150405.000000"), ".", "_"))
+	st, err := store.OpenSchema(ctx, url, testpg.Schema("apitest_plans"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +68,7 @@ func TestPlanControlsOwnerOnly(t *testing.T) {
 		t.Skip("AGW_TEST_DATABASE_URL not set")
 	}
 	ctx := context.Background()
-	st, err := store.OpenSchema(ctx, url, "apitest_planctl_"+strings.ReplaceAll(time.Now().Format("150405.000000"), ".", "_"))
+	st, err := store.OpenSchema(ctx, url, testpg.Schema("apitest_planctl"))
 	if err != nil {
 		t.Fatal(err)
 	}

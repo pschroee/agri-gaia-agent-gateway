@@ -367,7 +367,9 @@ func Open(ctx context.Context, url string) (*Store, error) { return OpenSchema(c
 var schemaName = regexp.MustCompile(`^[a-z_][a-z0-9_]*$`)
 
 // OpenSchema opens the database and creates the schema. With schema != ""
-// the store works in its own Postgres schema (for tests).
+// the store works in its own Postgres schema (for tests). The schema must not exist yet: joining an
+// existing one would mean sharing it with whoever created it, and a later DropSchema would take the
+// tables out from under that other user (issue #158).
 func OpenSchema(ctx context.Context, url, schema string) (*Store, error) {
 	cfg, err := pgxpool.ParseConfig(url)
 	if err != nil {
@@ -397,7 +399,7 @@ func OpenSchema(ctx context.Context, url, schema string) (*Store, error) {
 		return nil, fmt.Errorf("Postgres: %w", err)
 	}
 	if schema != "" {
-		if _, err := p.Exec(ctx, "CREATE SCHEMA IF NOT EXISTS "+schema); err != nil {
+		if _, err := p.Exec(ctx, "CREATE SCHEMA "+schema); err != nil {
 			p.Close()
 			return nil, err
 		}
@@ -411,6 +413,8 @@ func OpenSchema(ctx context.Context, url, schema string) (*Store, error) {
 
 func (s *Store) Close() { s.pool.Close() }
 
+// DropSchema removes the schema this store created (tests call it from t.Cleanup). Only this store has
+// ever used the schema, so dropping it cannot pull the ground out from under another test.
 func (s *Store) DropSchema(ctx context.Context) {
 	if s.schema != "" {
 		_, _ = s.pool.Exec(ctx, "DROP SCHEMA IF EXISTS "+s.schema+" CASCADE")
