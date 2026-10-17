@@ -21,6 +21,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+
 	"agw/internal/artifacts"
 	"agw/internal/config"
 	"agw/internal/delegation"
@@ -2441,7 +2443,15 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 		for _, u := range req.Uploads {
 			size += int64(len(u.Data))
 		}
-		ap, err := m.st.CreateApproval(ctx, store.Approval{ChatID: chatID, Kind: "platform_write", Via: via, Name: req.String(), Size: size,
+		// The id is assigned here and the recheck is registered before the insert: the pending approval is
+		// visible to the API (and to the user) as soon as the row exists, and a click that arrives before the
+		// registration would skip the re-read and approve the summary as proposed (issue #154).
+		inExperiment := m.experimentOf(ctx, chatID) != nil
+		apID := uuid.NewString()
+		if !inExperiment {
+			defer m.registerRecheck(apID, m.platformRecheck(chatID, apID, tool, req))()
+		}
+		ap, err := m.st.CreateApproval(ctx, store.Approval{ID: apID, ChatID: chatID, Kind: "platform_write", Via: via, Name: req.String(), Size: size,
 			ContentType: "application/json", PendingKey: "-", Preview: preview, Session: store.SessionFrom(ctx), ToolCallID: store.ToolCallFrom(ctx),
 			Effect: string(access.Effect), Summary: summary, Notebook: notebookData})
 		if err != nil {
@@ -2453,7 +2463,7 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 		m.logSummaryReads(ctx, chatID, ap.ID, "proposed", rl)
 		bg := context.WithoutCancel(ctx)
 		var final string
-		if m.experimentOf(ctx, chatID) != nil {
+		if inExperiment {
 			// X0.9: in an experiment chat the gateway decides instead of the user. The approval stays in
 			// the record with decided_by "experiment", and only the decided event goes out (no pending
 			// one, nobody waits for it).
@@ -2468,7 +2478,6 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 			m.publish(chatID, Event{Kind: "approval", Data: ap})
 			slog.Info("platform call approved by the experiment profile", "chat", chatID, "approval", ap.ID, "call", req.String(), "via", via)
 		} else {
-			defer m.registerRecheck(ap.ID, m.platformRecheck(chatID, ap.ID, tool, req))()
 			w := m.broker.Register(ap.ID)
 			if s, ok := m.pool.Get(slotID); ok {
 				s.SetActivity("waiting_approval", "")
