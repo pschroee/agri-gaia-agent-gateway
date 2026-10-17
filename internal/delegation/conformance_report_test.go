@@ -15,14 +15,18 @@ import (
 	"agw/internal/platform"
 )
 
+// sampleResults has one of each: an allowed control, a forbidden call that was refused, and a
+// forbidden call that was let through — the deviation the report has to name.
 func sampleResults(path string) []Result {
 	cases := []Case{
 		{Name: "list datasets", Req: platform.Request{Method: "GET", Path: "/datasets"}, Allowed: true, Group: "control"},
 		{Name: "delete another user's dataset", Req: platform.Request{Method: "DELETE", Path: "/datasets/5"}, Group: "action"},
+		{Name: "change another user's dataset", Req: platform.Request{Method: "PATCH", Path: "/datasets/5"}, Group: "action"},
 	}
 	return []Result{
 		ResultFor(cases[0], path, true, "allowed: read dataset"),
 		ResultFor(cases[1], path, false, "not in the delegated rights: delete dataset 5"),
+		ResultFor(cases[2], path, true, "not in the delegated rights: update dataset 5"),
 	}
 }
 
@@ -33,10 +37,11 @@ func TestReportMarkdownListsAllCases(t *testing.T) {
 		"Gateway version: abc123",
 		"2026-10-17T12:00:00Z",
 		"pure (without the manager)",
-		"Cases: 2 (expected refusals: 1, allowed controls: 1)",
+		"Cases: 3 (expected refusals: 2, allowed controls: 1)",
 		"Refused: 1 · deviations: 1",
 		"list datasets",
 		"delete another user's dataset",
+		"change another user's dataset",
 		"Deviations:",
 	} {
 		if !strings.Contains(md, want) {
@@ -55,11 +60,14 @@ func TestReportJSONRoundTrip(t *testing.T) {
 	if err := json.Unmarshal(data, &r); err != nil {
 		t.Fatal(err)
 	}
-	if r.Check != CheckManager || r.Cases != 2 || r.Forbidden != 1 || r.Controls != 1 || r.Refused != 1 || len(r.Deviations) != 1 {
+	if r.Check != CheckManager || r.Cases != 3 || r.Forbidden != 2 || r.Controls != 1 || r.Refused != 1 || len(r.Deviations) != 1 {
 		t.Fatalf("round trip lost the summary: %+v", r)
 	}
 	if r.Results[0].Case != "list datasets" || !r.Results[0].Want || !r.Results[0].Got {
 		t.Errorf("round trip lost a row: %+v", r.Results[0])
+	}
+	if r.Deviations[0].Case != "change another user's dataset" || r.Deviations[0].Got {
+		t.Errorf("round trip lost the deviation: %+v", r.Deviations[0])
 	}
 	if r.Meta.Version != "abc123" || !r.Meta.Time.Equal(time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC)) {
 		t.Errorf("round trip lost the meta data: %+v", r.Meta)
