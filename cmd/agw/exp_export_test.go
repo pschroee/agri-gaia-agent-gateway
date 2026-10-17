@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"agw/internal/agwclient"
 	"agw/internal/exp"
 )
 
@@ -62,6 +63,29 @@ func TestEnrichRunsFromPlan(t *testing.T) {
 	enrichRuns(rows, roles, cells)
 	if rows[0]["model_role"] != exp.RoleSecond || rows[0]["binding"] != "api" || rows[0]["protection"] != "service" || rows[0]["attack"] != "attack" {
 		t.Fatalf("enriched: %+v", rows[0])
+	}
+}
+
+// #161: the manifest names the plan-wide limits, the consumption and what is left before each limit.
+func TestExpLimitReport(t *testing.T) {
+	report, err := expLimitReport(exp.Limits{TokensTotal: 1000, DurationTotal: "2h"},
+		agwclient.ExpUsage{TokensTotal: 400, DurationTotal: "30m0s"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report["tokens_total"] != int64(1000) || report["tokens_used"] != int64(400) ||
+		report["tokens_remaining"] != int64(600) {
+		t.Fatalf("tokens: %+v", report)
+	}
+	if report["duration_total"] != "2h0m0s" || report["duration_used"] != "30m0s" ||
+		report["duration_remaining"] != "1h30m0s" {
+		t.Fatalf("duration: %+v", report)
+	}
+	// A plan over its limit reports zero left instead of a negative rest.
+	report, err = expLimitReport(exp.Limits{TokensTotal: 100, DurationTotal: "1m"},
+		agwclient.ExpUsage{TokensTotal: 400, DurationTotal: "2m0s"})
+	if err != nil || report["tokens_remaining"] != int64(0) || report["duration_remaining"] != "0s" {
+		t.Fatalf("over the limit: %+v %v", report, err)
 	}
 }
 

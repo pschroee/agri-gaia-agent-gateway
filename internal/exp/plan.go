@@ -46,7 +46,6 @@ type Plan struct {
 	Tasks          []string `yaml:"tasks"`
 	Limits         Limits   `yaml:"limits"`
 	Pass1Threshold float64  `yaml:"pass1_threshold"`
-	BudgetEUR      string   `yaml:"budget_eur"`
 }
 
 // Model names one model of the plan. ID may be a placeholder such as <HAUPTMODELL> until the
@@ -103,11 +102,39 @@ func TraceValue(v string) string {
 	return "on"
 }
 
-// Limits are the bounds per run (X3). MaxDuration is a Go duration such as 90m.
+// Defaults of the plan-wide limits (#161). They follow from the pilot runs on 17.10.2026: p90 of
+// 11.18 million tokens and 7.7 h over 32 cells × 20 tasks × k=3, rounded up.
+const (
+	DefaultTokensTotal   int64 = 12_000_000
+	DefaultDurationTotal       = 10 * time.Hour
+)
+
+// Limits are the bounds of the plan (X3, #161): Max* bound one run, TokensTotal and DurationTotal
+// bound the whole plan. The durations are Go durations such as 90m. An empty DurationTotal and a
+// zero TokensTotal mean the defaults above.
 type Limits struct {
-	MaxCostUSD  float64 `yaml:"max_cost_usd" json:"max_cost_usd"`
-	MaxTokens   int64   `yaml:"max_tokens" json:"max_tokens"`
-	MaxDuration string  `yaml:"max_duration" json:"max_duration"`
+	MaxCostUSD    float64 `yaml:"max_cost_usd" json:"max_cost_usd"`
+	MaxTokens     int64   `yaml:"max_tokens" json:"max_tokens"`
+	MaxDuration   string  `yaml:"max_duration" json:"max_duration"`
+	TokensTotal   int64   `yaml:"tokens_total" json:"tokens_total"`
+	DurationTotal string  `yaml:"duration_total" json:"duration_total"`
+}
+
+// PlanTokens is the token budget over the whole plan.
+func (l Limits) PlanTokens() int64 {
+	if l.TokensTotal > 0 {
+		return l.TokensTotal
+	}
+	return DefaultTokensTotal
+}
+
+// PlanDuration is the duration budget over the whole plan. Validate rejects an unparsable value;
+// an empty one means the default.
+func (l Limits) PlanDuration() time.Duration {
+	if d, err := time.ParseDuration(l.DurationTotal); err == nil && d > 0 {
+		return d
+	}
+	return DefaultDurationTotal
 }
 
 // Problem is one finding of Validate. Where names the file or object, Text the finding.
@@ -326,11 +353,18 @@ func validatePlan(p *Plan) []Problem {
 	} else if d <= 0 {
 		add("limits.max_duration must be positive, not %s", d)
 	}
+	if p.Limits.TokensTotal < 0 {
+		add("limits.tokens_total must not be negative, not %d", p.Limits.TokensTotal)
+	}
+	if p.Limits.DurationTotal != "" {
+		if d, err := time.ParseDuration(p.Limits.DurationTotal); err != nil {
+			add("limits.duration_total is not a duration such as 10h: %v", err)
+		} else if d <= 0 {
+			add("limits.duration_total must be positive, not %s", d)
+		}
+	}
 	if p.Pass1Threshold < 0 || p.Pass1Threshold > 1 {
 		add("pass1_threshold must be between 0 and 1, not %v", p.Pass1Threshold)
-	}
-	if strings.TrimSpace(p.BudgetEUR) == "" {
-		add("budget_eur is empty; a placeholder such as <BUDGET_EUR> is allowed")
 	}
 	if p.Purpose == PurposeMain && len(p.Tasks) < 20 {
 		add("a main plan needs at least 20 tasks, %d listed", len(p.Tasks))

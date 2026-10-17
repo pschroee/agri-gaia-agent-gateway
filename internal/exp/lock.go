@@ -49,7 +49,6 @@ type Lock struct {
 	Seed              int64             `json:"seed"`
 	K                 int               `json:"k"`
 	Runs              int               `json:"runs"` // Fallzahl: tasks × cells × k
-	BudgetEUR         string            `json:"budget_eur"`
 	Limits            Limits            `json:"limits"`
 	Pass1Threshold    float64           `json:"pass1_threshold"`
 	Runtimes          map[string]string `json:"runtimes,omitempty"`

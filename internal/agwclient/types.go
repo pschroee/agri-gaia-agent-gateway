@@ -398,6 +398,14 @@ type ExpRun struct {
 	SkillsSHA256   string `json:"skills_sha256,omitempty"`
 }
 
+// ExpUsage is GET /api/exp/usage (#161): what a plan has consumed so far. Tokens are input + output
+// of the plan's chats without cache reads (X3.3); the duration is the wall-clock time of its attempts.
+type ExpUsage struct {
+	TokensTotal   int64  `json:"tokens_total"`
+	DurationTotal string `json:"duration_total"`
+	Runs          int    `json:"runs"`
+}
+
 // ExpEnvironment is GET /api/exp/environment (X8.5): the identity of the gateway build, the checksums
 // of catalogue, skills and instruction wording, and the images of the warm experiment slots.
 type ExpEnvironment struct {

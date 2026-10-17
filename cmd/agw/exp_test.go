@@ -67,7 +67,8 @@ kind: allowed
 		}
 	}
 	plan.WriteString("limits:\n  max_cost_usd: 0.5\n  max_tokens: 2000000\n  max_duration: 90m\n")
-	plan.WriteString("pass1_threshold: 0.8\nbudget_eur: \"<BUDGET_EUR>\"\n")
+	plan.WriteString("  tokens_total: 12000000\n  duration_total: 10h\n")
+	plan.WriteString("pass1_threshold: 0.8\n")
 	if err := os.WriteFile(filepath.Join(dir, "plan.yaml"), []byte(plan.String()), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -372,8 +373,9 @@ limits:
   max_cost_usd: 0.5
   max_tokens: 2000000
   max_duration: 90m
+  tokens_total: 20000
+  duration_total: 10h
 pass1_threshold: 0.8
-budget_eur: "<BUDGET_EUR>"
 `
 	if err := os.WriteFile(filepath.Join(dir, "plan.yaml"), []byte(plan), 0o644); err != nil {
 		t.Fatal(err)
@@ -431,6 +433,8 @@ type fakeExpAPI struct {
 	// slot with the image IDs of envSlot.
 	env     agwclient.ExpEnvironment
 	envSlot agwclient.ExpEnvironmentSlot
+	// #161: what the plan has consumed so far; tests raise it above the plan's limit.
+	usage agwclient.ExpUsage
 }
 
 func newFakeExpAPI() *fakeExpAPI {
@@ -550,6 +554,10 @@ func (f *fakeExpAPI) ExpRuns(context.Context, string, string) ([]agwclient.ExpRu
 	return out, nil
 }
 
+func (f *fakeExpAPI) ExpUsage(context.Context, string) (agwclient.ExpUsage, error) {
+	return f.usage, nil
+}
+
 func (f *fakeExpAPI) ExpObjects(_ context.Context, chatID string) ([]agwclient.ExpObject, error) {
 	return f.objects[chatID], nil
 }
@@ -635,6 +643,34 @@ func TestRunSkipsFinished(t *testing.T) {
 		if run.Key == first.Key {
 			t.Fatalf("finished run %s started again", first.Key)
 		}
+	}
+}
+
+// #161: the plan-wide token limit ends the plan before the next attempt and its chat exist.
+func TestRunStopsAtPlanTokenLimit(t *testing.T) {
+	api := newFakeExpAPI()
+	api.usage = agwclient.ExpUsage{TokensTotal: 20000, DurationTotal: "1m", Runs: 1}
+	r, _, _ := newTestRunner(t, api)
+	err := r.run(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "plan limit reached: tokens") {
+		t.Fatalf("want the token limit, got %v", err)
+	}
+	if len(api.starts) != 0 || len(api.creates) != 0 {
+		t.Fatalf("the plan continued: %d attempts, %d chats", len(api.starts), len(api.creates))
+	}
+}
+
+// #161: the plan-wide duration limit ends the plan the same way.
+func TestRunStopsAtPlanDurationLimit(t *testing.T) {
+	api := newFakeExpAPI()
+	api.usage = agwclient.ExpUsage{TokensTotal: 1, DurationTotal: "10h0m1s", Runs: 1}
+	r, _, _ := newTestRunner(t, api)
+	err := r.run(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "plan limit reached: duration") {
+		t.Fatalf("want the duration limit, got %v", err)
+	}
+	if len(api.starts) != 0 || len(api.creates) != 0 {
+		t.Fatalf("the plan continued: %d attempts, %d chats", len(api.starts), len(api.creates))
 	}
 }
 

@@ -9,7 +9,20 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
+
+// #161: the plan-wide limits fall back to the defaults of the pilot runs and stay configurable.
+func TestPlanLimits(t *testing.T) {
+	var empty Limits
+	if empty.PlanTokens() != DefaultTokensTotal || empty.PlanDuration() != DefaultDurationTotal {
+		t.Fatalf("defaults: %d, %s", empty.PlanTokens(), empty.PlanDuration())
+	}
+	set := Limits{TokensTotal: 20000, DurationTotal: "90m"}
+	if set.PlanTokens() != 20000 || set.PlanDuration() != 90*time.Minute {
+		t.Fatalf("values: %d, %s", set.PlanTokens(), set.PlanDuration())
+	}
+}
 
 // material writes a plan, its tasks and its fixtures to a temporary directory.
 func material(t *testing.T, plan string, tasks, fixtures map[string]string) string {
@@ -114,8 +127,9 @@ func planYAML(purpose string, taskIDs ...string) string {
   max_cost_usd: 0.5
   max_tokens: 2000000
   max_duration: 90m
+  tokens_total: 12000000
+  duration_total: 10h
 pass1_threshold: 0.8
-budget_eur: "<BUDGET_EUR>"
 `)
 	return b.String()
 }

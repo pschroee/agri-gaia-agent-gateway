@@ -47,6 +47,7 @@ type expAPI interface {
 	ExpEndRun(ctx context.Context, end agwclient.ExpRunEnd) error
 	ExpSupersedeRun(ctx context.Context, id, by string) error
 	ExpRuns(ctx context.Context, plan, cell string) ([]agwclient.ExpRun, error)
+	ExpUsage(ctx context.Context, plan string) (agwclient.ExpUsage, error)
 	ExpObjects(ctx context.Context, chatID string) ([]agwclient.ExpObject, error)
 	ExpCall(ctx context.Context, req agwclient.ExpCallRequest) (agwclient.ExpCallResult, error)
 	ExpAbortChat(ctx context.Context, chatID string) error
@@ -295,6 +296,15 @@ func (r *expRunner) run(ctx context.Context) error {
 		return err
 	}
 	fmt.Fprintf(r.out, "%s: %d runs (k=%d), seed %d, material %s\n", r.planName, len(r.order), r.k, r.seed, shortID(r.planSHA))
+	if !r.dryRun {
+		// #161: the protocol names what the plan has consumed and what it may consume in total.
+		if usage, err := r.api.ExpUsage(ctx, r.planName); err != nil {
+			fmt.Fprintf(r.errw, "plan usage not readable: %v\n", err)
+		} else {
+			fmt.Fprintf(r.out, "plan usage: %d tokens, %s (limit %d tokens, %s)\n", usage.TokensTotal,
+				orDefault(usage.DurationTotal, "0s"), r.plan.Limits.PlanTokens(), roundDuration(r.plan.Limits.PlanDuration()))
+		}
+	}
 	if r.lock != nil && !r.dryRun {
 		// X8.5: the material matches the lock; now the environment must as well. A dry run prints the order
 		// without touching the gateway.
@@ -334,6 +344,30 @@ func (r *expRunner) checkModels(ctx context.Context) error {
 		fmt.Fprintln(&b, problem.String())
 	}
 	return errors.New(strings.TrimRight(b.String(), "\n"))
+}
+
+// checkPlanLimits stops the plan when its total token or duration budget is used up (#161). It runs
+// before every attempt that is not skipped, so the plan ends before a further chat is created.
+func (r *expRunner) checkPlanLimits(ctx context.Context) error {
+	usage, err := r.api.ExpUsage(ctx, r.planName)
+	if err != nil {
+		return fmt.Errorf("plan usage: %w", err)
+	}
+	if limit := r.plan.Limits.PlanTokens(); usage.TokensTotal >= limit {
+		return fmt.Errorf("plan limit reached: tokens (%d of %d used)", usage.TokensTotal, limit)
+	}
+	var used time.Duration // an empty field means nothing has run yet
+	if usage.DurationTotal != "" {
+		var err error
+		if used, err = time.ParseDuration(usage.DurationTotal); err != nil {
+			return fmt.Errorf("plan usage: duration %q: %w", usage.DurationTotal, err)
+		}
+	}
+	if limit := r.plan.Limits.PlanDuration(); used >= limit {
+		return fmt.Errorf("plan limit reached: duration (%s of %s used)",
+			roundDuration(used), roundDuration(limit))
+	}
+	return nil
 }
 
 // expEnvironment converts the client's answer into the material package's view.
@@ -425,6 +459,11 @@ func (r *expRunner) runOne(ctx context.Context, pr expPlannedRun, prev agwclient
 	if hasPrev && prev.Status != expStarted {
 		fmt.Fprintf(r.out, "run %s skipped (%s)\n", pr.Key, prev.Status)
 		return expOutcome{status: prev.Status, skipped: true}, nil
+	}
+	// #161: the plan-wide limits are checked against what the plan has consumed so far, before the
+	// next attempt and its chat exist. A skipped run above never reaches this point.
+	if err := r.checkPlanLimits(ctx); err != nil {
+		return expOutcome{}, err
 	}
 	id := pr.Key
 	if hasPrev {

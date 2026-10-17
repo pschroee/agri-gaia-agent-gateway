@@ -35,6 +35,7 @@ func (s *Server) expOnly(next http.HandlerFunc) http.HandlerFunc {
 func (s *Server) registerExp(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/exp/environment", s.expOnly(s.expEnvironment))
 	mux.HandleFunc("GET /api/exp/runs", s.expOnly(s.expRuns))
+	mux.HandleFunc("GET /api/exp/usage", s.expOnly(s.expUsage))
 	mux.HandleFunc("GET /api/exp/run", s.expOnly(s.expRun))
 	mux.HandleFunc("POST /api/exp/runs/start", s.expOnly(s.expStartRun))
 	mux.HandleFunc("POST /api/exp/runs/chat", s.expOnly(s.expSetRunChat))
@@ -53,6 +54,22 @@ func (s *Server) expRuns(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, runs)
+}
+
+// expUsage answers what a plan has consumed so far (#161): the runner checks the plan-wide token
+// and duration limits before every run.
+func (s *Server) expUsage(w http.ResponseWriter, r *http.Request) {
+	plan := r.URL.Query().Get("plan")
+	if plan == "" {
+		writeErr(w, http.StatusBadRequest, "plan is missing")
+		return
+	}
+	usage, err := s.M.ExpUsage(r.Context(), plan)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, 200, usage)
 }
 
 func (s *Server) expRun(w http.ResponseWriter, r *http.Request) {

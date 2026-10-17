@@ -36,6 +36,11 @@ func (m *Manager) ExpRun(ctx context.Context, id string) (store.ExpRun, error) {
 	return m.st.GetExpRun(ctx, id)
 }
 
+// ExpUsage sums what a plan has consumed so far (#161).
+func (m *Manager) ExpUsage(ctx context.Context, plan string) (store.ExpUsage, error) {
+	return m.st.ExpUsage(ctx, plan)
+}
+
 // DelegationObjects returns the provenance register of a chat (X1.10: cleanup only by these ids).
 func (m *Manager) DelegationObjects(ctx context.Context, chatID string) ([]store.DelegationObject, error) {
 	return m.st.ListDelegationObjects(ctx, chatID)

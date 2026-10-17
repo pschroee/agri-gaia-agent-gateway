@@ -372,6 +372,13 @@ func (c *Client) ExpRuns(ctx context.Context, plan, cell string) (out []ExpRun, 
 	return out, c.Do(ctx, "GET", "/api/exp/runs?"+q.Encode(), nil, &out)
 }
 
+// ExpUsage sums what a plan has consumed so far (#161).
+func (c *Client) ExpUsage(ctx context.Context, plan string) (out ExpUsage, err error) {
+	q := url.Values{}
+	q.Set("plan", plan)
+	return out, c.Do(ctx, "GET", "/api/exp/usage?"+q.Encode(), nil, &out)
+}
+
 func (c *Client) ExpRun(ctx context.Context, id string) (out ExpRun, err error) {
 	q := url.Values{}
 	q.Set("id", id)
