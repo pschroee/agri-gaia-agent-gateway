@@ -110,7 +110,10 @@ func TestCapabilitiesBuiltIn(t *testing.T) {
 	}
 	// The exec path reads no catalog of its own (issue #163): agw-platform in the sandbox posts to the
 	// socket, and the gateway answers from the same catalog object. The CLI binding therefore reports
-	// the same answer as the overview above.
+	// the same answer as the overview above. PlatformCall insists on a configured binding even for a
+	// virtual path (it checks m.opt.Platform first); the call below is answered by the gateway and
+	// reaches the fake platform at no point.
+	countPlatform(t, e)
 	res, err := e.m.PlatformCall(ctx, c2.ID, e.m.live[c2.ID].slot.ID, "cli",
 		platform.Request{Method: "GET", Path: platform.CapabilitiesPath})
 	if err != nil || res.Status != "ok" {
