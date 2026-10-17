@@ -1664,6 +1664,10 @@ type ToolExecution struct {
 	ArgsTruncated bool   `json:"args_truncated,omitempty"`
 	CommandBytes  *int64 `json:"command_bytes,omitempty"`
 	CommandSHA256 string `json:"command_sha256,omitempty"`
+	// X6: failed syscalls of this operation (strace lines). They are parsed into exec_syscalls
+	// and are not part of the API response.
+	Trace          []byte `json:"-"`
+	TraceTruncated bool   `json:"-"`
 }
 
 // AddToolExecution stores an execution. Postgres accepts no NUL in text
@@ -1688,6 +1692,7 @@ func (s *Store) AddToolExecution(ctx context.Context, e ToolExecution) (ToolExec
 	}
 	fb := e
 	fb.Args, fb.OutputExcerpt = json.RawMessage("{}"), ""
+	fb.Trace, fb.TraceTruncated = nil, false // if the trace was the cause, the execution still has to be stored
 	fb.Error = strings.TrimSpace(fb.Error + " [entry not stored completely: " + noNUL(err.Error()) + "]")
 	id, err2 := s.insertToolExecution(ctx, fb)
 	if err2 != nil {
@@ -1697,19 +1702,35 @@ func (s *Store) AddToolExecution(ctx context.Context, e ToolExecution) (ToolExec
 	return fb, nil
 }
 
+// insertToolExecution stores the execution and, in the same transaction, the parsed syscalls
+// of its trace (X6): a trace without its execution row (or the other way round) would break the
+// assignment in the export.
 func (s *Store) insertToolExecution(ctx context.Context, e ToolExecution) (int64, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
 	var chat any
 	if e.ChatID != "" {
 		chat = e.ChatID
 	}
 	var id int64
-	err := s.pool.QueryRow(ctx, `
+	if err := tx.QueryRow(ctx, `
 INSERT INTO tool_executions (chat_id, slot_id, session, tool_call_id, tool, op, args, exit_code, error, output_excerpt,
 output_sha256, output_bytes, started_at, duration_ms, args_truncated, command_bytes, command_sha256)
 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,NULLIF($17,'')) RETURNING id`,
 		chat, e.SlotID, e.Session, e.ToolCallID, e.Tool, e.Op, []byte(e.Args), e.ExitCode, e.Error, e.OutputExcerpt,
-		e.OutputSHA256, e.OutputBytes, e.StartedAt, e.DurationMs, e.ArgsTruncated, e.CommandBytes, e.CommandSHA256).Scan(&id)
-	return id, err
+		e.OutputSHA256, e.OutputBytes, e.StartedAt, e.DurationMs, e.ArgsTruncated, e.CommandBytes, e.CommandSHA256).Scan(&id); err != nil {
+		return 0, err
+	}
+	if err := insertExecSyscalls(ctx, tx, e, id); err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, err
+	}
+	return id, nil
 }
 
 // noNUL makes a text storable: NUL becomes U+2400, invalid UTF-8 becomes U+FFFD.

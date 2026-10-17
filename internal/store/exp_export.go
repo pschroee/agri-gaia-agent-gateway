@@ -78,8 +78,7 @@ var exportTables = []string{"runs", "platform_calls", "tool_executions", "llm_ca
 // ExportNames lists the tables of the export in the order of the manifest.
 func ExportNames() []string { return append([]string(nil), exportTables...) }
 
-// ExportTable reads one table for a plan. "reconcile" is computed by the API because it needs the chat package;
-// "syscalls" waits for X6 and stays empty.
+// ExportTable reads one table for a plan. "reconcile" is computed by the API because it needs the chat package.
 func (s *Store) ExportTable(ctx context.Context, plan, table string) (*ExportTable, error) {
 	switch table {
 	case "runs":
@@ -133,8 +132,13 @@ FROM chat_turns t JOIN plan_chats r ON r.chat_id = t.chat_id ORDER BY t.id`)
   f.created_at, f.removed_at, f.remove_result
 FROM exp_fixtures f JOIN plan_chats r ON r.cell = f.cell WHERE f.plan = $1 ORDER BY f.created_at, f.id, r.run_id`)
 	case "syscalls":
-		// X6 creates this source later; until then the file exists with its mandatory columns and no rows.
-		return &ExportTable{Name: table, Columns: []string{"run_id", "cell", "task", "rep"}}, nil
+		// X6: failed syscalls per execution; the chat assigns them to the run.
+		return s.exportQuery(ctx, plan, table,
+			[]string{"run_id", "cell", "task", "rep", "id", "chat_id", "slot_id", "execution_id", "pid", "syscall",
+				"args", "errno", "ts", "trace_truncated"},
+			`SELECT r.run_id, r.cell, r.task, r.rep, y.id, COALESCE(y.chat_id::text,''), y.slot_id, y.execution_id,
+  y.pid, y.syscall, y.args, y.errno, y.ts, y.trace_truncated
+FROM exec_syscalls y JOIN plan_chats r ON r.chat_id = y.chat_id ORDER BY y.id`)
 	}
 	return nil, fmt.Errorf("unknown export table %q", table)
 }

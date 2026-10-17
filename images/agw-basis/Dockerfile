@@ -100,9 +100,9 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       python3 python3-pip python3-venv curl jq ripgrep git ca-certificates procps \
       unzip zip tar gzip xz-utils bzip2 file \
-      poppler-utils binutils \
+      poppler-utils binutils strace \
  && rm -rf /var/lib/apt/lists/* \
- && pdfinfo -v 2>&1 | head -1 && strings --version | head -1
+ && pdfinfo -v 2>&1 | head -1 && strings --version | head -1 && strace -V | head -1
 # Common data packages preinstalled: internet is off in the sandbox by default,
 # so pip install mostly does not work. System-wide, because ~/.local is a tmpfs at runtime.
 # matplotlib draws without a display (Agg); the agent saves charts as PNG and shows

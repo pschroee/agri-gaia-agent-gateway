@@ -406,7 +406,7 @@ func (th *toolHandler) record(chat string, tr toolRequest, op string, args json.
 	e := store.ToolExecution{ChatID: chat, SlotID: th.slot, Session: SessionKey(tr.SessionFile), ToolCallID: tr.ToolCallID,
 		Tool: tr.Tool, Op: op, Args: args, ExitCode: f.Exit, Error: f.Error, OutputExcerpt: d.Excerpt(), OutputSHA256: d.Sum(),
 		OutputBytes: d.n, StartedAt: start, DurationMs: time.Since(start).Milliseconds(), ArgsTruncated: meta.Truncated,
-		CommandSHA256: meta.SHA256}
+		CommandSHA256: meta.SHA256, Trace: f.Trace, TraceTruncated: f.TraceTruncated}
 	if meta.Bytes > 0 {
 		e.CommandBytes = &meta.Bytes
 	}

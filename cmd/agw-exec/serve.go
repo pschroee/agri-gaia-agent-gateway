@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -44,16 +45,31 @@ type server struct {
 	cgroup string
 	// bgMax: at most this many concurrent background tasks (operation bg).
 	bgMax int
+	// trace: trace failed network and file syscalls of every operation (X6). The orchestrator
+	// sets AGW_EXEC_TRACE=failed for experiment slots only.
+	trace bool
 }
 
 const maxConcurrentOps = 64
+
+// Limits and names of the syscall trace (X6).
+const (
+	// traceMaxBytes: the supervisor sends at most this much of an operation's trace.
+	traceMaxBytes = 1 << 20
+	// traceDefaultDir: tmpfs of the execution sandbox, root-only (sandbox.ExecTmpfs).
+	traceDefaultDir = "/var/log/agw-trace"
+	// tracedSyscalls: failed network and file access, plus execve (X6.1/X6.2).
+	tracedSyscalls = "%network,open,openat,openat2,stat,newfstatat,execve"
+)
 
 func newServer(out io.Writer, self string, uid, gid int) *server {
 	env := []string{}
 	for _, kv := range os.Environ() {
 		k, _, _ := strings.Cut(kv, "=")
 		switch k {
-		case "HOME", "USER", "LOGNAME", "MAIL", "SUDO_USER":
+		// The agent's processes must not learn that their slot is traced (X6.5); the values
+		// are for the supervisor only.
+		case "HOME", "USER", "LOGNAME", "MAIL", "SUDO_USER", "AGW_EXEC_TRACE", "AGW_EXEC_TRACE_DIR":
 			continue
 		}
 		env = append(env, kv)
@@ -63,7 +79,61 @@ func newServer(out io.Writer, self string, uid, gid int) *server {
 	} else if h, ok := os.LookupEnv("HOME"); ok {
 		env = append(env, "HOME="+h)
 	}
-	return &server{self: self, uid: uid, gid: gid, env: env, out: bufio.NewWriterSize(out, 64<<10), running: map[uint64]*child{}, cgroup: "/sys/fs/cgroup", bgMax: execproto.DefaultBgMax}
+	s := &server{self: self, uid: uid, gid: gid, env: env, out: bufio.NewWriterSize(out, 64<<10), running: map[uint64]*child{}, cgroup: "/sys/fs/cgroup", bgMax: execproto.DefaultBgMax,
+		trace: os.Getenv("AGW_EXEC_TRACE") == "failed"}
+	if s.trace {
+		if err := os.MkdirAll(traceDir(), 0700); err != nil {
+			fmt.Fprintln(os.Stderr, "agw-exec serve: trace directory:", err)
+		}
+	}
+	return s
+}
+
+// traceDir is the directory of the trace files (X6.3). AGW_EXEC_TRACE_DIR exists for tests;
+// the sandbox mounts the default as a root-only tmpfs (sandbox.ExecTmpfs).
+func traceDir() string {
+	if d := os.Getenv("AGW_EXEC_TRACE_DIR"); d != "" {
+		return d
+	}
+	return traceDefaultDir
+}
+
+// tracePath is the trace file of one operation. One file per operation makes the
+// assignment to the execution unique, and the ID comes from the supervisor, not the agent.
+func tracePath(id uint64) string {
+	return filepath.Join(traceDir(), fmt.Sprintf("op-%d.trace", id))
+}
+
+// traceCommand builds the invocation of an operation under strace. strace stays root so that
+// it may write the root-only file; the helper drops to the agent user itself before it reads
+// the request. strace's own -u switch cannot be used: the tracer would then have to attach to
+// a process of another uid, which needs CAP_SYS_PTRACE (S0 of X6.8).
+func (s *server) traceCommand(id uint64) []string {
+	args := []string{"strace", "-f", "-qq", "--status=failed", "-e", "trace=" + tracedSyscalls,
+		// Timestamps for the ts column; signal lines are no syscalls and would only become "?" rows.
+		"-e", "signal=none", "-ttt", "-o", tracePath(id), "--", s.self, "op"}
+	return args
+}
+
+// readTrace reads at most traceMaxBytes of an operation's trace and trims a partial last line.
+func readTrace(path string) ([]byte, bool) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, false
+	}
+	defer f.Close()
+	b, err := io.ReadAll(io.LimitReader(f, traceMaxBytes+1))
+	if err != nil {
+		return nil, false
+	}
+	truncated := false
+	if len(b) > traceMaxBytes {
+		b, truncated = b[:traceMaxBytes], true
+		if i := bytes.LastIndexByte(b, '\n'); i >= 0 {
+			b = b[:i+1]
+		}
+	}
+	return b, truncated
 }
 
 func (s *server) send(f execproto.Frame) {
@@ -207,12 +277,12 @@ func (s *server) start(req execproto.Request) {
 			logFile, req.LogFD = f, true
 		}
 	}
-	cmd, stdin, stdout, err := s.spawn(logFile)
+	cmd, stdin, stdout, err := s.spawn(logFile, id)
 	if err != nil && errors.Is(err, syscall.EAGAIN) {
 		// No process left (PidsLimit exhausted, e.g. by a fork bomb): emergency brake,
 		// then a second attempt (N3).
 		s.reap()
-		cmd, stdin, stdout, err = s.spawn(logFile)
+		cmd, stdin, stdout, err = s.spawn(logFile, id)
 	}
 	if logFile != nil {
 		logFile.Close() // the helper has its own copy
@@ -225,6 +295,9 @@ func (s *server) start(req execproto.Request) {
 	if _, err := stdin.Write(append(b, '\n')); err != nil {
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
+		if s.trace {
+			_ = os.Remove(tracePath(id))
+		}
 		s.send(execproto.Frame{ID: id, Done: true, Error: "execution helper does not accept the request", Code: "EIO"})
 		return
 	}
@@ -237,6 +310,7 @@ func (s *server) start(req execproto.Request) {
 	go func() {
 		defer s.wg.Done()
 		done := false
+		var final execproto.Frame
 		sc := bufio.NewScanner(stdout)
 		sc.Buffer(make([]byte, 64<<10), execproto.MaxFrameBytes)
 		for sc.Scan() {
@@ -254,15 +328,42 @@ func (s *server) start(req execproto.Request) {
 				}
 				s.mu.Unlock()
 			}
+			if f.Done && s.trace {
+				// Hold the last frame until the trace file has been read (X6.3).
+				final = f
+				done = true
+				break
+			}
 			s.send(f)
 			if f.Done {
 				done = true
 				break
 			}
 		}
-		_, _ = io.Copy(io.Discard, stdout)
+		if done && s.trace {
+			// The trace was written before the helper sent Done; read it before the tracer is
+			// stopped. With -f strace would otherwise end only after every descendant, and a
+			// background child of the command can outlive the operation. Killing it detaches
+			// the remaining tracees; the result of this operation is complete by then.
+			b, truncated := readTrace(tracePath(id))
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
+			_ = os.Remove(tracePath(id))
+			if len(b) > 0 {
+				final.Trace, final.TraceTruncated = b, truncated
+			}
+			s.send(final)
+			// Descendants may still hold the pipe; draining without blocking keeps them from
+			// stalling on a full pipe and releases the slot right away.
+			go func() { _, _ = io.Copy(io.Discard, stdout) }()
+		} else {
+			if s.trace {
+				_ = cmd.Process.Kill()
+			}
+			_, _ = io.Copy(io.Discard, stdout)
+			_ = cmd.Wait()
+		}
 		c.cancel()
-		_ = cmd.Wait()
 		s.mu.Lock()
 		delete(s.running, id)
 		s.mu.Unlock()
@@ -287,24 +388,48 @@ func (s *server) start(req execproto.Request) {
 				s.reap()
 				msg += "; the process limit of the execution sandbox was exhausted, all processes of the agent were killed"
 			}
-			s.send(execproto.Frame{ID: id, Done: true, Error: msg, Code: "EIO"})
+			frame := execproto.Frame{ID: id, Done: true, Error: msg, Code: "EIO"}
+			if s.trace {
+				if b, truncated := readTrace(tracePath(id)); len(b) > 0 {
+					frame.Trace, frame.TraceTruncated = b, truncated
+				}
+				_ = os.Remove(tracePath(id))
+			}
+			s.send(frame)
 		}
 	}()
 }
 
-// spawn starts a child process "agw-exec op" as the agent user; extra becomes descriptor 3 there.
-func (s *server) spawn(extra *os.File) (*exec.Cmd, io.WriteCloser, io.ReadCloser, error) {
-	cmd := exec.Command(s.self, "op")
-	cmd.Env = s.env
+// command prepares the child process of one operation; spawn starts it.
+func (s *server) command(id uint64, extra *os.File) *exec.Cmd {
+	var cmd *exec.Cmd
+	env := s.env
+	if s.trace {
+		argv := s.traceCommand(id)
+		cmd = exec.Command(argv[0], argv[1:]...)
+		if s.uid >= 0 {
+			// The helper itself drops to the agent user before it reads the request (X6.1).
+			env = append(append([]string{}, s.env...), "AGW_EXEC_SETUID="+strconv.Itoa(s.uid), "AGW_EXEC_SETGID="+strconv.Itoa(s.gid))
+		}
+	} else {
+		cmd = exec.Command(s.self, "op")
+	}
+	cmd.Env = env
 	cmd.Dir = "/"
 	if extra != nil {
 		cmd.ExtraFiles = []*os.File{extra}
 	}
 	attr := &syscall.SysProcAttr{Setpgid: true}
-	if s.uid >= 0 {
+	if !s.trace && s.uid >= 0 {
 		attr.Credential = &syscall.Credential{Uid: uint32(s.uid), Gid: uint32(s.gid), Groups: []uint32{}}
 	}
 	cmd.SysProcAttr = attr
+	return cmd
+}
+
+// spawn starts a child process "agw-exec op" as the agent user; extra becomes descriptor 3 there.
+func (s *server) spawn(extra *os.File, id uint64) (*exec.Cmd, io.WriteCloser, io.ReadCloser, error) {
+	cmd := s.command(id, extra)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, nil, nil, err
@@ -389,6 +514,13 @@ func killUID(uid int) int {
 // opMain is the child process: one request from the first line of stdin;
 // the end of stdin aborts the operation.
 func opMain() int {
+	// Traced operations start under strace as root (the tracer needs the same uid at attach
+	// time, without CAP_SYS_PTRACE); the helper drops to the agent user before it reads the
+	// request. Unset right after, so the agent's processes do not see the values.
+	if err := dropTraced(); err != nil {
+		fmt.Fprintln(os.Stderr, "agw-exec op: dropping privileges:", err)
+		return 2
+	}
 	if err := notDumpable(); err != nil {
 		return 2
 	}
