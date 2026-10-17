@@ -421,6 +421,15 @@ func roundDuration(d time.Duration) string {
 	return d.Round(time.Second).String()
 }
 
+// experimentVariant maps the plan's binding to the variant key the toolset parser accepts. The
+// plan format writes the combination as "cli+mcp"; the canonical key is "cli,mcp".
+func experimentVariant(binding string) string {
+	if binding == "cli+mcp" {
+		return "cli,mcp"
+	}
+	return binding
+}
+
 // createChat makes the run's experiment chat. The task text goes with the create request: the
 // experiment key may create and read chats, not post messages (X1.3).
 func (r *expRunner) createChat(ctx context.Context, pr expPlannedRun, task exp.Task, cell exp.Cell, model string) (agwclient.Chat, error) {
@@ -430,7 +439,7 @@ func (r *expRunner) createChat(ctx context.Context, pr expPlannedRun, task exp.T
 	}
 	req := agwclient.CreateChatRequest{
 		Model:      model,
-		Variant:    cell.Binding,
+		Variant:    experimentVariant(cell.Binding),
 		Title:      truncate(fmt.Sprintf("%s · %s #%d", task.Title, cell.ID, pr.Rep), 80),
 		Message:    task.Prompt,
 		Delegation: delegation,

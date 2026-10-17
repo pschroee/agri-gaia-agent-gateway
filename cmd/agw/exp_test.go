@@ -681,3 +681,15 @@ func TestPilotRefusesMainTaskIDs(t *testing.T) {
 		t.Fatalf("want the overlap finding, got %q", out.String())
 	}
 }
+
+// The plan writes the combination as "cli+mcp"; the toolset parser expects "cli,mcp".
+func TestExperimentVariantCLIMCP(t *testing.T) {
+	if got := experimentVariant("cli+mcp"); got != "cli,mcp" {
+		t.Fatalf("cli+mcp: %q", got)
+	}
+	for _, in := range []string{"mcp", "api", "cli"} {
+		if got := experimentVariant(in); got != in {
+			t.Fatalf("%s: %q", in, got)
+		}
+	}
+}
