@@ -246,3 +246,23 @@ func TestRunBackground(t *testing.T) {
 		t.Fatalf("order: %v", events)
 	}
 }
+
+// X7.6/#152: Reset ends the supervisor session without closing the client; the next operation
+// starts a new supervisor (with the new trace setting).
+func TestResetStartsNewSession(t *testing.T) {
+	d := &localDialer{}
+	c := New(d.dial)
+	defer c.Close()
+	ctx := context.Background()
+	for i := 0; i < 2; i++ {
+		if f, err := c.Run(ctx, execproto.Request{Op: execproto.OpStat, Path: "/"}, nil); err != nil || f.Error != "" {
+			t.Fatalf("run %d: %v %+v", i, err, f)
+		}
+		if i == 0 {
+			c.Reset()
+		}
+	}
+	if d.dials != 2 {
+		t.Fatalf("%d supervisors, want 2", d.dials)
+	}
+}

@@ -133,7 +133,10 @@ type Experiment struct {
 	Cell       string `json:"cell,omitempty"`
 	Run        string `json:"run,omitempty"`
 	Seed       int64  `json:"seed,omitempty"`
-	Limit      string `json:"limit,omitempty"`
+	// Trace: syscall trace of this run (X7.6/#152): on | off. Empty means the slot's default,
+	// which is on for experiment slots.
+	Trace string `json:"trace,omitempty"`
+	Limit string `json:"limit,omitempty"`
 }
 
 type NewChat struct {

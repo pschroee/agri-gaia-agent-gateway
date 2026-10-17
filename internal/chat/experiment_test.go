@@ -282,3 +282,43 @@ func TestSetupBindingsStripExperimentPrefix(t *testing.T) {
 		t.Fatalf("detail %q", c.Detail)
 	}
 }
+
+// X7.6/#152: the trace setting of a run reaches the slot; empty means on, "off" switches it off.
+func TestExperimentTracePerRun(t *testing.T) {
+	e := setup(t)
+	allowExperiment(e)
+	for _, tc := range []struct {
+		name  string
+		field string
+		want  bool
+	}{
+		{"default", "", true},
+		{"on", "on", true},
+		{"off", "off", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, err := e.m.Create(context.Background(), NewChat{Title: "trace " + tc.name,
+				Experiment: &store.Experiment{Protection: "none", Cell: "cli", Run: "r1", Trace: tc.field},
+				Delegation: json.RawMessage(experimentDelegation), Owner: "sub-1", OwnerName: experimentUser})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if c.Experiment == nil || c.Experiment.Trace != tc.field {
+				t.Fatalf("stored trace: %+v", c.Experiment)
+			}
+			e.mu.Lock()
+			a := e.agents[len(e.agents)-1]
+			e.mu.Unlock()
+			calls := a.traceCalls()
+			if len(calls) == 0 || calls[len(calls)-1] != tc.want {
+				t.Fatalf("SetExecTrace: %v, want %v", calls, tc.want)
+			}
+		})
+	}
+	// An unknown value is refused instead of silently tracing.
+	if _, err := e.m.Create(context.Background(), NewChat{Title: "bad",
+		Experiment: &store.Experiment{Protection: "none", Cell: "cli", Run: "r1", Trace: "sometimes"},
+		Delegation: json.RawMessage(experimentDelegation), Owner: "sub-1", OwnerName: experimentUser}); !errors.Is(err, ErrExperimentTrace) {
+		t.Fatalf("invalid trace: %v", err)
+	}
+}

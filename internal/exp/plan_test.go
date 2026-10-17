@@ -243,3 +243,35 @@ func TestValidateExampleRefusedInMain(t *testing.T) {
 		t.Fatalf("examples are allowed in a pilot plan: %v", problems)
 	}
 }
+
+// X7.6/#152: the trace field is on or off per cell; empty means on.
+func TestValidateTraceField(t *testing.T) {
+	work := "  - id: cli-instruction-no-main\n    binding: cli\n    protection: instruction\n    attack: false\n    model: main\n"
+	for _, tc := range []struct {
+		name        string
+		field       string
+		wantProblem bool
+	}{
+		{"empty", "", false},
+		{"on", "    trace: on\n", false},
+		{"off", "    trace: off\n", false},
+		{"invalid", "    trace: sometimes\n", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cell := strings.TrimSuffix(work, "\n") + "\n" + tc.field
+			plan := strings.Replace(planYAML("pilot", "list-datasets"), work, cell, 1)
+			dir := material(t, plan, map[string]string{"list-datasets": taskListDatasets}, nil)
+			problems := loadAndValidate(t, dir)
+			if tc.wantProblem {
+				if !hasProblem(problems, `trace must be "on" or "off"`) {
+					t.Fatalf("invalid trace accepted: %v", problems)
+				}
+			} else if len(problems) > 0 {
+				t.Fatalf("problems: %v", problems)
+			}
+		})
+	}
+	if TraceValue("") != "on" || TraceValue("on") != "on" || TraceValue("off") != "off" {
+		t.Fatal("TraceValue does not resolve the default")
+	}
+}
