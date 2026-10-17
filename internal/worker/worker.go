@@ -602,6 +602,9 @@ type Worker struct {
 	dir   string
 	image string
 	once  sync.Once
+	// trace: trace the failed syscalls of this slot's operations (X7.6/#152)? The variant sets
+	// the default (on for experiment slots); an experiment chat may switch it per run.
+	trace atomic.Bool
 }
 
 func (w *Worker) Call(ctx context.Context, cmd map[string]any) (rpc.Response, error) {
@@ -689,6 +692,28 @@ func (w *Worker) SetInternet(ctx context.Context, on bool) error {
 	return w.rt.SetInternet(ctx, w.exec.ID, on)
 }
 
+// supervisorCommand starts agw-exec serve with the trace setting of this run. The value in the
+// exec environment overrides the container's, which keeps the variant's default (X7.6/#152).
+func (w *Worker) supervisorCommand(bgMax int) []string {
+	trace := "off"
+	if w.trace.Load() {
+		trace = "failed"
+	}
+	return []string{"/usr/bin/env", "AGW_EXEC_TRACE=" + trace, "/usr/local/bin/agw-exec", "serve", "-bg-max", strconv.Itoa(bgMax)}
+}
+
+// SetExecTrace switches the syscall trace for this run (X7.6/#152). The supervisor reads the
+// setting when it starts, so an existing session is ended; the next operation starts a new one.
+func (w *Worker) SetExecTrace(ctx context.Context, on bool) error {
+	if w.trace.Swap(on) == on {
+		return nil
+	}
+	if w.box != nil {
+		w.box.Reset()
+	}
+	return nil
+}
+
 // Create starts a slot. Order: sockets first, because the MCP extension
 // already talks to the socket when pi starts; the execution sandbox before
 // pi, so that tool calls have a target right away.
@@ -700,6 +725,10 @@ func (f *Factory) Create(ctx context.Context, slotID, variant string) (chat.Agen
 		return nil, err
 	}
 	w := &Worker{rt: f.RT, dir: filepath.Join(f.Env.SocketRoot, slotID), image: f.Env.PiImage}
+	// X6/#131: experiment slots trace by default; product slots never do. An experiment chat may
+	// switch it per run (X7.6/#152), with this value as the fallback.
+	_, experimentVariant := SplitExperiment(variant)
+	w.trace.Store(experimentVariant)
 	cleanup := func() { f.Destroy(pool.WithReason(context.WithoutCancel(ctx), pool.ReasonStartFailed), w) }
 	if w.net, err = f.RT.CreateSlotNetwork(ctx, slotID); err != nil {
 		return nil, err
@@ -713,7 +742,7 @@ func (f *Factory) Create(ctx context.Context, slotID, variant string) (chat.Agen
 			return nil, nil, nil, errors.New("execution sandbox missing")
 		}
 		// The connection lives longer than the request that triggers it.
-		in, out, closeFn, stderr, err := f.RT.ExecStream(context.WithoutCancel(dctx), w.exec.ID, []string{"/usr/local/bin/agw-exec", "serve", "-bg-max", strconv.Itoa(f.bgMax())}, "0:0")
+		in, out, closeFn, stderr, err := f.RT.ExecStream(context.WithoutCancel(dctx), w.exec.ID, w.supervisorCommand(f.bgMax()), "0:0")
 		if err != nil {
 			return nil, nil, nil, fmt.Errorf("starting supervisor: %w", err)
 		}

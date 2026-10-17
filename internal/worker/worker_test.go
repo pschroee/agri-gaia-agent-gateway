@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"context"
 	"encoding/json"
 	"slices"
 	"strings"
@@ -253,5 +254,24 @@ func TestInternetOffInEveryBinding(t *testing.T) {
 		if !strings.Contains(note, want) {
 			t.Errorf("system note lacks %q", want)
 		}
+	}
+}
+
+// X7.6/#152: the supervisor starts with this run's trace setting; the flag switches it.
+func TestSupervisorTraceSetting(t *testing.T) {
+	w := &Worker{}
+	w.trace.Store(true)
+	on := w.supervisorCommand(5)
+	if !slices.Contains(on, "AGW_EXEC_TRACE=failed") || !slices.Contains(on, "/usr/local/bin/agw-exec") || !slices.Contains(on, "-bg-max") {
+		t.Fatalf("on: %v", on)
+	}
+	w.trace.Store(false)
+	off := w.supervisorCommand(5)
+	if !slices.Contains(off, "AGW_EXEC_TRACE=off") {
+		t.Fatalf("off: %v", off)
+	}
+	// Without a supervisor session the flag changes alone; the next start uses the new value.
+	if err := w.SetExecTrace(context.Background(), true); err != nil || !w.trace.Load() {
+		t.Fatalf("SetExecTrace: %v %v", err, w.trace.Load())
 	}
 }

@@ -448,6 +448,8 @@ func (r *expRunner) createChat(ctx context.Context, pr expPlannedRun, task exp.T
 			Cell:       cell.ID,
 			Run:        pr.Key,
 			Seed:       pr.Seed,
+			// X7.6/#152: on unless the cell turns it off; the plan's field is per cell.
+			Trace: exp.TraceValue(cell.Trace),
 		},
 	}
 	for attempt := 0; ; attempt++ {

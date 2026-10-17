@@ -33,7 +33,8 @@ type fakeAgent struct {
 	cmds     []map[string]any
 	files    map[string][]byte
 	internet bool
-	netCalls int // SetInternet calls
+	netCalls int    // SetInternet calls
+	traces   []bool // SetExecTrace calls (X7.6/#152)
 	closed   bool
 	reason   string // teardown reason passed by the pool (issue #55)
 	events   chan rpc.Event
@@ -311,6 +312,21 @@ func (a *fakeAgent) SetInternet(_ context.Context, on bool) error {
 	a.netCalls++
 	a.mu.Unlock()
 	return nil
+}
+
+// SetExecTrace records the per-run syscall trace setting (X7.6/#152).
+func (a *fakeAgent) SetExecTrace(_ context.Context, on bool) error {
+	a.mu.Lock()
+	a.traces = append(a.traces, on)
+	a.mu.Unlock()
+	return nil
+}
+
+// traceCalls returns the recorded SetExecTrace values.
+func (a *fakeAgent) traceCalls() []bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return append([]bool(nil), a.traces...)
 }
 
 func (a *fakeAgent) file(path string) []byte {

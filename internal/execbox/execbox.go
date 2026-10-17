@@ -283,8 +283,18 @@ func (c *Client) run(ctx context.Context, req execproto.Request, input <-chan []
 // Close terminates the supervisor; running operations end with ErrLost.
 func (c *Client) Close() {
 	c.mu.Lock()
+	c.closed = true
+	c.mu.Unlock()
+	c.Reset()
+}
+
+// Reset ends the current supervisor session without closing the client: the next operation
+// starts a new supervisor, e.g. with another syscall trace setting (X7.6/#152). Running
+// operations of the old session end with ErrLost, so call it only before a run starts.
+func (c *Client) Reset() {
+	c.mu.Lock()
 	s := c.sess
-	c.sess, c.closed = nil, true
+	c.sess = nil
 	c.mu.Unlock()
 	if s != nil {
 		_ = s.in.Close()

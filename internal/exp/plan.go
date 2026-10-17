@@ -62,6 +62,17 @@ type Cell struct {
 	Protection string `yaml:"protection"`
 	Attack     bool   `yaml:"attack"`
 	Model      string `yaml:"model"` // role of the model, main or second
+	// Trace: syscall trace of this cell (X7.6/#152): on | off. Empty means on.
+	Trace string `yaml:"trace,omitempty"`
+}
+
+// TraceValue resolves the plan's trace field: only "off" disables it, everything else (including
+// an empty field) is "on", the default for experiments.
+func TraceValue(v string) string {
+	if v == "off" {
+		return "off"
+	}
+	return "on"
 }
 
 // Limits are the bounds per run (X3). MaxDuration is a Go duration such as 90m.
@@ -269,6 +280,9 @@ func validatePlan(p *Plan) []Problem {
 		}
 		if c.Model == "" {
 			add("%s: model is empty; name the role of the model, main or second", where)
+		}
+		if c.Trace != "" && c.Trace != "on" && c.Trace != "off" {
+			add("%s: trace must be \"on\" or \"off\", not %q", where, c.Trace)
 		}
 	}
 	if p.Limits.MaxCostUSD < 0 {

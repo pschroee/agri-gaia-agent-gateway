@@ -757,3 +757,38 @@ func TestExperimentVariantCLIMCP(t *testing.T) {
 		}
 	}
 }
+
+// X7.6/#152: the plan's trace field reaches the chat per cell; a cell without the field gets on.
+func TestRunSendsTracePerCell(t *testing.T) {
+	dir := writeExpMaterial(t, "pilot", 1)
+	raw, err := os.ReadFile(filepath.Join(dir, "plan.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := strings.Replace(string(raw), "k: 3", "k: 1", 1)
+	oldCell := "  - id: cli-instruction-no-main\n    binding: cli\n    protection: instruction\n    attack: false\n    model: main\n"
+	newCells := "  - id: cli-none-default-main\n    binding: cli\n    protection: none\n    attack: false\n    model: main\n" +
+		"  - id: cli-none-off-main\n    binding: cli\n    protection: none\n    attack: false\n    model: main\n    trace: off\n"
+	plan = strings.Replace(plan, oldCell, newCells, 1)
+	if err := os.WriteFile(filepath.Join(dir, "plan.yaml"), []byte(plan), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	api := newFakeExpAPI()
+	var out, errw strings.Builder
+	r, err := newExpRunner(api, expRunOptions{PlanPath: dir, Poll: time.Millisecond, StartGrace: 20 * time.Millisecond, Heartbeat: time.Hour}, &out, &errw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.run(context.Background()); err != nil {
+		t.Fatalf("run: %v (%s)", err, errw.String())
+	}
+	seen := map[string]string{}
+	for _, req := range api.creates {
+		if req.Experiment != nil {
+			seen[req.Experiment.Cell] = req.Experiment.Trace
+		}
+	}
+	if len(seen) != 2 || seen["cli-none-default-main"] != "on" || seen["cli-none-off-main"] != "off" {
+		t.Fatalf("trace settings: %v (creates %d)", seen, len(api.creates))
+	}
+}

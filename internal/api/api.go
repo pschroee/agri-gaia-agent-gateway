@@ -536,7 +536,7 @@ func errCode(err error) int {
 	case errors.Is(err, chat.ErrExperimentNotAllowed):
 		return http.StatusForbidden
 	case errors.Is(err, chat.ErrUnknownModel), errors.Is(err, chat.ErrUnknownVariant), errors.Is(err, chat.ErrVariantFixed), errors.Is(err, chat.ErrInvalid),
-		errors.Is(err, chat.ErrExperimentNeedsDelegation), errors.Is(err, chat.ErrExperimentProtection):
+		errors.Is(err, chat.ErrExperimentNeedsDelegation), errors.Is(err, chat.ErrExperimentProtection), errors.Is(err, chat.ErrExperimentTrace):
 		return http.StatusBadRequest
 	}
 	return http.StatusInternalServerError

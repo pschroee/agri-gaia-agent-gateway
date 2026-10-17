@@ -353,6 +353,8 @@ type ExperimentProfile struct {
 	Cell       string `json:"cell,omitempty"`
 	Run        string `json:"run,omitempty"`
 	Seed       int64  `json:"seed,omitempty"`
+	// Trace: syscall trace of this run (X7.6/#152): on | off. Empty keeps the slot's default.
+	Trace string `json:"trace,omitempty"`
 	// Limit: the limit that ended the run (X3.5: cost, tokens or duration), set by the gateway only.
 	Limit string `json:"limit,omitempty"`
 }

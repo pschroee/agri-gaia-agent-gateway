@@ -48,6 +48,9 @@ type Agent interface {
 	// agw-exec and coreutils): sessions, configuration, subagents.
 	ExecPi(ctx context.Context, cmd []string, stdin io.Reader) ([]byte, error)
 	SetInternet(ctx context.Context, on bool) error
+	// SetExecTrace switches the syscall trace of the execution sandbox for this run (X7.6/#152).
+	// A running supervisor is restarted; the slot's default stays the fallback.
+	SetExecTrace(ctx context.Context, on bool) error
 	// IP is the sandbox's address in the slot network (attribution at the LLM proxy).
 	IP() string
 	// Notify writes a command to pi without waiting for a response.
@@ -77,8 +80,10 @@ var (
 	ErrExperimentNeedsDelegation = errors.New("an experiment chat needs a delegation")
 	// ErrExperimentProtection: the protection level is not none, instruction or service.
 	ErrExperimentProtection = errors.New("unknown protection level; allowed are none, instruction and service")
-	ErrNoSlot               = pool.ErrNoIdleSlot
-	ErrNotFound             = store.ErrNotFound
+	// ErrExperimentTrace: the per-run syscall trace setting is not on or off (X7.6/#152).
+	ErrExperimentTrace = errors.New(`unknown syscall trace setting; allowed are "on" and "off"`)
+	ErrNoSlot          = pool.ErrNoIdleSlot
+	ErrNotFound        = store.ErrNotFound
 	// ErrAlreadySent: the input went with a message and is not removed any more (issue L4/#121, RemoveInput).
 	ErrAlreadySent = store.ErrAlreadySent
 )
@@ -631,6 +636,11 @@ func (m *Manager) Create(ctx context.Context, req NewChat) (ChatView, error) {
 		default:
 			return ChatView{}, fmt.Errorf("%w: %q", ErrExperimentProtection, experiment.Protection)
 		}
+		switch experiment.Trace {
+		case "", "on", "off":
+		default:
+			return ChatView{}, fmt.Errorf("%w: %q", ErrExperimentTrace, experiment.Trace)
+		}
 		base := m.opt.Toolsets
 		if req.Variant != "" {
 			ts, err := toolset.FromVariant(req.Variant)
@@ -821,6 +831,15 @@ func (m *Manager) attachSlot(ctx context.Context, c store.Chat, session []byte, 
 	fail := func(err error) error {
 		m.pool.Release(ctx, slot, pool.ReasonAttachFailed)
 		return err
+	}
+	if experiment {
+		// X7.6/#152: the plan decides the trace per run; empty keeps the slot's default (on for
+		// experiment slots, set from the variant in the worker). Setting it explicitly also
+		// resets a warm slot that a previous run left with the other value.
+		traceOn := c.Experiment == nil || c.Experiment.Trace != "off"
+		if err := a.SetExecTrace(ctx, traceOn); err != nil {
+			return fail(fmt.Errorf("set syscall trace: %w", err))
+		}
 	}
 	p.run(PhaseSession)
 	prov, model, _ := m.cat.Lookup(c.Model)
