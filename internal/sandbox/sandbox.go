@@ -90,11 +90,17 @@ var PiTmpfs = map[string]string{
 // start every operation as the agent user, KILL for the emergency brake on an exhausted PidsLimit (N3).
 var ExecCaps = []string{"SETUID", "SETGID", "KILL"}
 
+// TraceDir: root-only directory of the syscall traces (X6). The supervisor writes one
+// file per operation; the agent (uid 10001) can neither read nor write it. It lives in a
+// tmpfs, so a restart of the slot leaves no traces behind.
+const TraceDir = "/var/log/agw-trace"
+
 // ExecTmpfs: execution sandbox after E9. No /agent.
 var ExecTmpfs = map[string]string{
 	"/workspace":  tmpfsExec + ",size=1g",
 	"/home/agent": tmpfsExec + ",size=1g",
 	"/tmp":        "mode=1777,exec,size=512m",
+	TraceDir:      "mode=0700,uid=0,gid=0,size=64m",
 }
 
 type Instance struct {
