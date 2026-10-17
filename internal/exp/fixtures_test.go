@@ -321,7 +321,7 @@ func TestUnseedOnlyRecordedIDs(t *testing.T) {
 	}
 	primary.objects["datasets/1"] = map[string]any{"id": float64(1), "name": "placeholder-dataset"}
 	primary.objects["datasets/2"] = map[string]any{"id": float64(2), "name": "placeholder-dataset"}
-	rows, err := f.Unseed(ctx, "pilot", "c1")
+	res, err := f.Unseed(ctx, "pilot", "c1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -331,8 +331,8 @@ func TestUnseedOnlyRecordedIDs(t *testing.T) {
 	if _, ok := primary.objects["datasets/2"]; !ok {
 		t.Fatal("an object with the same name but a foreign id was removed")
 	}
-	if len(rows) != 1 || rows[0].RemovedAt == nil {
-		t.Fatalf("row after removal: %+v", rows)
+	if res.Removed != 1 || len(res.Fixtures) != 1 || res.Fixtures[0].RemovedAt == nil {
+		t.Fatalf("row after removal: %+v", res)
 	}
 }
 
@@ -343,12 +343,12 @@ func TestVerifyFindsMissingObject(t *testing.T) {
 		t.Fatal(err)
 	}
 	delete(primary.objects, "datasets/1") // deleted by a run inside the cell
-	findings, err := f.Verify(ctx, "pilot", "c1")
+	res, err := f.Verify(ctx, "pilot", "c1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(findings) != 1 || !findings[0].Missing || findings[0].ManifestID != "dataset-1" {
-		t.Fatalf("findings: %+v", findings)
+	if res.Checked != 1 || len(res.Mismatches) != 1 || !res.Mismatches[0].Missing || res.Mismatches[0].ManifestID != "dataset-1" {
+		t.Fatalf("findings: %+v", res)
 	}
 }
 
@@ -371,6 +371,30 @@ func TestSeedRefusesLiveFixtures(t *testing.T) {
 	}
 }
 
+// Issue #149: a cell without live fixtures is empty, not a passed check.
+func TestVerifyEmptyCell(t *testing.T) {
+	f, _, _, _ := newFixtures(nil)
+	res, err := f.Verify(context.Background(), "pilot", "empty")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Checked != 0 || len(res.Mismatches) != 0 {
+		t.Fatalf("empty cell: %+v", res)
+	}
+}
+
+// Issue #149: unseed of a cell without live fixtures has nothing to remove.
+func TestUnseedEmptyCell(t *testing.T) {
+	f, _, _, _ := newFixtures(nil)
+	res, err := f.Unseed(context.Background(), "pilot", "empty")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Removed != 0 || len(res.Fixtures) != 0 {
+		t.Fatalf("empty cell: %+v", res)
+	}
+}
+
 // A run inside the cell may change a fixture; the next Verify compares with the manifest, not with
 // the read-back of the seeding (X4.6).
 func TestVerifyDetectsChangedField(t *testing.T) {
@@ -382,12 +406,12 @@ func TestVerifyDetectsChangedField(t *testing.T) {
 	primary.mu.Lock()
 	primary.objects["datasets/1"]["name"] = "something-else"
 	primary.mu.Unlock()
-	findings, err := f.Verify(ctx, "pilot", "c1")
+	res, err := f.Verify(ctx, "pilot", "c1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(findings) != 1 || len(findings[0].Fields) != 1 || findings[0].Fields[0].Field != "name" {
-		t.Fatalf("findings: %+v", findings)
+	if res.Checked != 1 || len(res.Mismatches) != 1 || len(res.Mismatches[0].Fields) != 1 || res.Mismatches[0].Fields[0].Field != "name" {
+		t.Fatalf("findings: %+v", res)
 	}
 }
 
@@ -399,39 +423,39 @@ func TestVerifyComparesDescriptionAndMetadata(t *testing.T) {
 	if _, err := f.Seed(ctx, "pilot", "c1", fixtureSpecs()[:1]); err != nil {
 		t.Fatal(err)
 	}
-	if findings, err := f.Verify(ctx, "pilot", "c1"); err != nil {
+	if res, err := f.Verify(ctx, "pilot", "c1"); err != nil {
 		t.Fatal(err)
-	} else if len(findings) != 0 {
-		t.Fatalf("unchanged fixture: %+v", findings)
+	} else if res.Checked != 1 || len(res.Mismatches) != 0 {
+		t.Fatalf("unchanged fixture: %+v", res)
 	}
 	primary.mu.Lock()
 	primary.meta["datasets/1"]["description"] = "placeholder-CHANGED"
 	primary.mu.Unlock()
-	findings, err := f.Verify(ctx, "pilot", "c1")
+	res, err := f.Verify(ctx, "pilot", "c1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(findings) != 1 || len(findings[0].Fields) != 1 || findings[0].Fields[0].Field != "description" {
-		t.Fatalf("changed description: %+v", findings)
+	if len(res.Mismatches) != 1 || len(res.Mismatches[0].Fields) != 1 || res.Mismatches[0].Fields[0].Field != "description" {
+		t.Fatalf("changed description: %+v", res)
 	}
 	primary.mu.Lock()
 	primary.meta["datasets/1"]["description"] = "placeholder-1"
 	primary.meta["datasets/1"]["metadata"] = map[string]any{"placeholder": "2"}
 	primary.mu.Unlock()
-	findings, err = f.Verify(ctx, "pilot", "c1")
+	res, err = f.Verify(ctx, "pilot", "c1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(findings) != 1 || len(findings[0].Fields) != 1 || findings[0].Fields[0].Field != "metadata" {
-		t.Fatalf("changed metadata: %+v", findings)
+	if len(res.Mismatches) != 1 || len(res.Mismatches[0].Fields) != 1 || res.Mismatches[0].Fields[0].Field != "metadata" {
+		t.Fatalf("changed metadata: %+v", res)
 	}
 	primary.mu.Lock()
 	primary.meta["datasets/1"]["metadata"] = map[string]any{"placeholder": "1"}
 	primary.mu.Unlock()
-	if findings, err := f.Verify(ctx, "pilot", "c1"); err != nil {
+	if res, err := f.Verify(ctx, "pilot", "c1"); err != nil {
 		t.Fatal(err)
-	} else if len(findings) != 0 {
-		t.Fatalf("restored fixture: %+v", findings)
+	} else if len(res.Mismatches) != 0 {
+		t.Fatalf("restored fixture: %+v", res)
 	}
 }
 
@@ -444,10 +468,10 @@ func TestVerifySkipsMetadataOnOlderBackend(t *testing.T) {
 	if _, err := f.Seed(ctx, "pilot", "c1", fixtureSpecs()[:1]); err != nil {
 		t.Fatalf("seed without the metadata route: %v", err)
 	}
-	if findings, err := f.Verify(ctx, "pilot", "c1"); err != nil {
+	if res, err := f.Verify(ctx, "pilot", "c1"); err != nil {
 		t.Fatal(err)
-	} else if len(findings) != 0 {
-		t.Fatalf("older backend: %+v", findings)
+	} else if res.Checked != 1 || len(res.Mismatches) != 0 {
+		t.Fatalf("older backend: %+v", res)
 	}
 	// The description is still recorded, so a later backend can compare it.
 	if row, _ := f.List(ctx, "pilot", "c1"); len(row) == 0 || row[0].FieldSHA256["description"] == "" {

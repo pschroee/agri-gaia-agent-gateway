@@ -20,6 +20,8 @@ import (
 type fakeExpFixtures struct {
 	rows     []store.Fixture
 	mismatch []exp.Mismatch
+	checked  int
+	removed  int
 	err      error
 	plan     string
 	cell     string
@@ -34,14 +36,14 @@ func (f *fakeExpFixtures) Seed(_ context.Context, plan, cell string, specs []exp
 	return f.rows, nil
 }
 
-func (f *fakeExpFixtures) Unseed(_ context.Context, plan, cell string) ([]store.Fixture, error) {
+func (f *fakeExpFixtures) Unseed(_ context.Context, plan, cell string) (exp.UnseedResult, error) {
 	f.plan, f.cell = plan, cell
-	return f.rows, f.err
+	return exp.UnseedResult{Removed: f.removed, Fixtures: f.rows}, f.err
 }
 
-func (f *fakeExpFixtures) Verify(_ context.Context, plan, cell string) ([]exp.Mismatch, error) {
+func (f *fakeExpFixtures) Verify(_ context.Context, plan, cell string) (exp.VerifyResult, error) {
 	f.plan, f.cell = plan, cell
-	return f.mismatch, f.err
+	return exp.VerifyResult{Checked: f.checked, Mismatches: f.mismatch}, f.err
 }
 
 func (f *fakeExpFixtures) List(_ context.Context, plan, cell string) ([]store.Fixture, error) {
@@ -146,11 +148,41 @@ func TestExpSeedMismatchIs409(t *testing.T) {
 }
 
 func TestExpVerifyMismatchIs409(t *testing.T) {
-	svc := &fakeExpFixtures{mismatch: []exp.Mismatch{{ManifestID: "dataset-1", Missing: true}}}
+	svc := &fakeExpFixtures{checked: 1, mismatch: []exp.Mismatch{{ManifestID: "dataset-1", Missing: true}}}
 	h := expServer(svc)
 	w := doExp(t, h, "POST", "/api/exp/fixtures/verify", expToken, `{"plan":"pilot","cell":"c1"}`)
-	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), `"missing":true`) {
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), `"state":"mismatch"`) ||
+		!strings.Contains(w.Body.String(), `"missing":true`) {
 		t.Fatalf("verify: %d %s", w.Code, w.Body.String())
+	}
+}
+
+// Issue #149: a cell without live fixtures is named as empty, not as a passed check; the status
+// stays 200 because it is no finding.
+func TestExpVerifyEmptyCell(t *testing.T) {
+	h := expServer(&fakeExpFixtures{})
+	w := doExp(t, h, "POST", "/api/exp/fixtures/verify", expToken, `{"plan":"pilot","cell":"c1"}`)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"state":"empty"`) ||
+		!strings.Contains(w.Body.String(), `"checked":0`) {
+		t.Fatalf("empty cell: %d %s", w.Code, w.Body.String())
+	}
+}
+
+func TestExpVerifyMatchingCell(t *testing.T) {
+	h := expServer(&fakeExpFixtures{checked: 2})
+	w := doExp(t, h, "POST", "/api/exp/fixtures/verify", expToken, `{"plan":"pilot","cell":"c1"}`)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"state":"ok"`) ||
+		!strings.Contains(w.Body.String(), `"checked":2`) {
+		t.Fatalf("matching cell: %d %s", w.Code, w.Body.String())
+	}
+}
+
+// Issue #149: unseed names the empty case as well.
+func TestExpUnseedEmptyCell(t *testing.T) {
+	h := expServer(&fakeExpFixtures{})
+	w := doExp(t, h, "POST", "/api/exp/fixtures/unseed", expToken, `{"plan":"pilot","cell":"c1"}`)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"removed":0`) {
+		t.Fatalf("empty unseed: %d %s", w.Code, w.Body.String())
 	}
 }
 
