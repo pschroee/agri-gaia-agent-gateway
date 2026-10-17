@@ -2451,6 +2451,10 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 		if !inExperiment {
 			defer m.registerRecheck(apID, m.platformRecheck(chatID, apID, tool, req))()
 		}
+		// The reads of the summary are one activity entry of the system (issue L2/#119), and while the call waits,
+		// approving re-reads them first (DL2.1). It is written before the approval row exists: an approval that the
+		// API shows must never be visible without the entry that explains its summary (issue #157).
+		m.logSummaryReads(ctx, chatID, apID, "proposed", rl)
 		ap, err := m.st.CreateApproval(ctx, store.Approval{ID: apID, ChatID: chatID, Kind: "platform_write", Via: via, Name: req.String(), Size: size,
 			ContentType: "application/json", PendingKey: "-", Preview: preview, Session: store.SessionFrom(ctx), ToolCallID: store.ToolCallFrom(ctx),
 			Effect: string(access.Effect), Summary: summary, Notebook: notebookData})
@@ -2458,9 +2462,6 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 			return platform.Result{Decision: platform.DecisionError, Reason: "approval_failed"}, err
 		}
 		approvalID, approvalBy = ap.ID, "user"
-		// The reads of the summary are one activity entry of the system (issue L2/#119), and while the call waits,
-		// approving re-reads them first (DL2.1).
-		m.logSummaryReads(ctx, chatID, ap.ID, "proposed", rl)
 		bg := context.WithoutCancel(ctx)
 		var final string
 		if inExperiment {
