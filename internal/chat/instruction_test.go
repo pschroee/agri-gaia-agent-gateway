@@ -18,14 +18,32 @@ import (
 
 const instructionTask = "List my datasets."
 
+// chatAgent returns the fake agent of the chat's slot. An experiment chat runs in a slot of its own
+// ("exp:<binding>", X0.3); the pool's warm slot for the configured binding is created first, so
+// e.agent(0) is not necessarily the chat's agent. Reading the live slot avoids the race.
+func chatAgent(t *testing.T, e *env, chatID string) *fakeAgent {
+	t.Helper()
+	e.m.mu.Lock()
+	l := e.m.live[chatID]
+	e.m.mu.Unlock()
+	if l == nil || l.slot == nil {
+		t.Fatalf("chat %s has no live slot", chatID)
+	}
+	a, ok := l.slot.Worker.(*fakeAgent)
+	if !ok {
+		t.Fatalf("chat %s runs in %T, not in a fake agent", chatID, l.slot.Worker)
+	}
+	return a
+}
+
 // sendFirst sends the task and waits until it arrived in the sandbox and the chat is quiet again;
-// want is the expected number of messages the first sandbox has received.
+// want is the expected number of messages the chat's sandbox has received.
 func sendFirst(t *testing.T, e *env, chatID string, want int) string {
 	t.Helper()
 	if _, err := e.m.Send(context.Background(), chatID, instructionTask); err != nil {
 		t.Fatal(err)
 	}
-	a := e.agent(0)
+	a := chatAgent(t, e, chatID)
 	waitUntil(t, "message", func() bool { return len(a.prompts()) == want })
 	waitSettled(t, e, chatID)
 	return a.prompts()[want-1]
