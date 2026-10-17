@@ -30,6 +30,7 @@
         {
           "id": "deepseek-flash",
           "pi_builtin": true,
+          "input": ["text", "image"],
           "note": "Prices in the pi registry = peak tariff"
         },
         {
