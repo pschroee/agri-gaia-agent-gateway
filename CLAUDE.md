@@ -519,6 +519,30 @@ refer to this repository.
   The skill `result-check` (section *Own models*) and one sentence in `notebook` carry the flow; skill
   changes need both slot images rebuilt.
 
+## Experiment runs (X1)
+
+- **The experiment account has no browser session:** `oidc.PasswordSource` (`internal/oidc/password.go`) requests
+  its token with a password grant through the public client `frontend` and renews it before it expires. The
+  password never appears in a request log or an error text. Without `AGW_EXP_USER`/`AGW_EXP_PASSWORD` nothing changes;
+  with `AGW_EXP_API_TOKEN` both are required, the key needs at least 32 characters, and everything needs
+  `AGW_AUTH_MODE=oidc` (a chat owner is a Keycloak `sub`).
+- **`ownerToken` sends chats of the experiment account to the password source**, all others to the OIDC session.
+  The account's `sub` is read from its first token and cached; after a restart the first platform call of a product
+  chat may wait for that one token request.
+- **`AGW_EXP_API_TOKEN` reaches only `POST /api/chats` with an `experiment` profile, `GET /api/chats/{id}…` of its
+  own chats and `/api/exp/*`** (`internal/api/api.go`, `expRouteAllowed`). It is a bearer key, never a cookie, and
+  `/api/exp/*` additionally refuses a normal login. The runner must use `AGW_EXP_API_TOKEN`, never the gateway's
+  `AGW_API_TOKEN` (`agw.expClient`): the container's full key must not leak into the runner.
+- **The runner is `/agw` in this image** (`Dockerfile`) and talks to the gateway over HTTP; its state is
+  `exp_runs` (`internal/store/exp.go`, `exp_schema.sql`). The logical run is `run_key = <plan>/<cell>/<task>/<rep>`;
+  a crashed attempt keeps `status: "started"` until the next start supersedes it as `key#2`, `key#3`, … — a row
+  that ended (also `aborted`) is never repeated. **The account must be in `AGW_EXPERIMENT_USERS`**, otherwise the
+  gateway refuses the experiment chat (`ErrExperimentNotAllowed`).
+- **`main` plans need `plan.lock`** (X8.5): the runner checks every listed file's SHA-256 before the first run and
+  refuses a main plan without a lock. Pilot plans run without one. Cleanup deletes only identifiers from
+  `delegation_objects` and `container_id` values from the chat's answers (training containers are not in the
+  register: `delegation.Created` records the task) — never a name.
+
 ## Testing
 
 - `./dev.sh test` is the everyday check, before every commit and before every push: Go with Postgres (with Go's

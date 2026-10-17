@@ -149,6 +149,9 @@ type Chat struct {
 	RunningSince     string          `json:"running_since,omitempty"`
 	// BackgroundRunning: running background tasks (bash with run_in_background).
 	BackgroundRunning int `json:"background_running"`
+	// Experiment: the profile of an experiment chat including the limit that ended it (X3.5); nil
+	// for a product chat.
+	Experiment *ExperimentProfile `json:"experiment,omitempty"`
 }
 
 // QueueEntry: queued message (the chat's queue).
@@ -350,6 +353,8 @@ type ExperimentProfile struct {
 	Cell       string `json:"cell,omitempty"`
 	Run        string `json:"run,omitempty"`
 	Seed       int64  `json:"seed,omitempty"`
+	// Limit: the limit that ended the run (X3.5: cost, tokens or duration), set by the gateway only.
+	Limit string `json:"limit,omitempty"`
 }
 
 // WatchJob is an observed platform job of a chat (GET /api/chats/{id}/jobs, A-E2).

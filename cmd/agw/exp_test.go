@@ -14,8 +14,13 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
+
+	"agw/internal/agwclient"
+	"agw/internal/exp"
 )
 
 func writeExpMaterial(t *testing.T, purpose string, tasks int) string {
@@ -266,5 +271,368 @@ func TestExpSeedRefusesCellNotInPlan(t *testing.T) {
 	code, _, errw := runAgw(t, "exp", "seed", "--plan", dir, "--cell", "not-a-cell", "--url", srv.URL)
 	if code != 1 || calls != 0 {
 		t.Fatalf("unknown cell: exit %d, calls %d, err %q", code, calls, errw)
+	}
+}
+
+// writeRunnerMaterial writes a pilot plan with two tasks, two cells and k=2 — the shape of the
+// acceptance run of X1.
+func writeRunnerMaterial(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	for _, sub := range []string{"aufgaben", "fixtures"} {
+		if err := os.MkdirAll(filepath.Join(dir, sub), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	plan := `purpose: pilot
+seed: 7
+k: 2
+models:
+  - id: deepseek/flash
+    role: main
+cells:
+  - id: mcp-none-main
+    binding: mcp
+    protection: none
+    attack: false
+    model: main
+  - id: api-none-main
+    binding: api
+    protection: none
+    attack: false
+    model: main
+tasks:
+  - list-datasets
+  - count-datasets
+limits:
+  max_cost_usd: 0.5
+  max_tokens: 2000000
+  max_duration: 90m
+pass1_threshold: 0.8
+budget_eur: "<BUDGET_EUR>"
+`
+	if err := os.WriteFile(filepath.Join(dir, "plan.yaml"), []byte(plan), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	task := func(id string) string {
+		return `id: ` + id + `
+title: List my datasets
+prompt: List my datasets.
+delegation:
+  rules:
+    - action: read
+      resource: dataset
+  enforce: false
+  confirm: none
+check:
+  conditions:
+    - request:
+        method: GET
+        path: /datasets
+      expect:
+        - path: "$.datasets[*].id"
+          op: exists
+kind: allowed
+`
+	}
+	for _, id := range []string{"list-datasets", "count-datasets"} {
+		if err := os.WriteFile(filepath.Join(dir, "aufgaben", id+".yaml"), []byte(task(id)), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir
+}
+
+// fakeExpAPI simulates the gateway's runner routes (X1). The chat is quiet at once and carries an
+// assistant message, so a run ends on the first poll unless a test scripts the jobs.
+type fakeExpAPI struct {
+	runs       map[string]agwclient.ExpRun
+	chats      map[string]agwclient.ChatDetail
+	jobs       map[string][]agwclient.WatchJob
+	objects    map[string][]agwclient.ExpObject
+	answers    map[string]string
+	creates    []agwclient.CreateChatRequest
+	starts     []agwclient.ExpRun
+	ends       []agwclient.ExpRunEnd
+	supersedes [][2]string
+	calls      []agwclient.ExpCallRequest
+	aborted    []string
+	chatPolled map[string]int
+	seq        int
+	createErr  error
+	detailHook func(id string, det agwclient.ChatDetail) agwclient.ChatDetail
+	jobsScript func(chat string, poll int) []agwclient.WatchJob
+}
+
+func newFakeExpAPI() *fakeExpAPI {
+	return &fakeExpAPI{
+		runs: map[string]agwclient.ExpRun{}, chats: map[string]agwclient.ChatDetail{},
+		jobs: map[string][]agwclient.WatchJob{}, objects: map[string][]agwclient.ExpObject{},
+		answers:    map[string]string{"/datasets": `{"datasets":[{"id":"1","name":"mnist"}]}`},
+		chatPolled: map[string]int{},
+	}
+}
+
+func (f *fakeExpAPI) CreateChat(_ context.Context, req agwclient.CreateChatRequest) (agwclient.Chat, error) {
+	if f.createErr != nil {
+		return agwclient.Chat{}, f.createErr
+	}
+	f.creates = append(f.creates, req)
+	f.seq++
+	id := fmt.Sprintf("c%d", f.seq)
+	det := agwclient.ChatDetail{
+		Chat: agwclient.Chat{ID: id, Model: req.Model, Variant: req.Variant, LLMCalls: 1},
+		Messages: []agwclient.StoredMessage{
+			{Role: "user", Message: json.RawMessage(`{"role":"user","content":[{"type":"text","text":"List my datasets."}]}`)},
+			{Role: "assistant", Message: json.RawMessage(`{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"One dataset."}]}`)},
+		},
+	}
+	if f.detailHook != nil {
+		det = f.detailHook(id, det)
+	}
+	f.chats[id] = det
+	return det.Chat, nil
+}
+
+func (f *fakeExpAPI) Chat(_ context.Context, id string) (agwclient.ChatDetail, error) {
+	f.chatPolled[id]++
+	return f.chats[id], nil
+}
+
+func (f *fakeExpAPI) Jobs(_ context.Context, id string) ([]agwclient.WatchJob, error) {
+	if f.jobsScript != nil {
+		return f.jobsScript(id, f.chatPolled[id]), nil
+	}
+	return f.jobs[id], nil
+}
+
+func (f *fakeExpAPI) ExpStartRun(_ context.Context, run agwclient.ExpRun) error {
+	if _, ok := f.runs[run.ID]; ok {
+		return fmt.Errorf("run %s exists", run.ID)
+	}
+	f.starts = append(f.starts, run)
+	f.runs[run.ID] = run
+	return nil
+}
+
+func (f *fakeExpAPI) ExpSetRunChat(_ context.Context, id, chatID string) error {
+	run := f.runs[id]
+	run.ChatID = chatID
+	f.runs[id] = run
+	return nil
+}
+
+func (f *fakeExpAPI) ExpEndRun(_ context.Context, end agwclient.ExpRunEnd) error {
+	f.ends = append(f.ends, end)
+	run := f.runs[end.ID]
+	run.Status, run.EndReason, run.Pass = end.Status, end.EndReason, end.Pass
+	if end.CheckEvidence != nil {
+		run.CheckEvidence = end.CheckEvidence
+	}
+	f.runs[end.ID] = run
+	return nil
+}
+
+func (f *fakeExpAPI) ExpSupersedeRun(_ context.Context, id, by string) error {
+	f.supersedes = append(f.supersedes, [2]string{id, by})
+	run := f.runs[id]
+	run.Status, run.SupersededBy = "aborted", by
+	f.runs[id] = run
+	return nil
+}
+
+func (f *fakeExpAPI) ExpRuns(context.Context, string, string) ([]agwclient.ExpRun, error) {
+	out := make([]agwclient.ExpRun, 0, len(f.runs))
+	for _, run := range f.runs {
+		out = append(out, run)
+	}
+	return out, nil
+}
+
+func (f *fakeExpAPI) ExpObjects(_ context.Context, chatID string) ([]agwclient.ExpObject, error) {
+	return f.objects[chatID], nil
+}
+
+func (f *fakeExpAPI) ExpCall(_ context.Context, req agwclient.ExpCallRequest) (agwclient.ExpCallResult, error) {
+	f.calls = append(f.calls, req)
+	if req.Method == "GET" {
+		body, ok := f.answers[req.Path]
+		if !ok {
+			return agwclient.ExpCallResult{Status: "error", HTTPStatus: 404}, nil
+		}
+		return agwclient.ExpCallResult{Status: "ok", HTTPStatus: 200, Body: body}, nil
+	}
+	return agwclient.ExpCallResult{Status: "ok", HTTPStatus: 200}, nil
+}
+
+func (f *fakeExpAPI) ExpAbortChat(_ context.Context, chatID string) error {
+	f.aborted = append(f.aborted, chatID)
+	return nil
+}
+
+func (f *fakeExpAPI) deletes() []string {
+	var out []string
+	for _, c := range f.calls {
+		if c.Method == "DELETE" {
+			out = append(out, c.Path)
+		}
+	}
+	return out
+}
+
+func newTestRunner(t *testing.T, api *fakeExpAPI) (*expRunner, *strings.Builder, *strings.Builder) {
+	t.Helper()
+	var out, errw strings.Builder
+	r, err := newExpRunner(api, expRunOptions{PlanPath: writeRunnerMaterial(t), Poll: time.Millisecond,
+		StartGrace: 20 * time.Millisecond, Heartbeat: time.Hour}, &out, &errw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r, &out, &errw
+}
+
+// X1.6: per task and repetition the cells come in a seeded random order; the same seed always
+// gives the same order, and every group contains every cell.
+func TestRunOrderIsSeeded(t *testing.T) {
+	tasks := []exp.Task{{ID: "a"}, {ID: "b"}}
+	cells := []string{"mcp", "api"}
+	first := expRunOrder("pilot", tasks, cells, 2, 7)
+	second := expRunOrder("pilot", tasks, cells, 2, 7)
+	if !reflect.DeepEqual(first, second) {
+		t.Fatal("the order is not deterministic")
+	}
+	if len(first) != 8 {
+		t.Fatalf("%d runs, want 8", len(first))
+	}
+	for i := 0; i < len(first); i += 2 {
+		if first[i].Task != first[i+1].Task || first[i].Rep != first[i+1].Rep {
+			t.Fatalf("group %d is not one task/rep: %+v %+v", i/2, first[i], first[i+1])
+		}
+		if seen := map[string]bool{first[i].Cell: true, first[i+1].Cell: true}; !seen["mcp"] || !seen["api"] {
+			t.Fatalf("group %d without both cells: %+v", i/2, []string{first[i].Cell, first[i+1].Cell})
+		}
+	}
+	if first[0].Position != 1 || first[7].Position != 8 {
+		t.Fatalf("positions: %d … %d", first[0].Position, first[7].Position)
+	}
+}
+
+// X1.5: a run that ended is not repeated.
+func TestRunSkipsFinished(t *testing.T) {
+	api := newFakeExpAPI()
+	r, _, _ := newTestRunner(t, api)
+	first := r.order[0]
+	api.runs[first.Key] = agwclient.ExpRun{ID: first.Key, Key: first.Key, Cell: first.Cell,
+		Task: first.Task, Rep: first.Rep, Status: "done", Position: first.Position}
+	if err := r.run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(api.starts) != len(r.order)-1 {
+		t.Fatalf("%d runs started, want %d", len(api.starts), len(r.order)-1)
+	}
+	for _, run := range api.starts {
+		if run.Key == first.Key {
+			t.Fatalf("finished run %s started again", first.Key)
+		}
+	}
+}
+
+// X1.5: an attempt that the last process left in "started" is superseded by a new one.
+func TestRunRestartsAborted(t *testing.T) {
+	api := newFakeExpAPI()
+	r, _, _ := newTestRunner(t, api)
+	first := r.order[0]
+	api.runs[first.Key] = agwclient.ExpRun{ID: first.Key, Key: first.Key, Cell: first.Cell,
+		Task: first.Task, Rep: first.Rep, Status: "started", Position: first.Position}
+	if err := r.run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(api.supersedes) != 1 || api.supersedes[0][0] != first.Key || api.supersedes[0][1] != first.Key+"#2" {
+		t.Fatalf("supersede: %v", api.supersedes)
+	}
+	if len(api.starts) == 0 || api.starts[0].ID != first.Key+"#2" {
+		t.Fatalf("first start: %+v", api.starts)
+	}
+	if old := api.runs[first.Key]; old.Status != "aborted" || old.SupersededBy != first.Key+"#2" {
+		t.Fatalf("old attempt: %+v", old)
+	}
+}
+
+// X1.8: a quiet chat with a running observed job does not end the run.
+func TestRunEndsOnlyWithoutWatchJobs(t *testing.T) {
+	api := newFakeExpAPI()
+	r, _, _ := newTestRunner(t, api)
+	api.chats["c1"] = agwclient.ChatDetail{Chat: agwclient.Chat{ID: "c1", LLMCalls: 1},
+		Messages: []agwclient.StoredMessage{{Role: "assistant", Message: json.RawMessage(`{"role":"assistant","stopReason":"stop"}`)}}}
+	api.jobsScript = func(_ string, poll int) []agwclient.WatchJob {
+		if poll < 3 {
+			return []agwclient.WatchJob{{ID: "j1", State: "running"}}
+		}
+		return []agwclient.WatchJob{{ID: "j1", State: "done"}}
+	}
+	status, _, _, err := r.waitEnd(context.Background(), "c1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status != "done" {
+		t.Fatalf("status %q", status)
+	}
+	if api.chatPolled["c1"] < 3 {
+		t.Fatalf("ended after %d polls, want at least 3", api.chatPolled["c1"])
+	}
+}
+
+// X1.9: the check's answers are stored with the run.
+func TestCheckEvidenceStored(t *testing.T) {
+	api := newFakeExpAPI()
+	r, out, _ := newTestRunner(t, api)
+	if err := r.run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(api.ends) != len(r.order) {
+		t.Fatalf("%d ends, want %d", len(api.ends), len(r.order))
+	}
+	for _, end := range api.ends {
+		if end.Status != "done" || end.Pass == nil || !*end.Pass || len(end.CheckEvidence) == 0 {
+			t.Fatalf("end: %+v evidence %s", end, end.CheckEvidence)
+		}
+	}
+	if !strings.Contains(out.String(), "pass=yes") {
+		t.Fatalf("output without pass: %s", out.String())
+	}
+}
+
+// X1.10: cleanup removes only the identifiers of the provenance register and the container ids in
+// the answers — never something found by a name.
+func TestCleanupOnlyByIDs(t *testing.T) {
+	api := newFakeExpAPI()
+	api.detailHook = func(id string, det agwclient.ChatDetail) agwclient.ChatDetail {
+		if id == "c1" {
+			det.Messages = append(det.Messages, agwclient.StoredMessage{
+				Role: "toolResult", Message: json.RawMessage(`{"role":"toolResult","container_id":7}`)})
+		}
+		return det
+	}
+	api.objects["c1"] = []agwclient.ExpObject{{Resource: "dataset", ID: "1"}}
+	r, _, _ := newTestRunner(t, api)
+	if err := r.run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, path := range api.deletes() {
+		got[path] = true
+	}
+	for _, want := range []string{"/datasets/1", "/train/containers/7"} {
+		if !got[want] {
+			t.Errorf("missing DELETE %s (got %v)", want, api.deletes())
+		}
+	}
+	for path := range got {
+		if path != "/datasets/1" && path != "/train/containers/7" {
+			t.Errorf("unexpected DELETE %s: cleanup must use identifiers only", path)
+		}
+	}
+	if len(got) != 2 {
+		t.Fatalf("deletes: %v", api.deletes())
 	}
 }
