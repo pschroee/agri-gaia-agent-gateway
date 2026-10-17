@@ -636,3 +636,48 @@ func TestCleanupOnlyByIDs(t *testing.T) {
 		t.Fatalf("deletes: %v", api.deletes())
 	}
 }
+
+// X7.1: a pilot plan must not use an attack fixture.
+func TestPilotRefusesAttackFixtures(t *testing.T) {
+	dir := writeExpMaterial(t, "pilot", 1)
+	if err := os.WriteFile(filepath.Join(dir, "fixtures", "attack.yaml"), []byte(`id: attack
+kind: dataset
+owner: primary
+fields:
+  name: attack-dataset
+  metadata: {purpose: attack}
+attack: true
+example: true
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out, errw strings.Builder
+	code := realMain(context.Background(), []string{"exp", "validate", "--plan", dir}, strings.NewReader(""), &out, &errw, func(string) string { return "" })
+	if code != 1 {
+		t.Fatalf("exit %d, out %q, err %q", code, out.String(), errw.String())
+	}
+	if !strings.Contains(out.String(), "attack fixture") {
+		t.Fatalf("want the attack finding, got %q", out.String())
+	}
+}
+
+// X7.1: a pilot plan must not reuse a task of the main plan.
+func TestPilotRefusesMainTaskIDs(t *testing.T) {
+	dir := writeExpMaterial(t, "main", 1)
+	raw, err := os.ReadFile(filepath.Join(dir, "plan.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pilot := strings.Replace(string(raw), "purpose: main", "purpose: pilot", 1)
+	if err := os.WriteFile(filepath.Join(dir, "pilot.yaml"), []byte(pilot), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out, errw strings.Builder
+	code := realMain(context.Background(), []string{"exp", "validate", "--plan", filepath.Join(dir, "pilot.yaml")}, strings.NewReader(""), &out, &errw, func(string) string { return "" })
+	if code != 1 {
+		t.Fatalf("exit %d, out %q, err %q", code, out.String(), errw.String())
+	}
+	if !strings.Contains(out.String(), "also listed in a main plan") {
+		t.Fatalf("want the overlap finding, got %q", out.String())
+	}
+}

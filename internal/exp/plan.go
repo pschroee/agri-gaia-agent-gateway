@@ -167,6 +167,51 @@ func Validate(p *Plan, ts []Task, ms []Manifest) []Problem {
 	return problems
 }
 
+// PilotProblems adds the rules of X7.1 to Validate: a pilot plan must not use an attack
+// fixture and must not reuse a task of the main plan. mainTasks are the task IDs listed in plan.yaml
+// next to the pilot plan.
+func PilotProblems(p *Plan, ts []Task, ms []Manifest, mainTasks map[string]bool) []Problem {
+	if p == nil || p.Purpose != PurposePilot {
+		return nil
+	}
+	var out []Problem
+	for _, m := range ms {
+		if m.Attack {
+			out = append(out, Problem{"fixture " + m.ID, "is an attack fixture and cannot be part of a pilot plan"})
+		}
+	}
+	for _, t := range ts {
+		if mainTasks[t.ID] {
+			out = append(out, Problem{"task " + t.ID, "is also listed in a main plan; a pilot uses its own tasks"})
+		}
+	}
+	return out
+}
+
+// MainTaskIDs reads the task IDs of plan.yaml in dir. It returns nil when the file does not exist,
+// so that material without a main plan still validates.
+func MainTaskIDs(dir string) (map[string]bool, error) {
+	path := filepath.Join(dir, "plan.yaml")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	dec := yaml.NewDecoder(bytes.NewReader(raw))
+	dec.KnownFields(true)
+	var p Plan
+	if err := dec.Decode(&p); err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	out := make(map[string]bool, len(p.Tasks))
+	for _, id := range p.Tasks {
+		out[strings.TrimSpace(id)] = true
+	}
+	return out, nil
+}
+
 func validatePlan(p *Plan) []Problem {
 	var out []Problem
 	add := func(format string, a ...any) { out = append(out, Problem{"plan", fmt.Sprintf(format, a...)}) }
