@@ -149,6 +149,9 @@ type Chat struct {
 	RunningSince     string          `json:"running_since,omitempty"`
 	// BackgroundRunning: running background tasks (bash with run_in_background).
 	BackgroundRunning int `json:"background_running"`
+	// Experiment: the profile of an experiment chat including the limit that ended it (X3.5); nil
+	// for a product chat.
+	Experiment *ExperimentProfile `json:"experiment,omitempty"`
 }
 
 // QueueEntry: queued message (the chat's queue).
@@ -339,6 +342,84 @@ type CreateChatRequest struct {
 	Internet *bool  `json:"internet,omitempty"`
 	// Delegation: delegated rights as JSON (empty: no delegation).
 	Delegation json.RawMessage `json:"delegation,omitempty"`
+	// Experiment: the profile of an experiment chat (X0/X1); only for an experiment account.
+	Experiment *ExperimentProfile `json:"experiment,omitempty"`
+}
+
+// ExperimentProfile is what an experiment chat stores about its run (X0): the binding comes from
+// Variant, the protection level and the run's identity from here. The gateway sets Limit itself.
+type ExperimentProfile struct {
+	Protection string `json:"protection"`
+	Cell       string `json:"cell,omitempty"`
+	Run        string `json:"run,omitempty"`
+	Seed       int64  `json:"seed,omitempty"`
+	// Limit: the limit that ended the run (X3.5: cost, tokens or duration), set by the gateway only.
+	Limit string `json:"limit,omitempty"`
+}
+
+// WatchJob is an observed platform job of a chat (GET /api/chats/{id}/jobs, A-E2).
+type WatchJob struct {
+	ID      string `json:"id"`
+	ChatID  string `json:"chat_id"`
+	Kind    string `json:"kind"`
+	Ref     string `json:"ref"`
+	State   string `json:"state"`
+	Message string `json:"message,omitempty"`
+}
+
+// ExpRun is one attempt of one run of the experiment plan (X1.5).
+type ExpRun struct {
+	ID             string          `json:"id"`
+	Key            string          `json:"key"`
+	Plan           string          `json:"plan"`
+	PlanSHA256     string          `json:"plan_sha256,omitempty"`
+	Cell           string          `json:"cell"`
+	Task           string          `json:"task"`
+	Rep            int             `json:"rep"`
+	Seed           int64           `json:"seed"`
+	Position       int             `json:"position"`
+	ChatID         string          `json:"chat_id,omitempty"`
+	Status         string          `json:"status"`
+	EndReason      string          `json:"end_reason,omitempty"`
+	Pass           *bool           `json:"pass,omitempty"`
+	CheckEvidence  json.RawMessage `json:"check_evidence,omitempty"`
+	StartedAt      string          `json:"started_at"`
+	EndedAt        string          `json:"ended_at,omitempty"`
+	SupersededBy   string          `json:"superseded_by,omitempty"`
+	GatewayVersion string          `json:"gateway_version,omitempty"`
+	Model          string          `json:"model,omitempty"`
+}
+
+// ExpRunEnd closes a run (status is the end reason: done, limit_cost, …).
+type ExpRunEnd struct {
+	ID            string          `json:"id"`
+	Status        string          `json:"status"`
+	EndReason     string          `json:"end_reason,omitempty"`
+	Pass          *bool           `json:"pass,omitempty"`
+	CheckEvidence json.RawMessage `json:"check_evidence,omitempty"`
+}
+
+// ExpObject is an entry of a chat's provenance register (X1.10).
+type ExpObject struct {
+	Resource string `json:"resource"`
+	ID       string `json:"object_id"`
+}
+
+// ExpCallRequest is a read or delete of the experiment runner, executed with the account's token.
+type ExpCallRequest struct {
+	Chat   string            `json:"chat"`
+	Method string            `json:"method"`
+	Path   string            `json:"path"`
+	Query  map[string]string `json:"query,omitempty"`
+	Body   json.RawMessage   `json:"body,omitempty"`
+}
+
+// ExpCallResult is the platform's answer to an ExpCallRequest.
+type ExpCallResult struct {
+	Status     string `json:"status"`
+	HTTPStatus int    `json:"http_status"`
+	Body       string `json:"body,omitempty"`
+	Message    string `json:"message,omitempty"`
 }
 
 // ToolExecution is an operation the orchestrator has executed in the execution sandbox

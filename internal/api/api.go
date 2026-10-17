@@ -63,9 +63,29 @@ type Server struct {
 	// ExpAPIToken protects /api/exp/*. It is separate from Token: the experiment runner on the server
 	// uses it, the browser and the sandbox never see it (X1.3, X4).
 	ExpAPIToken string
+	// ExpAccount resolves the experiment account for ExpAPIToken (sub for the owner, user name for
+	// the permission of experiment chats, X1.3). Nil: the runner's chat routes are off; the fixture
+	// routes still work with the key alone.
+	ExpAccount func(context.Context) (oidc.User, error)
+	// OwnerSource answers who owns chats and approvals; nil means M (replaceable for tests).
+	OwnerSource Owners
 }
 
 type userKey struct{}
+
+// expKey marks a request that came in with the experiment key instead of a user session (X1.3).
+type expKey struct{}
+
+// ExpKeyFrom reports whether the request was authenticated with the experiment key.
+func ExpKeyFrom(ctx context.Context) bool {
+	_, ok := ctx.Value(expKey{}).(bool)
+	return ok
+}
+
+// withExpKey marks a context as coming from the experiment key (the middleware does this; tests too).
+func withExpKey(ctx context.Context) context.Context {
+	return context.WithValue(ctx, expKey{}, true)
+}
 
 // UserFrom returns the logged-in user (oidc mode only).
 func UserFrom(ctx context.Context) (oidc.User, bool) {
@@ -132,6 +152,31 @@ func (s *Server) auth(next http.Handler) http.Handler {
 				writeErr(w, http.StatusUnauthorized, "experiment API: missing or wrong AGW_EXP_API_TOKEN")
 				return
 			}
+			if s.OIDC != nil && s.ExpAccount != nil {
+				// X1: the runner's routes also act as the experiment account (owner checks).
+				u, err := s.ExpAccount(r.Context())
+				if err != nil {
+					slog.Warn("API: experiment account not reachable", "error", err)
+					writeErr(w, http.StatusServiceUnavailable, "experiment account not reachable")
+					return
+				}
+				ctx := withExpKey(r.Context())
+				r = r.WithContext(context.WithValue(ctx, userKey{}, u))
+			}
+		} else if s.expTokenOK(r) && s.OIDC != nil && s.ExpAccount != nil {
+			// X1.3: the same key creates experiment chats and reads their chats, on its surface only.
+			u, err := s.ExpAccount(r.Context())
+			if err != nil {
+				slog.Warn("API: experiment account not reachable", "error", err)
+				writeErr(w, http.StatusServiceUnavailable, "experiment account not reachable")
+				return
+			}
+			if !expRouteAllowed(r) {
+				writeErr(w, http.StatusForbidden, "the experiment key does not reach this route")
+				return
+			}
+			ctx := withExpKey(r.Context())
+			r = r.WithContext(context.WithValue(ctx, userKey{}, u))
 		} else if s.OIDC != nil {
 			u, ok := s.OIDC.SessionUser(r)
 			if !ok {
@@ -174,6 +219,14 @@ func (s *Server) expTokenOK(r *http.Request) bool {
 	}
 	given, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 	return ok && subtle.ConstantTimeCompare([]byte(given), []byte(s.ExpAPIToken)) == 1
+}
+
+// expRouteAllowed is the smallest surface of the key outside /api/exp/ (X1.3): create an experiment
+// chat and read the chats the account owns. The runner's own routes are under /api/exp/.
+func expRouteAllowed(r *http.Request) bool {
+	p := r.URL.Path
+	return (r.Method == http.MethodPost && p == "/api/chats") ||
+		(r.Method == http.MethodGet && strings.HasPrefix(p, "/api/chats/"))
 }
 
 // login sets the login cookie and redirects to the UI.
@@ -280,6 +333,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/events", s.allEvents)
 	mux.HandleFunc("GET /api/activity", s.activity)
 	mux.Handle("POST /api/approvals/{id}", s.ownApproval(s.approvalWritable(s.decide)))
+	s.registerExp(mux) // X1: the experiment runner, only with the experiment key
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "unknown endpoint")
 	})
@@ -295,7 +349,12 @@ type Owners interface {
 	ApprovalChat(ctx context.Context, approvalID string) (string, error)
 }
 
-func (s *Server) owners() Owners { return s.M }
+func (s *Server) owners() Owners {
+	if s.OwnerSource != nil {
+		return s.OwnerSource
+	}
+	return s.M
+}
 
 // owns reports whether the chat belongs to the logged-in user. In token mode every chat belongs to
 // the holder of the token. Foreign and unknown chats look the same (not found), so that identifiers
@@ -672,6 +731,11 @@ func (s *Server) createChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.Owner, req.OwnerName = "", ""
+	if ExpKeyFrom(r.Context()) && req.Experiment == nil {
+		// X1.3: the experiment key creates experiment chats and nothing else.
+		writeErr(w, http.StatusForbidden, "the experiment key only creates experiment chats")
+		return
+	}
 	if s.OIDC != nil {
 		u, ok := UserFrom(r.Context())
 		if !ok || u.Sub == "" {

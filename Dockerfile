@@ -13,9 +13,12 @@ RUN go mod download
 COPY . .
 COPY --from=web /web/dist ./web/dist
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/orchestrator ./cmd/orchestrator
+# X1.4: the experiment runner runs in this image (docker exec -d … /agw exp run …); it needs no shell.
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/agw ./cmd/agw
 
 # Runs as root because it serves the Docker socket and the socket volume.
 FROM gcr.io/distroless/static-debian12
 COPY --from=build /out/orchestrator /orchestrator
+COPY --from=build /out/agw /agw
 EXPOSE 18480 18481
 ENTRYPOINT ["/orchestrator"]

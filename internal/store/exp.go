@@ -1,0 +1,208 @@
+// SPDX-FileCopyrightText: 2026 Philipp Schröer
+//
+// SPDX-License-Identifier: MIT
+
+package store
+
+import (
+	"context"
+	_ "embed"
+	"encoding/json"
+	"errors"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+)
+
+//go:embed exp_schema.sql
+var expSchemaSQL string
+
+func init() { registerSchema(expSchemaSQL) }
+
+// States of an experiment run (X1.5, X1.8). Status holds the end reason of a finished run; a run
+// that is still going is ExpStarted.
+const (
+	ExpStarted       = "started"
+	ExpDone          = "done"
+	ExpLimitCost     = "limit_cost"
+	ExpLimitTokens   = "limit_tokens"
+	ExpLimitDuration = "limit_duration"
+	ExpError         = "error"
+	ExpAborted       = "aborted"
+)
+
+// ErrExpRunExists: an attempt with this id is already recorded.
+var ErrExpRunExists = errors.New("experiment run exists")
+
+// ExpRun is one attempt of one run of the experiment plan. The logical run is Key; a retry after a
+// crash takes a new ID (key + "#<attempt>") and the old row stays with SupersededBy.
+type ExpRun struct {
+	ID             string          `json:"id"`
+	Key            string          `json:"key"`
+	Plan           string          `json:"plan"`
+	PlanSHA256     string          `json:"plan_sha256,omitempty"`
+	Cell           string          `json:"cell"`
+	Task           string          `json:"task"`
+	Rep            int             `json:"rep"`
+	Seed           int64           `json:"seed"`
+	Position       int             `json:"position"`
+	ChatID         string          `json:"chat_id,omitempty"`
+	Status         string          `json:"status"`
+	EndReason      string          `json:"end_reason,omitempty"`
+	Pass           *bool           `json:"pass,omitempty"`
+	CheckEvidence  json.RawMessage `json:"check_evidence,omitempty"`
+	StartedAt      time.Time       `json:"started_at"`
+	EndedAt        *time.Time      `json:"ended_at,omitempty"`
+	SupersededBy   string          `json:"superseded_by,omitempty"`
+	GatewayVersion string          `json:"gateway_version,omitempty"`
+	Model          string          `json:"model,omitempty"`
+}
+
+// ExpRunEnd is what EndExpRun records.
+type ExpRunEnd struct {
+	Status        string
+	EndReason     string
+	Pass          *bool
+	CheckEvidence json.RawMessage
+}
+
+// StartExpRun records a new attempt.
+func (s *Store) StartExpRun(ctx context.Context, r ExpRun) error {
+	if r.ID == "" || r.Key == "" {
+		return errors.New("experiment run needs an id and a key")
+	}
+	status := r.Status
+	if status == "" {
+		status = ExpStarted
+	}
+	ct, err := s.pool.Exec(ctx, `INSERT INTO exp_runs
+		(id, run_key, plan, plan_sha256, cell, task, rep, seed, position, chat_id, status, gateway_version, model)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NULLIF($10,'')::uuid,$11,$12,$13)`,
+		r.ID, r.Key, r.Plan, r.PlanSHA256, r.Cell, r.Task, r.Rep, r.Seed, r.Position, r.ChatID, status, r.GatewayVersion, r.Model)
+	if err != nil {
+		if pgErrUnique(err) {
+			return ErrExpRunExists
+		}
+		return err
+	}
+	if ct.RowsAffected() == 0 {
+		return ErrExpRunExists
+	}
+	return nil
+}
+
+// SetExpRunChat records the chat that carries the run. The row is written before the chat exists, so
+// that a crash leaves a visible "started" attempt (X1.5); the chat id follows at once.
+func (s *Store) SetExpRunChat(ctx context.Context, id, chatID string) error {
+	ct, err := s.pool.Exec(ctx, `UPDATE exp_runs SET chat_id=$2::uuid WHERE id=$1`, id, chatID)
+	if err != nil {
+		return err
+	}
+	if ct.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// EndExpRun records the outcome of a run. It is also the way an aborted run is closed; ending a run
+// twice overwrites the first ending, which keeps a retried request harmless.
+func (s *Store) EndExpRun(ctx context.Context, id string, end ExpRunEnd) error {
+	if end.Status == "" {
+		return errors.New("experiment run end without status")
+	}
+	var evidence []byte
+	if len(end.CheckEvidence) > 0 {
+		evidence = end.CheckEvidence
+	}
+	ct, err := s.pool.Exec(ctx, `UPDATE exp_runs SET status=$2, end_reason=$3, pass=$4,
+		check_evidence=$5::jsonb, ended_at=now() WHERE id=$1`, id, end.Status, end.EndReason, end.Pass, evidence)
+	if err != nil {
+		return err
+	}
+	if ct.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// SupersedeExpRun marks an attempt that was replaced by a new one (X1.5). It stays visible with its
+// chat id and its partial data; only the link to the new attempt is added.
+func (s *Store) SupersedeExpRun(ctx context.Context, id, by string) error {
+	if by == "" {
+		return errors.New("supersede without the new attempt")
+	}
+	ct, err := s.pool.Exec(ctx, `UPDATE exp_runs SET status=$3,
+		end_reason=CASE WHEN end_reason='' THEN 'superseded by a new attempt' ELSE end_reason END,
+		superseded_by=$2, ended_at=COALESCE(ended_at, now()) WHERE id=$1`, id, by, ExpAborted)
+	if err != nil {
+		return err
+	}
+	if ct.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// ListExpRuns returns the runs of a plan, optionally of one cell, in the runner's order.
+func (s *Store) ListExpRuns(ctx context.Context, plan, cell string) ([]ExpRun, error) {
+	rows, err := s.pool.Query(ctx, `SELECT id, run_key, plan, plan_sha256, cell, task, rep, seed, position,
+		COALESCE(chat_id::text, ''), status, end_reason, pass, check_evidence, started_at, ended_at,
+		superseded_by, gateway_version, model
+		FROM exp_runs WHERE plan=$1 AND ($2='' OR cell=$2) ORDER BY position, started_at`, plan, cell)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []ExpRun{}
+	for rows.Next() {
+		r, err := scanExpRun(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// GetExpRun returns one attempt.
+func (s *Store) GetExpRun(ctx context.Context, id string) (ExpRun, error) {
+	row := s.pool.QueryRow(ctx, `SELECT id, run_key, plan, plan_sha256, cell, task, rep, seed, position,
+		COALESCE(chat_id::text, ''), status, end_reason, pass, check_evidence, started_at, ended_at,
+		superseded_by, gateway_version, model FROM exp_runs WHERE id=$1`, id)
+	r, err := scanExpRun(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ExpRun{}, ErrNotFound
+	}
+	return r, err
+}
+
+// scanRow is what QueryRow and Rows have in common.
+type scanRow interface {
+	Scan(dest ...any) error
+}
+
+func scanExpRun(row scanRow) (ExpRun, error) {
+	var (
+		r     ExpRun
+		ev    []byte
+		ended *time.Time
+		pass  *bool
+	)
+	if err := row.Scan(&r.ID, &r.Key, &r.Plan, &r.PlanSHA256, &r.Cell, &r.Task, &r.Rep, &r.Seed,
+		&r.Position, &r.ChatID, &r.Status, &r.EndReason, &pass, &ev, &r.StartedAt, &ended,
+		&r.SupersededBy, &r.GatewayVersion, &r.Model); err != nil {
+		return ExpRun{}, err
+	}
+	r.Pass, r.EndedAt = pass, ended
+	if len(ev) > 0 {
+		r.CheckEvidence = json.RawMessage(ev)
+	}
+	return r, nil
+}
+
+// pgErrUnique reports a unique violation of Postgres.
+func pgErrUnique(err error) bool {
+	var pe *pgconn.PgError
+	return errors.As(err, &pe) && pe.Code == "23505"
+}

@@ -2294,3 +2294,49 @@ Limits per slot (all endpoints together): at most **32 concurrent requests**; re
 `read`, upload) additionally occupy a **byte budget of 2 × 64 MiB**. A request above the limit waits until room
 becomes free or ends when the connection is closed. Per operation the orchestrator buffers at most 64 MiB of output
 that has not been collected yet; above that it aborts the operation (`code: "EOVERFLOW"`).
+
+## Experiment runs (X1)
+
+The experiment runs of the thesis work without a browser. Their account (`agent-exp`) logs in with a password
+grant (public client `frontend`, X1.2); the gateway requests that token itself and exchanges it per experiment chat
+as usual (`azp=agw-agent`). The login therefore never expires after `MaxSession`, only the access token is renewed.
+`AGW_EXP_USER`, `AGW_EXP_PASSWORD` and `AGW_EXP_API_TOKEN` come from the secret file of the instance; without them
+the routes below answer as before. The account must also be listed in `AGW_EXPERIMENT_USERS` (X0.2).
+
+**Key and surface (X1.3).** `Authorization: Bearer <AGW_EXP_API_TOKEN>` reaches exactly:
+
+- `POST /api/chats` — and only with an `experiment` profile in the body (otherwise **403**);
+- `GET /api/chats/{id}…` for chats the experiment account owns (others are **404**, as everywhere);
+- `/api/exp/*` below.
+
+Every other route is **403** with this key, and the key is never accepted as a cookie. The request context carries
+the account's `sub` as owner, so ownership checks work unchanged.
+
+| Method and path | Purpose |
+|---|---|
+| `POST /api/chats` | creates an experiment chat: `experiment: {protection, cell, run, seed}` plus `delegation`, `model`, `variant` (binding) and `message` (the task) |
+| `POST /api/exp/runs/start` | records one attempt: `{id, key, plan, plan_sha256, cell, task, rep, seed, position, model}`; `409` if the id exists |
+| `POST /api/exp/runs/chat` | links the attempt to its chat: `{id, chat}` |
+| `POST /api/exp/runs/end` | closes the attempt: `{id, status, end_reason, pass, check_evidence}`; status is the end reason (`done`, `limit_cost`, `limit_tokens`, `limit_duration`, `error`, `aborted`) |
+| `POST /api/exp/runs/supersede` | an attempt that a restart replaced: `{id, superseded_by}`; the old row keeps `status: "aborted"` and stays visible |
+| `POST /api/exp/runs/stop` | `{id}`: aborts the run's chat and closes the run as `aborted`; a finished run keeps its outcome |
+| `GET /api/exp/runs?plan=&cell=` | all attempts of a plan (one cell if `cell` is set), in the runner's order |
+| `GET /api/exp/run?id=` | one attempt |
+| `GET /api/exp/objects?chat=` | the chat's provenance register (`resource`, `object_id`) for the cleanup (X1.10) |
+| `POST /api/exp/call` | a **GET or DELETE** on the platform with the chat's token: `{chat, method, path, query?, body?}` → `{status, http_status, body, message}`; everything else is **403** |
+| `POST /api/exp/chats/abort` | `{chat}`: stops the running turn (a limit of X3) |
+
+**The runner** is `agw exp run --plan <dir|file> [--cell <id>]... [--k N] [--seed N] [--dry-run]`; it is shipped in
+the gateway image as `/agw` and starts from the container (`docker exec -d agri_gaia-agent_gateway-1 /agw exp run …`)
+with `AGW_EXP_API_TOKEN` in its environment. It reads `plan.yaml`/`pilot.yaml`, the tasks and the fixture manifests
+(X9), checks `plan.lock` for a main plan (X8.5), orders the runs per task and repetition with a seeded shuffle of
+the cells (X1.6) and runs them strictly one after the other (X1.7). A run ends when the chat is quiet
+(`running: false`, `queued: 0`, not resuming) and no observed job (`GET /api/chats/{id}/jobs`) is still running,
+or when the gateway stored a limit at the chat (`experiment.limit` from X3/#128), which the runner maps to
+`limit_cost`, `limit_tokens` or `limit_duration` (X1.8); the limits of the plan file are checked in addition as a
+fallback. Then the declarative `check` of the task runs (X1.9), the objects of the provenance register and the
+training container ids from the answers are removed (X1.10), and the attempt is closed.
+
+`agw exp status --plan <dir|file>` counts attempts per cell and status; `agw exp abort <run>` ends one attempt from
+outside. An attempt that a crashed process left in `started` is superseded by `key#2` (then `key#3`, …) on the next
+start; an attempt that ended — also as `aborted` — is never repeated (X1.5).

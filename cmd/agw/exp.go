@@ -5,6 +5,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,14 +13,15 @@ import (
 	"strings"
 	"time"
 
+	"agw/internal/agwclient"
 	"agw/internal/exp"
 )
 
-// cmdExp dispatches the experiment subcommands. X9 added the validation of the material; X4 (issue
-// #129) adds seeding and removing the fixtures of a cell. The runner itself follows in X1.
+// cmdExp dispatches the experiment subcommands: validate (X9), seed, unseed and verify of the
+// fixtures (X4, issue #129), and run, status and abort of the runner (X1).
 func (a *app) cmdExp(args []string) error {
 	if len(args) == 0 {
-		return usagef("exp: subcommand missing (validate, seed, unseed, verify)")
+		return usagef("exp: subcommand missing (validate, seed, unseed, verify, run, status, abort)")
 	}
 	switch args[0] {
 	case "validate":
@@ -30,6 +32,12 @@ func (a *app) cmdExp(args []string) error {
 		return a.cmdExpUnseed(args[1:])
 	case "verify":
 		return a.cmdExpVerify(args[1:])
+	case "run":
+		return a.cmdExpRun(args[1:])
+	case "status":
+		return a.cmdExpStatus(args[1:])
+	case "abort":
+		return a.cmdExpAbort(args[1:])
 	}
 	return usagef("unknown command \"exp %s\" – agw help shows all commands", args[0])
 }
@@ -276,6 +284,160 @@ func printMismatches(a *app, list []mismatchRow) {
 				m.ManifestID, m.Kind, m.ObjectID, f.Field, f.Expected, f.Actual)
 		}
 	}
+}
+
+// --- The runner (X1) -----------------------------------------------------------------------------
+
+// expClient connects with the experiment key (X1.3). It is deliberately not AGW_API_TOKEN: the
+// runner inside the gateway container must not carry the full key.
+func (a *app) expClient() (*agwclient.Client, error) {
+	token := os.Getenv("AGW_EXP_API_TOKEN")
+	if token == "" {
+		return nil, usagef("AGW_EXP_API_TOKEN is not set; the experiment routes need the key (X1.3)")
+	}
+	if a.c == nil {
+		a.c = agwclient.New(a.url)
+	}
+	a.c.Token = token
+	return a.c, nil
+}
+
+// multiFlag collects a switch that may be repeated (--cell).
+type multiFlag []string
+
+func (m *multiFlag) String() string { return strings.Join(*m, ",") }
+
+func (m *multiFlag) Set(v string) error {
+	*m = append(*m, v)
+	return nil
+}
+
+func (a *app) cmdExpRun(args []string) error {
+	fs := a.flags("exp run")
+	path := fs.String("plan", "", "material directory with plan.yaml, or a plan file")
+	k := fs.Int("k", 0, "repetitions per task (default: the plan's k)")
+	seed := fs.Int64("seed", 0, "seed of the order (default: the plan's seed)")
+	dry := fs.Bool("dry-run", false, "print the order and change nothing")
+	var cells multiFlag
+	fs.Var(&cells, "cell", "cell to run (repeatable; default: every cell of the plan)")
+	if _, err := a.parse(fs, args, 0, 0, "agw exp run --plan <dir|file> [--cell <id>]... [--k N] [--seed N] [--dry-run]"); err != nil {
+		return err
+	}
+	if *path == "" {
+		return usagef("--plan is required")
+	}
+	seedSet := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "seed" {
+			seedSet = true
+		}
+	})
+	opts := expRunOptions{PlanPath: *path, Cells: cells, K: *k, Seed: *seed, SeedSet: seedSet, DryRun: *dry}
+	if *dry {
+		return runExpPlan(a.ctx, nil, opts, a.stdout, a.stderr)
+	}
+	c, err := a.expClient()
+	if err != nil {
+		return err
+	}
+	return runExpPlan(a.ctx, c, opts, a.stdout, a.stderr)
+}
+
+// cmdExpStatus shows how many runs of a plan exist per cell and status. A run that a newer attempt
+// superseded counts as such, not in the outcome (X1.5).
+func (a *app) cmdExpStatus(args []string) error {
+	fs := a.flags("exp status")
+	path := fs.String("plan", "", "material directory with plan.yaml, or a plan file")
+	if _, err := a.parse(fs, args, 0, 0, "agw exp status --plan <dir|file> [--json]"); err != nil {
+		return err
+	}
+	if *path == "" {
+		return usagef("--plan is required")
+	}
+	m, err := loadMaterial(*path)
+	if err != nil {
+		return err
+	}
+	c, err := a.expClient()
+	if err != nil {
+		return err
+	}
+	runs, err := c.ExpRuns(a.ctx, m.PlanID, "")
+	if err != nil {
+		return err
+	}
+	if a.json {
+		return a.printJSON(runs)
+	}
+	type stats struct {
+		runs, done, pass, started, limits, errors, aborted, superseded int
+	}
+	per := map[string]*stats{}
+	get := func(cell string) *stats {
+		if per[cell] == nil {
+			per[cell] = &stats{}
+		}
+		return per[cell]
+	}
+	for _, run := range runs {
+		s := get(run.Cell)
+		if run.SupersededBy != "" {
+			s.superseded++
+			continue
+		}
+		s.runs++
+		switch run.Status {
+		case "done":
+			s.done++
+		case "started":
+			s.started++
+		case "error":
+			s.errors++
+		case "aborted":
+			s.aborted++
+		case "limit_cost", "limit_tokens", "limit_duration":
+			s.limits++
+		}
+		if run.Pass != nil && *run.Pass {
+			s.pass++
+		}
+	}
+	cells := make([]string, 0, len(per))
+	for cell := range per {
+		cells = append(cells, cell)
+	}
+	sort.Strings(cells)
+	tw := a.table()
+	fmt.Fprintln(tw, "Cell\tRuns\tDone\tPass\tStarted\tLimits\tErrors\tAborted\tSuperseded")
+	for _, cell := range cells {
+		s := per[cell]
+		fmt.Fprintf(tw, "%s\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\n", cell, s.runs, s.done, s.pass, s.started,
+			s.limits, s.errors, s.aborted, s.superseded)
+	}
+	return tw.Flush()
+}
+
+// cmdExpAbort ends a run from outside: the chat is aborted and the run is closed as aborted. A run
+// that already ended keeps its outcome.
+func (a *app) cmdExpAbort(args []string) error {
+	fs := a.flags("exp abort")
+	pos, err := a.parse(fs, args, 1, 1, "agw exp abort <run>")
+	if err != nil {
+		return err
+	}
+	c, err := a.expClient()
+	if err != nil {
+		return err
+	}
+	run, err := c.ExpStopRun(a.ctx, pos[0])
+	if err != nil {
+		return err
+	}
+	if a.json {
+		return a.printJSON(run)
+	}
+	fmt.Fprintf(a.stdout, "run %s %s\n", run.Key, run.Status)
+	return nil
 }
 
 // cmdExpValidate checks one plan against the formats of X9. --plan takes the material

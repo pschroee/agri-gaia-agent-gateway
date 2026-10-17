@@ -334,6 +334,63 @@ func (c *Client) Decide(ctx context.Context, approvalID string, approve bool) (o
 	return out, c.Do(ctx, "POST", "/api/approvals/"+esc(approvalID), map[string]bool{"approve": approve}, &out)
 }
 
+// Jobs lists the observed platform jobs of a chat (A-E2). The runner uses it to know whether a run
+// still has something going on (X1.8).
+func (c *Client) Jobs(ctx context.Context, id string) (out []WatchJob, err error) {
+	return out, c.Do(ctx, "GET", "/api/chats/"+esc(id)+"/jobs", nil, &out)
+}
+
+// --- Experiment runner (X1) ----------------------------------------------------------------------
+
+func (c *Client) ExpStartRun(ctx context.Context, run ExpRun) error {
+	return c.Do(ctx, "POST", "/api/exp/runs/start", run, nil)
+}
+
+func (c *Client) ExpSetRunChat(ctx context.Context, id, chatID string) error {
+	return c.Do(ctx, "POST", "/api/exp/runs/chat", map[string]string{"id": id, "chat": chatID}, nil)
+}
+
+func (c *Client) ExpEndRun(ctx context.Context, end ExpRunEnd) error {
+	return c.Do(ctx, "POST", "/api/exp/runs/end", end, nil)
+}
+
+func (c *Client) ExpSupersedeRun(ctx context.Context, id, by string) error {
+	return c.Do(ctx, "POST", "/api/exp/runs/supersede", map[string]string{"id": id, "superseded_by": by}, nil)
+}
+
+func (c *Client) ExpRuns(ctx context.Context, plan, cell string) (out []ExpRun, err error) {
+	q := url.Values{}
+	q.Set("plan", plan)
+	if cell != "" {
+		q.Set("cell", cell)
+	}
+	return out, c.Do(ctx, "GET", "/api/exp/runs?"+q.Encode(), nil, &out)
+}
+
+func (c *Client) ExpRun(ctx context.Context, id string) (out ExpRun, err error) {
+	q := url.Values{}
+	q.Set("id", id)
+	return out, c.Do(ctx, "GET", "/api/exp/run?"+q.Encode(), nil, &out)
+}
+
+func (c *Client) ExpObjects(ctx context.Context, chatID string) (out []ExpObject, err error) {
+	q := url.Values{}
+	q.Set("chat", chatID)
+	return out, c.Do(ctx, "GET", "/api/exp/objects?"+q.Encode(), nil, &out)
+}
+
+func (c *Client) ExpCall(ctx context.Context, req ExpCallRequest) (out ExpCallResult, err error) {
+	return out, c.Do(ctx, "POST", "/api/exp/call", req, &out)
+}
+
+func (c *Client) ExpAbortChat(ctx context.Context, chatID string) error {
+	return c.Do(ctx, "POST", "/api/exp/chats/abort", map[string]string{"chat": chatID}, nil)
+}
+
+func (c *Client) ExpStopRun(ctx context.Context, id string) (out ExpRun, err error) {
+	return out, c.Do(ctx, "POST", "/api/exp/runs/stop", map[string]string{"id": id}, &out)
+}
+
 // Events opens the SSE stream of a chat. Returns as soon as the server has sent the headers –
 // from then on the subscription is active.
 func (c *Client) Events(ctx context.Context, id string) (io.ReadCloser, error) {
