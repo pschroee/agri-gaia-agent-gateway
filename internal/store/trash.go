@@ -200,6 +200,9 @@ WHERE chat_id = $1`,
 		`UPDATE aux_llm_calls SET chat_id = NULL, deleted_chat = $2, error = CASE WHEN error <> '' THEN 'error' ELSE '' END
 WHERE chat_id = $1`,
 		`UPDATE web_requests SET chat_id = NULL, deleted_chat = $2, path = '' WHERE chat_id = $1`,
+		// X6: syscall traces carry paths and arguments; they are removed with the chat instead of
+		// being kept in a tombstone.
+		`DELETE FROM exec_syscalls WHERE chat_id = $1`,
 	}
 	for _, q := range steps {
 		if _, err := tx.Exec(ctx, q, chatID, tomb); err != nil {
