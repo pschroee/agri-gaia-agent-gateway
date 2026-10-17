@@ -1036,7 +1036,8 @@ was missing from the log); `%20` is the only encoding allowed. **Limits that rem
 /train/containers` incidentally removes entries of vanished containers and still counts as a read; the
 REST endpoint is also attached to the execution sandbox's socket (route `cli`), so the agent of the variants with `bash`
 can use it alongside `agw-platform`, which the evaluation must count as a separate route.
-`AGW_CONFORMANCE_REPORT=file.md` writes the table for the thesis. **Limit:** training containers
+`AGW_CONFORMANCE_REPORT=file.md` writes the report for the thesis (Markdown to that path, JSON next to it, one section
+per check path, with the gateway version and the time). **Limit:** training containers
 are created asynchronously from a task whose response does not name their ID; `own` therefore does not apply to them.
 
 **Checked live (2026-10-05)** with DeepSeek V4.1 Flash on our own instance: in the MCP variant

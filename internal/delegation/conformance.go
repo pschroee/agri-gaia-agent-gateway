@@ -54,6 +54,33 @@ type Case struct {
 	Group   string
 	Rules   string   // own delegation instead of ConformanceDelegation (empty: that one)
 	Owns    []string // own objects this case runs with (resource:id); empty: OwnInConformance
+	// Violation: the case expects a violation that only gets logged, because its delegation sets
+	// enforce false (stage "no protection" of the experiment plan, X10.2). The call runs; the
+	// manager reports the violation in Result.Violation ("allowed_violation" in the socket log).
+	Violation bool
+	// Raw: hand Req to the manager unchanged, so that the manager's own call check (normalize) is
+	// what refuses it. Only cases that Build would already refuse at the same check need this
+	// (X10.2: the fixed locks hold in a stage without a delegation check, XE1).
+	Raw bool
+}
+
+// CallText renders the call of a case for the conformance report.
+func (c Case) CallText() string {
+	if c.Tool != "" {
+		if c.Args == "" {
+			return c.Tool
+		}
+		return c.Tool + " " + c.Args
+	}
+	return strings.TrimSpace(c.Req.Method + " " + c.Req.Path)
+}
+
+// DelegationText renders the delegation a case runs with for the conformance report.
+func (c Case) DelegationText() string {
+	if c.Rules == "" {
+		return "conformance delegation"
+	}
+	return strings.Join(strings.Fields(c.Rules), " ")
 }
 
 // ConformanceCases returns the test cases: the base table plus everything features registered
@@ -70,6 +97,12 @@ var registeredCases []Case
 // start of a test).
 func registerConformance(cases ...Case) {
 	registeredCases = append(registeredCases, cases...)
+}
+
+// RegisterConformance adds cases from another package (X10.2: the protection-level cases live in
+// internal/chat, next to the manager behavior they exercise).
+func RegisterConformance(cases ...Case) {
+	registerConformance(cases...)
 }
 
 // baseCases are the cases of this package: forbidden calls in all variants a parser might read
@@ -172,7 +205,9 @@ func (c Case) Build() (platform.Request, error) {
 }
 
 // Evaluate checks a case against ConformanceDelegation (without platform). allowed: the service
-// would let the call through.
+// would let the call through. With a delegation that does not enforce (stage "no protection",
+// X10.2), a violation runs and is reported as such; the fixed locks (blocked paths, field rules,
+// calls the gateway cannot classify) hold in every stage (XE1).
 func Evaluate(c Case, now time.Time) (allowed bool, why string) {
 	raw := ConformanceDelegation
 	if c.Rules != "" {
@@ -190,6 +225,14 @@ func Evaluate(c Case, now time.Time) (allowed bool, why string) {
 	if err != nil {
 		return false, "refused while checking the arguments: " + err.Error()
 	}
+	access := Classify(req)
+	// The fixed locks come before the delegation in the manager and hold in every stage (XE1).
+	if access.Problem != "" {
+		return false, "refused by a field rule: " + access.Problem
+	}
+	if !access.Effect.Valid() {
+		return false, "refused: the gateway could not classify this call"
+	}
 	ownList := c.OwnsOf()
 	own := func(res, id string) bool {
 		for _, o := range ownList {
@@ -199,35 +242,12 @@ func Evaluate(c Case, now time.Time) (allowed bool, why string) {
 		}
 		return false
 	}
-	dec := d.Check(Classify(req), now, own)
-	if !dec.Allowed {
-		return false, dec.Reason
+	dec := d.Check(access, now, own)
+	if dec.Allowed {
+		return true, "allowed: " + dec.Access.String()
 	}
-	return true, "allowed: " + dec.Access.String()
-}
-
-// Report summarizes results as a table (Markdown, for 7.3.1).
-func Report(results map[string]bool, cases []Case) string {
-	var b strings.Builder
-	b.WriteString("| Group | Cases | As expected |\n|---|---|---|\n")
-	type agg struct{ n, ok int }
-	order := []string{}
-	groups := map[string]*agg{}
-	for _, c := range cases {
-		g, found := groups[c.Group]
-		if !found {
-			g = &agg{}
-			groups[c.Group] = g
-			order = append(order, c.Group)
-		}
-		g.n++
-		if results[c.Name] == c.Allowed {
-			g.ok++
-		}
+	if !d.Enforcing() {
+		return true, "allowed violation (only logged): " + dec.Reason
 	}
-	for _, name := range order {
-		g := groups[name]
-		fmt.Fprintf(&b, "| %s | %d | %d |\n", name, g.n, g.ok)
-	}
-	return b.String()
+	return false, dec.Reason
 }
