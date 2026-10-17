@@ -167,10 +167,15 @@ func run() error {
 		slog.Info("notebooks on", "hub", env.JupyterHubAPIURL, "server_prefix", env.NotebookPrefix,
 			"timeout_max_minutes", env.NotebookTimeoutMaxMin, "idle_minutes", env.NotebookIdleMin)
 	}
-	// Warm slots only for the configured combination; chats stored with another one (cli, mcp, api,
-	// both, …) get a slot on demand when they resume.
-	p := pool.New[chat.Agent](fac.Create, fac.Destroy, map[string]int{toolsets.Key(): env.PoolSize})
-	p.SetKnown(toolset.Valid)
+	// Warm slots only for the configured combination and the experiment variants of
+	// AGW_EXPERIMENT_POOL (X0.3); chats stored with another one (cli, mcp, api, both, exp:…) get a
+	// slot on demand when they resume.
+	targets := map[string]int{toolsets.Key(): env.PoolSize}
+	for variant, n := range env.ExperimentPool {
+		targets[variant] = n
+	}
+	p := pool.New[chat.Agent](fac.Create, fac.Destroy, targets)
+	p.SetKnown(toolset.ValidVariant)
 	// R0 — result checks: the gateway runs a model in a sealed container of its own and reports the
 	// figures and the verdict (internal/assess). Without a container runtime or without AGW_IMAGE the
 	// service cannot check anything: the capability "checks" says so and every check tool answers
@@ -204,9 +209,10 @@ func run() error {
 		AutoCompactDefault: env.AutoCompactDefault, CompactReserveTokens: env.CompactReserveTokens, CompactKeepRecent: env.CompactKeepRecent,
 		BgWakesPerHour: env.BgWakesPerHour, BgKeepAlive: env.BgKeepAlive, AutoTurnsMax: env.AutoTurnsMax,
 		Titler: newTitler(cat, env.TitleModel), Platform: plat, Toolsets: toolsets,
-		Sessions: sessionKeeper(auth), // A-E3: keeps the login of plan owners fresh
-		Notebook: notebooker,
-		Checks:   checks, // R0: answers the capability "checks"
+		ExperimentUsers: env.ExperimentUsers, // X0.2: who may create experiment chats
+		Sessions:        sessionKeeper(auth), // A-E3: keeps the login of plan owners fresh
+		Notebook:        notebooker,
+		Checks:          checks, // R0: answers the capability "checks"
 	})
 	fac.Backend = m
 	plat.SetOnExchange(m.PlatformExchanged)

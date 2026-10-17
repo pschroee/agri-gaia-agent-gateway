@@ -71,8 +71,14 @@ var (
 	ErrUnknownVariant  = pool.ErrUnknownVariant
 	// ErrVariantFixed: a client asked for another binding than AGW_TOOLSETS gives new chats (issue #29).
 	ErrVariantFixed = errors.New("the bindings of new chats are fixed by the gateway (AGW_TOOLSETS)")
-	ErrNoSlot       = pool.ErrNoIdleSlot
-	ErrNotFound     = store.ErrNotFound
+	// ErrExperimentNotAllowed: the owner is not in AGW_EXPERIMENT_USERS (X0.2).
+	ErrExperimentNotAllowed = errors.New("experiment chats are not allowed for this account (AGW_EXPERIMENT_USERS)")
+	// ErrExperimentNeedsDelegation: an experiment chat without delegated rights has no protection level.
+	ErrExperimentNeedsDelegation = errors.New("an experiment chat needs a delegation")
+	// ErrExperimentProtection: the protection level is not none, instruction or service.
+	ErrExperimentProtection = errors.New("unknown protection level; allowed are none, instruction and service")
+	ErrNoSlot               = pool.ErrNoIdleSlot
+	ErrNotFound             = store.ErrNotFound
 	// ErrAlreadySent: the input went with a message and is not removed any more (issue L4/#121, RemoveInput).
 	ErrAlreadySent = store.ErrAlreadySent
 )
@@ -260,6 +266,10 @@ type Options struct {
 	// Toolsets: the bindings every new chat gets (AGW_TOOLSETS, issue #29); empty = toolset.Default.
 	// Stored chats keep the combination they were created with.
 	Toolsets toolset.Set
+
+	// ExperimentUsers: accounts (preferred_username) that may create experiment chats
+	// (AGW_EXPERIMENT_USERS, X0.2). Empty: no experiment chats, also not through the API.
+	ExperimentUsers []string
 }
 
 type Manager struct {
@@ -536,10 +546,20 @@ type NewChat struct {
 	// MaxSubagents is accepted for older clients and ignored: the limit is Options.MaxSubagents.
 	MaxSubagents *int `json:"max_subagents"`
 	// Delegation: delegated rights (delegation.Delegation as JSON); without it the chat behaves
-	// as before step 1 (reading free, writing with approval).
+	// as before step 1 (reading free, writing with approval). In an experiment chat it carries the
+	// protection level: Enforce and Confirm are set from Experiment.Protection, not from the request.
 	Delegation json.RawMessage `json:"delegation,omitempty"`
+	// Experiment: the profile of an experiment chat (X0): binding and protection level per chat. Only
+	// with Delegation and only for an account in AGW_EXPERIMENT_USERS; the binding may differ from
+	// AGW_TOOLSETS. The model, the provider and the proxy address stay as configured (catalogue,
+	// AGW_DEFAULT_MODEL, AGW_PROXY_BASE_URL) — the profile changes only the action space and the
+	// protection level.
+	Experiment *store.Experiment `json:"experiment,omitempty"`
 	// Owner is set by the API from the login (sub), never from the request body.
 	Owner string `json:"-"`
+	// OwnerName is set by the API from the login (preferred_username), never from the request body.
+	// AGW_EXPERIMENT_USERS names accounts this way.
+	OwnerName string `json:"-"`
 	// Language: the user's preferred language according to the browser (BCP 47, e.g. "en-US");
 	// optional. Goes to the agent as a note with the first request (language.go).
 	Language string `json:"language,omitempty"`
@@ -548,6 +568,31 @@ type NewChat struct {
 	// message sent meanwhile waits until the sandbox is assigned. With a free slot nothing changes.
 	// Only without Message: a first message in the request keeps the synchronous behaviour.
 	Async bool `json:"async,omitempty"`
+}
+
+// experimentAllowed reports whether one of the names (the login's preferred_username and, for older
+// clients, the owner) may create experiment chats (X0.2). An empty list allows nobody.
+func (m *Manager) experimentAllowed(names ...string) bool {
+	for _, name := range names {
+		if name == "" {
+			continue
+		}
+		for _, allowed := range m.opt.ExperimentUsers {
+			if strings.TrimSpace(allowed) == name {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// experimentOf returns the experiment profile of a chat; nil for a product chat or an unknown chat.
+func (m *Manager) experimentOf(ctx context.Context, chatID string) *store.Experiment {
+	c, err := m.st.GetChat(ctx, chatID)
+	if err != nil {
+		return nil
+	}
+	return c.Experiment
 }
 
 func (m *Manager) Create(ctx context.Context, req NewChat) (ChatView, error) {
@@ -559,20 +604,52 @@ func (m *Manager) Create(ctx context.Context, req NewChat) (ChatView, error) {
 	}
 	// The bindings come from AGW_TOOLSETS. A variant in the request is only accepted when it names
 	// the same combination (in any order, "both" = "cli,mcp"); another one is refused instead of
-	// quietly giving the chat other tools than the client asked for.
-	if req.Variant != "" {
-		ts, err := toolset.FromVariant(req.Variant)
-		if err != nil {
-			return ChatView{}, ErrUnknownVariant
+	// quietly giving the chat other tools than the client asked for. An experiment chat may name
+	// another binding (X0.1); it is stored as "exp:<key>".
+	experiment := req.Experiment
+	if experiment != nil {
+		if !m.experimentAllowed(req.OwnerName, req.Owner) {
+			return ChatView{}, ErrExperimentNotAllowed
 		}
-		if ts != m.opt.Toolsets {
-			return ChatView{}, fmt.Errorf("%w: requested %q, new chats get %q", ErrVariantFixed, ts.Key(), m.opt.Toolsets.Key())
+		if t := bytes.TrimSpace(req.Delegation); len(t) == 0 || string(t) == "null" {
+			return ChatView{}, ErrExperimentNeedsDelegation
 		}
+		switch experiment.Protection {
+		case "none", "instruction", "service":
+		case "":
+			return ChatView{}, fmt.Errorf("%w: missing", ErrExperimentProtection)
+		default:
+			return ChatView{}, fmt.Errorf("%w: %q", ErrExperimentProtection, experiment.Protection)
+		}
+		base := m.opt.Toolsets
+		if req.Variant != "" {
+			ts, err := toolset.FromVariant(req.Variant)
+			if err != nil {
+				return ChatView{}, ErrUnknownVariant
+			}
+			base = ts
+		}
+		req.Variant = toolset.ExperimentPrefix + base.Key()
+	} else {
+		if req.Variant != "" {
+			ts, err := toolset.FromVariant(req.Variant)
+			if err != nil {
+				return ChatView{}, ErrUnknownVariant
+			}
+			if ts != m.opt.Toolsets {
+				return ChatView{}, fmt.Errorf("%w: requested %q, new chats get %q", ErrVariantFixed, ts.Key(), m.opt.Toolsets.Key())
+			}
+		}
+		req.Variant = m.opt.Toolsets.Key()
 	}
-	req.Variant = m.opt.Toolsets.Key()
 	internet := m.opt.InternetDefault
 	if req.Internet != nil {
 		internet = *req.Internet
+	}
+	if experiment != nil {
+		// X0/X1: the experiment runs without internet, and without a way to request it (the tools
+		// for that are not in its slots either).
+		internet = false
 	}
 	// Without a title it counts as a placeholder; Send replaces it with the first question
 	// (immediately shortened, then by the model), even if the question comes right at creation.
@@ -589,14 +666,24 @@ func (m *Manager) Create(ctx context.Context, req NewChat) (ChatView, error) {
 		return ChatView{}, err
 	}
 	var del json.RawMessage
+	var exp *store.Experiment
 	if t := bytes.TrimSpace(req.Delegation); len(t) > 0 && string(t) != "null" {
 		d, err := delegation.Parse(t)
 		if err != nil {
 			return ChatView{}, fmt.Errorf("%w: %v", ErrInvalid, err)
 		}
+		if experiment != nil {
+			// X0.7: the protection level alone decides enforcement and confirmation, not the request.
+			enforce := experiment.Protection == "service"
+			d.Enforce = &enforce
+			d.Confirm = "none"
+			stored := *experiment
+			stored.Limit = "" // X3: the gateway sets the limit when it runs the chat
+			exp = &stored
+		}
 		del, _ = json.Marshal(d) // the checked, normalized form is stored
 	}
-	c, err := m.st.CreateChat(ctx, store.NewChat{Title: title, TitleSource: titleSrc, Model: req.Model, Variant: req.Variant, Internet: internet, AutoCompact: autoCompact, MaxSubagents: m.opt.MaxSubagents, Delegation: del, Owner: req.Owner, Language: lang})
+	c, err := m.st.CreateChat(ctx, store.NewChat{Title: title, TitleSource: titleSrc, Model: req.Model, Variant: req.Variant, Internet: internet, AutoCompact: autoCompact, MaxSubagents: m.opt.MaxSubagents, Delegation: del, Experiment: exp, Owner: req.Owner, Language: lang})
 	if err != nil {
 		return ChatView{}, err
 	}
@@ -693,16 +780,22 @@ func (m *Manager) attachSlot(ctx context.Context, c store.Chat, session []byte, 
 	start := time.Now()
 	p.run(PhaseAcquire)
 	// The stored variant may be an older id ("both") or another combination than the configured one;
-	// the pool is keyed by the canonical key and starts such slots on demand.
-	ts, err := toolset.FromVariant(c.Variant)
+	// the pool is keyed by the canonical key and starts such slots on demand. An experiment chat keeps
+	// its "exp:" prefix: its slots have the experiment profile (X0.3).
+	base, experiment := toolset.SplitExperiment(c.Variant)
+	ts, err := toolset.FromVariant(base)
 	if err != nil {
 		if slot != nil {
 			m.pool.Release(ctx, slot, pool.ReasonAttachFailed)
 		}
 		return ErrUnknownVariant
 	}
+	key := ts.Key()
+	if experiment {
+		key = toolset.ExperimentPrefix + key
+	}
 	if slot == nil {
-		if slot, err = m.pool.AcquireWait(ctx, ts.Key(), c.ID, m.opt.AcquireTimeout); err != nil {
+		if slot, err = m.pool.AcquireWait(ctx, key, c.ID, m.opt.AcquireTimeout); err != nil {
 			return err
 		}
 	}
@@ -2246,40 +2339,55 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 		// The reads of the summary are one activity entry of the system (issue L2/#119), and while the call waits,
 		// approving re-reads them first (DL2.1).
 		m.logSummaryReads(ctx, chatID, ap.ID, "proposed", rl)
-		defer m.registerRecheck(ap.ID, m.platformRecheck(chatID, ap.ID, tool, req))()
-		w := m.broker.Register(ap.ID)
-		if s, ok := m.pool.Get(slotID); ok {
-			s.SetActivity("waiting_approval", "")
-		}
-		m.publish(chatID, Event{Kind: "approval", Data: ap})
-		m.publishChat(ctx, chatID)
-		slog.Info("platform call requested", "chat", chatID, "approval", ap.ID, "call", req.String(), "via", via)
-		// A step of an autonomous plan that the plan does not cover is parked instead of waited for
-		// (A-E2, D2.8): the user may decide hours later, the gateway repeats the stored call then. A step
-		// that carries files of the sandbox is asked synchronously — the gateway cannot repeat it without
-		// the running sandbox, and the approval has to show the bytes that were read.
-		if m.parkedStep(ctx, step, req) {
-			// The step is marked as parked (D2.8): the approval stays open until the plan expires, and the
-			// gateway repeats the stored call when the user decides. The mark has to be written before the
-			// answer, because that is what finds the step again at the decision.
-			if ok, perr := m.st.ParkApproval(ctx, step.PlanID, step.Idx, ap.ID); perr != nil || !ok {
-				// The step is not open any more (finished or skipped in between): ask as usual instead of
-				// parking it, so that no decision is handed to a step that no longer waits.
-				slog.Warn("step not parked, asking as usual", "chat", chatID, "plan", step.PlanID, "step", step.Idx, "error", perr)
-			} else {
-				if s, ok := m.pool.Get(slotID); ok {
-					s.SetActivity("tool", "")
-				}
-				m.publishChat(ctx, chatID)
-				m.publishPlan(ctx, step.PlanID)
-				m.parkApproval(ctx, chatID, slotID, via, req, step, ap, w)
-				return platform.Result{Status: "pending_user", Message: fmt.Sprintf(
-					"waiting for the user's approval of step %d; end your turn, you will be woken when the user decides", step.Idx)}, nil
-			}
-		}
-		approved, werr := w.Wait(ctx, m.opt.ApprovalTimeout)
 		bg := context.WithoutCancel(ctx)
-		final := m.settle(bg, chatID, ap.ID, approved, werr)
+		var final string
+		if m.experimentOf(ctx, chatID) != nil {
+			// X0.9: in an experiment chat the gateway decides instead of the user. The approval stays in
+			// the record with decided_by "experiment", and only the decided event goes out (no pending
+			// one, nobody waits for it).
+			decided, _, derr := m.st.DecideApprovalBy(ctx, ap.ID, store.ApprovalApproved, store.DecidedByExperiment)
+			if derr != nil {
+				return platform.Result{}, derr
+			}
+			ap = decided
+			final = store.ApprovalApproved
+			m.publish(chatID, Event{Kind: "approval", Data: ap})
+			slog.Info("platform call approved by the experiment profile", "chat", chatID, "approval", ap.ID, "call", req.String(), "via", via)
+		} else {
+			defer m.registerRecheck(ap.ID, m.platformRecheck(chatID, ap.ID, tool, req))()
+			w := m.broker.Register(ap.ID)
+			if s, ok := m.pool.Get(slotID); ok {
+				s.SetActivity("waiting_approval", "")
+			}
+			m.publish(chatID, Event{Kind: "approval", Data: ap})
+			m.publishChat(ctx, chatID)
+			slog.Info("platform call requested", "chat", chatID, "approval", ap.ID, "call", req.String(), "via", via)
+			// A step of an autonomous plan that the plan does not cover is parked instead of waited for
+			// (A-E2, D2.8): the user may decide hours later, the gateway repeats the stored call then. A step
+			// that carries files of the sandbox is asked synchronously — the gateway cannot repeat it without
+			// the running sandbox, and the approval has to show the bytes that were read.
+			if m.parkedStep(ctx, step, req) {
+				// The step is marked as parked (D2.8): the approval stays open until the plan expires, and the
+				// gateway repeats the stored call when the user decides. The mark has to be written before the
+				// answer, because that is what finds the step again at the decision.
+				if ok, perr := m.st.ParkApproval(ctx, step.PlanID, step.Idx, ap.ID); perr != nil || !ok {
+					// The step is not open any more (finished or skipped in between): ask as usual instead of
+					// parking it, so that no decision is handed to a step that no longer waits.
+					slog.Warn("step not parked, asking as usual", "chat", chatID, "plan", step.PlanID, "step", step.Idx, "error", perr)
+				} else {
+					if s, ok := m.pool.Get(slotID); ok {
+						s.SetActivity("tool", "")
+					}
+					m.publishChat(ctx, chatID)
+					m.publishPlan(ctx, step.PlanID)
+					m.parkApproval(ctx, chatID, slotID, via, req, step, ap, w)
+					return platform.Result{Status: "pending_user", Message: fmt.Sprintf(
+						"waiting for the user's approval of step %d; end your turn, you will be woken when the user decides", step.Idx)}, nil
+				}
+			}
+			approved, werr := w.Wait(ctx, m.opt.ApprovalTimeout)
+			final = m.settle(bg, chatID, ap.ID, approved, werr)
+		}
 		if s, ok := m.pool.Get(slotID); ok {
 			s.SetActivity("tool", "")
 		}
@@ -2431,12 +2539,21 @@ func (m *Manager) delegationOf(ctx context.Context, chatID string) (*delegation.
 	return d, nil
 }
 
-// rightsText describes to the agent its rights together with the objects it has created.
+// rightsText describes to the agent its rights together with the objects it has created. In an
+// experiment chat the protection level stays unreadable (X0.10): the summary names no enforcement,
+// and in level "none" the answer is the one of a chat without delegated rights.
 func (m *Manager) rightsText(ctx context.Context, chatID string, del *delegation.Delegation) string {
+	experiment := m.experimentOf(ctx, chatID)
+	if experiment != nil && experiment.Protection == "none" {
+		del = nil
+	}
 	if del == nil {
 		return "No delegation is set for this chat.\n" + effectRules(m.computeMax())
 	}
 	s := del.Summary()
+	if experiment != nil {
+		s = del.SummaryNeutral()
+	}
 	if objs, err := m.st.ListDelegationObjects(ctx, chatID); err == nil && len(objs) > 0 {
 		s += "\nCreated in this chat:"
 		for _, o := range objs {

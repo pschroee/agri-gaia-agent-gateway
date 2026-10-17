@@ -445,7 +445,10 @@ func errCode(err error) int {
 		return http.StatusConflict
 	case errors.Is(err, chat.ErrTooManyPending):
 		return http.StatusTooManyRequests
-	case errors.Is(err, chat.ErrUnknownModel), errors.Is(err, chat.ErrUnknownVariant), errors.Is(err, chat.ErrVariantFixed), errors.Is(err, chat.ErrInvalid):
+	case errors.Is(err, chat.ErrExperimentNotAllowed):
+		return http.StatusForbidden
+	case errors.Is(err, chat.ErrUnknownModel), errors.Is(err, chat.ErrUnknownVariant), errors.Is(err, chat.ErrVariantFixed), errors.Is(err, chat.ErrInvalid),
+		errors.Is(err, chat.ErrExperimentNeedsDelegation), errors.Is(err, chat.ErrExperimentProtection):
 		return http.StatusBadRequest
 	}
 	return http.StatusInternalServerError
@@ -640,7 +643,7 @@ func (s *Server) createChat(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "invalid JSON")
 		return
 	}
-	req.Owner = ""
+	req.Owner, req.OwnerName = "", ""
 	if s.OIDC != nil {
 		u, ok := UserFrom(r.Context())
 		if !ok || u.Sub == "" {
@@ -648,6 +651,7 @@ func (s *Server) createChat(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		req.Owner = u.Sub
+		req.OwnerName = u.Username // X0.2: AGW_EXPERIMENT_USERS names preferred_username
 	}
 	c, err := s.M.Create(r.Context(), req)
 	if err != nil {
