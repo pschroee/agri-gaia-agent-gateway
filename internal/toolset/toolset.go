@@ -153,6 +153,26 @@ func Valid(v string) bool {
 	return err == nil
 }
 
+// ExperimentPrefix marks the variant of an experiment chat (X0.3): the same binding as a product
+// slot, with the experiment profile (no file tools with MCP, no subagents, no internet switch).
+// FromVariant does not accept the prefix; callers split it off first.
+const ExperimentPrefix = "exp:"
+
+// SplitExperiment splits an experiment variant into the binding key ("exp:mcp" → "mcp", true). Any
+// other variant comes back unchanged with false.
+func SplitExperiment(variant string) (base string, experiment bool) {
+	if strings.HasPrefix(variant, ExperimentPrefix) {
+		return strings.TrimPrefix(variant, ExperimentPrefix), true
+	}
+	return variant, false
+}
+
+// ValidVariant reports whether a stored variant can be resumed, including experiment variants.
+func ValidVariant(v string) bool {
+	base, _ := SplitExperiment(v)
+	return Valid(base)
+}
+
 // All lists every non-empty combination, ordered by key length and then canonically.
 func All() []Set {
 	var out []Set

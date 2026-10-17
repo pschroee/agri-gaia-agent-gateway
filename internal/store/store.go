@@ -103,6 +103,9 @@ type Chat struct {
 	Workspace *WorkspaceInfo `json:"workspace,omitempty"`
 	// Delegation: delegated rights of the chat (nil: without delegation, behaviour as before step 1).
 	Delegation json.RawMessage `json:"delegation,omitempty"`
+	// Experiment: the profile of an experiment chat (X0), set when the chat is created and unchanged
+	// after that. nil: a product chat.
+	Experiment *Experiment `json:"experiment,omitempty"`
 	// Owner: sub of the user who owns the chat (login through the platform); empty in token mode.
 	Owner string `json:"owner,omitempty"`
 	// Language: the user's preferred language according to the browser (BCP 47); empty: unknown.
@@ -120,6 +123,19 @@ const (
 	TitleModel   = "model" // phrased by the model (once, after the first question)
 )
 
+// Experiment is the profile of an experiment chat (X0): the cell it belongs to and its protection
+// level, which the gateway maps to the delegation. The model, the provider and the proxy address are
+// not part of it: they come from the catalogue (AGW_CATALOG), AGW_DEFAULT_MODEL and the chat's own
+// model, so that another provider can be used without changing the profile. Limit is set by the
+// gateway alone (X3); a value in a request is discarded.
+type Experiment struct {
+	Protection string `json:"protection"` // none | instruction | service
+	Cell       string `json:"cell,omitempty"`
+	Run        string `json:"run,omitempty"`
+	Seed       int64  `json:"seed,omitempty"`
+	Limit      string `json:"limit,omitempty"`
+}
+
 type NewChat struct {
 	Title, Model, Variant string
 	TitleSource           string // empty: TitleUser
@@ -127,6 +143,7 @@ type NewChat struct {
 	AutoCompact           bool
 	MaxSubagents          int
 	Delegation            json.RawMessage // nil: without delegation
+	Experiment            *Experiment     // nil: a product chat
 	Owner                 string          // empty: without owner (token mode)
 	Language              string          // empty: unknown; checked by the caller (ValidLanguage)
 }
@@ -235,6 +252,9 @@ type Approval struct {
 	State       string     `json:"state"`
 	CreatedAt   time.Time  `json:"created_at"`
 	DecidedAt   *time.Time `json:"decided_at,omitempty"`
+	// DecidedBy: who decided ("user" for the normal path, "experiment" when the gateway approved it in
+	// an experiment chat, X0.9); "user" for entries from before the column existed.
+	DecidedBy string `json:"decided_by,omitempty"`
 	// Session and ToolCallID: who asked (main agent "main" or subagent run) and in which
 	// tool call; empty for older entries.
 	Session    string `json:"session,omitempty"`
@@ -356,7 +376,7 @@ SELECT c.id::text, c.title, c.model, c.thinking_level, c.variant, c.state, c.int
    FROM chat_workspaces w WHERE w.chat_id = c.id),
   (SELECT count(*) FROM chat_queue q WHERE q.chat_id = c.id AND q.delivered_at IS NULL),
   (SELECT count(*) FROM background_tasks b WHERE b.chat_id = c.id AND b.state = 'running'),
-  c.delegation, COALESCE(c.owner, ''), COALESCE(c.language, ''), c.trashed_at
+  c.delegation, COALESCE(c.owner, ''), COALESCE(c.language, ''), c.trashed_at, c.experiment
 FROM chats c
 LEFT JOIN LATERAL (
   SELECT sum((m.message->'usage'->>'input')::bigint)       AS input,
@@ -377,12 +397,18 @@ LEFT JOIN LATERAL (
 
 func scanChat(row pgx.Row) (Chat, error) {
 	var c Chat
-	var ctxRaw, wsRaw, delRaw []byte
+	var ctxRaw, wsRaw, delRaw, expRaw []byte
 	err := row.Scan(&c.ID, &c.Title, &c.Model, &c.ThinkingLevel, &c.Variant, &c.State, &c.Internet, &c.AutoCompact, &c.MaxSubagents, &c.Compactions, &ctxRaw, &c.CreatedAt, &c.UpdatedAt,
 		&c.Tokens.Input, &c.Tokens.Output, &c.Tokens.CacheRead, &c.Tokens.Total, &c.Cost, &c.ArtifactCount, &c.PendingApprovals,
-		&c.Subagents, &c.LLMCalls, &c.CostOther, &wsRaw, &c.Queued, &c.BackgroundRunning, &delRaw, &c.Owner, &c.Language, &c.TrashedAt)
+		&c.Subagents, &c.LLMCalls, &c.CostOther, &wsRaw, &c.Queued, &c.BackgroundRunning, &delRaw, &c.Owner, &c.Language, &c.TrashedAt, &expRaw)
 	if len(delRaw) > 0 {
 		c.Delegation = delRaw
+	}
+	if len(expRaw) > 0 {
+		var e Experiment
+		if json.Unmarshal(expRaw, &e) == nil {
+			c.Experiment = &e
+		}
 	}
 	if errors.Is(err, pgx.ErrNoRows) {
 		return c, ErrNotFound
@@ -417,8 +443,13 @@ func (s *Store) CreateChat(ctx context.Context, n NewChat) (Chat, error) {
 	if n.Language != "" {
 		lang = n.Language
 	}
-	err := s.pool.QueryRow(ctx, `INSERT INTO chats (title, title_source, model, variant, internet, auto_compact, max_subagents, delegation, owner, language) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10) RETURNING id::text`,
-		n.Title, src, n.Model, n.Variant, n.Internet, n.AutoCompact, n.MaxSubagents, del, owner, lang).Scan(&id)
+	var exp any // NULL for a product chat
+	if n.Experiment != nil {
+		b, _ := json.Marshal(n.Experiment)
+		exp = string(b)
+	}
+	err := s.pool.QueryRow(ctx, `INSERT INTO chats (title, title_source, model, variant, internet, auto_compact, max_subagents, delegation, owner, language, experiment) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11::jsonb) RETURNING id::text`,
+		n.Title, src, n.Model, n.Variant, n.Internet, n.AutoCompact, n.MaxSubagents, del, owner, lang, exp).Scan(&id)
 	if err != nil {
 		return Chat{}, err
 	}
@@ -839,12 +870,12 @@ func (s *Store) DeleteUnsentInput(ctx context.Context, chatID, name string) (Art
 	return Artifact{}, ErrNotFound
 }
 
-const approvalCols = `id::text, chat_id::text, kind, via, name, size, sha256, content_type, pending_key, COALESCE(preview,''), state, created_at, decided_at, session, tool_call_id, COALESCE(effect,''), COALESCE(summary,''), COALESCE(summary_proposed,''), summary_changed_at, COALESCE(notebook::text,'')`
+const approvalCols = `id::text, chat_id::text, kind, via, name, size, sha256, content_type, pending_key, COALESCE(preview,''), state, created_at, decided_at, decided_by, session, tool_call_id, COALESCE(effect,''), COALESCE(summary,''), COALESCE(summary_proposed,''), summary_changed_at, COALESCE(notebook::text,'')`
 
 func scanApproval(row pgx.Row) (Approval, error) {
 	var a Approval
 	var notebook string
-	err := row.Scan(&a.ID, &a.ChatID, &a.Kind, &a.Via, &a.Name, &a.Size, &a.SHA256, &a.ContentType, &a.PendingKey, &a.Preview, &a.State, &a.CreatedAt, &a.DecidedAt, &a.Session, &a.ToolCallID, &a.Effect, &a.Summary, &a.SummaryProposed, &a.SummaryChangedAt, &notebook)
+	err := row.Scan(&a.ID, &a.ChatID, &a.Kind, &a.Via, &a.Name, &a.Size, &a.SHA256, &a.ContentType, &a.PendingKey, &a.Preview, &a.State, &a.CreatedAt, &a.DecidedAt, &a.DecidedBy, &a.Session, &a.ToolCallID, &a.Effect, &a.Summary, &a.SummaryProposed, &a.SummaryChangedAt, &notebook)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return a, ErrNotFound
 	}
@@ -871,10 +902,22 @@ func (s *Store) GetApproval(ctx context.Context, id string) (Approval, error) {
 	return scanApproval(s.pool.QueryRow(ctx, `SELECT `+approvalCols+` FROM approvals WHERE id=$1`, id))
 }
 
+// Deciders of an approval.
+const (
+	DecidedByUser       = "user"
+	DecidedByExperiment = "experiment" // the gateway approved it in an experiment chat (X0.9)
+)
+
 // DecideApproval sets the state only while it is "pending". ok reports
 // whether this decision took effect; otherwise the existing state is returned.
 func (s *Store) DecideApproval(ctx context.Context, id, state string) (Approval, bool, error) {
-	a, err := scanApproval(s.pool.QueryRow(ctx, `UPDATE approvals SET state=$2, decided_at=now() WHERE id=$1 AND state='pending' RETURNING `+approvalCols, id, state))
+	return s.DecideApprovalBy(ctx, id, state, DecidedByUser)
+}
+
+// DecideApprovalBy is DecideApproval with the decider recorded ("user" or "experiment"). The
+// experiment path uses it, so that the record shows that no user decided (X0.9).
+func (s *Store) DecideApprovalBy(ctx context.Context, id, state, by string) (Approval, bool, error) {
+	a, err := scanApproval(s.pool.QueryRow(ctx, `UPDATE approvals SET state=$2, decided_at=now(), decided_by=$3 WHERE id=$1 AND state='pending' RETURNING `+approvalCols, id, state, by))
 	if err == nil {
 		return a, true, nil
 	}

@@ -115,3 +115,23 @@ func TestAll(t *testing.T) {
 		}
 	}
 }
+
+// Experiment variants (X0.3) carry a prefix that FromVariant does not accept; the pool and the
+// capability overview split it off with SplitExperiment.
+func TestSplitExperiment(t *testing.T) {
+	for _, c := range []struct {
+		variant, base string
+		exp           bool
+	}{{"exp:mcp", "mcp", true}, {"exp:cli,api", "cli,api", true}, {"cli", "cli", false}, {"both", "both", false}} {
+		base, exp := SplitExperiment(c.variant)
+		if base != c.base || exp != c.exp {
+			t.Errorf("%q: %q %v", c.variant, base, exp)
+		}
+	}
+	if _, err := FromVariant("exp:mcp"); err == nil {
+		t.Fatal("FromVariant accepted an experiment variant")
+	}
+	if !ValidVariant("exp:mcp") || !ValidVariant("cli") || ValidVariant("exp:shell") || ValidVariant("") {
+		t.Fatal("ValidVariant")
+	}
+}

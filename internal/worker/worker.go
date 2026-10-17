@@ -69,6 +69,13 @@ const (
 	documentSkil = "/opt/agw/skills/documents" // Office, PDF, EPUB, HTML: markitdown and pdftotext (issue #42)
 	// Web research for every binding that can read a skill file (read or bash): cli and mcp (issue #44).
 	webSkill = "/opt/agw/skills/web-research"
+	// delegatedRightsSkill explains how to read the delegated rights per binding; experiment slots load
+	// it in every binding (X0.11), so that all three describe the rights the same way.
+	delegatedRightsSkill = "/opt/agw/skills/delegated-rights"
+	// platformExp is what platform becomes in an experiment slot (X0.10): the section on delegated
+	// rights is cut down to a reference, because the protection level must not be readable. The copy is
+	// generated from platform/SKILL.md while the image is built (build-platform-exp.mjs).
+	platformExpSkil = "/opt/agw/skills/platform-exp"
 )
 
 // cliSkills are the skill directories features registered (registerCLISkill, G1.6); they are loaded
@@ -105,9 +112,16 @@ func registeredSkillArgs() []string {
 
 // cliSkillArgs lists the --skill arguments of the cli binding: the fixed skills first, then the
 // registered ones.
-func cliSkillArgs() []string {
+func cliSkillArgs() []string { return cliSkillArgsFor(false) }
+
+// cliSkillArgsFor is cliSkillArgs; an experiment slot gets platform-exp instead of platform, because
+// platform names the protection level (X0.10, X0.11).
+func cliSkillArgsFor(experiment bool) []string {
 	out := make([]string, 0, 2*(len(fixedCLISkills)+len(cliSkills)))
 	for _, s := range fixedCLISkills {
+		if experiment && s == platformSkil {
+			s = platformExpSkil
+		}
 		out = append(out, "--skill", s)
 	}
 	return append(out, registeredSkillArgs()...)
@@ -166,8 +180,9 @@ const (
 // so the prefix cache is preserved — state such as internet or the compute calls left belongs in the
 // tool capabilities, not here.
 func SystemNoteFor(variant string, bgMax int, caps []string) string {
+	base, experiment := SplitExperiment(variant)
 	bg, mmdc, inputs := "", "", inputsAPI
-	ts, err := toolset.FromVariant(variant)
+	ts, err := toolset.FromVariant(base)
 	if err != nil {
 		ts, _ = toolset.Parse("api") // unknown variants start no pi (piArgs fails); the strictest text
 	}
@@ -177,9 +192,37 @@ func SystemNoteFor(variant string, bgMax int, caps []string) string {
 	case ts.Has(toolset.MCP):
 		inputs = inputsMCP
 	}
-	return strings.NewReplacer("{{bg}}", bg, "{{mmdc}}", mmdc, "{{inputs}}", inputs, "{{internet}}", internetNote(ts),
-		"{{send}}", sendNote(ts), "{{capabilities}}", capabilityNote(ts, caps)).Replace(systemNote)
+	internet := internetNote(ts)
+	template := systemNote
+	if experiment {
+		// The experiment slots have no file tools with MCP (X0.4), no subagents (X0.6) and no way to
+		// request internet (X1); the note says what they have and nothing about a protection level.
+		if ts.Has(toolset.MCP) && !ts.Has(toolset.CLI) {
+			inputs = inputsAPI
+		}
+		internet = ""
+		template = systemNoteExperiment
+	}
+	return strings.NewReplacer("{{bg}}", bg, "{{mmdc}}", mmdc, "{{inputs}}", inputs, "{{internet}}", internet,
+		"{{send}}", sendNote(ts), "{{capabilities}}", capabilityNote(ts, caps)).Replace(template)
 }
+
+// systemNoteExperiment is the system note of an experiment slot: systemNote without the paragraph on
+// subagents (X0.6) and without the line on requesting internet (X1). It is derived from systemNote
+// instead of being a second full text, so that the two cannot drift apart.
+var systemNoteExperiment = func() string {
+	const paragraph = "- For self-contained subtasks you can start subagents"
+	i := strings.Index(systemNote, paragraph)
+	if i < 0 {
+		return systemNote
+	}
+	j := strings.Index(systemNote[i:], "\n- Task list:")
+	if j < 0 {
+		return systemNote
+	}
+	without := systemNote[:i] + systemNote[i+j+1:]
+	return strings.Replace(without, "{{internet}}\n", "", 1)
+}()
 
 // capabilityTool names, per binding, how the agent asks for the capabilities of this setup (G1.9).
 var capabilityTool = map[toolset.Binding]string{
@@ -383,13 +426,20 @@ func PiArgs(variant, provider, model string) ([]string, error) {
 }
 
 func piArgs(variant, provider, model, note string) ([]string, error) {
-	ts, err := toolset.FromVariant(variant)
+	base, experiment := SplitExperiment(variant)
+	ts, err := toolset.FromVariant(base)
 	if err != nil {
 		return nil, err
 	}
+	// The provider and the model come from the caller (catalogue, AGW_DEFAULT_MODEL, the chat's model);
+	// the experiment profile changes neither of them, so another provider needs no change here.
 	args := []string{"--provider", provider, "--model", model, "--append-system-prompt", note, "-e", bridgeExt, "-e", todoExt, "-e", webToolsExt, "-e", webGateExt}
 	if ts.Has(toolset.CLI) {
-		args = append(args, "-e", subagentsExt, "-e", intercomExt, "--exclude-tools", noLazySubagent)
+		if !experiment {
+			// X0.6: experiment slots have no subagents, in no binding.
+			args = append(args, "-e", subagentsExt, "-e", intercomExt)
+		}
+		args = append(args, "--exclude-tools", noLazySubagent)
 	}
 	if ts.Has(toolset.MCP) {
 		args = append(args, "-e", mcpExt)
@@ -399,17 +449,73 @@ func piArgs(variant, provider, model, note string) ([]string, error) {
 		// task tools as MCP, so that the bindings differ only in how the platform is bound.
 		args = append(args, "-e", apiExt)
 	}
+	if experiment {
+		if hidden := experimentHidden(ts); len(hidden) > 0 {
+			args = append(args, "--exclude-tools", strings.Join(hidden, ","))
+		}
+	}
 	if ts.Has(toolset.CLI) {
-		args = append(args, cliSkillArgs()...)
+		args = append(args, cliSkillArgsFor(experiment)...)
 	} else {
 		// The other skills describe commands; web-research names the tools of every binding, and
 		// MCP's read can load it (the skills are in both images).
 		if HasSkills(ts) {
 			args = append(args, "--skill", webSkill)
 		}
-		args = append(args, "--tools", strings.Join(Tools(ts), ","))
+		tools := Tools(ts)
+		if experiment {
+			tools = experimentTools(ts)
+		}
+		args = append(args, "--tools", strings.Join(tools, ","))
+	}
+	if experiment {
+		// X0.11: every binding gets the same description of how to read the delegated rights.
+		args = append(args, "--skill", delegatedRightsSkill)
 	}
 	return args, nil
+}
+
+// SplitExperiment splits an experiment variant into its binding key; the helper lives in toolset, so
+// that chat and worker read the prefix the same way.
+func SplitExperiment(variant string) (base string, experiment bool) {
+	return toolset.SplitExperiment(variant)
+}
+
+// experimentHidden are the tools an experiment slot does not get (X0.4–X0.6): the file tools with
+// MCP (unless the command line brings read and write anyway), the internet switch (internet is off in
+// the experiment and cannot be requested, X1), and subagents and intercom with the command line.
+func experimentHidden(ts toolset.Set) []string {
+	var out []string
+	if ts.Has(toolset.CLI) {
+		out = append(out, "subagent", "intercom")
+	}
+	if ts.Has(toolset.MCP) {
+		if !ts.Has(toolset.CLI) {
+			out = append(out, "read", "write", "ls")
+		}
+		out = append(out, "mcp_request_internet", "mcp_disable_internet")
+	}
+	if ts.Has(toolset.API) {
+		out = append(out, "request_internet", "disable_internet")
+	}
+	return out
+}
+
+// experimentTools filters the tools of a combination for an experiment slot; REST stays unchanged
+// apart from the internet tools (X0.5).
+func experimentTools(ts toolset.Set) []string {
+	hidden := map[string]bool{}
+	for _, t := range experimentHidden(ts) {
+		hidden[t] = true
+	}
+	tools := Tools(ts)
+	out := make([]string, 0, len(tools))
+	for _, t := range tools {
+		if !hidden[t] {
+			out = append(out, t)
+		}
+	}
+	return out
 }
 
 type Factory struct {
@@ -432,7 +538,9 @@ type Backend interface {
 // the catalog and the environment. They feed the system note and change only when the orchestrator
 // restarts or the catalog changes, never during a chat.
 func (f *Factory) capabilities(variant string) []string {
-	return chat.SetupLines(chat.Setup{Catalog: f.Cat, Env: f.Env, Variant: variant})
+	// X0.12: the overview names the binding, never the experiment profile or its protection level.
+	base, _ := SplitExperiment(variant)
+	return chat.SetupLines(chat.Setup{Catalog: f.Cat, Env: f.Env, Variant: base})
 }
 
 func NewFactory(rt *sandbox.Runtime, cat *config.Catalog, env config.Env) (*Factory, error) {
@@ -713,7 +821,8 @@ func WebEnv(env config.Env) []string {
 // agent: with the command line, grep, find and ls were not active before E9.
 // Without it --tools sets the tools; MCP needs ls, so nothing is hidden there.
 func BridgeHide(variant string) string {
-	ts, err := toolset.FromVariant(variant)
+	base, _ := SplitExperiment(variant)
+	ts, err := toolset.FromVariant(base)
 	if err == nil && ts.Has(toolset.MCP) && !ts.Has(toolset.CLI) {
 		return ""
 	}

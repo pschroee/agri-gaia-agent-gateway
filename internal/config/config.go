@@ -331,7 +331,13 @@ type Env struct {
 	Toolsets string
 	// PoolSize: warm slots kept ready for the configured combination (AGW_POOL_SIZE, default 4).
 	// Chats of another combination (stored before a change of AGW_TOOLSETS) get a slot on demand.
-	PoolSize          int
+	PoolSize int
+	// ExperimentPool: warm slots kept ready for experiment variants (AGW_EXPERIMENT_POOL, X0.3),
+	// keyed by the pool key "exp:<binding>". Empty: experiment slots start on demand.
+	ExperimentPool map[string]int
+	// ExperimentUsers: accounts (preferred_username) that may create experiment chats
+	// (AGW_EXPERIMENT_USERS, X0.2). Empty: no experiment chats.
+	ExperimentUsers   []string
 	IdleTimeout       time.Duration
 	ApprovalTimeout   time.Duration
 	ArtifactMaxBytes  int64
@@ -567,6 +573,8 @@ func FromEnv() Env {
 		SocketRoot:           str("AGW_SOCKET_ROOT", "/run/agw"),
 		Toolsets:             toolsetsEnv(),
 		PoolSize:             max(0, num("AGW_POOL_SIZE", DefaultPoolSize)),
+		ExperimentPool:       experimentPool(),
+		ExperimentUsers:      commaList("AGW_EXPERIMENT_USERS"),
 		IdleTimeout:          dur("AGW_IDLE_TIMEOUT", 10*time.Minute),
 		ApprovalTimeout:      dur("AGW_APPROVAL_TIMEOUT", 10*time.Minute),
 		ArtifactMaxBytes:     int64(num("AGW_ARTIFACT_MAX_MB", 50)) << 20,
@@ -788,6 +796,29 @@ func edgeSimDevices(k string) []EdgeSimDevice {
 			continue
 		}
 		out = append(out, EdgeSimDevice{Name: name, Container: container})
+	}
+	return out
+}
+
+// experimentPool reads AGW_EXPERIMENT_POOL: "variant=n" pairs, comma separated, for example
+// "exp:mcp=1,exp:api=1" (X0.3). The prefix "exp:" may be left out; the binding is checked and the
+// key normalized. An entry with an unknown binding or a count below 1 is dropped, so that a typo does
+// not keep a slot of a variant nobody can use. A combination key contains a comma itself, so it
+// cannot be written here; such experiment variants start on demand.
+func experimentPool() map[string]int {
+	out := map[string]int{}
+	for _, part := range commaList("AGW_EXPERIMENT_POOL") {
+		variant, count, ok := strings.Cut(part, "=")
+		if !ok {
+			continue
+		}
+		base, _ := toolset.SplitExperiment(strings.TrimSpace(variant))
+		key, err := toolset.Normalize(base)
+		n, nerr := strconv.Atoi(strings.TrimSpace(count))
+		if err != nil || nerr != nil || n < 1 {
+			continue
+		}
+		out[toolset.ExperimentPrefix+key] = n
 	}
 	return out
 }

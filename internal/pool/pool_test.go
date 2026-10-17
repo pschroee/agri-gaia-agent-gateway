@@ -187,6 +187,26 @@ func TestActivityOnSlot(t *testing.T) {
 	}
 }
 
+// X0.3: experiment variants are pool keys like any other; a target keeps one warm, and SetKnown
+// accepts them for on-demand starts.
+func TestExperimentTargetsWarm(t *testing.T) {
+	f := &fakeFactory{}
+	p := newTestPool(t, f, map[string]int{"exp:mcp": 1})
+	p.SetKnown(toolset.ValidVariant)
+	waitFor(t, "experiment slot warm", func() bool { return idle(p, "exp:mcp") == 1 })
+	if _, err := p.Acquire("exp:nonsense", "c"); !errors.Is(err, ErrUnknownVariant) {
+		t.Fatalf("unknown experiment key: %v", err)
+	}
+	ctx := context.Background()
+	s, err := p.AcquireWait(ctx, "exp:api", "chat-exp", 2*time.Second)
+	if err != nil {
+		t.Fatalf("on demand: %v", err)
+	}
+	if s.Variant != "exp:api" || s.Worker.variant != "exp:api" {
+		t.Fatalf("slot of %q (worker %q)", s.Variant, s.Worker.variant)
+	}
+}
+
 // Issue #29: the pool keeps warm slots only for the configured combination; chats of another
 // stored combination get a slot on demand, unknown keys are refused.
 func TestKnownVariantsOnDemand(t *testing.T) {

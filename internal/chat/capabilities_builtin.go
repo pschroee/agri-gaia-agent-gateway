@@ -7,6 +7,8 @@ package chat
 import (
 	"context"
 	"fmt"
+
+	"agw/internal/toolset"
 )
 
 // The capabilities of this package (G1.11): vision, internet, compute, bindings. A feature adds its own
@@ -147,6 +149,10 @@ func capabilityBindings(ctx context.Context, m *Manager, chatID string) Capabili
 	if variant == "" {
 		variant = m.opt.Toolsets.Key()
 	}
+	// X0.12: the overview names the binding, never the experiment profile or its protection level.
+	if base, _ := toolset.SplitExperiment(variant); base != "" {
+		variant = base
+	}
 	c.Detail = "this chat uses the binding " + variant
 	return c
 }
@@ -156,5 +162,9 @@ func setupBindings(s Setup) Capability {
 	if s.Variant == "" {
 		return Capability{Detail: "unknown"}
 	}
-	return Capability{Available: true, Detail: "the chat works through " + s.Variant}
+	variant := s.Variant
+	if base, _ := toolset.SplitExperiment(variant); base != "" {
+		variant = base
+	}
+	return Capability{Available: true, Detail: "the chat works through " + variant}
 }

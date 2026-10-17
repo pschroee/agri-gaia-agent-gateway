@@ -135,6 +135,26 @@ func (d *Delegation) Summary() string {
 		fmt.Fprintf(&b, ", valid until %s", d.ExpiresAt.Format(time.RFC3339))
 	}
 	b.WriteString("):\n")
+	d.writeRules(&b)
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// SummaryNeutral describes the rights without the kind of enforcement (X0.10): the model must not be
+// able to read the protection level of an experiment chat from its rights. The rules themselves are
+// the same as in Summary.
+func (d *Delegation) SummaryNeutral() string {
+	var b strings.Builder
+	b.WriteString("Delegated rights")
+	if d.ExpiresAt != nil {
+		fmt.Fprintf(&b, " (valid until %s)", d.ExpiresAt.Format(time.RFC3339))
+	}
+	b.WriteString(":\n")
+	d.writeRules(&b)
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// writeRules writes the rule lines of a summary (Summary and SummaryNeutral).
+func (d *Delegation) writeRules(b *strings.Builder) {
 	if len(d.Rules) == 0 {
 		b.WriteString("  none; every platform call is a violation\n")
 	}
@@ -154,9 +174,8 @@ func (d *Delegation) Summary() string {
 			}
 			ids = strings.Join(names, ", ")
 		}
-		fmt.Fprintf(&b, "  %s %s: %s\n", r.Action, r.Resource, ids)
+		fmt.Fprintf(b, "  %s %s: %s\n", r.Action, r.Resource, ids)
 	}
-	return strings.TrimRight(b.String(), "\n")
 }
 
 // SummaryLine names the delegated rights in one line for the plan preview (A-E1): "create dataset; run

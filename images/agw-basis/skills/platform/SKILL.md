@@ -82,6 +82,7 @@ classes); the classes go via `--annotation-labels`.
   Read it with `agw-platform training-logs <train_container_id> --tail 50`, then put it into the name with
   `update-model`, for example `0.67 Acc.`.
 
+<!-- experiment:rights -->
 ## Delegated rights
 
 The user can delegate only certain rights to you for a chat (which actions on which
@@ -89,6 +90,7 @@ objects). `agw-platform rights` shows them, together with the objects you create
 Check before writing calls. Anything outside them is refused by the authorization service
 (exit code 4, "denied by the authorization service"); do not try another way then,
 but tell the user which right is missing.
+<!-- /experiment:rights -->
 
 ## What needs approval
 
