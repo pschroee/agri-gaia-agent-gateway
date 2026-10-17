@@ -254,6 +254,7 @@ func (s *Server) Handler() http.Handler {
 	if s.OIDC != nil {
 		mux.Handle("/oidc/", s.OIDC.Handler())
 	}
+	mux.HandleFunc("GET /api/exp/export", s.expExport)
 	mux.HandleFunc("GET /api/me", s.me)
 	mux.HandleFunc("GET /api/models", s.models)
 	mux.HandleFunc("GET /api/variants", s.variants)

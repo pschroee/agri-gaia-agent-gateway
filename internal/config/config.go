@@ -750,6 +750,9 @@ func (e Env) CheckAuth() error {
 	if _, err := BasePath(e.PublicURL); err != nil {
 		return err
 	}
+	if e.ExpAPIToken != "" && len(e.ExpAPIToken) < 32 {
+		return errors.New("AGW_EXP_API_TOKEN is shorter than 32 characters (or leave it empty to keep the export closed)")
+	}
 	switch e.AuthMode {
 	case AuthToken:
 		if len(e.APIToken) < 32 {
