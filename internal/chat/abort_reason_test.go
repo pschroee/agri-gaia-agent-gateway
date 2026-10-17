@@ -34,6 +34,17 @@ func waitRunning(t *testing.T, e *env, id string) {
 	})
 }
 
+// waitReported waits until pi has reported the chat's user message. The reason of an abort travels with the stored
+// messages (a join on chat_turns), so a test that probes it needs that message; and an abort that tears the sandbox
+// down (the trash, the time limit) would otherwise end before the message exists, leaving only the turn behind.
+func waitReported(t *testing.T, e *env, id string) {
+	t.Helper()
+	waitFor(t, func() bool {
+		msgs, err := e.st.Messages(context.Background(), id)
+		return err == nil && len(msgs) > 0 && msgs[0].Role == "user"
+	})
+}
+
 // The user's stop is recorded on the turn, so the UI says "stopped by you" only when the user really stopped
 // (issue #120, L3, F9).
 func TestAbortReasonUser(t *testing.T) {
@@ -61,12 +72,12 @@ func TestAbortReasonTrash(t *testing.T) {
 	id, _, release := busyChat(t, e)
 	defer release()
 	waitRunning(t, e, id)
+	waitReported(t, e, id)
 	if _, err := e.m.Trash(ctx, id); err != nil {
 		t.Fatal(err)
 	}
-	if got := turnReason(t, e, id); got != AbortTrash {
-		t.Fatalf("abort reason of the trash: %q", got)
-	}
+	// The message that carries the reason is stored by now; still waited for, so the probe depends on no timing.
+	waitFor(t, func() bool { return turnReason(t, e, id) == AbortTrash })
 }
 
 // A turn that runs longer than maxRunTime is aborted by the time limit (issue #120, L3). The 30 minutes are not
@@ -76,6 +87,9 @@ func TestAbortReasonTimeLimit(t *testing.T) {
 	id, _, release := busyChat(t, e)
 	defer release()
 	waitRunning(t, e, id)
+	// The timer below suspends the chat right after the abort, which ends pi's stream: without the message the
+	// reason could never be read back. Waited for, so the abort meets a turn pi has reported.
+	waitReported(t, e, id)
 	e.m.opt.IdleTimeout = time.Minute
 	l := e.m.liveOf(id)
 	if l == nil {
@@ -139,9 +153,9 @@ func TestAbortReasonSubagentLimitMarksRuns(t *testing.T) {
 	if changed := e.m.enforceSubagentLimit(id, l, now); !changed {
 		t.Fatal("the limit did not fire")
 	}
-	if got := turnReason(t, e, id); got != AbortSubagentLimit {
-		t.Fatalf("abort reason of the subagent limit: %q", got)
-	}
+	// The reason stands on the turn right away; the message that carries it is written once pi's stream is
+	// stored, so it is waited for rather than read on the spot.
+	waitFor(t, func() bool { return turnReason(t, e, id) == AbortSubagentLimit })
 	for _, run := range []string{"run-1", "run-2"} {
 		rec, err := e.st.SubagentRunOf(ctx, id, run)
 		if err != nil || rec.StoppedBy != StoppedByLimit {
