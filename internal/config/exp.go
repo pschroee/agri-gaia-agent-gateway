@@ -9,13 +9,14 @@ import (
 	"time"
 )
 
-// Placeholder limits of an experiment run (X3.2–X3.4, X3.6). They are what the outline prescribes until the
-// pilot runs (XE5) fix them from the budget and the number of runs: a run costs at most 0.50 USD, uses at most
-// two million tokens and may take 90 minutes; temperature is 0.
+// Limits of an experiment run (X3.2–X3.4, X3.6), fixed from the pilot runs of 17.10.2026 (X7): a run costs
+// at most 0.02 USD, uses at most 50 000 tokens (input + output, cache reads excluded) and may take 5 minutes;
+// temperature is 0. The pilot's 90th percentile lay well below all three values; the full main runs may need
+// higher limits once their tasks are frozen (XE5).
 const (
-	DefaultExpMaxCostUSD  = 0.50
-	DefaultExpMaxTokens   = 2_000_000
-	DefaultExpMaxDuration = 90 * time.Minute
+	DefaultExpMaxCostUSD  = 0.02
+	DefaultExpMaxTokens   = 50_000
+	DefaultExpMaxDuration = 5 * time.Minute
 	DefaultExpTemperature = 0
 )
 

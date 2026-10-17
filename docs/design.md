@@ -1433,8 +1433,8 @@ has four advantages:
 - **Token usage per run** accrues at the orchestrator, exactly the quantity the pilot study needs for
   the cost estimate (outline 7.1).
 - **Limits per experiment run** are enforced in one place: the proxy refuses a model call once the run
-  has used up its cost (`AGW_EXP_MAX_COST_USD`, default 0.50 USD), its tokens (`AGW_EXP_MAX_TOKENS`,
-  default 2 000 000, input + output without cache reads) or its duration (`AGW_EXP_MAX_DURATION`,
+  has used up its cost (`AGW_EXP_MAX_COST_USD`, default 0.02 USD), its tokens (`AGW_EXP_MAX_TOKENS`,
+  default 50 000, input + output without cache reads) or its duration (`AGW_EXP_MAX_DURATION`,
   default 90 minutes, counted from the chat's creation). The answer is HTTP 429
   `experiment run limit reached: cost|tokens|duration`; the gateway stores that reason in the chat's
   experiment profile and aborts the turn. The check runs before a call, so one call may take the run

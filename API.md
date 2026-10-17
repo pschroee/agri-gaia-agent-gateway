@@ -1062,9 +1062,9 @@ An experiment chat (`experiment` in `Chat`, X0) is held to the limits of its run
 - **Only the chat's model** (`chats.model`) is accepted; any other model — also another model of the catalog — gets
   403 `model not allowed in this experiment run: <m>`. Titles from the model are off for these chats (the runner
   sets the title).
-- The sum of `llm_calls.cost` of the chat stays below `AGW_EXP_MAX_COST_USD` (default 0.50 USD, placeholder).
-- `input + output` of the chat's calls (without `cache_read`) stays below `AGW_EXP_MAX_TOKENS` (default 2 000 000).
-- The run ends within `AGW_EXP_MAX_DURATION` (default 90m) of the chat's creation.
+- The sum of `llm_calls.cost` of the chat stays below `AGW_EXP_MAX_COST_USD` (default 0.02 USD, from the 17.10.2026 pilot).
+- `input + output` of the chat's calls (without `cache_read`) stays below `AGW_EXP_MAX_TOKENS` (default 50 000).
+- The run ends within `AGW_EXP_MAX_DURATION` (default 5m) of the chat's creation.
 
 Once a limit is reached, the next model call is refused with 429
 `experiment run limit reached: cost|tokens|duration`; the gateway stores the reason as `experiment.limit` at the chat
