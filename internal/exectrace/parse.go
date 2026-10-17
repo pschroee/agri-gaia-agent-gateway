@@ -14,7 +14,6 @@
 package exectrace
 
 import (
-	"math"
 	"regexp"
 	"strconv"
 	"strings"
@@ -52,9 +51,8 @@ func Parse(raw []byte) []Syscall {
 		if m := lineRe.FindStringSubmatch(line); m != nil {
 			pid, _ := strconv.Atoi(m[1])
 			s := Syscall{PID: pid, Name: m[3], Args: m[4], Errno: m[5]}
-			if sec, err := strconv.ParseFloat(m[2], 64); err == nil {
-				whole, frac := math.Modf(sec)
-				s.TS = time.Unix(int64(whole), int64(frac*1e9))
+			if ts, ok := parseTS(m[2]); ok {
+				s.TS = ts
 			}
 			out = append(out, s)
 			continue
@@ -64,8 +62,25 @@ func Parse(raw []byte) []Syscall {
 	return out
 }
 
-// modf splits seconds into whole seconds and the fractional part (time.Unix takes nanoseconds).
-func modf(sec float64) (int64, float64) {
-	whole := int64(sec)
-	return whole, sec - float64(whole)
+// parseTS turns strace's epoch timestamp ("1759234567.123456", -ttt) into a time.Time. It parses
+// the decimal digits exactly instead of going through float64: the float conversion of
+// 1759234567.123456 lands one nanosecond next to the value strace printed.
+func parseTS(s string) (time.Time, bool) {
+	sec, frac, hasFrac := strings.Cut(s, ".")
+	whole, err := strconv.ParseInt(sec, 10, 64)
+	if err != nil {
+		return time.Time{}, false
+	}
+	if !hasFrac {
+		return time.Unix(whole, 0), true
+	}
+	if len(frac) > 9 {
+		frac = frac[:9]
+	}
+	frac += strings.Repeat("0", 9-len(frac))
+	ns, err := strconv.ParseInt(frac, 10, 64)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return time.Unix(whole, ns), true
 }
