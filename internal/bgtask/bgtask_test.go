@@ -325,3 +325,23 @@ func TestTail(t *testing.T) {
 		t.Fatalf("tail: %q", got)
 	}
 }
+
+// X6/#145: the trace of the operation arrives with its last frame and reaches the notifier
+// with the end of the task, so that it can be stored with the tool_executions row.
+func TestEndCarriesTrace(t *testing.T) {
+	r, run, n := newReg(t, 2)
+	ctx := context.Background()
+	if _, err := r.Start(ctx, StartParams{ChatID: "c1", Session: "main", ToolCallID: "call_trace", Command: "cat /workspace/fehlt.txt", Cwd: "/workspace"}); err != nil {
+		t.Fatal(err)
+	}
+	code := 1
+	trace := "7 1759234567.123456 openat(AT_FDCWD, \"/workspace/fehlt.txt\", O_RDONLY) = -1 ENOENT (No such file or directory)\n"
+	run.end("cat /workspace/fehlt.txt", execproto.Frame{Done: true, Exit: &code, Trace: []byte(trace), TraceTruncated: true})
+	e := waitEnded(t, n)
+	if !strings.Contains(string(e.Trace), "ENOENT") || !e.TraceTruncated {
+		t.Fatalf("end without trace: %q truncated=%v", e.Trace, e.TraceTruncated)
+	}
+	if e.ToolCallID != "call_trace" || e.ID != "bg-1" {
+		t.Fatalf("assignment fields: %+v", e)
+	}
+}

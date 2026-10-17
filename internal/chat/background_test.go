@@ -275,3 +275,55 @@ func TestStopBackgroundFromUser(t *testing.T) {
 		t.Fatalf("list: %+v %v", list, err)
 	}
 }
+
+// X6/#145: the manager attaches the trace of a background task to the tool_executions row of its
+// start, and a later Done frame of the already ended task is not discarded.
+func TestBackgroundEndedAttachesTrace(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	c, err := e.m.Create(ctx, NewChat{Title: "bg trace"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.st.StartExpRun(ctx, store.ExpRun{ID: "pilot/cli-service-none-m/t1/1", Key: "pilot/cli-service-none-m/t1/1",
+		Plan: "pilot", Cell: "cli-service-none-m", Task: "t1", Rep: 1, ChatID: c.ID, Model: "m"}); err != nil {
+		t.Fatal(err)
+	}
+	bt := startBg(t, e, c.ID, "cat /workspace/fehlt.txt")
+	exec, err := e.st.AddToolExecution(ctx, store.ToolExecution{ChatID: c.ID, SlotID: "p", Session: "main", ToolCallID: "call_bg",
+		Tool: "bash", Op: "bg_start", Args: []byte(`{"run_in_background":true}`), StartedAt: time.Now()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	code := 1
+	bt.State, bt.ExitCode, bt.EndedAt = store.BgExited, &code, &now
+	bt.Trace = []byte("7 1759234567.123456 openat(AT_FDCWD, \"/workspace/fehlt.txt\", O_RDONLY) = -1 ENOENT (No such file or directory)\n")
+	e.m.BackgroundEnded(bt, false)
+
+	tbl, err := e.st.ExportTable(ctx, "pilot", "syscalls")
+	if err != nil || len(tbl.Rows) != 1 {
+		t.Fatalf("export: %+v %v", tbl, err)
+	}
+	col := func(tbl *store.ExportTable, name string) any {
+		for i, c := range tbl.Columns {
+			if c == name {
+				return tbl.Rows[0][i]
+			}
+		}
+		t.Fatalf("column %q missing", name)
+		return nil
+	}
+	if col(tbl, "execution_id") != exec.ID || col(tbl, "syscall") != "openat" || col(tbl, "errno") != "ENOENT" {
+		t.Fatalf("row: %+v", tbl.Rows[0])
+	}
+
+	// The same task ends a second time (late Done frame after the row was already ended): the
+	// new trace replaces the old one.
+	bt.Trace = []byte("7 1759234568.000001 connect(3, {sa_family=AF_INET, sin_port=htons(1), sin_addr=inet_addr(\"127.0.0.1\")}, 16) = -1 ECONNREFUSED (Connection refused)\n")
+	e.m.BackgroundEnded(bt, false)
+	tbl, err = e.st.ExportTable(ctx, "pilot", "syscalls")
+	if err != nil || len(tbl.Rows) != 1 || col(tbl, "syscall") != "connect" || col(tbl, "errno") != "ECONNREFUSED" {
+		t.Fatalf("late Done frame: %+v %v", tbl.Rows, err)
+	}
+}

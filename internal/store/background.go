@@ -51,6 +51,10 @@ type BackgroundTask struct {
 	NotifiedAt    *time.Time `json:"notified_at,omitempty"`
 	Woke          bool       `json:"woke,omitempty"`
 	NoticePending bool       `json:"notice_pending,omitempty"`
+	// X6/#145: the final syscall trace of the command, handed from the last frame to the
+	// notifier only; it is not a column of background_tasks.
+	Trace          []byte `json:"-"`
+	TraceTruncated bool   `json:"-"`
 }
 
 // BgID: ID of a background task within the chat.

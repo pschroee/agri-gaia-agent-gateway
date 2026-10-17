@@ -87,6 +87,11 @@ func (m *Manager) BackgroundLookup(ctx context.Context, chatID string, seq int) 
 // BackgroundEnded records the end and notifies the agent (bgtask.Notifier).
 func (m *Manager) BackgroundEnded(t store.BackgroundTask, notify bool) {
 	ctx := context.Background()
+	// X6/#145: the trace belongs to the tool_executions row written at the start. It is attached
+	// before the early return below, so a late Done frame of an already ended row still reaches it.
+	if len(t.Trace) > 0 {
+		m.attachExecTrace(ctx, t)
+	}
 	updated, err := m.st.FinishBackgroundTask(ctx, t)
 	if err != nil {
 		slog.Error("end of background task not stored", "chat", t.ChatID, "task", t.ID, "err", err)
@@ -117,6 +122,27 @@ func (m *Manager) BackgroundEnded(t store.BackgroundTask, notify bool) {
 		slog.Info("wake-up by background task", "chat", t.ChatID, "task", t.ID)
 		m.deliverQueue(t.ChatID, wake)
 	}
+}
+
+// attachExecTrace stores the trace of a background task with its tool_executions row (#145). A
+// very short task can send its Done frame before the socket has written the bg_start row; the
+// few retries cover that window without delaying the end of a normal task.
+func (m *Manager) attachExecTrace(ctx context.Context, t store.BackgroundTask) {
+	const attempts, pause = 40, 50 * time.Millisecond
+	for i := 0; i < attempts; i++ {
+		ok, err := m.st.AttachExecTrace(ctx, t.ChatID, t.ToolCallID, t.ID, t.SlotID, t.Trace, t.TraceTruncated)
+		if err != nil {
+			slog.Error("trace of background task not stored", "chat", t.ChatID, "task", t.ID, "err", err)
+			return
+		}
+		if ok {
+			return
+		}
+		if i+1 < attempts {
+			time.Sleep(pause)
+		}
+	}
+	slog.Warn("trace of background task has no tool execution row", "chat", t.ChatID, "task", t.ID, "toolCallId", t.ToolCallID)
 }
 
 // notifyBackground enqueues the note as a system entry. If pi is idle and the queue is not held, it
