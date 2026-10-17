@@ -354,6 +354,20 @@ func (a *app) cmdExpRun(args []string) error {
 			seedSet = true
 		}
 	})
+	m, err := loadMaterial(*path)
+	if err != nil {
+		return err
+	}
+	problems, err := materialProblems(m)
+	if err != nil {
+		return err
+	}
+	if len(problems) > 0 {
+		for _, problem := range problems {
+			fmt.Fprintln(a.stderr, problem.String())
+		}
+		return errSilentFailure
+	}
 	opts := expRunOptions{PlanPath: *path, Cells: cells, K: *k, Seed: *seed, SeedSet: seedSet, DryRun: *dry}
 	if *dry {
 		return runExpPlan(a.ctx, nil, opts, a.stdout, a.stderr)
@@ -462,6 +476,24 @@ func (a *app) cmdExpAbort(args []string) error {
 	return nil
 }
 
+// materialProblems checks the material of one plan: the format rules of X9 and, for a pilot, the
+// separation from the main runs (X7.1).
+func materialProblems(m *material) ([]exp.Problem, error) {
+	problems := exp.Validate(m.Plan, m.Tasks, m.Manifests)
+	if m.Plan != nil && m.Plan.Purpose == exp.PurposePilot {
+		var mainTasks map[string]bool
+		if filepath.Base(m.Path) != "plan.yaml" {
+			var err error
+			mainTasks, err = exp.MainTaskIDs(m.Dir)
+			if err != nil {
+				return nil, err
+			}
+		}
+		problems = append(problems, exp.PilotProblems(m.Plan, m.Tasks, m.Manifests, mainTasks)...)
+	}
+	return problems, nil
+}
+
 // cmdExpValidate checks one plan against the formats of X9. --plan takes the material
 // directory (then plan.yaml is read) or a plan file such as pilot.yaml.
 func (a *app) cmdExpValidate(args []string) error {
@@ -477,7 +509,10 @@ func (a *app) cmdExpValidate(args []string) error {
 	if err != nil {
 		return err
 	}
-	problems := exp.Validate(m.Plan, m.Tasks, m.Manifests)
+	problems, err := materialProblems(m)
+	if err != nil {
+		return err
+	}
 	for _, problem := range problems {
 		fmt.Fprintln(a.stdout, problem.String())
 	}
