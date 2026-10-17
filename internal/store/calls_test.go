@@ -7,8 +7,19 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"reflect"
 	"testing"
 )
+
+// sameJSON compares two JSON documents semantically: jsonb normalises spacing and key order, so a byte
+// comparison would fail on a value that round-tripped correctly.
+func sameJSON(a, b []byte) bool {
+	var va, vb any
+	if json.Unmarshal(a, &va) != nil || json.Unmarshal(b, &vb) != nil {
+		return false
+	}
+	return reflect.DeepEqual(va, vb)
+}
 
 // X5.1–X5.5: every structured field of a platform call survives the round trip.
 func TestCallRecordRoundTrip(t *testing.T) {
@@ -25,7 +36,8 @@ func TestCallRecordRoundTrip(t *testing.T) {
 		Result: "ok 201", Session: "main", ToolCallID: "call_1", DurationMs: ptrFloat(12.5), Effect: "write",
 		Decision: "allowed", Reason: "rule", Rule: rule, Body: []byte(`{"name":"x"}`), BodyTruncated: true,
 		BodyInSHA256: "in", CallRef: "call_1", CallRefSource: "exec_window", CallRefCandidates: []string{"a", "b"},
-		CallRefClaimed: "claimed", WithinDelegation: &within, ApprovalDecision: "user", PlanStep: &step}
+		CallRefClaimed: "claimed", WithinDelegation: &within, ApprovalID: "00000000-0000-0000-0000-000000000001",
+		ApprovalDecision: "user", PlanStep: &step}
 	stored, err := s.AddSocketCallRecord(ctx, rec)
 	if err != nil {
 		t.Fatal(err)
@@ -35,12 +47,39 @@ func TestCallRecordRoundTrip(t *testing.T) {
 		t.Fatalf("list: %v %v", list, err)
 	}
 	got := list[0]
-	if got.ID != stored.ID || got.Decision != "allowed" || got.Reason != "rule" || string(got.Rule) != string(rule) ||
-		string(got.Body) != `{"name":"x"}` || !got.BodyTruncated || got.BodyInSHA256 != "in" ||
-		got.CallRef != "call_1" || got.CallRefSource != "exec_window" || len(got.CallRefCandidates) != 2 ||
-		got.CallRefClaimed != "claimed" || got.WithinDelegation == nil || !*got.WithinDelegation ||
-		got.ApprovalDecision != "user" || got.PlanStep == nil || *got.PlanStep != 2 {
-		t.Fatalf("round trip: %+v", got)
+	if got.ID != stored.ID {
+		t.Fatalf("id: %d, stored %d", got.ID, stored.ID)
+	}
+	if got.Decision != "allowed" || got.Reason != "rule" {
+		t.Errorf("decision/reason: %q/%q", got.Decision, got.Reason)
+	}
+	if !sameJSON(got.Rule, rule) {
+		t.Errorf("rule: %s, want %s", got.Rule, rule)
+	}
+	// Body is bytea, not jsonb: it must come back byte for byte.
+	if string(got.Body) != `{"name":"x"}` {
+		t.Errorf("body: %q", got.Body)
+	}
+	if !got.BodyTruncated {
+		t.Error("body_truncated lost")
+	}
+	if got.BodyInSHA256 != "in" {
+		t.Errorf("body_in_sha256: %q", got.BodyInSHA256)
+	}
+	if got.CallRef != "call_1" || got.CallRefSource != "exec_window" || got.CallRefClaimed != "claimed" {
+		t.Errorf("call ref: %q/%q/%q", got.CallRef, got.CallRefSource, got.CallRefClaimed)
+	}
+	if !reflect.DeepEqual(got.CallRefCandidates, []string{"a", "b"}) {
+		t.Errorf("candidates: %v", got.CallRefCandidates)
+	}
+	if got.WithinDelegation == nil || !*got.WithinDelegation {
+		t.Errorf("within_delegation: %v", got.WithinDelegation)
+	}
+	if got.ApprovalID != "00000000-0000-0000-0000-000000000001" || got.ApprovalDecision != "user" {
+		t.Errorf("approval: %q/%q", got.ApprovalID, got.ApprovalDecision)
+	}
+	if got.PlanStep == nil || *got.PlanStep != 2 {
+		t.Errorf("plan_step: %v", got.PlanStep)
 	}
 }
 
@@ -80,8 +119,11 @@ func TestToolsetRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err := s.Toolset(ctx, "abc")
-	if err != nil || string(got) != string(tools) {
-		t.Fatalf("toolset: %s %v", got, err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sameJSON(got, tools) {
+		t.Fatalf("toolset: %s, want %s", got, tools)
 	}
 }
 
