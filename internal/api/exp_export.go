@@ -10,11 +10,10 @@ package api
 import (
 	"encoding/json"
 	"net/http"
-	"os"
-	"runtime/debug"
 	"slices"
 
 	"agw/internal/store"
+	"agw/internal/version"
 )
 
 // expExport streams one export table.
@@ -86,14 +85,6 @@ func (s *Server) exportTable(r *http.Request, plan, table string) (*store.Export
 	return out, nil
 }
 
-// GatewayVersion names the deployed gateway in the manifest (X5.7). X8 sets AGW_VERSION; otherwise the module
-// version of the build applies, and "devel" for a local build.
-func GatewayVersion() string {
-	if v := os.Getenv("AGW_VERSION"); v != "" {
-		return v
-	}
-	if bi, ok := debug.ReadBuildInfo(); ok && bi.Main.Version != "" && bi.Main.Version != "(devel)" {
-		return bi.Main.Version
-	}
-	return "devel"
-}
+// GatewayVersion names the deployed gateway in the manifest (X5.7/X8.1). It is the value embedded at build
+// time; a local build falls back to AGW_VERSION or the module version.
+func GatewayVersion() string { return version.String() }

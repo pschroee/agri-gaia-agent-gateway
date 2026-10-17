@@ -558,9 +558,22 @@ refer to this repository.
   `started_at`/`ended_at` have `omitempty`; the gateway sets both, and an empty string fails its `time.Time` decoder
   with 400 invalid JSON (seen live on 17.10.2026).
 - **`main` plans need `plan.lock`** (X8.5): the runner checks every listed file's SHA-256 before the first run and
-  refuses a main plan without a lock. Pilot plans run without one. Cleanup deletes only identifiers from
-  `delegation_objects` and `container_id` values from the chat's answers (training containers are not in the
-  register: `delegation.Created` records the task) — never a name.
+  refuses a main plan without a lock. Since X8 it also checks the environment: gateway commit and describe,
+  `catalog_sha256`, `skills_sha256`, `instruction_sha256` and the image IDs of the warm `exp:` slots, all from
+  `GET /api/exp/environment`; a deviation stops the plan before the first run with the list of findings, and after
+  each chat is created the image IDs of its own slot are checked once more. Pilot plans run without a lock. Cleanup
+  deletes only identifiers from `delegation_objects` and `container_id` values from the chat's answers (training
+  containers are not in the register: `delegation.Created` records the task) — never a name.
+- **The gateway version is embedded at build time** (X8.1): the Dockerfile takes `AGW_COMMIT` and `AGW_DESCRIBE`
+  (default `dev`) and sets `agw/internal/version.Commit`/`Describe`; the value appears in `GET /api/config`, the
+  start log, `exp_runs.gateway_version` (the gateway fills it itself) and the export manifest. Without build
+  arguments `version.String()` falls back to `AGW_VERSION` and then to the module version, so older deployments and
+  local runs keep working.
+- **Image IDs and checksums are read, not assumed** (X8.2): `sandbox.Instance.ImageID` comes from
+  `ContainerInspect` right after the container is created, so a slot that still runs the image of before a rebuild
+  reports the old ID. `POST /api/exp/runs/chat` records the IDs of that slot and `catalog_sha256`/`skills_sha256`
+  in `exp_runs` (also in the export). The catalogue is `AGW_CATALOG`; the skills are copied into this image at
+  `/etc/agw/skills` (`AGW_SKILLS_PATH`) because the orchestrator does not see the pi/exec images.
 
 ## Testing
 

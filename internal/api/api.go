@@ -24,10 +24,12 @@ import (
 	"agw/internal/bgtask"
 	"agw/internal/chat"
 	"agw/internal/config"
+	"agw/internal/exp"
 	"agw/internal/oidc"
 	"agw/internal/platform"
 	"agw/internal/pool"
 	"agw/internal/store"
+	"agw/internal/version"
 	"agw/internal/worker"
 )
 
@@ -67,6 +69,11 @@ type Server struct {
 	// the permission of experiment chats, X1.3). Nil: the runner's chat routes are off; the fixture
 	// routes still work with the key alone.
 	ExpAccount func(context.Context) (oidc.User, error)
+	// Environment is the identity of this build for the freeze of X8: gateway version, commit,
+	// describe and the checksums of catalogue and skills. Filled once at startup
+	// (BuildEnvironment); zero in tests, where environment() supplies the identity of the binary and
+	// the instruction checksum.
+	Environment exp.Environment
 	// OwnerSource answers who owns chats and approvals; nil means M (replaceable for tests).
 	OwnerSource Owners
 }
@@ -635,6 +642,10 @@ func (s *Server) config(w http.ResponseWriter, r *http.Request) {
 		// Bindings of every new chat (AGW_TOOLSETS, issue #29): key, bindings, label and the union
 		// of their tools. There is no choice per chat.
 		"toolsets": worker.Info(o.Toolsets),
+		// X8.1: the identity of this build, so that a deployment states which gateway it serves.
+		"gateway_version":  version.String(),
+		"gateway_commit":   version.Commit,
+		"gateway_describe": version.Describe,
 	})
 }
 

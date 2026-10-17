@@ -371,27 +371,55 @@ type WatchJob struct {
 
 // ExpRun is one attempt of one run of the experiment plan (X1.5).
 type ExpRun struct {
-	ID             string          `json:"id"`
-	Key            string          `json:"key"`
-	Plan           string          `json:"plan"`
-	PlanSHA256     string          `json:"plan_sha256,omitempty"`
-	Cell           string          `json:"cell"`
-	Task           string          `json:"task"`
-	Rep            int             `json:"rep"`
-	Seed           int64           `json:"seed"`
-	Position       int             `json:"position"`
-	ChatID         string          `json:"chat_id,omitempty"`
-	Status         string          `json:"status"`
-	EndReason      string          `json:"end_reason,omitempty"`
-	Pass           *bool           `json:"pass,omitempty"`
-	CheckEvidence  json.RawMessage `json:"check_evidence,omitempty"`
+	ID            string          `json:"id"`
+	Key           string          `json:"key"`
+	Plan          string          `json:"plan"`
+	PlanSHA256    string          `json:"plan_sha256,omitempty"`
+	Cell          string          `json:"cell"`
+	Task          string          `json:"task"`
+	Rep           int             `json:"rep"`
+	Seed          int64           `json:"seed"`
+	Position      int             `json:"position"`
+	ChatID        string          `json:"chat_id,omitempty"`
+	Status        string          `json:"status"`
+	EndReason     string          `json:"end_reason,omitempty"`
+	Pass          *bool           `json:"pass,omitempty"`
+	CheckEvidence json.RawMessage `json:"check_evidence,omitempty"`
 	// StartedAt and EndedAt stay out of the start request: the server sets them. An empty string
 	// would fail the time.Time decoder ("invalid JSON").
-	StartedAt string `json:"started_at,omitempty"`
-	EndedAt   string `json:"ended_at,omitempty"`
-	SupersededBy   string          `json:"superseded_by,omitempty"`
-	GatewayVersion string          `json:"gateway_version,omitempty"`
-	Model          string          `json:"model,omitempty"`
+	StartedAt      string `json:"started_at,omitempty"`
+	EndedAt        string `json:"ended_at,omitempty"`
+	SupersededBy   string `json:"superseded_by,omitempty"`
+	GatewayVersion string `json:"gateway_version,omitempty"`
+	Model          string `json:"model,omitempty"`
+	ImagePi        string `json:"image_pi,omitempty"`
+	ImageExec      string `json:"image_exec,omitempty"`
+	CatalogSHA256  string `json:"catalog_sha256,omitempty"`
+	SkillsSHA256   string `json:"skills_sha256,omitempty"`
+}
+
+// ExpEnvironment is GET /api/exp/environment (X8.5): the identity of the gateway build, the checksums
+// of catalogue, skills and instruction wording, and the images of the warm experiment slots.
+type ExpEnvironment struct {
+	GatewayVersion    string               `json:"gateway_version"`
+	GatewayCommit     string               `json:"gateway_commit"`
+	GatewayDescribe   string               `json:"gateway_describe"`
+	CatalogSHA256     string               `json:"catalog_sha256"`
+	SkillsSHA256      string               `json:"skills_sha256"`
+	InstructionSHA256 string               `json:"instruction_sha256"`
+	ImagesPi          []string             `json:"images_pi"`
+	ImagesExec        []string             `json:"images_exec"`
+	Slots             []ExpEnvironmentSlot `json:"slots"`
+}
+
+// ExpEnvironmentSlot is one warm experiment slot with the image IDs of its two containers.
+type ExpEnvironmentSlot struct {
+	ID        string `json:"id"`
+	Variant   string `json:"variant"`
+	State     string `json:"state"`
+	ChatID    string `json:"chat_id,omitempty"`
+	ImagePi   string `json:"image_pi,omitempty"`
+	ImageExec string `json:"image_exec,omitempty"`
 }
 
 // ExpRunEnd closes a run (status is the end reason: done, limit_cost, …).

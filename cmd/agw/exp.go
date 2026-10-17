@@ -21,17 +21,20 @@ import (
 
 	"agw/internal/agwclient"
 	"agw/internal/exp"
+	gwversion "agw/internal/version"
 )
 
 // cmdExp dispatches the experiment subcommands: validate (X9), seed, unseed and verify of the fixtures (X4,
-// issue #129), run, status and abort of the runner (X1), and export of the protocol (X5).
+// issue #129), run, status and abort of the runner (X1), export of the protocol (X5) and environment (X8).
 func (a *app) cmdExp(args []string) error {
 	if len(args) == 0 {
-		return usagef("exp: subcommand missing (validate, seed, unseed, verify, run, status, abort, export)")
+		return usagef("exp: subcommand missing (validate, environment, seed, unseed, verify, run, status, abort, export)")
 	}
 	switch args[0] {
 	case "validate":
 		return a.cmdExpValidate(args[1:])
+	case "environment":
+		return a.cmdExpEnvironment(args[1:])
 	case "seed":
 		return a.cmdExpSeed(args[1:])
 	case "unseed":
@@ -543,6 +546,46 @@ func (a *app) cmdExpValidate(args []string) error {
 	return nil
 }
 
+// cmdExpEnvironment prints the identity of the gateway build and the images of the warm experiment slots
+// (X8.5). The freeze script writes these values into plan.lock; the runner compares them before a main
+// plan starts.
+func (a *app) cmdExpEnvironment(args []string) error {
+	fs := a.flags("exp environment")
+	if _, err := a.parse(fs, args, 0, 0, "agw exp environment [--json]"); err != nil {
+		return err
+	}
+	c, err := a.expClient()
+	if err != nil {
+		return err
+	}
+	env, err := c.ExpEnvironment(a.ctx)
+	if err != nil {
+		return err
+	}
+	if a.json {
+		return a.printJSON(env)
+	}
+	fmt.Fprintf(a.stdout, "gateway   version %s  describe %s  commit %s\n",
+		env.GatewayVersion, orNone(env.GatewayDescribe), env.GatewayCommit)
+	fmt.Fprintf(a.stdout, "catalog   sha256 %s\nskills    sha256 %s\ninstruction sha256 %s\n",
+		orNone(env.CatalogSHA256), orNone(env.SkillsSHA256), orNone(env.InstructionSHA256))
+	fmt.Fprintf(a.stdout, "images_pi   %s\nimages_exec %s\n", strings.Join(env.ImagesPi, ", "), strings.Join(env.ImagesExec, ", "))
+	fmt.Fprintf(a.stdout, "%d experiment slot(s)\n", len(env.Slots))
+	for _, s := range env.Slots {
+		fmt.Fprintf(a.stdout, "  %s  %s  %s  chat %s  pi %s  exec %s\n",
+			s.ID, s.Variant, s.State, orNone(s.ChatID), orNone(s.ImagePi), orNone(s.ImageExec))
+	}
+	return nil
+}
+
+// orNone renders an empty value in the environment output.
+func orNone(s string) string {
+	if s == "" {
+		return "-"
+	}
+	return s
+}
+
 // cmdExpExport writes the protocol of one plan as JSONL and CSV and a manifest with checksums (X5.7).
 //
 // --plan takes the plan name stored with the runs or the plan file itself (then its purpose names the plan and its
@@ -646,13 +689,18 @@ func (a *app) cmdExpExport(args []string) error {
 		files = append(files, entry...)
 		fmt.Fprintf(a.stdout, "%s: %d rows\n", table, len(rows))
 	}
+	if version == "" {
+		version = gwversion.String()
+	}
 	manifest := map[string]any{
-		"gateway_version": version,
-		"plan":            plan,
-		"plan_sha256":     planSHA,
-		"exported_at":     time.Now().UTC().Format(time.RFC3339),
-		"synthetic":       false,
-		"files":           files,
+		"gateway_version":  version,
+		"gateway_commit":   gwversion.Commit,
+		"gateway_describe": gwversion.Describe,
+		"plan":             plan,
+		"plan_sha256":      planSHA,
+		"exported_at":      time.Now().UTC().Format(time.RFC3339),
+		"synthetic":        false,
+		"files":            files,
 	}
 	raw, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {

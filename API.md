@@ -377,7 +377,7 @@ type ActivityPage = { calls: ActivityCall[]; chats: Record<string, { id: string;
 |---|---|---|
 | `GET /api/models` | `Model[]` | selectable models |
 | `GET /api/variants` | `Variant[]` | every combination of bindings; `active` marks the one new chats get (`AGW_TOOLSETS`) |
-| `GET /api/config` | `{internet_default: boolean, approval_timeout_s: number, artifact_max_mb: number, idle_timeout_s: number, auto_compact_default: boolean, compact_reserve_tokens: number, compact_keep_recent_tokens: number, max_subagents: number /* at the same time per chat, fixed */, max_subagents_default: number /* deprecated, = max_subagents */, max_subagents_limit: number /* deprecated, = max_subagents */, workspace_max_mb: number /* 0 = workspace is not backed up */, bg_wakes_per_hour: number /* 0 = never wake */, bg_keepalive_s: number, auto_turns_max: number /* consecutive turns without the user, 0 = none */, executed_tools: string[] /* tools whose execution is proven at the socket, sorted */, toolsets: Variant /* bindings of every new chat (AGW_TOOLSETS) */}` | defaults for the UI |
+| `GET /api/config` | `{internet_default: boolean, approval_timeout_s: number, artifact_max_mb: number, idle_timeout_s: number, auto_compact_default: boolean, compact_reserve_tokens: number, compact_keep_recent_tokens: number, max_subagents: number /* at the same time per chat, fixed */, max_subagents_default: number /* deprecated, = max_subagents */, max_subagents_limit: number /* deprecated, = max_subagents */, workspace_max_mb: number /* 0 = workspace is not backed up */, bg_wakes_per_hour: number /* 0 = never wake */, bg_keepalive_s: number, auto_turns_max: number /* consecutive turns without the user, 0 = none */, executed_tools: string[] /* tools whose execution is proven at the socket, sorted */, toolsets: Variant /* bindings of every new chat (AGW_TOOLSETS) */, gateway_version: string, gateway_commit: string, gateway_describe: string /* identity of this build, X8.1 */}` | defaults for the UI |
 | `GET /api/pool` | `Pool` | pool status (the UI polls every second) |
 | `GET /api/platform` | `{configured: boolean, api_url?, login?: "user" \| "account", account?: string /* login account only */, client_id?, token_exchange?: boolean, probe?: {reachable, http_status?, latency_ms, error?, checked_at}, last_exchange?: {chat_id, at, ok, error?}}` | binding to the platform, read-only. `probe`: unauthenticated `GET` on the API base, any HTTP answer counts as reachable, cached 10 s. `last_exchange`: newest token exchange among the user's own chats, also a failed one (e.g. the user's login expired); in memory only, empty after a restart until the next platform call. `{configured: false}` without `AGW_PLATFORM_API_URL` |
 | `GET /api/exp/export?plan=<plan>&table=<table>` | JSONL stream (`application/x-ndjson`), one object per row | experiment export (X5.7): `runs`, `platform_calls`, `tool_executions`, `llm_calls`, `reconcile`, `fixtures`, `syscalls`, `turns`; **only** `AGW_EXP_API_TOKEN` as bearer is accepted, never the browser session or `AGW_API_TOKEN`. Columns in `X-Agw-Columns` (JSON array), gateway version in `X-Agw-Gateway-Version`. `agw exp export` writes JSONL, CSV and `manifest.json` (checksums, row counts) |
@@ -2328,8 +2328,9 @@ the account's `sub` as owner, so ownership checks work unchanged.
 |---|---|
 | `POST /api/chats` | creates an experiment chat: `experiment: {protection, cell, run, seed, trace}` plus `delegation`, `model`, `variant` (binding) and `message` (the task) |
 | `GET /api/models` | the model catalogue; the runner and `agw exp validate` compare the plan's IDs with it (#156) |
-| `POST /api/exp/runs/start` | records one attempt: `{id, key, plan, plan_sha256, cell, task, rep, seed, position, model}`; `409` if the id exists |
-| `POST /api/exp/runs/chat` | links the attempt to its chat: `{id, chat}` |
+| `GET /api/exp/environment` | `{gateway_version, gateway_commit, gateway_describe, catalog_sha256, skills_sha256, instruction_sha256, images_pi, images_exec, slots: [{id, variant, state, chat_id?, image_pi?, image_exec?}]}` — the identity of the build and the images the warm experiment slots actually run (X8.5); `agw exp environment [--json]` |
+| `POST /api/exp/runs/start` | records one attempt: `{id, key, plan, plan_sha256, cell, task, rep, seed, position, model}`; `409` if the id exists. The gateway fills `gateway_version` itself (X8.1) |
+| `POST /api/exp/runs/chat` | links the attempt to its chat: `{id, chat}`; the gateway records `image_pi`, `image_exec`, `catalog_sha256` and `skills_sha256` of that slot (X8.2) |
 | `POST /api/exp/runs/end` | closes the attempt: `{id, status, end_reason, pass, check_evidence}`; status is the end reason (`done`, `limit_cost`, `limit_tokens`, `limit_duration`, `error`, `aborted`) |
 | `POST /api/exp/runs/supersede` | an attempt that a restart replaced: `{id, superseded_by}`; the old row keeps `status: "aborted"` and stays visible |
 | `POST /api/exp/runs/stop` | `{id}`: aborts the run's chat and closes the run as `aborted`; a finished run keeps its outcome |
@@ -2346,7 +2347,12 @@ the gateway image as `/agw` and starts from the container
 in `AGW_ALLOWED_HOSTS` there and answers `403 unknown host` (issue #155). It reads `plan.yaml`/`pilot.yaml`, the tasks and the fixture manifests
 (X9), checks the plan's model IDs against `GET /api/models` before the first chat (#156; a typo fails the run
 instead of every cell), checks `plan.lock` for a main plan (X8.5), orders the runs per task and repetition with a seeded shuffle of
-the cells (X1.6) and runs them strictly one after the other (X1.7). A run ends when the chat is quiet
+the cells (X1.6) and runs them strictly one after the other (X1.7). For a main plan the check has two parts: the
+SHA-256 of every material file against `plan.lock`, and the environment against
+`GET /api/exp/environment` — gateway commit and describe, `catalog_sha256`, `skills_sha256`, `instruction_sha256`
+and the image IDs of the warm experiment slots. A deviation stops the plan with the list of findings before any
+run starts; after each chat is created the image IDs of its own slot are checked once more (a slot that started
+later may still carry an older image). A pilot plan ignores the lock. A run ends when the chat is quiet
 (`running: false`, `queued: 0`, not resuming) and no observed job (`GET /api/chats/{id}/jobs`) is still running,
 or when the gateway stored a limit at the chat (`experiment.limit` from X3/#128), which the runner maps to
 `limit_cost`, `limit_tokens` or `limit_duration` (X1.8); the limits of the plan file are checked in addition as a

@@ -866,3 +866,145 @@ func TestRunRejectsUnknownModel(t *testing.T) {
 		t.Fatalf("the run started anyway: %d starts, %d chats", len(api.starts), len(api.creates))
 	}
 }
+
+// X8.5: a pilot plan ignores a lock (the pilot is development material).
+func TestPilotIgnoresLock(t *testing.T) {
+	dir := writeExpMaterial(t, "pilot", 1)
+	if err := os.WriteFile(filepath.Join(dir, "plan.lock"), []byte(`{"files":{"plan.yaml":"deadbeef"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := newExpRunner(newFakeExpAPI(), expRunOptions{PlanPath: dir}, io.Discard, io.Discard); err != nil {
+		t.Fatalf("pilot with a bogus lock: %v", err)
+	}
+}
+
+// writePlanLock writes plan.lock with the checksums of the material and fills the environment part with
+// defaults unless the caller set it.
+func writePlanLock(t *testing.T, dir string, lock exp.Lock) *exp.Lock {
+	t.Helper()
+	files, err := exp.MaterialFiles(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lock.Files = files
+	if lock.GatewayCommit == "" {
+		lock.GatewayCommit, lock.GatewayDescribe = "abc123", "abc123"
+	}
+	if lock.ImagePi == "" {
+		lock.ImagePi, lock.ImageExec = "sha256:pi", "sha256:exec"
+	}
+	if lock.CatalogSHA256 == "" {
+		lock.CatalogSHA256, lock.SkillsSHA256, lock.InstructionSHA256 = "cat", "skills", "instr"
+	}
+	raw, err := json.MarshalIndent(lock, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "plan.lock"), raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return &lock
+}
+
+// matchingEnv is the fake environment that matches writePlanLock's defaults.
+func matchingEnv() *fakeExpAPI {
+	api := newFakeExpAPI()
+	api.env = agwclient.ExpEnvironment{
+		GatewayVersion: "abc123", GatewayCommit: "abc123", GatewayDescribe: "abc123",
+		CatalogSHA256: "cat", SkillsSHA256: "skills", InstructionSHA256: "instr",
+		ImagesPi: []string{"sha256:pi"}, ImagesExec: []string{"sha256:exec"},
+	}
+	api.envSlot = agwclient.ExpEnvironmentSlot{ID: "exp-1", Variant: "exp:cli", ImagePi: "sha256:pi", ImageExec: "sha256:exec"}
+	return api
+}
+
+func TestMainPlanRefusedOnMaterialMismatch(t *testing.T) {
+	dir := writeExpMaterial(t, "main", 20)
+	writePlanLock(t, dir, exp.Lock{})
+	path := filepath.Join(dir, "aufgaben", "list-datasets.yaml")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, append(raw, []byte("\n# changed after the freeze\n")...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err = newExpRunner(newFakeExpAPI(), expRunOptions{PlanPath: dir}, io.Discard, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "list-datasets.yaml differs") {
+		t.Fatalf("want the material deviation, got %v", err)
+	}
+}
+
+func TestMainPlanRefusedOnLockMismatch(t *testing.T) {
+	cases := []struct {
+		name   string
+		change func(*fakeExpAPI)
+		want   string
+	}{
+		{"gateway commit", func(a *fakeExpAPI) { a.env.GatewayCommit = "other" }, "gateway_commit"},
+		{"catalog", func(a *fakeExpAPI) { a.env.CatalogSHA256 = "other" }, "catalog_sha256"},
+		{"skills", func(a *fakeExpAPI) { a.env.SkillsSHA256 = "other" }, "skills_sha256"},
+		{"instruction", func(a *fakeExpAPI) { a.env.InstructionSHA256 = "other" }, "instruction_sha256"},
+		{"image pi", func(a *fakeExpAPI) { a.env.ImagesPi = []string{"sha256:old"} }, "image_pi"},
+		{"image exec", func(a *fakeExpAPI) { a.env.ImagesExec = []string{"sha256:old"} }, "image_exec"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			dir := writeExpMaterial(t, "main", 20)
+			writePlanLock(t, dir, exp.Lock{})
+			api := matchingEnv()
+			c.change(api)
+			r, err := newExpRunner(api, expRunOptions{PlanPath: dir, Poll: time.Millisecond,
+				StartGrace: 20 * time.Millisecond, Heartbeat: time.Hour}, io.Discard, io.Discard)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = r.run(context.Background())
+			if err == nil || !strings.Contains(err.Error(), c.want) {
+				t.Fatalf("want %q in the deviation, got %v", c.want, err)
+			}
+			if len(api.starts) != 0 {
+				t.Fatalf("a run started despite the deviation: %+v", api.starts)
+			}
+		})
+	}
+}
+
+// X8.5: a slot that appears after the plan started (for example after a rebuild) is checked per run.
+func TestRunRefusedWhenSlotImageDiffers(t *testing.T) {
+	dir := writeExpMaterial(t, "main", 20)
+	writePlanLock(t, dir, exp.Lock{})
+	api := matchingEnv()
+	api.envSlot.ImagePi = "sha256:old"
+	r, err := newExpRunner(api, expRunOptions{PlanPath: dir, Poll: time.Millisecond,
+		StartGrace: 20 * time.Millisecond, Heartbeat: time.Hour}, io.Discard, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(api.ends) == 0 || !strings.Contains(api.ends[0].EndReason, "image_pi") {
+		t.Fatalf("want an error about image_pi, got %+v", api.ends)
+	}
+	if len(api.aborted) == 0 {
+		t.Fatal("the mismatching chat was not aborted")
+	}
+}
+
+func TestMainPlanRunsWithMatchingLock(t *testing.T) {
+	dir := writeExpMaterial(t, "main", 20)
+	writePlanLock(t, dir, exp.Lock{})
+	api := matchingEnv()
+	r, err := newExpRunner(api, expRunOptions{PlanPath: dir, Poll: time.Millisecond,
+		StartGrace: 20 * time.Millisecond, Heartbeat: time.Hour}, io.Discard, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(api.starts) != 20*3 {
+		t.Fatalf("runs: %d", len(api.starts))
+	}
+}

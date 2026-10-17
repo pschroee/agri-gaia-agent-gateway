@@ -317,20 +317,23 @@ func (c *Catalog) PiModelsJSON(proxyBase string) ([]byte, error) {
 
 // Env holds the settings from the environment.
 type Env struct {
-	HTTPAddr             string
-	ProxyAddr            string
-	WebProxyAddr         string // web proxy for web_search/web_extract from pi's container
-	WebProxyURL          string // how pi's container reaches the web proxy
-	SearxURL             string // own SearXNG service as seen from the orchestrator (empty: none)
-	ProxyBaseURL         string // how the sandbox reaches the proxy
-	CatalogPath          string
-	DatabaseURL          string
-	S3Endpoint           string
-	S3AccessKey          string
-	S3SecretKey          string
-	S3Bucket             string
-	Image                string // execution sandbox (E9): tools, Python, Typst …
-	PiImage              string // pi's container (E9): no shell, no Python
+	HTTPAddr     string
+	ProxyAddr    string
+	WebProxyAddr string // web proxy for web_search/web_extract from pi's container
+	WebProxyURL  string // how pi's container reaches the web proxy
+	SearxURL     string // own SearXNG service as seen from the orchestrator (empty: none)
+	ProxyBaseURL string // how the sandbox reaches the proxy
+	CatalogPath  string
+	DatabaseURL  string
+	S3Endpoint   string
+	S3AccessKey  string
+	S3SecretKey  string
+	S3Bucket     string
+	Image        string // execution sandbox (E9): tools, Python, Typst …
+	PiImage      string // pi's container (E9): no shell, no Python
+	// SkillsPath: the skill directory copied into the gateway image (X8.2). Its checksum names the
+	// skills a slot runs with; the source is images/agw-basis/skills in the build context.
+	SkillsPath           string
 	SandboxNetwork       string
 	EgressNetwork        string
 	EgressSubnet         string
@@ -603,6 +606,7 @@ func FromEnv() Env {
 		S3Bucket:             str("AGW_S3_BUCKET", "agw-artifacts"),
 		Image:                str("AGW_IMAGE", "agwpoc/agw-basis:dev"),
 		PiImage:              str("AGW_PI_IMAGE", "agwpoc/agw-pi:dev"),
+		SkillsPath:           str("AGW_SKILLS_PATH", "/etc/agw/skills"),
 		SandboxNetwork:       str("AGW_SANDBOX_NETWORK", "agwpoc_sandbox"),
 		EgressNetwork:        str("AGW_EGRESS_NETWORK", "agwpoc_egress"),
 		EgressSubnet:         str("AGW_EGRESS_SUBNET", "10.231.20.0/24"), // never Docker's 172.x (would otherwise hide VPN destinations)

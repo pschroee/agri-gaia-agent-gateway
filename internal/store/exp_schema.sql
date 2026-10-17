@@ -26,8 +26,18 @@ CREATE TABLE IF NOT EXISTS exp_runs (
     started_at      timestamptz NOT NULL DEFAULT now(),
     ended_at        timestamptz,
     superseded_by   text NOT NULL DEFAULT '',       -- id of the attempt that replaced this one
-    gateway_version text NOT NULL DEFAULT '',       -- X8.1, empty until the version is embedded
-    model           text NOT NULL DEFAULT ''
+    gateway_version text NOT NULL DEFAULT '',       -- X8.1, the build the gateway ran with
+    model           text NOT NULL DEFAULT '',
+    image_pi        text NOT NULL DEFAULT '',       -- X8.2, image ID the run's slot used
+    image_exec      text NOT NULL DEFAULT '',
+    catalog_sha256  text NOT NULL DEFAULT '',
+    skills_sha256   text NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS exp_runs_plan ON exp_runs (plan, cell, position);
 CREATE INDEX IF NOT EXISTS exp_runs_key ON exp_runs (run_key);
+
+-- Existing databases get the columns of X8.2; the statement is idempotent like the rest of the schema.
+ALTER TABLE exp_runs ADD COLUMN IF NOT EXISTS image_pi text NOT NULL DEFAULT '';
+ALTER TABLE exp_runs ADD COLUMN IF NOT EXISTS image_exec text NOT NULL DEFAULT '';
+ALTER TABLE exp_runs ADD COLUMN IF NOT EXISTS catalog_sha256 text NOT NULL DEFAULT '';
+ALTER TABLE exp_runs ADD COLUMN IF NOT EXISTS skills_sha256 text NOT NULL DEFAULT '';
