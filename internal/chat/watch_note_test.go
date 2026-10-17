@@ -9,10 +9,12 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"agw/internal/plan"
 	"agw/internal/platform"
 	"agw/internal/store"
+	"agw/internal/watch"
 )
 
 // A-E2 (D2.1): the answer of a call that started an observed job says so, so that the agent ends its turn
@@ -96,5 +98,21 @@ func TestJobOutsidePlanAnswerHasNoNote(t *testing.T) {
 	jobs, err := e.m.Jobs(ctx, c.ID)
 	if err != nil || len(jobs) != 1 {
 		t.Fatalf("the job is not observed for the cards: %+v %v", jobs, err)
+	}
+}
+
+// Issue #141: a token in a stored platform message or log tail never reaches the note to the agent, also
+// when the row was written before the gateway redacted platform answers.
+func TestJobNoteRedactsTokens(t *testing.T) {
+	const token = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhZ2VudC10ZXN0In0.c2lnbmF0dXJl"
+	note := JobNote(store.WatchJob{ID: "w1", Kind: "task",
+		Message: "assume role failed: " + token,
+		LogTail: "WARN token " + token + " expired"}, nil, watch.StateFailed, time.Second)
+	text := note.Text()
+	if strings.Contains(text, token) {
+		t.Fatalf("the token reached the note: %s", text)
+	}
+	if got := strings.Count(text, platform.RedactText(token)); got != 2 {
+		t.Fatalf("expected two marks in the note, got %d:\n%s", got, text)
 	}
 }

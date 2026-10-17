@@ -27,6 +27,7 @@ import (
 	"regexp"
 	"strings"
 
+	"agw/internal/platform"
 	"agw/internal/store"
 )
 
@@ -191,7 +192,9 @@ func wrapSystem(n systemNote, avoid string, used map[string]bool) (string, strin
 		hint = n.FenceHint
 	}
 	b.WriteString("\n" + hint + "\n<<<" + marker + "\n")
-	b.WriteString(n.Body)
+	// Last stop before the agent: a note queued before the gateway redacted platform answers may still
+	// carry a token (issue #141).
+	b.WriteString(platform.RedactText(n.Body))
 	b.WriteString("\n" + marker + ">>>")
 	return b.String(), marker
 }

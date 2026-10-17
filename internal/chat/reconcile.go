@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"agw/internal/platform"
 	"agw/internal/sock"
 	"agw/internal/store"
 )
@@ -178,6 +179,9 @@ func firstTime(c ReconciledCall) time.Time {
 // RecordToolExecution stores an operation executed at the socket and reports
 // it to the UI (sock.ToolRecorder).
 func (m *Manager) RecordToolExecution(e store.ToolExecution) {
+	// Tool output may quote a platform answer, and those carried tokens in free text (issue #141).
+	e.Error = platform.RedactText(e.Error)
+	e.OutputExcerpt = platform.RedactText(e.OutputExcerpt)
 	rec, err := m.st.AddToolExecution(context.Background(), e)
 	if err != nil {
 		// A missing entry would show up in the reconciliation as "not executed".

@@ -66,6 +66,9 @@ func (c *Client) DoTrusted(ctx context.Context, chatID string, r Request, limit 
 	} else {
 		if json.Valid(body) {
 			body = redact(body)
+		} else {
+			// Free text carries tokens as well (issue #141).
+			body = []byte(RedactText(string(body)))
 		}
 		if len(body) > c.cfg.MaxResult && !r.Full {
 			body, res.Truncated = body[:c.cfg.MaxResult], true

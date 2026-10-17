@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"agw/internal/annotation"
+	"agw/internal/platform"
 	"agw/internal/store"
 )
 
@@ -135,7 +136,7 @@ func annotationRunLine(row store.AnnotationRun, watch store.WatchJob, base strin
 	line := annotationRun{
 		RunID: row.ID, DatasetID: row.DatasetID, TaskID: row.TaskID, Function: row.Function,
 		MinConfidence: row.MinConfidence, Mapping: map[string]string{}, Existing: row.Existing,
-		State: row.State, Error: row.Error, Progress: watch.Progress, Message: watch.Message,
+		State: row.State, Error: platform.RedactText(row.Error), Progress: watch.Progress, Message: watch.Message,
 		ToolCallID: watch.ToolCallID, CreatedAt: row.CreatedAt, EndedAt: row.EndedAt,
 	}
 	if row.Mapping != "" {
@@ -149,7 +150,7 @@ func annotationRunLine(row store.AnnotationRun, watch store.WatchJob, base strin
 func annotationJobLine(row store.AnnotationJob, watch store.WatchJob, base string) annotationJob {
 	line := annotationJob{
 		JobID: row.ID, Kind: row.Kind, DatasetID: row.DatasetID, TaskID: row.TaskID, Function: row.Function,
-		State: row.State, Done: row.Done, Total: row.Total, Error: row.Error,
+		State: row.State, Done: row.Done, Total: row.Total, Error: platform.RedactText(row.Error),
 		ToolCallID: watch.ToolCallID, CreatedAt: row.CreatedAt, EndedAt: row.EndedAt,
 	}
 	// The stored JSON goes through unchanged; a value that cannot be read is left out rather than
@@ -157,8 +158,8 @@ func annotationJobLine(row store.AnnotationJob, watch store.WatchJob, base strin
 	if json.Valid([]byte(row.Params)) {
 		line.Params = json.RawMessage(row.Params)
 	}
-	if row.Result != "" && json.Valid([]byte(row.Result)) {
-		line.Result = json.RawMessage(row.Result)
+	if res := platform.RedactText(row.Result); res != "" && json.Valid([]byte(res)) {
+		line.Result = json.RawMessage(res)
 	}
 	line.CVATURL = cvatTaskURL(base, row.TaskID)
 	return line

@@ -371,8 +371,19 @@ func (m *Manager) publishPlan(ctx context.Context, planID string) {
 	}
 	m.invalidatePlanCache(p.ChatID)
 	m.fillPlanUsage(ctx, &p)
-	m.publish(p.ChatID, Event{Kind: "plan", Data: p})
+	m.publish(p.ChatID, Event{Kind: "plan", Data: redactPlanText(p)})
 	m.publishPlanAlerts(ctx, p)
+}
+
+// redactPlanText keeps tokens out of the progress texts of a plan's steps on the way to the UI (issue #141):
+// the messages come from the platform, and rows stored before the gateway redacted them still carry one.
+func redactPlanText(p store.Plan) store.Plan {
+	for i := range p.Steps {
+		p.Steps[i].ProgressMsg = platform.RedactText(p.Steps[i].ProgressMsg)
+		p.Steps[i].LogTail = platform.RedactText(p.Steps[i].LogTail)
+		p.Steps[i].Result = platform.RedactText(p.Steps[i].Result)
+	}
+	return p
 }
 
 // fillPlanUsage writes what the plan has used of its budget onto it (A-E4, D4.5). An unreadable usage

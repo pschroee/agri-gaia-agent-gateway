@@ -181,11 +181,13 @@ func (m *Manager) pollJob(ctx context.Context, j store.WatchJob, kind watch.Kind
 		m.publishJob(ctx, j, p)
 		return
 	}
+	// A token in the platform's message or log is kept out of the row as well (issue #141): older
+	// readers and rows stored before this rule exist.
 	prog := store.WatchProgress{
 		State:   p.State,
 		Percent: p.Percent,
-		Message: watch.ClipRunes(p.Message, watch.MaxMessage),
-		LogTail: watch.Tail(p.LogTail),
+		Message: watch.ClipRunes(platform.RedactText(p.Message), watch.MaxMessage),
+		LogTail: watch.Tail(platform.RedactText(p.LogTail)),
 		Outputs: storeOutputs(p.Outputs),
 		Link:    p.Link,
 		ETA:     m.jobETA(j, p, time.Now()),
@@ -220,7 +222,7 @@ func (m *Manager) jobReadFailed(ctx context.Context, j store.WatchJob, err error
 		return
 	}
 	fails := j.FailReads + 1
-	msg := "platform not readable: " + oneLine(err.Error())
+	msg := "platform not readable: " + oneLine(platform.RedactText(err.Error()))
 	switch {
 	case fails == 1:
 		slog.Warn("job not readable", "job", j.ID, "kind", j.Kind, "fails", fails, "error", err)
@@ -251,7 +253,7 @@ func (m *Manager) jobReadFailed(ctx context.Context, j store.WatchJob, err error
 // the plan fails, and the agent learns why through the note (D2.5). A paused plan stays paused — the user
 // decides about it, the step is failed either way.
 func (m *Manager) endUnreadableJob(ctx context.Context, j store.WatchJob, err error) {
-	msg := "the job is no longer readable: " + oneLine(err.Error())
+	msg := "the job is no longer readable: " + oneLine(platform.RedactText(err.Error()))
 	if uerr := m.st.SetJobProgress(ctx, j.ID, store.WatchProgress{State: watch.StateFailed,
 		Message: watch.ClipRunes(msg, watch.MaxMessage)}); uerr != nil {
 		slog.Error("unreadable job not ended", "job", j.ID, "error", uerr)
@@ -294,7 +296,7 @@ func storeOutputs(out []watch.Output) []store.WatchOutput {
 
 // publishJob distributes a job's new state to the subscribers of its chat.
 func (m *Manager) publishJob(ctx context.Context, j store.WatchJob, p watch.Progress) {
-	d := JobEvent{Change: "progress", Job: j}
+	d := JobEvent{Change: "progress", Job: redactWatchText(j)}
 	if p.Next != nil {
 		d.Change = "next"
 	}
@@ -465,9 +467,9 @@ func JobNote(j store.WatchJob, st *store.PlanStep, state string, dur time.Durati
 	h.WriteString(phrase + " (" + j.Kind + ") after " + FormatRuntime(dur) + ".")
 	var b strings.Builder
 	if j.Message != "" {
-		b.WriteString("Platform message: " + watch.ClipRunes(oneLine(j.Message), watch.MaxMessage))
+		b.WriteString("Platform message: " + watch.ClipRunes(oneLine(platform.RedactText(j.Message)), watch.MaxMessage))
 	}
-	tail := watch.Tail(j.LogTail)
+	tail := watch.Tail(platform.RedactText(j.LogTail))
 	if tail == "" {
 		if b.Len() == 0 {
 			b.WriteString("The platform reported no message and no log.")
@@ -811,6 +813,7 @@ func (m *Manager) StopJob(ctx context.Context, chatID, jobID string) (store.Watc
 	if err != nil {
 		return store.WatchJob{}, err
 	}
+	job = redactWatchText(job)
 	if job.State != store.JobRunning {
 		return job, ErrNotRunning
 	}
@@ -860,7 +863,22 @@ func (m *Manager) Jobs(ctx context.Context, chatID string) ([]store.WatchJob, er
 	if _, err := m.st.GetChat(ctx, chatID); err != nil {
 		return nil, err
 	}
-	return m.st.ChatWatchJobs(ctx, chatID)
+	list, err := m.st.ChatWatchJobs(ctx, chatID)
+	if err != nil {
+		return nil, err
+	}
+	for i := range list {
+		list[i] = redactWatchText(list[i])
+	}
+	return list, nil
+}
+
+// redactWatchText keeps tokens out of a job's texts on the way out (issue #141): rows stored before the
+// gateway redacted platform answers still carry them.
+func redactWatchText(j store.WatchJob) store.WatchJob {
+	j.Message = platform.RedactText(j.Message)
+	j.LogTail = platform.RedactText(j.LogTail)
+	return j
 }
 
 // StopPlanStep stops the job a waiting step of a plan observes (D2.9): only a step that waits for a job
