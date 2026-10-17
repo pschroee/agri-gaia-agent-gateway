@@ -904,6 +904,10 @@ func TestConfirmEachStepParked(t *testing.T) {
 	waitFor(t, func() bool {
 		return len(f.writeCalls()) == 1 && f.writeCalls()[0] == "PUT /container-deployments/5/deploy"
 	})
+	// The repeat goes out before the gateway records the job it started (startWatching: AddWatchJob, then
+	// WaitPlanStep). A watcher pass in between sees no job and leaves the step waiting, so wait for the step
+	// to wait — the write call alone is only the platform's receipt, not the gateway's record (issue #159).
+	waitFor(t, func() bool { return stepsOfPlan(t, e, p.ID)[0].State == plan.StepWaiting })
 	f.set("GET /tasks/5", `{"status":"completed","completion_percentage":1.0}`)
 	f.set("GET /container-deployments/5", `{"status":"deployed"}`)
 	runWatchersOnce(t, e)
