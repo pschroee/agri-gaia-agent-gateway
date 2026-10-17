@@ -19,17 +19,23 @@ import (
 	"time"
 )
 
-// PasswordSource keeps a platform access token for the experiment account (X1.2): a password grant
-// through the public client "frontend", renewed before the token expires. Experiment runs need no
-// browser session, so the 12-hour limit of Service does not apply; the token itself still has the
-// realm's access-token lifespan.
+// PasswordSource keeps a platform access token for the experiment account (X1.2): a password grant,
+// renewed before the token expires. Experiment runs need no browser session, so the 12-hour limit of
+// Service does not apply; the token itself still has the realm's access-token lifespan.
 //
-// The password never leaves this type: neither the request nor an error text carries it.
+// The client is configurable. With token exchange on (AGW_PLATFORM_TOKEN_EXCHANGE=true), Keycloak
+// only exchanges a token whose issuer is the requesting client or in its audience; the public
+// "frontend" token is refused with "Client is not within the token audience". The confidential
+// client agw-agent (which performs the exchange) has direct access grants enabled, so the same
+// account can log in through it when its secret is configured.
+//
+// Neither the password nor the client secret appears in a request log or an error text.
 type PasswordSource struct {
-	issuer   string
-	clientID string
-	user     string
-	password string
+	issuer       string
+	clientID     string
+	clientSecret string
+	user         string
+	password     string
 
 	// HTTP and Now are replaceable for tests; nil means the defaults.
 	HTTP *http.Client
@@ -45,12 +51,13 @@ type PasswordSource struct {
 
 // NewPasswordSource prepares the login of the experiment account. Nothing is requested until the
 // first Token or Subject call, so the orchestrator also starts while Keycloak is unreachable.
-func NewPasswordSource(issuer, clientID, user, password string) *PasswordSource {
+func NewPasswordSource(issuer, clientID, clientSecret, user, password string) *PasswordSource {
 	return &PasswordSource{
-		issuer:   strings.TrimRight(issuer, "/"),
-		clientID: clientID,
-		user:     user,
-		password: password,
+		issuer:       strings.TrimRight(issuer, "/"),
+		clientID:     clientID,
+		clientSecret: clientSecret,
+		user:         user,
+		password:     password,
 	}
 }
 
@@ -82,6 +89,9 @@ func (p *PasswordSource) Token(ctx context.Context) (string, error) {
 	form := url.Values{}
 	form.Set("grant_type", "password")
 	form.Set("client_id", p.clientID)
+	if p.clientSecret != "" {
+		form.Set("client_secret", p.clientSecret)
+	}
 	form.Set("username", p.user)
 	form.Set("password", p.password)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, d.Token, strings.NewReader(form.Encode()))
