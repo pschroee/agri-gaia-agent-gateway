@@ -148,8 +148,10 @@ func (r Request) String() string {
 	if q := r.encodedQuery(); q != "" {
 		s += "?" + q
 	}
-	if len(r.Files) > 0 {
-		s += " (multipart, " + fileCount(len(r.Files)) + ")"
+	// Uploads alone carries files the gateway read itself (X4); Files names the sandbox paths the
+	// orchestrator still has to read. A call carries one of the two, never both.
+	if n := len(r.Files) + len(r.Uploads); n > 0 {
+		s += " (multipart, " + fileCount(n) + ")"
 	} else if len(r.Form) > 0 {
 		s += " (multipart)"
 	}
@@ -365,14 +367,16 @@ func normalize(r Request, agent bool) (Request, error) {
 	if total > maxQueryTotal {
 		return r, fmt.Errorf("query too long (at most %d bytes)", maxQueryTotal)
 	}
-	if len(r.Form) > 0 || len(r.Files) > 0 {
+	// Uploads are files the gateway has read itself (fixture sealing, X4); Files are paths in the
+	// execution sandbox that the orchestrator still reads. A call carries one of the two, never both.
+	if len(r.Form) > 0 || len(r.Files) > 0 || len(r.Uploads) > 0 {
 		if r.Method != http.MethodPost && r.Method != http.MethodPut && r.Method != http.MethodPatch {
 			return r, errors.New("form and files only with POST, PUT or PATCH")
 		}
 		if len(r.Body) > 0 && !bodyWithFile(r) {
 			return r, errors.New("either JSON body or form, not both")
 		}
-		if len(r.Files) > MaxFiles {
+		if len(r.Files) > MaxFiles || len(r.Uploads) > MaxFiles {
 			return r, fmt.Errorf("at most %d files per call", MaxFiles)
 		}
 		ftotal := 0
@@ -396,6 +400,17 @@ func normalize(r Request, agent bool) (Request, error) {
 			}
 			if !path.IsAbs(f.Path) || path.Clean(f.Path) != f.Path || strings.ContainsRune(f.Path, 0) || f.Path == "/" {
 				return r, fmt.Errorf("file path %q invalid: give it absolute and without . or ..", f.Path)
+			}
+		}
+		if len(r.Files) > 0 && len(r.Uploads) > 0 {
+			return r, errors.New("either files to read or files already read, not both")
+		}
+		for _, u := range r.Uploads {
+			if !fieldRe.MatchString(u.Field) {
+				return r, fmt.Errorf("upload field %q invalid", u.Field)
+			}
+			if strings.ContainsRune(u.Name, 0) || u.Name == "" {
+				return r, fmt.Errorf("upload field %q: file name missing or containing NUL", u.Field)
 			}
 		}
 	}
@@ -655,8 +670,10 @@ func (c *Client) send(ctx context.Context, chatID string, r Request, relogin boo
 	var body io.Reader
 	ctype := ""
 	switch {
-	case len(r.Form) > 0 || len(r.Files) > 0:
-		if len(r.Uploads) != len(r.Files) {
+	case len(r.Form) > 0 || len(r.Files) > 0 || len(r.Uploads) > 0:
+		// Uploads without Files are read by the gateway itself (X4); Files still waiting to be read
+		// must be handed over as Uploads before the call goes out.
+		if len(r.Files) > 0 && len(r.Uploads) != len(r.Files) {
 			return nil, errors.New("the call's files have not been read")
 		}
 		var buf bytes.Buffer
