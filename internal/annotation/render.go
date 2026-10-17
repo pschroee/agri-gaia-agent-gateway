@@ -19,6 +19,8 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+
+	"agw/internal/imagereview"
 )
 
 // The rendering of the images the image review looks at (V3d). The review sends pictures of the user's
@@ -130,32 +132,16 @@ func reviewLine(frame int, objs []AutoObject, places map[string]int) string {
 	return head + strings.Join(parts, "; ")
 }
 
-// Scale answers the size a picture is rendered at (V3d): its longest side is maxSide, whether that shrinks
-// the picture or blows it up. A picture of 28 px (MNIST) would say almost nothing to a model at its own
-// size, and one of 4000 px would cost without need: what is fixed is the size, not the direction.
-func Scale(width, height, maxSide int) (int, int) {
-	if width <= 0 || height <= 0 {
-		return 0, 0
-	}
-	if maxSide <= 0 {
-		return width, height
-	}
-	if width >= height {
-		return maxSide, max(1, height*maxSide/width)
-	}
-	return max(1, width*maxSide/height), maxSide
-}
-
 // RenderFrame renders the picture at the given size and draws the boxes of the automatic annotation on it
 // as frames in their colour (V3d). Without a box — a classification, whose class stands in the line of the
 // prompt instead — nothing is drawn: a frame around everything would say nothing. The answer is a JPEG.
 func RenderFrame(img image.Image, boxes []Box, maxSide int) ([]byte, error) {
 	b := img.Bounds()
-	w, h := Scale(b.Dx(), b.Dy(), maxSide)
+	w, h := imagereview.Scale(b.Dx(), b.Dy(), maxSide)
 	if w <= 0 || h <= 0 {
 		return nil, errors.New("the picture has no size")
 	}
-	dst := resizeNearest(img, w, h)
+	dst := imagereview.Resize(img, w, h)
 	// The boxes come in the coordinates of the original picture; the drawing goes by the ratio of the
 	// rendered picture to it.
 	fx, fy := float64(w)/float64(b.Dx()), float64(h)/float64(b.Dy())
@@ -167,21 +153,6 @@ func RenderFrame(img image.Image, boxes []Box, maxSide int) ([]byte, error) {
 		return nil, err
 	}
 	return buf.Bytes(), nil
-}
-
-// resizeNearest scales a picture to the given size by picking the nearest pixel of the original. The
-// standard library has no scaler of its own, and a smooth one would not read any better once the JPEG
-// has been over it.
-func resizeNearest(src image.Image, w, h int) *image.RGBA {
-	b := src.Bounds()
-	dst := image.NewRGBA(image.Rect(0, 0, w, h))
-	for y := 0; y < h; y++ {
-		sy := b.Min.Y + y*b.Dy()/h
-		for x := 0; x < w; x++ {
-			dst.Set(x, y, src.At(b.Min.X+x*b.Dx()/w, sy))
-		}
-	}
-	return dst
 }
 
 // drawBox draws one box as a frame of boxLineWidth pixels along its edges (V3d). The corners come in the

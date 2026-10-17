@@ -67,12 +67,18 @@ type Suggestion struct {
 
 // ImageReview is whether a model looked at the pictures behind the measured task (P14). A check of the
 // gateway that never sends images of its own (R0–R3) reports Done false with a reason; the pre-annotation
-// (V3d) fills Checked and FlaggedShare as well, and Done only from ten checked images on.
+// (V3d) fills Checked and FlaggedShare as well, and Done only from ten checked images on. The training
+// check (R4) fills Of, Checked and Flagged from the misclassified validation images it looked at.
 type ImageReview struct {
 	Done  bool   `json:"done"`
 	Model string `json:"model,omitempty"`
-	// Checked is how many images the review gave a verdict for (V3d); 0 when no model looked at any.
+	// Of is how many misclassified validation images the review should look at (R4); 0 otherwise.
+	Of int `json:"of,omitempty"`
+	// Checked is how many images the review gave a verdict for (V3d, R4); 0 when no model looked at any.
 	Checked int `json:"checked,omitempty"`
+	// Flagged is how many checked images look mislabelled (R4: the verdict label_wrong). It never changes
+	// the verdict of the check, only the hint and the suggestion fix_labels.
+	Flagged int `json:"flagged,omitempty"`
 	// FlaggedShare is the share of the checked images the review complained about (V3d): above 0.20 the
 	// verdict may not be usable, however good the figures are.
 	FlaggedShare float64 `json:"flagged_share,omitempty"`

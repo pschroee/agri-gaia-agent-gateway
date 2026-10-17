@@ -67,7 +67,7 @@ func TestStartAndReport(t *testing.T) {
 	ctx := context.Background()
 	c := testChat(t, st, "checks")
 	done := make(chan struct{})
-	id, err := svc.Start(ctx, c.ID, "training_model", "model:7", 0, false, func(context.Context) (Report, error) {
+	id, err := svc.Start(ctx, c.ID, "training_model", "model:7", 0, false, func(context.Context, string) (Report, error) {
 		<-done
 		rep := NewReport("training_model", SetValidation, 12)
 		rep.Verdict = Questionable
@@ -124,7 +124,7 @@ func TestStartLimit(t *testing.T) {
 	ctx := context.Background()
 	c := testChat(t, st, "limit")
 	release := make(chan struct{})
-	run := func(context.Context) (Report, error) {
+	run := func(context.Context, string) (Report, error) {
 		<-release
 		return NewReport("training_model", SetValidation, 5), nil
 	}
@@ -160,7 +160,7 @@ func TestStartLimit(t *testing.T) {
 	if n, err := st.CountAssessments(ctx, c.ID); err != nil || n != 1 {
 		t.Fatalf("counted after a failure: %d %v", n, err)
 	}
-	if _, err := svc.Start(ctx, c.ID, "training_model", "model:1", 0, false, func(context.Context) (Report, error) {
+	if _, err := svc.Start(ctx, c.ID, "training_model", "model:1", 0, false, func(context.Context, string) (Report, error) {
 		return NewReport("training_model", SetValidation, 5), nil
 	}); err != nil {
 		t.Fatalf("after a failed check: %v", err)
@@ -175,7 +175,7 @@ func TestStartOneAtATime(t *testing.T) {
 	c := testChat(t, st, "one at a time")
 	first := make(chan struct{})
 	started := make(chan struct{})
-	id1, err := svc.Start(ctx, c.ID, "training_model", "model:1", 0, false, func(context.Context) (Report, error) {
+	id1, err := svc.Start(ctx, c.ID, "training_model", "model:1", 0, false, func(context.Context, string) (Report, error) {
 		close(started)
 		<-first
 		return NewReport("training_model", SetValidation, 5), nil
@@ -184,7 +184,7 @@ func TestStartOneAtATime(t *testing.T) {
 		t.Fatal(err)
 	}
 	<-started
-	id2, err := svc.Start(ctx, c.ID, "training_model", "model:2", 0, false, func(context.Context) (Report, error) {
+	id2, err := svc.Start(ctx, c.ID, "training_model", "model:2", 0, false, func(context.Context, string) (Report, error) {
 		return NewReport("training_model", SetValidation, 5), nil
 	})
 	if err != nil {
@@ -216,7 +216,7 @@ func TestFinalOnceIndex(t *testing.T) {
 	svc := New(NewRunner(&fakeRuntime{answer: goodAnswer}, "img"), st, 12)
 	ctx := context.Background()
 	c := testChat(t, st, "final once")
-	id, err := svc.Start(ctx, c.ID, "training_model", "model:1", 7, true, func(context.Context) (Report, error) {
+	id, err := svc.Start(ctx, c.ID, "training_model", "model:1", 7, true, func(context.Context, string) (Report, error) {
 		return NewReport("training_model", SetHoldout, 25), nil
 	})
 	if err != nil {
@@ -226,13 +226,13 @@ func TestFinalOnceIndex(t *testing.T) {
 		row, err := st.Assessment(ctx, c.ID, id)
 		return err == nil && row.State == store.AssessFinished
 	})
-	if _, err := svc.Start(ctx, c.ID, "training_model", "model:2", 7, true, func(context.Context) (Report, error) {
+	if _, err := svc.Start(ctx, c.ID, "training_model", "model:2", 7, true, func(context.Context, string) (Report, error) {
 		return NewReport("training_model", SetHoldout, 25), nil
 	}); err == nil || !strings.Contains(err.Error(), "already run in this chat") {
 		t.Fatalf("a second final check: %v", err)
 	}
 	// Comparing rounds stays possible, also at the same dataset.
-	if _, err := svc.Start(ctx, c.ID, "training_model", "model:2", 7, false, func(context.Context) (Report, error) {
+	if _, err := svc.Start(ctx, c.ID, "training_model", "model:2", 7, false, func(context.Context, string) (Report, error) {
 		return NewReport("training_model", SetValidation, 8), nil
 	}); err != nil {
 		t.Fatalf("an interim check: %v", err)
@@ -268,7 +268,7 @@ func TestFailedKeepsFigures(t *testing.T) {
 	rep.Verdict = Usable
 	rep.Finish()
 	rep.Figures = ClassMetrics([]string{"a", "b"}, []string{"a", "a"}, nil)
-	id, err := svc.Start(ctx, c.ID, "own_model", "sha:abc", 4, true, func(context.Context) (Report, error) {
+	id, err := svc.Start(ctx, c.ID, "own_model", "sha:abc", 4, true, func(context.Context, string) (Report, error) {
 		return rep, errPartial
 	})
 	if err != nil {

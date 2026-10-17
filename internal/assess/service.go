@@ -42,6 +42,16 @@ type Service struct {
 	// split); the manager wires it like the notebook service's logger.
 	LogCall func(ctx context.Context, chatID, detail, result string)
 
+	// R4 — the image review of misclassified validation images: the catalog of the chat's model, the rule
+	// of #111 (AGW_VISION_DATASET_PATTERN) and where a model call of the review is written down as an
+	// auxiliary call of the chat. Cat nil: no review; the report says why (R0.9).
+	Cat           *config.Catalog
+	VisionPattern *regexp.Regexp
+	Aux           func(ctx context.Context, call store.AuxCall)
+	// ChatModel answers the model of a chat ("provider/model"); nil: the store is asked. Tests wire it to
+	// avoid a database.
+	ChatModel func(ctx context.Context, chatID string) string
+
 	// R3 — the deployment check: the simulated devices the gateway may send test requests to
 	// (AGW_EDGE_SIM_DEVICES, the operator's list) and the container runtime that reaches their
 	// containers. Either missing: the deployment tool answers that this setup cannot probe a
@@ -188,11 +198,26 @@ func progressOf(row store.Assessment) json.RawMessage {
 }
 
 // Progress is what a running check reports about itself (L4): the set it measures, how many images are
-// done and a short note.
+// done, a short note and — when the check has steps — their state for the check card (R4).
 type Progress struct {
 	Set    string `json:"set,omitempty"`
 	Images int    `json:"images,omitempty"`
 	Note   string `json:"note,omitempty"`
+	// ReviewModel is the model of the image review while it runs (R4, L12); empty: no image review runs.
+	ReviewModel string `json:"review_model,omitempty"`
+	// Steps are the steps of the check card, in order (R4, L12). Empty: the card shows an indeterminate
+	// bar ("statistics only").
+	Steps []ProgressStep `json:"steps,omitempty"`
+}
+
+// ProgressStep is one step of a running check (R4, L12). K and M are the counted part ("image 3 of 12");
+// Seconds is how long the step has run so far.
+type ProgressStep struct {
+	Name    string  `json:"name"`
+	Done    bool    `json:"done"`
+	Seconds float64 `json:"seconds,omitempty"`
+	K       int     `json:"k,omitempty"`
+	M       int     `json:"m,omitempty"`
 }
 
 // SetProgress records the progress of a running check (L4). A check that is already over keeps the
@@ -210,10 +235,11 @@ func (s *Service) SetProgress(ctx context.Context, checkID string, p Progress) e
 
 // Start runs one check in the background (R0.20). It lays the row down at once (queued) and answers its
 // id, so that the tool call does not wait for minutes; the check itself waits for the one slot, then
-// runs and writes its report. run gets the report or an error; with an error it may still answer a
+// runs and writes its report. run gets the id of its row, so that it can report progress while it runs
+// (R4: the steps of the check card), and the report or an error; with an error it may still answer a
 // partial report (Figures), which is stored next to the error (L5).
 func (s *Service) Start(ctx context.Context, chatID, kind, subject string, evalDataset int64, final bool,
-	run func(ctx context.Context) (Report, error)) (string, error) {
+	run func(ctx context.Context, checkID string) (Report, error)) (string, error) {
 	if !s.Configured() {
 		return "", errors.New("checks are not configured on this instance")
 	}
@@ -245,7 +271,7 @@ func (s *Service) Start(ctx context.Context, chatID, kind, subject string, evalD
 }
 
 // work is the background part of a check: wait for the one slot, run, record the end.
-func (s *Service) work(id, chatID string, run func(ctx context.Context) (Report, error)) {
+func (s *Service) work(id, chatID string, run func(ctx context.Context, checkID string) (Report, error)) {
 	ctx, cancel := context.WithTimeout(context.Background(), CheckTimeout)
 	defer cancel()
 	select {
@@ -258,7 +284,7 @@ func (s *Service) work(id, chatID string, run func(ctx context.Context) (Report,
 	if err := s.St.SetAssessmentState(ctx, chatID, id, store.AssessRunning); err != nil {
 		return
 	}
-	rep, err := run(ctx)
+	rep, err := run(ctx, id)
 	if err != nil {
 		s.fail(id, chatID, rep, err.Error())
 		return
