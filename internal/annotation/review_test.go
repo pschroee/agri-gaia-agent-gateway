@@ -246,7 +246,7 @@ func TestReviewSendsImages(t *testing.T) {
 		t.Fatal(err)
 	}
 	rv := NewReviewer(rt.svc.Cat)
-	res, err := rv.Review(context.Background(), "ds/flash", []ReviewImage{{Frame: 3, JPEG: big,
+	res, err := rv.Review(context.Background(), "ds/flash", []ReviewImage{{ID: 3, JPEG: big,
 		Line: `frame 3: the image is annotated with the class "0" (colour red)`}})
 	if err != nil {
 		t.Fatal(err)
@@ -283,7 +283,7 @@ func TestReviewSendsImages(t *testing.T) {
 	// Six images do not go out in one call: four do, the caller asks again for the rest.
 	six := make([]ReviewImage, 0, 6)
 	for f := 0; f < 6; f++ {
-		six = append(six, ReviewImage{Frame: f, JPEG: big, Line: fmt.Sprintf("frame %d: nothing is annotated on this image", f)})
+		six = append(six, ReviewImage{ID: f, JPEG: big, Line: fmt.Sprintf("frame %d: nothing is annotated on this image", f)})
 	}
 	if _, err := rv.Review(context.Background(), "ds/flash", six); err != nil {
 		t.Fatal(err)

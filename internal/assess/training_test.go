@@ -343,7 +343,7 @@ func TestAssessUnknownOrigin(t *testing.T) {
 	f.model(3, "mnist-effnet", "onnx", modelZip("onnx-bytes", lightningLog))
 	svc := New(NewRunner(&fakeRuntime{answer: goodAnswer}, "img"), st, 12)
 	svc.Plat = f.client()
-	rep, err := svc.runTrainingCheck(ctx, chat.ID, assessRequest{ModelID: 3})
+	rep, err := svc.runTrainingCheck(ctx, chat.ID, "", assessRequest{ModelID: 3})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -383,7 +383,7 @@ func TestAssessNoHeldOut(t *testing.T) {
 	}
 	svc := New(NewRunner(&fakeRuntime{answer: goodAnswer}, "img"), st, 12)
 	svc.Plat = f.client()
-	rep, err := svc.runTrainingCheck(ctx, chat.ID, assessRequest{ModelID: 3})
+	rep, err := svc.runTrainingCheck(ctx, chat.ID, "", assessRequest{ModelID: 3})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -427,7 +427,7 @@ func TestAssessTrainLogFallback(t *testing.T) {
 	}
 	svc := New(NewRunner(&fakeRuntime{answer: goodAnswer}, "img"), st, 12)
 	svc.Plat = f.client()
-	rep, err := svc.runTrainingCheck(ctx, chat.ID, assessRequest{ModelID: 3})
+	rep, err := svc.runTrainingCheck(ctx, chat.ID, "", assessRequest{ModelID: 3})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -479,7 +479,7 @@ func TestHeldOutExcludesDuplicates(t *testing.T) {
 	runtime := &fakeRuntime{answer: noPredictions}
 	svc := New(NewRunner(runtime, "img"), st, 12)
 	svc.Plat = f.client()
-	rep, err := svc.runTrainingCheck(ctx, chat.ID, assessRequest{ModelID: 3})
+	rep, err := svc.runTrainingCheck(ctx, chat.ID, "", assessRequest{ModelID: 3})
 	if err != nil {
 		t.Fatal(err)
 	}

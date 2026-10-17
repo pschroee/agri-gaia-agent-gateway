@@ -12,6 +12,8 @@ import (
 	"image/jpeg"
 	"math"
 	"testing"
+
+	"agw/internal/imagereview"
 )
 
 // flatPicture is a picture of one colour; the tests draw on it and read the pixels back.
@@ -70,7 +72,7 @@ func TestScale(t *testing.T) {
 		{1000, 500, 0, 1000, 500}, // no target: nothing is scaled
 		{0, 0, 512, 0, 0},
 	} {
-		gotW, gotH := Scale(c.w, c.h, c.max)
+		gotW, gotH := imagereview.Scale(c.w, c.h, c.max)
 		if gotW != c.wantW || gotH != c.wantH {
 			t.Errorf("Scale(%d, %d, %d) = %d, %d, want %d, %d", c.w, c.h, c.max, gotW, gotH, c.wantW, c.wantH)
 		}

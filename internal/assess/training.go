@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"agw/internal/platform"
 	"agw/internal/store"
@@ -205,6 +206,10 @@ type JudgeInput struct {
 	LogNaN         bool
 	// MissingClass: a class of the training data that does not occur in the measured set.
 	MissingClass string
+	// ImageReview: what stands in the report about the image review before the judgement runs (R4). The
+	// zero value: no review was decided yet, and judgeReport fills the default reason. The measurement
+	// overwrites it with the review's own result.
+	ImageReview ImageReview
 	// Previous: the last interim check of the same dataset in this chat (R1.12).
 	Previous *CheckComparison
 }
@@ -258,7 +263,7 @@ func judgeReport(in JudgeInput, figures ModelFigures) Report {
 		set = SetHoldout
 	}
 	rep := NewReport(in.Kind, set, measuredImages(in))
-	rep.ImageReview = ImageReview{Done: false, Reason: imageReviewReason(in.Final)}
+	rep.ImageReview = imageReviewOf(in)
 	rep.Figures = figures
 
 	// Not measured: there is nothing to judge on (R1.9).
@@ -469,6 +474,16 @@ func imageReviewReason(final bool) string {
 	return "image review is not available yet"
 }
 
+// imageReviewOf fills the image review of a report from the judgement input (R4): a review the caller
+// already decided on stands as it is; otherwise the default reason of this kind of check stands.
+func imageReviewOf(in JudgeInput) ImageReview {
+	review := in.ImageReview
+	if !review.Done && review.Reason == "" {
+		review.Reason = imageReviewReason(in.Final)
+	}
+	return review
+}
+
 // mappingNames renders the derived mapping with the output index as a string key, because JSON objects
 // have string keys: {"0": "cow", "1": "pig"}.
 func mappingNames(m map[int]string) map[string]string {
@@ -548,8 +563,8 @@ func (s *Service) assessModel(ctx context.Context, chatID string, req platform.R
 		evalID = s.defaultEvalDataset(ctx, chatID, body.ModelID)
 	}
 	subject := modelSubject(body.ModelID)
-	id, err := s.Start(ctx, chatID, KindTrainingModel, subject, evalID, body.Final, func(ctx context.Context) (Report, error) {
-		return s.runTrainingCheck(ctx, chatID, body)
+	id, err := s.Start(ctx, chatID, KindTrainingModel, subject, evalID, body.Final, func(ctx context.Context, checkID string) (Report, error) {
+		return s.runTrainingCheck(ctx, chatID, checkID, body)
 	})
 	if err != nil {
 		return errResult(err.Error()), nil
@@ -590,7 +605,8 @@ type checkImage struct {
 
 // runTrainingCheck is the background part of a training check (R1.8): the origin, the model, the log,
 // the datasets the model could have seen, the held-out images, one container run and the judgement.
-func (s *Service) runTrainingCheck(ctx context.Context, chatID string, body assessRequest) (Report, error) {
+func (s *Service) runTrainingCheck(ctx context.Context, chatID, checkID string, body assessRequest) (Report, error) {
+	started := time.Now()
 	in := JudgeInput{Kind: KindTrainingModel, Final: body.Final}
 	origin, err := s.St.ModelOriginOf(ctx, chatID, body.ModelID)
 	if errors.Is(err, store.ErrNotFound) {
@@ -630,6 +646,16 @@ func (s *Service) runTrainingCheck(ctx context.Context, chatID string, body asse
 	in.EvalDataset = DatasetRef{ID: evalID}
 	if info, err := s.datasetInfo(ctx, chatID, evalID); err == nil {
 		in.EvalDataset.Name = info.Name
+	}
+	// R4: for an interim check the rule of #111 decides whether the pictures may go to the model at all.
+	// When it says no, the report carries its reason (R0.9, L7); the final check keeps the held-out reason.
+	reviewModel := ""
+	if !body.Final {
+		reviewModel = s.chatModel(ctx, chatID)
+		if allowed, why := s.reviewAllowed(reviewModel, in.EvalDataset.Name); !allowed {
+			in.ImageReview = ImageReview{Reason: why}
+			reviewModel = ""
+		}
 	}
 	// The datasets the model could have seen (P2): every image in one of them is a seen image, whatever
 	// its file name is (P1).
@@ -684,6 +710,17 @@ func (s *Service) runTrainingCheck(ctx context.Context, chatID string, body asse
 	if body.Final {
 		measured = holdout
 	}
+	// R4/L12: while the check runs, the card shows the statistics step and — when the image review is
+	// allowed — the model and the review step. The final check has no review step (the hold-out images
+	// are never shown to a model).
+	if reviewModel != "" {
+		set := SetValidation
+		if body.Final {
+			set = SetHoldout
+		}
+		_ = s.SetProgress(ctx, checkID, Progress{Set: set, Images: len(measured), ReviewModel: reviewModel,
+			Steps: []ProgressStep{{Name: "statistics", K: len(measured), M: len(measured)}}})
+	}
 	sample := seenSample(seenImages)
 	out, err := s.Run.Run(ctx, Job{
 		Model:  modelBytes,
@@ -695,7 +732,7 @@ func (s *Service) runTrainingCheck(ctx context.Context, chatID string, body asse
 	if err != nil {
 		return Report{}, err
 	}
-	return s.judgeRun(ctx, chatID, in, out, sample, measured, seen, skipped), nil
+	return s.judgeRun(ctx, chatID, checkID, reviewModel, started, in, out, sample, measured, seen, skipped), nil
 }
 
 // notMeasuredReport builds a report for a reason that was decided before the measurement (not ONNX, no
@@ -705,7 +742,7 @@ func notMeasuredReport(in JudgeInput, reason string) Report {
 	rep := NewReport(in.Kind, SetValidation, 0)
 	rep.Verdict = NotMeasured
 	rep.Reasons = []string{reason}
-	rep.ImageReview = ImageReview{Done: false, Reason: imageReviewReason(in.Final)}
+	rep.ImageReview = imageReviewOf(in)
 	rep.Figures = figuresOf(in)
 	return rep
 }
@@ -721,13 +758,21 @@ func figuresOf(in JudgeInput) *TrainingFigures {
 }
 
 // judgeRun turns the raw predictions into the report: the class order from the seen sample, the figures
-// from the measured set, the baseline, the test and the judgement (R1.8, R1.9).
-func (s *Service) judgeRun(ctx context.Context, chatID string, in JudgeInput, out Output, sample, measured []checkImage,
-	seen map[string]Item, skipped int) Report {
-	s.measure(&in, out, sample, measured, seen)
+// from the measured set, the baseline, the test and the judgement (R1.8, R1.9). For an interim check the
+// image review of R4 runs after the measurement: it looks at misclassified validation images and adds a
+// hint and a suggestion, never a better verdict.
+func (s *Service) judgeRun(ctx context.Context, chatID, checkID, reviewModel string, started time.Time, in JudgeInput, out Output,
+	sample, measured []checkImage, seen map[string]Item, skipped int) Report {
+	byID := s.measure(&in, out, sample, measured, seen)
 	in.Previous = s.previousCheck(ctx, chatID, in.EvalDataset.ID, modelSubject(in.Model.ID))
 	rep := JudgeClassification(in)
 	rep.Note = reportNote(in, skipped, len(measured))
+	if reviewModel != "" && !in.Final && rep.Verdict != NotMeasured {
+		review := s.reviewMisclassified(ctx, checkID, chatID, reviewModel, started, in, measured, byID)
+		rep.ImageReview = review.ImageReview
+		rep.Hints = append(rep.Hints, review.Hints...)
+		rep.Suggestions = append(rep.Suggestions, review.Suggestions...)
+	}
 	return rep
 }
 

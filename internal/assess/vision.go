@@ -54,3 +54,20 @@ func ImageReviewAllowed(m config.Model, datasetName string, pattern *regexp.Rege
 	}
 	return false, reasonCloudDataset
 }
+
+// ReviewAllowed is ImageReviewAllowed as the callers ask it (V3d, R4): it answers the rule of #111 for the
+// chat's model, and it also says why there is no model to ask at all (no catalog, no model of the chat, a
+// model the catalog does not know). One place for the rule and its reasons.
+func ReviewAllowed(cat *config.Catalog, pattern *regexp.Regexp, chatModel, datasetName string) (bool, string) {
+	if cat == nil {
+		return false, "the model catalog is not set up"
+	}
+	if chatModel == "" {
+		return false, "this chat has no model that could look at the images"
+	}
+	_, model, found := cat.Lookup(chatModel)
+	if !found {
+		return false, "the model " + chatModel + " is not in the catalog; whether it reads images is unknown"
+	}
+	return ImageReviewAllowed(model, datasetName, pattern)
+}

@@ -240,6 +240,19 @@ func run() error {
 	// service cannot check anything: the capability "checks" says so and every check tool answers
 	// "not configured on this instance" (G1.13).
 	checks := assess.New(assess.NewRunner(rt, env.Image), st, env.AssessMaxPerChat)
+	// R4 — the image review of misclassified validation images runs with the chat's model and only where
+	// #111 allows it. The pattern is compiled once here, for the checks and for the pre-annotation; every
+	// review call is an auxiliary call of the chat, like a title (never an llm_call of the agent).
+	visionPattern, err := assess.VisionPattern(env.VisionDatasetPattern)
+	if err != nil {
+		return fmt.Errorf("AGW_VISION_DATASET_PATTERN: %w", err)
+	}
+	checks.Cat, checks.VisionPattern = cat, visionPattern
+	checks.Aux = func(ctx context.Context, call store.AuxCall) {
+		if err := st.RecordAuxCall(ctx, call); err != nil {
+			slog.Warn("image review call not recorded", "chat", call.ChatID, "error", err)
+		}
+	}
 	// R3 — the deployment check: the gateway may send test requests to the containers of the simulated
 	// edge devices of the operator's list (AGW_EDGE_SIM_DEVICES) and to no other container. Without the
 	// list the tool answers that this setup cannot probe a deployment (G1.13).
@@ -294,11 +307,7 @@ func run() error {
 		// V3d: the image review runs with the chat's model, and only where #111 allows it — a self hosted
 		// model may see every dataset, a cloud model only those whose name matches the pattern. Every call
 		// it makes is an auxiliary call of the chat, like a title (never an llm_call of the agent).
-		pattern, err := assess.VisionPattern(env.VisionDatasetPattern)
-		if err != nil {
-			return fmt.Errorf("AGW_VISION_DATASET_PATTERN: %w", err)
-		}
-		svc.Cat, svc.VisionPattern = cat, pattern
+		svc.Cat, svc.VisionPattern = cat, visionPattern
 		svc.Aux = func(ctx context.Context, call store.AuxCall) {
 			if err := st.RecordAuxCall(ctx, call); err != nil {
 				slog.Warn("image review call not recorded", "chat", call.ChatID, "error", err)

@@ -234,7 +234,7 @@ func (s *Service) assessOwnFile(ctx context.Context, chatID string, body assessR
 		evalID = s.defaultEvalDatasetForSeen(ctx, chatID, seen)
 	}
 	id, err := s.Start(ctx, chatID, KindOwnModel, FileSubject(file.SHA256), evalID, body.Final,
-		func(ctx context.Context) (Report, error) {
+		func(ctx context.Context, _ string) (Report, error) {
 			return s.runOwnModelCheck(ctx, chatID, body, file, seen)
 		})
 	if err != nil {
