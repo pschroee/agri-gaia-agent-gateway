@@ -147,3 +147,27 @@ func TestBuildVersion(t *testing.T) {
 		t.Fatal("empty version")
 	}
 }
+
+// #160: go test carries no VCS information, so the build arguments from the environment name the
+// version; the describe string wins, like internal/version.
+func TestBuildVersionFromEnvironment(t *testing.T) {
+	t.Setenv("AGW_DESCRIBE", "v1.2.3-4-gabc123")
+	t.Setenv("AGW_COMMIT", "abc123456789")
+	if got := versionFromEnvironment(); got != "v1.2.3-4-gabc123" {
+		t.Errorf("describe ignored: %q", got)
+	}
+	t.Setenv("AGW_DESCRIBE", "dev")
+	if got := versionFromEnvironment(); got != "abc123456789" {
+		t.Errorf("commit ignored: %q", got)
+	}
+}
+
+// Without any build information the report names the build as a test build, not just "unknown".
+func TestBuildVersionUnknownTestBuild(t *testing.T) {
+	t.Setenv("AGW_DESCRIBE", "")
+	t.Setenv("AGW_COMMIT", "")
+	t.Setenv("AGW_VERSION", "")
+	if got := versionFromEnvironment(); got != "unknown (test build)" {
+		t.Errorf("version: %q, want %q", got, "unknown (test build)")
+	}
+}

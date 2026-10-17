@@ -12,6 +12,8 @@ import (
 	"runtime/debug"
 	"strings"
 	"time"
+
+	"agw/internal/version"
 )
 
 // Report of the conformance check without a language model (outline 7.3.1, X10): per case the
@@ -233,37 +235,54 @@ func jsonPath(md string) string {
 	return md + ".json"
 }
 
-// BuildVersion names the gateway build the report came from: the module version if the build
-// carries one, otherwise the VCS revision, otherwise "unknown". The tests run from a source tree,
-// so they usually report the revision (with -dirty when the tree has changes).
+// BuildVersion names the gateway build the report came from: the VCS revision of the Go build if it
+// carries one (with -dirty when the tree had changes), else the version of the running process. The
+// tests run under go test, whose build info usually carries neither: there the build arguments of
+// #133 (AGW_DESCRIBE/AGW_COMMIT from the environment) name the build, else the process version
+// (ldflags, AGW_VERSION), else "unknown (test build)".
 func BuildVersion() string {
-	info, ok := debug.ReadBuildInfo()
-	if !ok {
-		return "unknown"
-	}
-	var rev string
-	modified := false
-	for _, s := range info.Settings {
-		switch s.Key {
-		case "vcs.revision":
-			rev = s.Value
-		case "vcs.modified":
-			modified = s.Value == "true"
+	if info, ok := debug.ReadBuildInfo(); ok {
+		var rev string
+		modified := false
+		for _, s := range info.Settings {
+			switch s.Key {
+			case "vcs.revision":
+				rev = s.Value
+			case "vcs.modified":
+				modified = s.Value == "true"
+			}
+		}
+		if rev != "" {
+			if len(rev) > 12 {
+				rev = rev[:12]
+			}
+			if modified {
+				rev += "-dirty"
+			}
+			return rev
+		}
+		if info.Main.Version != "" && info.Main.Version != "(devel)" {
+			return info.Main.Version
 		}
 	}
-	if rev != "" {
-		if len(rev) > 12 {
-			rev = rev[:12]
-		}
-		if modified {
-			rev += "-dirty"
-		}
-		return rev
+	return versionFromEnvironment()
+}
+
+// versionFromEnvironment is the fallback when the Go build carries no version. AGW_DESCRIBE comes
+// before AGW_COMMIT, like internal/version; then the version of the running process; a test binary
+// with none of them reports "unknown (test build)" instead of just "unknown", so that a report from
+// go test is recognisable as such.
+func versionFromEnvironment() string {
+	if v := os.Getenv("AGW_DESCRIBE"); v != "" && v != "dev" {
+		return v
 	}
-	if info.Main.Version != "" && info.Main.Version != "(devel)" {
-		return info.Main.Version
+	if v := os.Getenv("AGW_COMMIT"); v != "" && v != "dev" {
+		return v
 	}
-	return "unknown"
+	if v := version.String(); v != "devel" {
+		return v
+	}
+	return "unknown (test build)"
 }
 
 // writeFileAtomic writes data through a temporary file in the same directory and renames it, so
