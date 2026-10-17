@@ -55,6 +55,7 @@ Commands:
   approve <id> | reject <id>
   watch <chat-id> [--verbose]   follow events live (Ctrl+C ends)
   run [--model M] [--variant V] [--internet=…] [--auto-approve|--auto-reject] [--thinking] [--verbose] "<task>"
+  exp validate --plan <dir|file>  check the experiment material: plan, tasks and fixture manifests
 
 --verbose additionally shows every model call (LLM proxy) with costs and the interventions of the subagent limit.
 
@@ -178,6 +179,8 @@ func (a *app) dispatch(cmd string, args []string) error {
 		return a.cmdWatch(args)
 	case "run":
 		return a.cmdRun(args)
+	case "exp":
+		return a.cmdExp(args)
 	case "help", "-h", "--help":
 		io.WriteString(a.stdout, usageText)
 		return nil
