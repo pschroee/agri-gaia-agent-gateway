@@ -288,6 +288,11 @@ refer to this repository.
   (`pending_user`), which used to come out as "HTTP 0" with the message dropped.
 - **The platform reports no intermediate percent** for the tasks of this instance (`completion_percentage` 0.0 until the
   end), so a waiting job showing no percent is the platform's answer, not a gateway bug.
+- **A read that cannot succeed ends the job** (issue #140): kinds mark decided errors with `watch.Decided` (404 on the
+  object, an answer that is no longer the object); the loop closes such a job as `failed` with the reason and lets the
+  step and the plan follow (`finishWatched`), retry included. Everything else is transient: keep the job, count
+  `fail_reads`, back off (doubling to `watchMaxBackoff`, 15 min) and log at the first failure, at `watchFailReads` and
+  then every tenth. An unknown error from a kind of another plan counts as transient.
 - **The end of a step wakes a resting chat** (`ensureLive` + `deliverQueue`) only for an autonomous plan that was
   approved while the step ran, and the wake-up counts against the plan's `max_auto_turns` (`planWakeLimit`) instead of
   `AGW_AUTO_TURNS_MAX`/`AGW_BG_WAKES_PER_HOUR`; over the budget the plan is paused with `budget_turns` and the note stays

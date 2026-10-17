@@ -65,11 +65,17 @@ func pollTrainingRun(ctx context.Context, j Job, read Reader) (Progress, error) 
 		return Progress{}, err
 	}
 	if res.Status == "error" || res.HTTPStatus >= 400 {
-		return Progress{}, fmt.Errorf("training container %s not readable: %s", j.Ref, res.Message)
+		// A 404 means the training container was removed while it was observed (issue #140): the job ends,
+		// every other status may pass.
+		err := fmt.Errorf("training container %s not readable: %s", j.Ref, res.Message)
+		if DecidedByStatus(res.HTTPStatus) {
+			return Progress{}, Decided(err)
+		}
+		return Progress{}, err
 	}
 	var doc trainingDoc
 	if err := json.Unmarshal([]byte(res.Body), &doc); err != nil {
-		return Progress{}, fmt.Errorf("training container %s: %v", j.Ref, err)
+		return Progress{}, Decidedf("training container %s: %v", j.Ref, err)
 	}
 	tail, terr := trainingLogTail(ctx, read, j.Ref)
 	p := Progress{State: StateRunning, Message: oneLine(trainingMessage(doc)), LogTail: tail}

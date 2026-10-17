@@ -46,18 +46,32 @@ const (
 	watchParallel   = 4
 	// watchFailReads: so many reading calls in a row may fail before the job says so (D2.3).
 	watchFailReads = 5
+	// watchMaxBackoff caps the distance a job is retried at while its reads keep failing (issue #140): a
+	// platform that is away for minutes must not be asked every ten seconds, and the row must not fill
+	// the log with one warning per tick.
+	watchMaxBackoff = 15 * time.Minute
 )
 
-// watchInterval is the distance between two polls of a job of this age.
-func watchInterval(age time.Duration) time.Duration {
+// watchInterval is the distance between two polls of a job of this age. While reads fail it grows with
+// every failure in a row (doubling, capped at watchMaxBackoff): a transient outage costs less, and a job
+// whose task is gone still ends on its first decided error (see jobReadFailed).
+func watchInterval(age time.Duration, fails int) time.Duration {
+	var d time.Duration
 	switch {
 	case age < watchYoungUntil:
-		return watchIntervalA
+		d = watchIntervalA
 	case age < watchOldFrom:
-		return watchIntervalB
+		d = watchIntervalB
 	default:
-		return watchIntervalC
+		d = watchIntervalC
 	}
+	for i := 0; i < fails && d < watchMaxBackoff; i++ {
+		d *= 2
+	}
+	if d > watchMaxBackoff {
+		d = watchMaxBackoff
+	}
+	return d
 }
 
 // watchNow is the clock of the watcher; tests move it forward so that a job that was just polled is due
@@ -69,7 +83,7 @@ func watchDue(j store.WatchJob, now time.Time) bool {
 	if j.CheckedAt == nil || j.CheckedAt.IsZero() {
 		return true
 	}
-	return !now.Before(j.CheckedAt.Add(watchInterval(now.Sub(j.StartedAt))))
+	return !now.Before(j.CheckedAt.Add(watchInterval(now.Sub(j.StartedAt), j.FailReads)))
 }
 
 // watchKind returns the kind registered under the name of the job; a kind that this build does not know
@@ -191,33 +205,63 @@ func (m *Manager) pollJob(ctx context.Context, j store.WatchJob, kind watch.Kind
 	}
 }
 
-// jobReadFailed counts a reading call that failed and, from watchFailReads in a row on, writes the
-// reason onto the job without ending it (the platform may come back, D2.3).
+// jobReadFailed handles a reading call that failed. A **decided** error (the platform says the object is
+// gone, or its answer is no longer the object) ends the job at once with the reason (issue #140); a
+// **transient** one is counted, leaves the job running and is retried at a growing distance (D2.3). The log
+// gets one warning at the first failure, one at the point where the job says so, and then only every tenth
+// — one warning per tick for hours (278 in the run of 16.10.2026) filled it without any news.
 func (m *Manager) jobReadFailed(ctx context.Context, j store.WatchJob, err error) {
+	if watch.IsDecided(err) {
+		m.endUnreadableJob(ctx, j, err)
+		return
+	}
 	if uerr := m.st.SetJobProgress(ctx, j.ID, store.WatchProgress{ReadFail: true}); uerr != nil {
 		slog.Error("failed read not counted", "job", j.ID, "error", uerr)
 		return
 	}
 	fails := j.FailReads + 1
-	if fails < watchFailReads {
-		slog.Warn("job not readable", "job", j.ID, "kind", j.Kind, "fails", fails, "error", err)
-		return
-	}
 	msg := "platform not readable: " + oneLine(err.Error())
-	if uerr := m.st.SetJobMessage(ctx, j.ID, watch.ClipRunes(msg, watch.MaxMessage)); uerr != nil {
-		slog.Error("job message not stored", "job", j.ID, "error", uerr)
-	}
-	slog.Warn("job still not readable", "job", j.ID, "kind", j.Kind, "fails", fails, "error", err)
-	if j.PlanID != "" {
-		// The plan step keeps waiting; the user should see that the gateway cannot look right now.
-		m.publish(j.ChatID, Event{Kind: "attention", Data: map[string]string{"chat_id": j.ChatID, "job_id": j.ID, "message": msg}})
-		if fails == watchFailReads {
-			// Once per run of failures (A-E4, D4.3): the read loop calls this on every further attempt,
-			// and a notification for each one would be noise. The counter starts over after a readable
-			// answer, so a second outage reports again.
+	switch {
+	case fails == 1:
+		slog.Warn("job not readable", "job", j.ID, "kind", j.Kind, "fails", fails, "error", err)
+	case fails == watchFailReads:
+		if uerr := m.st.SetJobMessage(ctx, j.ID, watch.ClipRunes(msg, watch.MaxMessage)); uerr != nil {
+			slog.Error("job message not stored", "job", j.ID, "error", uerr)
+		}
+		slog.Warn("job still not readable", "job", j.ID, "kind", j.Kind, "fails", fails, "error", err)
+		if j.PlanID != "" {
+			// The plan step keeps waiting; the user should see that the gateway cannot look right now.
+			m.publish(j.ChatID, Event{Kind: "attention", Data: map[string]string{"chat_id": j.ChatID, "job_id": j.ID, "message": msg}})
+			// Once per run of failures (A-E4, D4.3): the read loop calls this on every further attempt, and
+			// a notification for each one would be noise. The counter starts over after a readable answer,
+			// so a second outage reports again.
 			m.publishPlanAttention(j.ChatID, j.PlanID, msg)
 		}
+	case fails > watchFailReads && fails%10 == 0:
+		if uerr := m.st.SetJobMessage(ctx, j.ID, watch.ClipRunes(msg, watch.MaxMessage)); uerr != nil {
+			slog.Error("job message not stored", "job", j.ID, "error", uerr)
+		}
+		slog.Warn("job still not readable", "job", j.ID, "kind", j.Kind, "fails", fails, "error", err,
+			"next_attempt_in", watchInterval(watchNow().Sub(j.StartedAt), fails).String())
 	}
+}
+
+// endUnreadableJob ends a job whose object is gone (issue #140). The row says "failed" with the reason, and
+// the step and the plan follow the path of a job that ended failed: the retry of A-E1 applies, otherwise
+// the plan fails, and the agent learns why through the note (D2.5). A paused plan stays paused — the user
+// decides about it, the step is failed either way.
+func (m *Manager) endUnreadableJob(ctx context.Context, j store.WatchJob, err error) {
+	msg := "the job is no longer readable: " + oneLine(err.Error())
+	if uerr := m.st.SetJobProgress(ctx, j.ID, store.WatchProgress{State: watch.StateFailed,
+		Message: watch.ClipRunes(msg, watch.MaxMessage)}); uerr != nil {
+		slog.Error("unreadable job not ended", "job", j.ID, "error", uerr)
+		return
+	}
+	slog.Warn("job ended: its object is gone", "job", j.ID, "kind", j.Kind, "ref", j.Ref, "plan", j.PlanID, "reason", err)
+	j.State, j.Message = watch.StateFailed, msg
+	p := watch.Progress{State: watch.StateFailed, Message: msg}
+	m.publishJob(ctx, j, p)
+	m.finishWatched(ctx, j, p)
 }
 
 // jobETA estimates the end of a job from the measurements the loop has: its start, what was recorded
