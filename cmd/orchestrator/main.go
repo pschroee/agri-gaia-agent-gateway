@@ -84,16 +84,41 @@ func run() error {
 		return err
 	}
 	var auth *oidc.Service
+	var expAcct *oidc.PasswordSource
+	var expAccount func(context.Context) (oidc.User, error)
 	if env.AuthMode == config.AuthOIDC {
 		if auth, err = oidc.New(oidc.Config{Issuer: env.OIDCIssuer, ClientID: env.OIDCClientID, ClientSecret: env.OIDCClientSecret, PublicURL: env.PublicURL}); err != nil {
 			return err
 		}
+		// X1.2: the experiment account logs in with a password grant, so its runs need no browser
+		// session and no 12-hour limit. The password stays in the secret file and in this process.
+		switch {
+		case env.ExpUser == "" && env.ExpPassword == "":
+		case env.ExpUser == "" || env.ExpPassword == "":
+			return errors.New("AGW_EXP_USER and AGW_EXP_PASSWORD belong together")
+		case env.OIDCIssuer == "":
+			return errors.New("AGW_EXP_USER needs AGW_OIDC_ISSUER (AGW_AUTH_MODE=oidc)")
+		default:
+			expAcct = oidc.NewPasswordSource(env.OIDCIssuer, env.ExpClientID, env.ExpUser, env.ExpPassword)
+			slog.Info("experiment account on", "user", env.ExpUser, "client", env.ExpClientID)
+		}
+		if env.ExpAPIToken != "" {
+			if len(env.ExpAPIToken) < 32 {
+				return errors.New("AGW_EXP_API_TOKEN must have at least 32 characters")
+			}
+			if expAcct == nil {
+				return errors.New("AGW_EXP_API_TOKEN needs AGW_EXP_USER and AGW_EXP_PASSWORD")
+			}
+		}
+		expAccount = expAccountFunc(expAcct, env.ExpUser)
 		// The UI is opened under the public address; its host is therefore allowed.
 		if h := env.PublicHost(); h != "" && !slices.Contains(env.AllowedHosts, h) {
 			env.AllowedHosts = append(env.AllowedHosts, h)
 		}
 		slog.Info("login through the platform (OIDC)", "issuer", env.OIDCIssuer, "client", env.OIDCClientID, "redirect", env.PublicURL+oidc.CallbackPath, "base", env.BasePath+"/", "embedding", env.FrameAncestors)
 	}
+	// Without oidc mode the fixture routes of #129 still work with AGW_EXP_API_TOKEN alone; the
+	// runner's chat routes need the account (sub) and stay off.
 	blocked, err := api.ParseSubnets(env.BlockedSubnets)
 	if err != nil {
 		return err
@@ -143,8 +168,9 @@ func run() error {
 		MaxStream: int64(env.NotebookDatasetMaxMB) << 20}
 	konto := env.PlatformUser
 	if auth != nil {
-		// Every chat acts for its owner: the owner's token from the session is the subject_token.
-		pcfg.Subject = ownerToken(st, auth)
+		// Every chat acts for its owner: the owner's token from the session is the subject_token; an
+		// experiment chat uses the password grant of the experiment account (X1.2).
+		pcfg.Subject = ownerToken(st, auth, expAcct)
 		pcfg.User, pcfg.Password, konto = "", "", "owner of the chat"
 		if env.PlatformAPIURL != "" && !env.PlatformExchange {
 			slog.Warn("login through the platform without token exchange: the user's token goes to the API unchanged (AGW_PLATFORM_TOKEN_EXCHANGE=true recommended)")
@@ -397,7 +423,8 @@ func run() error {
 		expFixtures = fixtures
 	}
 	apiSrv := &http.Server{Addr: env.HTTPAddr, Handler: (&api.Server{M: m, Pool: p, Cat: cat, Env: env, Web: webFS, Blocked: blocked, Token: env.APIToken, AllowedHosts: env.AllowedHosts,
-		OIDC: auth, FrameAncestors: env.FrameAncestors, Platform: plat, ExpFixtures: expFixtures, ExpAPIToken: env.ExpAPIToken}).Handler(),
+		OIDC: auth, FrameAncestors: env.FrameAncestors, Platform: plat, ExpFixtures: expFixtures,
+		ExpAPIToken: env.ExpAPIToken, ExpAccount: expAccount}).Handler(),
 		ReadHeaderTimeout: 10 * time.Second, MaxHeaderBytes: 64 << 10, BaseContext: func(net.Listener) context.Context { return baseCtx }}
 	proxy := llmproxy.New(cat)
 	proxy.SetRecorder(m) // assignment per slot, billing, hard limit of concurrent agents
@@ -454,7 +481,7 @@ func sessionKeeper(auth *oidc.Service) chat.SessionKeeper {
 
 // ownerToken returns, per chat, the access token of its owner from the owner's session at the orchestrator.
 // Without a live session the platform call fails with oidc.ErrNoSession (message to the agent).
-func ownerToken(st *store.Store, auth *oidc.Service) func(ctx context.Context, chatID string) (string, error) {
+func ownerToken(st *store.Store, auth *oidc.Service, exp *oidc.PasswordSource) func(ctx context.Context, chatID string) (string, error) {
 	return func(ctx context.Context, chatID string) (string, error) {
 		owner, err := st.ChatOwner(ctx, chatID)
 		if err != nil {
@@ -463,7 +490,27 @@ func ownerToken(st *store.Store, auth *oidc.Service) func(ctx context.Context, c
 		if owner == "" {
 			return "", errors.New("chat without owner (created in token mode); create a new chat for the platform")
 		}
+		// X1.2: chats of the experiment account carry its sub; its token comes from the password
+		// grant, not from a browser session.
+		if exp != nil && exp.Owns(ctx, owner) {
+			return exp.Token(ctx)
+		}
 		return auth.AccessToken(ctx, owner)
+	}
+}
+
+// expAccountFunc resolves the experiment account for the API key (X1.3): the sub becomes the owner
+// of the chats it creates, the user name is what AGW_EXPERIMENT_USERS checks.
+func expAccountFunc(exp *oidc.PasswordSource, user string) func(context.Context) (oidc.User, error) {
+	if exp == nil {
+		return nil
+	}
+	return func(ctx context.Context) (oidc.User, error) {
+		sub, err := exp.Subject(ctx)
+		if err != nil {
+			return oidc.User{}, err
+		}
+		return oidc.User{Sub: sub, Username: user}, nil
 	}
 }
 

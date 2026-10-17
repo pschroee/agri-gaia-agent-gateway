@@ -456,15 +456,12 @@ type Env struct {
 	Exp2User     string
 	Exp2Password string
 	// ExpAPIToken protects /api/exp/* (AGW_EXP_API_TOKEN). Empty: the fixture routes answer 503.
+	// X1.3: it also reaches POST /api/chats with an experiment profile and GET routes of experiment
+	// chats, and it needs at least 32 characters.
 	ExpAPIToken string
-
-	// X1: the experiment account and the key of the runner. ExpUser and ExpPassword are the password
-	// grant of the account (client "frontend"), ExpAPIToken is the bearer key that only reaches
-	// experiment chats and /api/exp/* (X1.3). Empty: no experiment runs.
-	ExpUser     string // AGW_EXP_USER
-	ExpPassword string // AGW_EXP_PASSWORD
-	ExpClientID string // AGW_EXP_CLIENT_ID, default frontend
-	ExpAPIToken string // AGW_EXP_API_TOKEN, at least 32 characters
+	// ExpClientID: the client of the experiment account's password grant (AGW_EXP_CLIENT_ID,
+	// default frontend, X1.2).
+	ExpClientID string
 
 	// V1 — pre-annotation with CVAT. The service is wired only when both URLs are set; without them
 	// the path /_agw/annotation answers "not configured" and the capability annotation says so.
@@ -684,12 +681,7 @@ func FromEnv() Env {
 		Exp2User:     str("AGW_EXP2_USER", ""),
 		Exp2Password: str("AGW_EXP2_PASSWORD", ""),
 		ExpAPIToken:  str("AGW_EXP_API_TOKEN", ""),
-
-		// X1: the experiment account and the key of the runner.
-		ExpUser:     str("AGW_EXP_USER", ""),
-		ExpPassword: str("AGW_EXP_PASSWORD", ""),
-		ExpClientID: str("AGW_EXP_CLIENT_ID", "frontend"),
-		ExpAPIToken: str("AGW_EXP_API_TOKEN", ""),
+		ExpClientID:  str("AGW_EXP_CLIENT_ID", "frontend"),
 
 		// V1 — pre-annotation with CVAT.
 		CVATAPIURL:          strings.TrimRight(str("AGW_CVAT_API_URL", ""), "/"),
