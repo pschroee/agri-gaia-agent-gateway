@@ -270,11 +270,16 @@ func TestUploadsWithoutSandboxFiles(t *testing.T) {
 	if res.HTTPStatus != http.StatusCreated || gotField != "modelfile" || gotName != "model.onnx" || string(gotData) != "model" {
 		t.Fatalf("upload: %+v field=%q name=%q data=%q", res, gotField, gotName, gotData)
 	}
-	// Files of the sandbox and uploads of the gateway are alternatives, never both.
-	if _, err := Normalize(Request{Method: "POST", Path: "/models",
+	// Files and Uploads together are what the orchestrator sends after it read the sandbox files;
+	// the short form counts the files once, not twice.
+	prepared := Request{Method: "POST", Path: "/models",
 		Files:   []File{{Field: "modelfile", Path: "/workspace/model.onnx"}},
-		Uploads: []Upload{{Field: "modelfile", Name: "model.onnx", Data: []byte("x")}}}); err == nil {
-		t.Fatal("files and uploads together accepted")
+		Uploads: []Upload{{Field: "modelfile", Name: "model.onnx", Data: []byte("x")}}}
+	if _, err := Normalize(prepared); err != nil {
+		t.Fatalf("prepared upload: %v", err)
+	}
+	if got := prepared.String(); !strings.Contains(got, "multipart, 1 file") || strings.Contains(got, "2 files") {
+		t.Fatalf("short form of a prepared upload: %q", got)
 	}
 }
 

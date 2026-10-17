@@ -153,9 +153,9 @@ func (r Request) String() string {
 	if q := r.encodedQuery(); q != "" {
 		s += "?" + q
 	}
-	// Uploads alone carries files the gateway read itself (X4); Files names the sandbox paths the
-	// orchestrator still has to read. A call carries one of the two, never both.
-	if n := len(r.Files) + len(r.Uploads); n > 0 {
+	// Files names the sandbox paths; Uploads carries the bytes once they are read. After preparation
+	// both are set, so the larger of the two counts the files, not their sum.
+	if n := max(len(r.Files), len(r.Uploads)); n > 0 {
 		s += " (multipart, " + fileCount(n) + ")"
 	} else if len(r.Form) > 0 {
 		s += " (multipart)"
@@ -482,9 +482,9 @@ func normalize(r Request, agent bool) (Request, error) {
 				return r, fmt.Errorf("file path %q invalid: give it absolute and without . or ..", f.Path)
 			}
 		}
-		if len(r.Files) > 0 && len(r.Uploads) > 0 {
-			return r, errors.New("either files to read or files already read, not both")
-		}
+		// Files and Uploads together are the normal state after the orchestrator read the sandbox
+		// files: Files names them, Uploads carries the bytes. Uploads alone are read by the gateway
+		// itself (X4). send checks that both lists have the same length when Files is set.
 		for _, u := range r.Uploads {
 			if !fieldRe.MatchString(u.Field) {
 				return r, fmt.Errorf("upload field %q invalid", u.Field)
