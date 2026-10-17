@@ -10,13 +10,51 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strconv"
 	"strings"
 )
 
-// Client runs one read call of a check (X1.9). The runner implements it over the gateway, which
-// executes the call with the experiment account's platform token; tests use a fake.
+// Client is what a check reads: one platform call (X1.9) or the last assistant text of the run's
+// chat (#147). The runner implements it over the gateway, which executes the platform call with
+// the experiment account's token and hands back the stored chat; tests use a fake.
 type Client interface {
 	Get(ctx context.Context, path string) (json.RawMessage, error)
+	LastAssistantText(ctx context.Context) (string, error)
+}
+
+// Message is one stored chat message as far as the answer check needs it: the role decides what
+// counts, the message carries pi's content items.
+type Message struct {
+	Role    string          `json:"role"`
+	Message json.RawMessage `json:"message"`
+}
+
+// AssistantText returns the text of the last assistant message of a chat: only its text items,
+// joined with a newline. Thinking, tool calls, tool results and system notes never count, and an
+// assistant message without a text item gives an empty answer.
+func AssistantText(messages []Message) string {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role != "assistant" {
+			continue
+		}
+		var m struct {
+			Content []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"content"`
+		}
+		if json.Unmarshal(messages[i].Message, &m) != nil {
+			return ""
+		}
+		var parts []string
+		for _, item := range m.Content {
+			if item.Type == "text" {
+				parts = append(parts, item.Text)
+			}
+		}
+		return strings.Join(parts, "\n")
+	}
+	return ""
 }
 
 // Object is an object a run created, taken from the chat's provenance register (resource and
@@ -31,7 +69,20 @@ type Object struct {
 type Evidence struct {
 	Conditions []ConditionEvidence `json:"conditions"`
 	Created    *CreatedEvidence    `json:"created,omitempty"`
+	Answer     *AnswerEvidence     `json:"answer,omitempty"`
 	Pass       bool                `json:"pass"`
+}
+
+// AnswerEvidence is the answer check and what it saw. Text is the last assistant text itself;
+// ContainsOK and CountOK say which part failed.
+type AnswerEvidence struct {
+	Text       string `json:"text"`
+	Contains   string `json:"contains,omitempty"`
+	Count      *int64 `json:"count,omitempty"`
+	ContainsOK bool   `json:"contains_ok"`
+	CountOK    bool   `json:"count_ok"`
+	Error      string `json:"error,omitempty"`
+	OK         bool   `json:"ok"`
 }
 
 // ConditionEvidence is one read call of the check.
@@ -67,8 +118,8 @@ type CreatedEvidence struct {
 func Evaluate(ctx context.Context, c Client, spec CheckSpec, created []Object) (bool, json.RawMessage, error) {
 	ev := Evidence{Pass: true}
 	var firstErr error
-	if len(spec.Conditions) == 0 {
-		return false, marshalEvidence(ev), errors.New("check without conditions")
+	if len(spec.Conditions) == 0 && spec.Created == nil && spec.Answer == nil {
+		return false, marshalEvidence(ev), errors.New("check without conditions, created or answer")
 	}
 	for _, cond := range spec.Conditions {
 		ce := ConditionEvidence{Method: cond.Request.Method, Path: cond.Request.Path}
@@ -115,8 +166,59 @@ func Evaluate(ctx context.Context, c Client, spec CheckSpec, created []Object) (
 		}
 		ev.Created = &CreatedEvidence{Resource: spec.Created.Resource, Want: spec.Created.Count, Got: got, OK: ok}
 	}
+	if spec.Answer != nil {
+		ae := AnswerEvidence{
+			Contains:   spec.Answer.Contains,
+			Count:      spec.Answer.Count,
+			ContainsOK: spec.Answer.Contains == "",
+			CountOK:    spec.Answer.Count == nil,
+		}
+		text, err := c.LastAssistantText(ctx)
+		if err != nil {
+			ae.Error = err.Error()
+			if firstErr == nil {
+				firstErr = fmt.Errorf("last assistant text: %w", err)
+			}
+		} else {
+			ae.Text = text
+			if spec.Answer.Contains != "" {
+				ae.ContainsOK = strings.Contains(text, spec.Answer.Contains)
+			}
+			if spec.Answer.Count != nil {
+				ae.CountOK = containsNumber(text, *spec.Answer.Count)
+			}
+		}
+		ae.OK = ae.Error == "" && ae.ContainsOK && ae.CountOK
+		if !ae.OK {
+			ev.Pass = false
+		}
+		ev.Answer = &ae
+	}
 	return ev.Pass, marshalEvidence(ev), firstErr
 }
+
+// containsNumber reports whether text contains want as a whole number: the decimal form with no
+// other digit directly before or after, so that 3 does not match 13.
+func containsNumber(text string, want int64) bool {
+	needle := strconv.FormatInt(want, 10)
+	for from := 0; from <= len(text)-len(needle); {
+		i := strings.Index(text[from:], needle)
+		if i < 0 {
+			return false
+		}
+		start := from + i
+		end := start + len(needle)
+		left := start == 0 || !isDigit(text[start-1])
+		right := end == len(text) || !isDigit(text[end])
+		if left && right {
+			return true
+		}
+		from = end
+	}
+	return false
+}
+
+func isDigit(b byte) bool { return b >= '0' && b <= '9' }
 
 func marshalEvidence(ev Evidence) json.RawMessage {
 	b, err := json.Marshal(ev)
