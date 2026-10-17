@@ -275,3 +275,20 @@ func TestValidateTraceField(t *testing.T) {
 		t.Fatal("TraceValue does not resolve the default")
 	}
 }
+
+// #156: model IDs are checked against the catalogue, case-sensitively; placeholders stay allowed.
+func TestValidateModels(t *testing.T) {
+	p := &Plan{Models: []Model{{ID: "deepseek/deepseek-flash", Role: RoleMain}, {ID: "<ZWEITMODELL>", Role: RoleSecond}}}
+	if ps := ValidateModels(p, []string{"deepseek/deepseek-flash"}); len(ps) != 0 {
+		t.Fatalf("valid model rejected: %v", ps)
+	}
+	p.Models[0].ID = "DeepSeek/DeepSeek-Flash"
+	ps := ValidateModels(p, []string{"deepseek/deepseek-flash", "deepseek/deepseek-v4-pro"})
+	if len(ps) != 1 || !strings.Contains(ps[0].String(), `unknown model "DeepSeek/DeepSeek-Flash"`) ||
+		!strings.Contains(ps[0].String(), "deepseek/deepseek-flash, deepseek/deepseek-v4-pro") {
+		t.Fatalf("case difference: %v", ps)
+	}
+	if ps := ValidateModels(p, nil); len(ps) != 0 {
+		t.Fatalf("without a catalogue: %v", ps)
+	}
+}

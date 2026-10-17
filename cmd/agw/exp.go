@@ -513,6 +513,25 @@ func (a *app) cmdExpValidate(args []string) error {
 	if err != nil {
 		return err
 	}
+	// #156: the model IDs must exist in the gateway's catalogue. The check needs the experiment
+	// key; without it validation stays offline and says so.
+	if os.Getenv("AGW_EXP_API_TOKEN") != "" {
+		c, err := a.expClient()
+		if err != nil {
+			return err
+		}
+		models, err := c.Models(a.ctx)
+		if err != nil {
+			return fmt.Errorf("model catalogue: %w", err)
+		}
+		known := make([]string, len(models))
+		for i, model := range models {
+			known[i] = model.ID
+		}
+		problems = append(problems, exp.ValidateModels(m.Plan, known)...)
+	} else {
+		fmt.Fprintln(a.stderr, "model IDs not checked: AGW_EXP_API_TOKEN is not set")
+	}
 	for _, problem := range problems {
 		fmt.Fprintln(a.stdout, problem.String())
 	}

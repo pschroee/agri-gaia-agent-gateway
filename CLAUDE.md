@@ -537,13 +537,19 @@ refer to this repository.
   The account's `sub` is read from its first token and cached; after a restart the first platform call of a product
   chat may wait for that one token request.
 - **`AGW_EXP_API_TOKEN` reaches only `POST /api/chats` with an `experiment` profile, `GET /api/chats/{id}…` of its
-  own chats and `/api/exp/*`** (`internal/api/api.go`, `expRouteAllowed`). It is a bearer key, never a cookie, and
+  own chats, `GET /api/models` (the model-ID check of #156) and `/api/exp/*`** (`internal/api/api.go`,
+  `expRouteAllowed`). It is a bearer key, never a cookie, and
   `/api/exp/*` additionally refuses a normal login. The runner must use `AGW_EXP_API_TOKEN`, never the gateway's
   `AGW_API_TOKEN` (`agw.expClient`): the container's full key must not leak into the runner.
 - **On the instance the runner needs `--url https://app.<base>/agent`** (#155, seen live on 17.10.2026): Compose
   sets `AGW_ALLOWED_HOSTS: app.${PROJECT_BASE_URL}`, so `docker exec … /agw exp run …` against
   `http://127.0.0.1:18480` answers `403 unknown host` — not a key problem. **No loopback exception**: the host
   check stays as it is; the error names the host and points at `AGW_ALLOWED_HOSTS`.
+- **The plan's model IDs are checked against the catalogue** (#156): `agw exp validate` does it when
+  `AGW_EXP_API_TOKEN` is set (otherwise it says on stderr that the check was skipped), and `agw exp run` does it
+  before the first chat. The comparison is case-sensitive; placeholders such as `<HAUPTMODELL>` stay allowed until
+  the model is fixed (XE5). A typo like `deepseek-flash` (instead of `deepseek/deepseek-flash`) used to fail
+  every cell of the plan.
 - **The runner is `/agw` in this image** (`Dockerfile`) and talks to the gateway over HTTP; its state is
   `exp_runs` (`internal/store/exp.go`, `exp_schema.sql`). The logical run is `run_key = <plan>/<cell>/<task>/<rep>`;
   a crashed attempt keeps `status: "started"` until the next start supersedes it as `key#2`, `key#3`, … — a row

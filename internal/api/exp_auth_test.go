@@ -64,6 +64,7 @@ func TestExpTokenRefusedOnOtherRoutes(t *testing.T) {
 	}{
 		{"POST", "/api/chats", http.StatusNoContent},
 		{"GET", "/api/chats/abc", http.StatusNoContent},
+		{"GET", "/api/models", http.StatusNoContent},
 		{"GET", "/api/chats/abc/events", http.StatusNoContent},
 		{"POST", "/api/exp/call", http.StatusNoContent},
 		{"GET", "/api/approvals", http.StatusForbidden},

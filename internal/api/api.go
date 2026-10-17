@@ -228,11 +228,13 @@ func (s *Server) expTokenOK(r *http.Request) bool {
 }
 
 // expRouteAllowed is the smallest surface of the key outside /api/exp/ (X1.3): create an experiment
-// chat and read the chats the account owns. The runner's own routes are under /api/exp/.
+// chat, read the chats the account owns and read the model catalogue (the runner and
+// `agw exp validate` check the plan's model IDs against it, #156). The runner's own routes are
+// under /api/exp/.
 func expRouteAllowed(r *http.Request) bool {
 	p := r.URL.Path
 	return (r.Method == http.MethodPost && p == "/api/chats") ||
-		(r.Method == http.MethodGet && strings.HasPrefix(p, "/api/chats/"))
+		(r.Method == http.MethodGet && (strings.HasPrefix(p, "/api/chats/") || p == "/api/models"))
 }
 
 // login sets the login cookie and redirects to the UI.

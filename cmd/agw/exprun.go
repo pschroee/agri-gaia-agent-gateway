@@ -38,6 +38,7 @@ const expStarted = "started"
 // expAPI is the part of the gateway the runner uses. The real implementation is *agwclient.Client;
 // the tests replace it.
 type expAPI interface {
+	Models(ctx context.Context) ([]agwclient.Model, error)
 	CreateChat(ctx context.Context, req agwclient.CreateChatRequest) (agwclient.Chat, error)
 	Chat(ctx context.Context, id string) (agwclient.ChatDetail, error)
 	Jobs(ctx context.Context, id string) ([]agwclient.WatchJob, error)
@@ -280,9 +281,38 @@ func expAttempt(id, key string) int {
 }
 
 func (r *expRunner) run(ctx context.Context) error {
+	// #156: a mistyped model ID fails here, before the first chat is created.
+	if err := r.checkModels(ctx); err != nil {
+		return err
+	}
 	fmt.Fprintf(r.out, "%s: %d runs (k=%d), seed %d, material %s\n", r.planName, len(r.order), r.k, r.seed, shortID(r.planSHA))
 	counts := map[string]int{}
 	return r.runAll(ctx, counts)
+}
+
+// checkModels compares the plan's model IDs with the gateway's catalogue. Without an API (dry run)
+// there is nothing to compare against.
+func (r *expRunner) checkModels(ctx context.Context) error {
+	if r.api == nil {
+		return nil
+	}
+	models, err := r.api.Models(ctx)
+	if err != nil {
+		return fmt.Errorf("model catalogue: %w", err)
+	}
+	known := make([]string, len(models))
+	for i, model := range models {
+		known[i] = model.ID
+	}
+	problems := exp.ValidateModels(r.plan, known)
+	if len(problems) == 0 {
+		return nil
+	}
+	var b strings.Builder
+	for _, problem := range problems {
+		fmt.Fprintln(&b, problem.String())
+	}
+	return errors.New(strings.TrimRight(b.String(), "\n"))
 }
 
 // newExpRand seeds the order of one task and repetition (X1.6): the plan's seed and a hash of

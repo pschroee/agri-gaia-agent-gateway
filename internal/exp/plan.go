@@ -16,6 +16,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -64,6 +65,33 @@ type Cell struct {
 	Model      string `yaml:"model"` // role of the model, main or second
 	// Trace: syscall trace of this cell (X7.6/#152): on | off. Empty means on.
 	Trace string `yaml:"trace,omitempty"`
+}
+
+// ValidateModels checks the plan's model IDs against the gateway catalogue (#156). The comparison
+// is case-sensitive, as the catalogue is; a placeholder such as <HAUPTMODELL> stays allowed until
+// the model is fixed (XE5). An empty catalogue means "not checked" and yields no findings.
+func ValidateModels(p *Plan, known []string) []Problem {
+	if p == nil || len(known) == 0 {
+		return nil
+	}
+	have := make(map[string]bool, len(known))
+	for _, id := range known {
+		have[id] = true
+	}
+	sorted := append([]string(nil), known...)
+	sort.Strings(sorted)
+	var problems []Problem
+	for i, m := range p.Models {
+		id := strings.TrimSpace(m.ID)
+		if id == "" || (strings.HasPrefix(id, "<") && strings.HasSuffix(id, ">")) {
+			continue
+		}
+		if !have[id] {
+			problems = append(problems, Problem{Where: fmt.Sprintf("model %d", i+1),
+				Text: fmt.Sprintf("unknown model %q; known are %s", id, strings.Join(sorted, ", "))})
+		}
+	}
+	return problems
 }
 
 // TraceValue resolves the plan's trace field: only "off" disables it, everything else (including

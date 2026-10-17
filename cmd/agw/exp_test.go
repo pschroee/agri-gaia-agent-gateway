@@ -423,6 +423,7 @@ type fakeExpAPI struct {
 	aborted    []string
 	chatPolled map[string]int
 	seq        int
+	models     []agwclient.Model
 	createErr  error
 	detailHook func(id string, det agwclient.ChatDetail) agwclient.ChatDetail
 	jobsScript func(chat string, poll int) []agwclient.WatchJob
@@ -434,7 +435,15 @@ func newFakeExpAPI() *fakeExpAPI {
 		jobs: map[string][]agwclient.WatchJob{}, objects: map[string][]agwclient.ExpObject{},
 		answers:    map[string]string{"/datasets": `{"datasets":[{"id":"1","name":"mnist"}]}`},
 		chatPolled: map[string]int{},
+		// The catalogue the runner validates the plan against (#156); writeRunnerMaterial uses
+		// deepseek/flash, placeholder IDs are skipped.
+		models: []agwclient.Model{{ID: "deepseek/flash"}, {ID: "deepseek/deepseek-flash"}},
 	}
+}
+
+// Models returns the fake catalogue (#156).
+func (f *fakeExpAPI) Models(_ context.Context) ([]agwclient.Model, error) {
+	return f.models, nil
 }
 
 func (f *fakeExpAPI) CreateChat(_ context.Context, req agwclient.CreateChatRequest) (agwclient.Chat, error) {
@@ -790,5 +799,70 @@ func TestRunSendsTracePerCell(t *testing.T) {
 	}
 	if len(seen) != 2 || seen["cli-none-default-main"] != "on" || seen["cli-none-off-main"] != "off" {
 		t.Fatalf("trace settings: %v (creates %d)", seen, len(api.creates))
+	}
+}
+
+// #156: validate checks the plan's model IDs against the gateway catalogue.
+func TestValidateChecksModelIDs(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/models" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = io.WriteString(w, `[{"id":"deepseek/deepseek-flash"}]`)
+	}))
+	defer srv.Close()
+	t.Setenv("AGW_URL", srv.URL)
+	t.Setenv("AGW_EXP_API_TOKEN", "exp-key")
+	dir := writeExpMaterial(t, "pilot", 1)
+	path := filepath.Join(dir, "plan.yaml")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := strings.Replace(string(raw), "<HAUPTMODELL>", "deepseek-flash", 1)
+	if err := os.WriteFile(path, []byte(plan), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run := func() (int, string, string) {
+		var out, errw strings.Builder
+		code := realMain(context.Background(), []string{"exp", "validate", "--plan", dir}, strings.NewReader(""), &out, &errw, os.Getenv)
+		return code, out.String(), errw.String()
+	}
+	code, out, errw := run()
+	if code != 1 || !strings.Contains(out, `unknown model "deepseek-flash"`) || !strings.Contains(out, "deepseek/deepseek-flash") {
+		t.Fatalf("unknown model: exit %d, out %q, err %q", code, out, errw)
+	}
+	if err := os.WriteFile(path, []byte(strings.Replace(plan, "deepseek-flash", "deepseek/deepseek-flash", 1)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if code, out, errw := run(); code != 0 || !strings.Contains(out, "no problems") {
+		t.Fatalf("valid model: exit %d, out %q, err %q", code, out, errw)
+	}
+}
+
+// #156: the runner refuses an unknown model before it creates a chat.
+func TestRunRejectsUnknownModel(t *testing.T) {
+	dir := writeExpMaterial(t, "pilot", 1)
+	path := filepath.Join(dir, "plan.yaml")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(strings.Replace(string(raw), "<HAUPTMODELL>", "deepseek-flash", 1)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	api := newFakeExpAPI()
+	var out, errw strings.Builder
+	r, err := newExpRunner(api, expRunOptions{PlanPath: dir, Poll: time.Millisecond, StartGrace: 20 * time.Millisecond, Heartbeat: time.Hour}, &out, &errw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = r.run(context.Background())
+	if err == nil || !strings.Contains(err.Error(), `unknown model "deepseek-flash"`) || !strings.Contains(err.Error(), "deepseek/deepseek-flash") {
+		t.Fatalf("run: %v", err)
+	}
+	if len(api.starts) != 0 || len(api.creates) != 0 {
+		t.Fatalf("the run started anyway: %d starts, %d chats", len(api.starts), len(api.creates))
 	}
 }
