@@ -609,6 +609,9 @@ func (c *Client) Do(ctx context.Context, chatID string, r Request) (Result, erro
 	}
 	if json.Valid(raw) {
 		raw = redact(raw)
+	} else {
+		// Free text (a platform error page, a plain message) carries tokens as well (issue #141).
+		raw = []byte(RedactText(string(raw)))
 	}
 	if len(raw) > c.cfg.MaxResult && !r.Full {
 		raw, res.Truncated = raw[:c.cfg.MaxResult], true
@@ -915,7 +918,23 @@ var secretKeys = []string{"password", "passwd", "secret", "token", "api_key", "a
 // step details of the chat, which the user reads (issue L6/#123).
 const redacted = "[redacted]"
 
-// redact replaces the values of secret keys in a JSON response and returns it compacted.
+// jwtPattern matches a JSON Web Token in arbitrary text (issue #141): three base64url parts joined by dots,
+// the first starting with "eyJ" — the base64url of `{"`, with which every JOSE header begins. A sentence
+// with dots, a version number or a file name does not match.
+var jwtPattern = regexp.MustCompile(`\beyJ[A-Za-z0-9_-]+={0,2}\.[A-Za-z0-9_-]+={0,2}\.[A-Za-z0-9_-]+={0,2}`)
+
+// RedactText replaces JSON Web Tokens in arbitrary text. Platform error messages carry them in free text
+// (a MinIO AssumeRole failure showed a whole token, issue #141), where redacting by key cannot reach. The
+// gateway also applies it to texts stored before this rule existed.
+func RedactText(s string) string {
+	if !strings.Contains(s, "eyJ") {
+		return s
+	}
+	return jwtPattern.ReplaceAllString(s, redacted)
+}
+
+// redact replaces the values of secret keys and tokens in the free text of a JSON response and returns it
+// compacted.
 func redact(raw []byte) []byte {
 	d := json.NewDecoder(bytes.NewReader(raw))
 	d.UseNumber()
@@ -947,6 +966,9 @@ func redactValue(v any) any {
 		for i := range x {
 			x[i] = redactValue(x[i])
 		}
+	case string:
+		// A token may stand in any string, not only under a key that names a secret (issue #141).
+		return RedactText(x)
 	}
 	return v
 }

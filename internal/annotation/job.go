@@ -126,7 +126,7 @@ func ProgressOf(row store.AnnotationJob) watch.Progress {
 	case store.AnnotationJobFailed:
 		p.State, p.Message = watch.StateFailed, "failed"
 		if row.Error != "" {
-			p.Message = "failed: " + oneLine(row.Error, 150)
+			p.Message = "failed: " + oneLine(platform.RedactText(row.Error), 150)
 		}
 	}
 	return p
@@ -394,8 +394,13 @@ func (s *Service) jobStatus(ctx context.Context, chatID, id string, query map[st
 		return platform.Result{}, err
 	}
 	result, page, pages := pageOf(row, pageWanted(query))
+	// The job's answer and its error are gateway data, but they may quote a platform answer stored before
+	// the gateway redacted one (issue #141).
+	if result != nil {
+		result = json.RawMessage(platform.RedactText(string(result)))
+	}
 	a := jobAnswer{stepList: stepList{Steps: []string{}}, JobID: row.ID, Kind: row.Kind, State: row.State,
-		Done: row.Done, Total: row.Total, Result: result, Error: row.Error, Page: page, Pages: pages}
+		Done: row.Done, Total: row.Total, Result: result, Error: platform.RedactText(row.Error), Page: page, Pages: pages}
 	if row.State == store.AnnotationJobFinished {
 		a.Note = jobFinishedNote(row.Kind)
 	}

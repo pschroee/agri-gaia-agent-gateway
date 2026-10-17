@@ -609,7 +609,7 @@ func (h *handler) runPlatform(ctx context.Context, chat, via string, req platfor
 	if eff := delegation.Classify(req).Effect; eff.Valid() {
 		ctx = store.WithEffect(ctx, string(eff))
 	}
-	h.logCall(ctx, chat, via, "platform", req.String(), result)
+	h.logCall(ctx, chat, via, "platform", req.String(), platform.RedactText(result))
 	return res, err
 }
 

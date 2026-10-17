@@ -11,8 +11,20 @@ import (
 	"strconv"
 
 	"agw/internal/chat"
+	"agw/internal/platform"
 	"agw/internal/store"
 )
+
+// redactPlanText keeps tokens in the progress texts of a plan's steps away from the browser (issue #141):
+// the messages come from the platform, and rows stored before the gateway redacted them still carry one.
+func redactPlanText(p store.Plan) store.Plan {
+	for i := range p.Steps {
+		p.Steps[i].ProgressMsg = platform.RedactText(p.Steps[i].ProgressMsg)
+		p.Steps[i].LogTail = platform.RedactText(p.Steps[i].LogTail)
+		p.Steps[i].Result = platform.RedactText(p.Steps[i].Result)
+	}
+	return p
+}
 
 // plans lists the plans of a chat, oldest first (issue #70). Foreign and unknown chats are 404.
 func (s *Server) plans(w http.ResponseWriter, r *http.Request) {
@@ -25,6 +37,9 @@ func (s *Server) plans(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		fail(w, err)
 		return
+	}
+	for i := range ps {
+		ps[i] = redactPlanText(ps[i])
 	}
 	writeJSON(w, 200, ps)
 }
@@ -69,7 +84,7 @@ func (s *Server) stopPlanStep(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	writeJSON(w, 200, p)
+	writeJSON(w, 200, redactPlanText(p))
 }
 
 // stopJob stops a single observed job of a chat (A-E2, D2.9): the user's action for the cards outside
@@ -109,6 +124,6 @@ func (s *Server) planControl(f func(ctx context.Context, chatID, planID string) 
 			fail(w, err)
 			return
 		}
-		writeJSON(w, 200, p)
+		writeJSON(w, 200, redactPlanText(p))
 	}
 }

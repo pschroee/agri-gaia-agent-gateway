@@ -51,7 +51,7 @@ func (c *Client) Stream(ctx context.Context, chatID string, r Request) (body io.
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		defer resp.Body.Close()
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<10))
-		return nil, 0, fmt.Errorf("%s: the platform answers %d: %s", r.String(), resp.StatusCode, strings.TrimSpace(string(msg)))
+		return nil, 0, fmt.Errorf("%s: the platform answers %d: %s", r.String(), resp.StatusCode, RedactText(strings.TrimSpace(string(msg))))
 	}
 	limit := c.cfg.MaxStream
 	if limit <= 0 {

@@ -939,7 +939,7 @@ func (s *Service) runStatus(ctx context.Context, chatID, id string) (platform.Re
 
 // rowAnswer is the answer for a run that is over: the gateway's own row, without asking CVAT again.
 func rowAnswer(steps stepList, row store.AnnotationRun, note string) runStatusAnswer {
-	a := runStatusAnswer{stepList: steps, RunID: row.ID, State: row.State, Error: row.Error, Note: note}
+	a := runStatusAnswer{stepList: steps, RunID: row.ID, State: row.State, Error: platform.RedactText(row.Error), Note: note}
 	if row.State == store.AnnotationFinished {
 		a.Progress = 100
 	}

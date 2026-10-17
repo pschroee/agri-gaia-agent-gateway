@@ -8,6 +8,7 @@ import (
 	"context"
 
 	"agw/internal/plan"
+	"agw/internal/platform"
 	"agw/internal/store"
 )
 
@@ -135,5 +136,6 @@ func (m *Manager) sendPlanAlert(p store.Plan, a PlanAlert) {
 	a.ChatID = p.ChatID
 	a.PlanID = p.ID
 	a.Title = p.Title
+	a.Reason = platform.RedactText(a.Reason)
 	m.publish(p.ChatID, Event{Kind: "plan_alert", Data: a})
 }
