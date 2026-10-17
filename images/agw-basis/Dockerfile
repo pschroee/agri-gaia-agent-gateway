@@ -76,6 +76,9 @@ ENV PI_SUBAGENTS_OUTPUT_INLINE=1
 # pi reads skills at startup (list in the system prompt); the agent reads the content with read,
 # i.e. in the execution sandbox, which has the same files.
 COPY images/agw-basis/skills /opt/agw/skills
+# platform-exp is generated from platform here (X0.10): the experiment slots must not read which
+# protection level they run under.
+RUN node /opt/agw/skills/build-platform-exp.mjs && rm /opt/agw/skills/build-platform-exp.mjs
 COPY --from=build /out/agw-exec /usr/local/bin/agw-exec
 # /workspace is an empty, read-only directory here: pi's working directory (the
 # system prompt names it), but without the agent's files.
@@ -195,6 +198,8 @@ COPY --from=build /out/agw-exec /usr/local/bin/agw-exec
 RUN ln -s agw-artifact /usr/local/bin/agw-internet \
  && ln -s agw-artifact /usr/local/bin/agw-platform
 COPY images/agw-basis/skills /opt/agw/skills
+# Same generated skill as in the pi image (the agent reads it here).
+RUN node /opt/agw/skills/build-platform-exp.mjs && rm /opt/agw/skills/build-platform-exp.mjs
 # The check script of the result checks (R0): the gateway runs it in a sealed container of this image,
 # with the model and the inputs on stdin. It is part of the image, so the agent can read it but not
 # change it; the gateway alone decides what goes in.
