@@ -383,8 +383,10 @@ type ExpRun struct {
 	EndReason      string          `json:"end_reason,omitempty"`
 	Pass           *bool           `json:"pass,omitempty"`
 	CheckEvidence  json.RawMessage `json:"check_evidence,omitempty"`
-	StartedAt      string          `json:"started_at"`
-	EndedAt        string          `json:"ended_at,omitempty"`
+	// StartedAt and EndedAt stay out of the start request: the server sets them. An empty string
+	// would fail the time.Time decoder ("invalid JSON").
+	StartedAt string `json:"started_at,omitempty"`
+	EndedAt   string `json:"ended_at,omitempty"`
 	SupersededBy   string          `json:"superseded_by,omitempty"`
 	GatewayVersion string          `json:"gateway_version,omitempty"`
 	Model          string          `json:"model,omitempty"`
