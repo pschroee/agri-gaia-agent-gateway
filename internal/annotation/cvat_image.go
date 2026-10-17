@@ -221,25 +221,64 @@ type NewAnnotations struct {
 // exactly the objects whose id stands in one of the three lists, whatever their source
 // (apps/engine/views.py:1060-1068, apps/dataset_manager/task.py:327-356). What stands in the lists is
 // the gateway's own choice, never the agent's (see rollback.go).
+//
+// CVAT 2.4.2 validates the body against LabeledDataSerializer before it deletes
+// (apps/engine/serializers.py:1351), and every element of the lists is an AnnotationSerializer: frame and
+// label_id are required there (serializers.py:1223-1230) — a bare id answers
+// {"frame":["This field is required."],"label_id":[...]} with HTTP 400. A shape also names its type
+// (ChoiceField of ShapeSerializer), a track the list of its shapes (TrackedShapeSerializer, may be
+// empty). The delete itself filters by id alone (dataset_manager/task.py:333-341), so the other fields
+// only satisfy the serializer.
 type AnnotationsDelete struct {
-	Tags   []int64 `json:"tags"`
-	Shapes []int64 `json:"shapes"`
-	Tracks []int64 `json:"tracks"`
+	Version int           `json:"version"`
+	Tags    []DeleteTag   `json:"tags"`
+	Shapes  []DeleteShape `json:"shapes"`
+	Tracks  []DeleteTrack `json:"tracks"`
+}
+
+// DeleteTag is one classification annotation of a delete call.
+type DeleteTag struct {
+	ID      int64 `json:"id"`
+	Frame   int   `json:"frame"`
+	LabelID int64 `json:"label_id"`
+}
+
+// DeleteShape is one box annotation of a delete call; Type is one of CVAT's shape types.
+type DeleteShape struct {
+	ID      int64  `json:"id"`
+	Frame   int    `json:"frame"`
+	LabelID int64  `json:"label_id"`
+	Type    string `json:"type"`
+}
+
+// DeleteTrack is one track of a delete call; CVAT requires the list of its shapes, an empty one is taken.
+type DeleteTrack struct {
+	ID      int64 `json:"id"`
+	Frame   int   `json:"frame"`
+	LabelID int64 `json:"label_id"`
+	Shapes  []any `json:"shapes"`
+}
+
+// Normalized fills the three lists of a delete body, so that a call without objects still names them: the
+// serializer of CVAT takes empty lists (serializers.py:1351), and a body with none of the three would say
+// nothing at all.
+func (a AnnotationsDelete) Normalized() AnnotationsDelete {
+	if a.Tags == nil {
+		a.Tags = []DeleteTag{}
+	}
+	if a.Shapes == nil {
+		a.Shapes = []DeleteShape{}
+	}
+	if a.Tracks == nil {
+		a.Tracks = []DeleteTrack{}
+	}
+	return a
 }
 
 // DeleteAnnotations removes exactly the named annotations of a task (V3b). CVAT itself does not look at
 // the source of an object, so the caller passes only what the gateway wrote and found unchanged.
 func (c *CVAT) DeleteAnnotations(ctx context.Context, s session, taskID int64, a AnnotationsDelete) error {
-	if a.Tags == nil {
-		a.Tags = []int64{}
-	}
-	if a.Shapes == nil {
-		a.Shapes = []int64{}
-	}
-	if a.Tracks == nil {
-		a.Tracks = []int64{}
-	}
-	body, err := json.Marshal(a)
+	body, err := json.Marshal(a.Normalized())
 	if err != nil {
 		return err
 	}
