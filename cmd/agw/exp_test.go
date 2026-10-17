@@ -427,6 +427,10 @@ type fakeExpAPI struct {
 	createErr  error
 	detailHook func(id string, det agwclient.ChatDetail) agwclient.ChatDetail
 	jobsScript func(chat string, poll int) []agwclient.WatchJob
+	// X8.5: the environment the runner checks a main plan against; a chat created by this fake gets a
+	// slot with the image IDs of envSlot.
+	env     agwclient.ExpEnvironment
+	envSlot agwclient.ExpEnvironmentSlot
 }
 
 func newFakeExpAPI() *fakeExpAPI {
@@ -477,6 +481,30 @@ func (f *fakeExpAPI) Jobs(_ context.Context, id string) ([]agwclient.WatchJob, e
 		return f.jobsScript(id, f.chatPolled[id]), nil
 	}
 	return f.jobs[id], nil
+}
+
+func (f *fakeExpAPI) ExpEnvironment(context.Context) (agwclient.ExpEnvironment, error) {
+	out := f.env
+	out.Slots = append([]agwclient.ExpEnvironmentSlot(nil), f.env.Slots...)
+	// The slot of a chat created by this fake becomes visible after CreateChat, as in the gateway.
+	for id := range f.chats {
+		slot := f.envSlot
+		if slot.ID == "" {
+			break
+		}
+		slot.ChatID = id
+		slot.State = "assigned"
+		seen := false
+		for i := range out.Slots {
+			if out.Slots[i].ChatID == id {
+				seen = true
+			}
+		}
+		if !seen {
+			out.Slots = append(out.Slots, slot)
+		}
+	}
+	return out, nil
 }
 
 func (f *fakeExpAPI) ExpStartRun(_ context.Context, run agwclient.ExpRun) error {
