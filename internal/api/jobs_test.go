@@ -224,6 +224,35 @@ func TestStopJobNotStoppable(t *testing.T) {
 	if got := f.names(); len(got) != 1 || got[0] != "POST /train/containers/9/stop" {
 		t.Fatalf("calls: %v", got)
 	}
+	// The step waits, but its job is of a kind without a stop call: the answer is 409 with the job's own
+	// reason, not with the plan's state (a message like "plan is job this job cannot be stopped" was
+	// unreadable on the instance, 17.10.2026).
+	p2, err := st.CreatePlan(ctx, store.Plan{ChatID: c.ID, Title: "build", Via: "cli", Steps: []store.PlanStep{
+		{Idx: 1, Method: "POST", Path: "/container-images/build", Effect: "compute"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := st.DecidePlan(ctx, p2.ID, "approved", &expires); err != nil || !ok {
+		t.Fatalf("approve: %v %v", ok, err)
+	}
+	taskJob, err := st.AddWatchJob(ctx, store.WatchJob{ChatID: c.ID, PlanID: p2.ID, StepIdx: 1, Kind: "platform_task", Ref: "task:9"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := st.ClaimPlanStep(ctx, p2.ID, 1); err != nil || !ok {
+		t.Fatalf("claim: %v %v", ok, err)
+	}
+	if ok, err := st.WaitPlanStep(ctx, p2.ID, 1, taskJob, "ok 202", "image_build", "task:9"); err != nil || !ok {
+		t.Fatalf("wait: %v %v", ok, err)
+	}
+	code, body = call(t, a, "POST", base+"/plans/"+p2.ID+"/steps/1/stop", "")
+	if code != 409 || !strings.Contains(body, "this job cannot be stopped") {
+		t.Fatalf("a step whose job cannot be stopped: %d %s", code, body)
+	}
+	if strings.Contains(body, "plan is job") {
+		t.Fatalf("the reason must not repeat the plan's state: %s", body)
+	}
 	// A plan that is not this chat's is 404.
 	other := srv.URL + "/api/chats/" + c.ID + "/plans/00000000-0000-0000-0000-000000000002/steps/1/stop"
 	if code, _ := call(t, a, "POST", other, ""); code != 404 {

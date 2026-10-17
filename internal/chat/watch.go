@@ -835,8 +835,12 @@ func (m *Manager) StopPlanStep(ctx context.Context, chatID, planID string, idx i
 	}
 	if _, err := m.StopJob(ctx, chatID, st.WatchJob); err != nil {
 		switch {
-		case errors.Is(err, ErrNotStoppable), errors.Is(err, ErrNotRunning), errors.Is(err, store.ErrNotFound):
-			return pl, &PlanStateError{State: "job " + err.Error()}
+		case errors.Is(err, ErrNotStoppable), errors.Is(err, ErrNotRunning):
+			// The step does wait; what is wrong is its job, so the state is not the message. The API
+			// answers 409 with the job's own text ("this job cannot be stopped").
+			return pl, &PlanStateError{State: st.State, Reason: err.Error()}
+		case errors.Is(err, store.ErrNotFound):
+			return pl, &PlanStateError{State: st.State}
 		}
 		return pl, err
 	}

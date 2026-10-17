@@ -489,9 +489,19 @@ func autonomyOf(p store.Plan) *plan.Autonomy {
 }
 
 // PlanStateError reports an attempt to move a plan that is not in the required state; the API answers 409.
-type PlanStateError struct{ State string }
+type PlanStateError struct {
+	State string
+	// Reason replaces the "plan is <state>" text where the plan's state is not what is wrong: the step
+	// waits, but its job cannot be stopped. It is the message the user sees.
+	Reason string
+}
 
-func (e *PlanStateError) Error() string { return "plan is " + e.State }
+func (e *PlanStateError) Error() string {
+	if e.Reason != "" {
+		return e.Reason
+	}
+	return "plan is " + e.State
+}
 
 // planOf loads a plan and checks that it belongs to the chat; a foreign or unknown plan is ErrNotFound.
 func (m *Manager) planOf(ctx context.Context, chatID, planID string) (store.Plan, error) {
