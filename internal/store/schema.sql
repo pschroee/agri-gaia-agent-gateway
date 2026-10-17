@@ -472,3 +472,10 @@ ALTER TABLE subagent_runs ADD COLUMN IF NOT EXISTS stopped_by text NOT NULL DEFA
 -- wins (a turn ended by the time limit and then moved to the trash keeps the time limit). NULL for turns that were
 -- not aborted and for rows from before this change.
 ALTER TABLE chat_turns ADD COLUMN IF NOT EXISTS abort_reason text;
+
+-- Experiment chats (X0): binding and protection level per chat, set when the chat is created. NULL for product chats.
+ALTER TABLE chats ADD COLUMN IF NOT EXISTS experiment jsonb;
+
+-- Who decided an approval (X0.9): "user" normally, "experiment" when the gateway approved it automatically in an
+-- experiment chat. Entries from before the column count as decided by the user.
+ALTER TABLE approvals ADD COLUMN IF NOT EXISTS decided_by text NOT NULL DEFAULT 'user';
