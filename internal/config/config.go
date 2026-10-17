@@ -225,6 +225,18 @@ func (c *Catalog) Lookup(id string) (Provider, Model, bool) {
 	return Provider{}, Model{}, false
 }
 
+// ChatModel resolves the model a chat works with: the identifier the chat names, otherwise the
+// catalog's default. The gateway starts a chat without a model with the default (Manager.run), so
+// everything that asks the catalog about a chat's model — the capability overview as well as the
+// image review of the checks and the pre-annotation — has to resolve it the same way. One source for
+// the image capability (issue #163).
+func (c *Catalog) ChatModel(id string) string {
+	if id != "" {
+		return id
+	}
+	return c.Default
+}
+
 // ContextWindow: a model's context window in tokens (catalog, otherwise pi's registry; 0 = unknown).
 func (c *Catalog) ContextWindow(id string) int64 {
 	if _, m, ok := c.Lookup(id); ok && m.ContextWindow > 0 {

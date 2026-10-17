@@ -124,6 +124,24 @@ func reviewService(t *testing.T, cat *config.Catalog, aux *[]store.AuxCall) *Ser
 	return svc
 }
 
+// A chat that names no model runs with the catalog's default; the image review resolves the identifier
+// the same way the capability overview does (config.Catalog.ChatModel, issue #163).
+func TestChatModelResolvesCatalogDefault(t *testing.T) {
+	cat := &config.Catalog{Default: "ds/flash", Providers: []config.Provider{{ID: "ds", Models: []config.Model{
+		{ID: "flash", Name: "Flash", Input: []string{"text", "image"}},
+		{ID: "text", Input: []string{"text"}}}}}}
+	if got := (&Service{Cat: cat, ChatModel: func(context.Context, string) string { return "" }}).chatModel(context.Background(), "c1"); got != "ds/flash" {
+		t.Errorf("without a model: %q, want the catalog default ds/flash", got)
+	}
+	if got := (&Service{Cat: cat, ChatModel: func(context.Context, string) string { return "ds/text" }}).chatModel(context.Background(), "c1"); got != "ds/text" {
+		t.Errorf("with a model: %q, want the chat's own ds/text", got)
+	}
+	// Without a catalog nothing is resolved, and the review reports why it did not look at anything.
+	if got := (&Service{}).chatModel(context.Background(), "c1"); got != "" {
+		t.Errorf("without a catalog: %q, want empty", got)
+	}
+}
+
 // reviewCatalog points at the fake upstream: a cloud model that reads images, a text-only model and a
 // self-hosted model that reads images.
 func reviewCatalog(upstreamURL string) *config.Catalog {

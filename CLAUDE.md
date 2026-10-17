@@ -574,6 +574,17 @@ refer to this repository.
   reports the old ID. `POST /api/exp/runs/chat` records the IDs of that slot and `catalog_sha256`/`skills_sha256`
   in `exp_runs` (also in the export). The catalogue is `AGW_CATALOG`; the skills are copied into this image at
   `/etc/agw/skills` (`AGW_SKILLS_PATH`) because the orchestrator does not see the pi/exec images.
+- **The model catalogue is one file, and only the gateway reads it** (#163): `AGW_CATALOG` defaults to
+  `/etc/agw/models.json`, mounted from `services/agent-gateway/models.json` by the deployment compose. The exec
+  image ships **no** catalogue: `agw-platform` is a symlink to `agw-artifact`, which posts to the slot socket,
+  and the orchestrator answers `capabilities` from the catalog object it loaded. A `vision: no` therefore never
+  comes from the sandbox; a divergence means the gateway process is stale. The file is read **once at start**
+  (`config.LoadCatalog`), and a bind mount of a single file keeps the old inode when git replaces it — a changed
+  catalogue needs a gateway restart. Checked on the instance (17.10.2026): `/proc/<gateway-pid>/root/etc/agw/models.json`
+  and the host file carry the same SHA-256 as `catalog_sha256` in the start log; an old `vision: no` tool result
+  was from 16.10., before `models.json` declared `["text","image"]`. `config.Catalog.ChatModel` resolves the chat's
+  model (stored ID, otherwise the default) for `capabilities`, `assess.ReviewAllowed` and the pre-annotation
+  alike; `TestVisionMatchesImageReview` keeps the two answers on one catalog entry.
 
 ## Testing
 

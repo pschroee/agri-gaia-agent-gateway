@@ -606,6 +606,20 @@ func TestNoVisionStricterVerdict(t *testing.T) {
 	}
 }
 
+// A chat the store does not know runs with the catalog's default; the review asks about the same model
+// the capability overview reports (config.Catalog.ChatModel, issue #163).
+func TestChatModelWithoutStoreUsesDefault(t *testing.T) {
+	cat := &config.Catalog{Default: "ds/flash", Providers: []config.Provider{{ID: "ds", Models: []config.Model{
+		{ID: "flash", Input: []string{"text", "image"}}}}}}
+	if got := (&Service{Cat: cat}).chatModel(context.Background(), "c1"); got != "ds/flash" {
+		t.Errorf("without a store: %q, want the catalog default ds/flash", got)
+	}
+	// Without a catalog nothing is resolved, and the review reports why it did not look at anything.
+	if got := (&Service{}).chatModel(context.Background(), "c1"); got != "" {
+		t.Errorf("without a catalog: %q, want empty", got)
+	}
+}
+
 // The reason a report gives for not reviewing is the one the rule of #111 words (assess.ImageReviewAllowed,
 // R0.9) — the same entry the capabilities overview reports under "vision" (V3d).
 func TestNoVisionReasonFromCapabilities(t *testing.T) {
