@@ -2318,6 +2318,7 @@ the routes below answer as before. The account must also be listed in `AGW_EXPER
 
 - `POST /api/chats` — and only with an `experiment` profile in the body (otherwise **403**);
 - `GET /api/chats/{id}…` for chats the experiment account owns (others are **404**, as everywhere);
+- `GET /api/models` — the catalogue the runner and `agw exp validate` check the plan's model IDs against (#156);
 - `/api/exp/*` below.
 
 Every other route is **403** with this key, and the key is never accepted as a cookie. The request context carries
@@ -2325,7 +2326,8 @@ the account's `sub` as owner, so ownership checks work unchanged.
 
 | Method and path | Purpose |
 |---|---|
-| `POST /api/chats` | creates an experiment chat: `experiment: {protection, cell, run, seed}` plus `delegation`, `model`, `variant` (binding) and `message` (the task) |
+| `POST /api/chats` | creates an experiment chat: `experiment: {protection, cell, run, seed, trace}` plus `delegation`, `model`, `variant` (binding) and `message` (the task) |
+| `GET /api/models` | the model catalogue; the runner and `agw exp validate` compare the plan's IDs with it (#156) |
 | `POST /api/exp/runs/start` | records one attempt: `{id, key, plan, plan_sha256, cell, task, rep, seed, position, model}`; `409` if the id exists |
 | `POST /api/exp/runs/chat` | links the attempt to its chat: `{id, chat}` |
 | `POST /api/exp/runs/end` | closes the attempt: `{id, status, end_reason, pass, check_evidence}`; status is the end reason (`done`, `limit_cost`, `limit_tokens`, `limit_duration`, `error`, `aborted`) |
@@ -2342,7 +2344,8 @@ the gateway image as `/agw` and starts from the container
 (`docker exec -d agri_gaia-agent_gateway-1 /agw --url https://app.<base>/agent exp run …`) with
 `AGW_EXP_API_TOKEN` in its environment. The `--url` is required on the instance: `http://127.0.0.1:18480` is not
 in `AGW_ALLOWED_HOSTS` there and answers `403 unknown host` (issue #155). It reads `plan.yaml`/`pilot.yaml`, the tasks and the fixture manifests
-(X9), checks `plan.lock` for a main plan (X8.5), orders the runs per task and repetition with a seeded shuffle of
+(X9), checks the plan's model IDs against `GET /api/models` before the first chat (#156; a typo fails the run
+instead of every cell), checks `plan.lock` for a main plan (X8.5), orders the runs per task and repetition with a seeded shuffle of
 the cells (X1.6) and runs them strictly one after the other (X1.7). A run ends when the chat is quiet
 (`running: false`, `queued: 0`, not resuming) and no observed job (`GET /api/chats/{id}/jobs`) is still running,
 or when the gateway stored a limit at the chat (`experiment.limit` from X3/#128), which the runner maps to
