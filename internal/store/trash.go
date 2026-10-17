@@ -200,14 +200,16 @@ WHERE chat_id = $1`,
 		`UPDATE aux_llm_calls SET chat_id = NULL, deleted_chat = $2, error = CASE WHEN error <> '' THEN 'error' ELSE '' END
 WHERE chat_id = $1`,
 		`UPDATE web_requests SET chat_id = NULL, deleted_chat = $2, path = '' WHERE chat_id = $1`,
-		// X6: syscall traces carry paths and arguments; they are removed with the chat instead of
-		// being kept in a tombstone.
-		`DELETE FROM exec_syscalls WHERE chat_id = $1`,
 	}
 	for _, q := range steps {
 		if _, err := tx.Exec(ctx, q, chatID, tomb); err != nil {
 			return "", err
 		}
+	}
+	// X6: syscall traces carry paths and arguments; they are removed with the chat instead of
+	// being kept in a tombstone. Separate from the steps above: this one takes only the chat ID.
+	if _, err := tx.Exec(ctx, `DELETE FROM exec_syscalls WHERE chat_id = $1`, chatID); err != nil {
+		return "", err
 	}
 	// The cascade removes messages, runs, artifacts, approvals, subagents, images, workspace, background tasks,
 	// queue, turns, delegation objects, plans, annotation runs (V1) and the session.
