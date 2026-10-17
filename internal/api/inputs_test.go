@@ -20,6 +20,7 @@ import (
 	"agw/internal/config"
 	"agw/internal/pool"
 	"agw/internal/store"
+	"agw/internal/testpg"
 )
 
 // testBlobs is the object store of the route test: only what AddInput and RemoveInput touch.
@@ -79,7 +80,7 @@ func TestRemoveInputRoute(t *testing.T) {
 		t.Skip("AGW_TEST_DATABASE_URL not set")
 	}
 	ctx := context.Background()
-	st, err := store.OpenSchema(ctx, url, "apitest_inputs_"+strings.ReplaceAll(time.Now().Format("150405.000000"), ".", "_"))
+	st, err := store.OpenSchema(ctx, url, testpg.Schema("apitest_inputs"))
 	if err != nil {
 		t.Fatal(err)
 	}

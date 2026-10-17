@@ -16,10 +16,10 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"agw/internal/platform"
 	"agw/internal/store"
+	"agw/internal/testpg"
 )
 
 // --- test helpers ---
@@ -31,7 +31,7 @@ func testStore(t *testing.T) *store.Store {
 	if url == "" {
 		t.Skip("AGW_TEST_DATABASE_URL not set")
 	}
-	st, err := store.OpenSchema(context.Background(), url, "nbtest_"+strings.ReplaceAll(time.Now().Format("150405.000000"), ".", "_"))
+	st, err := store.OpenSchema(context.Background(), url, testpg.Schema("nbtest"))
 	if err != nil {
 		t.Fatal(err)
 	}

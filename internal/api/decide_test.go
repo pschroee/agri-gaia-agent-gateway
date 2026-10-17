@@ -23,6 +23,7 @@ import (
 	"agw/internal/platform"
 	"agw/internal/pool"
 	"agw/internal/store"
+	"agw/internal/testpg"
 )
 
 // A click on "Approve" that finds another platform state answers 409 with code summary_changed and the approval
@@ -33,7 +34,7 @@ func TestDecideConflictCode(t *testing.T) {
 		t.Skip("AGW_TEST_DATABASE_URL not set")
 	}
 	ctx := context.Background()
-	st, err := store.OpenSchema(ctx, url, "apitest_decide_"+strings.ReplaceAll(time.Now().Format("150405.000000"), ".", "_"))
+	st, err := store.OpenSchema(ctx, url, testpg.Schema("apitest_decide"))
 	if err != nil {
 		t.Fatal(err)
 	}

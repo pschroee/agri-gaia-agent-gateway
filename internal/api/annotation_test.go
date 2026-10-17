@@ -23,6 +23,7 @@ import (
 	"agw/internal/oidc/oidctest"
 	"agw/internal/pool"
 	"agw/internal/store"
+	"agw/internal/testpg"
 )
 
 // testCVATBase is AGW_CVAT_PUBLIC_URL of the test setup; the links of the cards begin with it.
@@ -37,7 +38,7 @@ func annotationServer(t *testing.T, cvatBase string) (*store.Store, *httptest.Se
 		t.Skip("AGW_TEST_DATABASE_URL not set")
 	}
 	ctx := context.Background()
-	st, err := store.OpenSchema(ctx, url, "apitest_annotation_"+strings.ReplaceAll(time.Now().Format("150405.000000"), ".", "_"))
+	st, err := store.OpenSchema(ctx, url, testpg.Schema("apitest_annotation"))
 	if err != nil {
 		t.Fatal(err)
 	}

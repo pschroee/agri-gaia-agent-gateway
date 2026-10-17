@@ -23,6 +23,7 @@ import (
 	"agw/internal/platform"
 	"agw/internal/pool"
 	"agw/internal/store"
+	"agw/internal/testpg"
 )
 
 // jobCalls records the calls that arrived at the fake platform of the job routes.
@@ -46,7 +47,7 @@ func jobsServer(t *testing.T, name string) (*store.Store, *httptest.Server, *oid
 		t.Skip("AGW_TEST_DATABASE_URL not set")
 	}
 	ctx := context.Background()
-	st, err := store.OpenSchema(ctx, url, name+"_"+strings.ReplaceAll(time.Now().Format("150405.000000"), ".", "_"))
+	st, err := store.OpenSchema(ctx, url, testpg.Schema(name))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -20,6 +20,7 @@ import (
 	"agw/internal/oidc/oidctest"
 	"agw/internal/pool"
 	"agw/internal/store"
+	"agw/internal/testpg"
 )
 
 // assessServer builds the API of a test setup with a database and returns the store and the server.
@@ -30,7 +31,7 @@ func assessServer(t *testing.T) (*store.Store, *httptest.Server, *oidctest.Issue
 		t.Skip("AGW_TEST_DATABASE_URL not set")
 	}
 	ctx := context.Background()
-	st, err := store.OpenSchema(ctx, url, "apitest_assess_"+strings.ReplaceAll(time.Now().Format("150405.000000"), ".", "_"))
+	st, err := store.OpenSchema(ctx, url, testpg.Schema("apitest_assess"))
 	if err != nil {
 		t.Fatal(err)
 	}

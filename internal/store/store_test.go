@@ -8,11 +8,14 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"agw/internal/testpg"
 )
 
 // Tests against a real Postgres. Set AGW_TEST_DATABASE_URL, e.g.
 // postgres://agwpoc:<pw>@127.0.0.1:18482/agwpoc?sslmode=disable.
-// Every test gets its own schema.
+// Every test gets its own schema; the name carries the process id and random bytes, so two test runs
+// against the same Postgres cannot end up in one schema (issue #158).
 func open(t *testing.T) *Store {
 	t.Helper()
 	url := os.Getenv("AGW_TEST_DATABASE_URL")
@@ -20,12 +23,25 @@ func open(t *testing.T) *Store {
 		t.Skip("AGW_TEST_DATABASE_URL not set")
 	}
 	ctx := context.Background()
-	s, err := OpenSchema(ctx, url, "test_"+time.Now().Format("150405_000000"))
+	s, err := OpenSchema(ctx, url, testpg.Schema("test"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { s.DropSchema(context.Background()); s.Close() })
 	return s
+}
+
+// OpenSchema refuses to join a schema that already exists: a second store would silently share the tables
+// with the first, and its DropSchema would take them away from a test that is still using them (issue #158).
+func TestOpenSchemaRefusesAnExistingSchema(t *testing.T) {
+	s := open(t)
+	if _, err := OpenSchema(context.Background(), os.Getenv("AGW_TEST_DATABASE_URL"), s.schema); err == nil {
+		t.Fatal("a second store adopted an existing schema")
+	}
+	// The first store keeps working; the refused open did not touch its tables.
+	if _, err := s.CreateChat(context.Background(), NewChat{Title: "still here", Model: "m/m", Variant: "cli"}); err != nil {
+		t.Fatalf("first store after the refused second open: %v", err)
+	}
 }
 
 func TestChatLifecycle(t *testing.T) {

@@ -22,6 +22,7 @@ import (
 	"agw/internal/rpc"
 	"agw/internal/sock"
 	"agw/internal/store"
+	"agw/internal/testpg"
 	"agw/internal/titler"
 	"agw/internal/toolset"
 )
@@ -429,7 +430,7 @@ func setup(t *testing.T) *env {
 		t.Skip("AGW_TEST_DATABASE_URL not set")
 	}
 	ctx := context.Background()
-	st, err := store.OpenSchema(ctx, url, "chattest_"+strings.ReplaceAll(time.Now().Format("150405.000000"), ".", "_"))
+	st, err := store.OpenSchema(ctx, url, testpg.Schema("chattest"))
 	if err != nil {
 		t.Fatal(err)
 	}

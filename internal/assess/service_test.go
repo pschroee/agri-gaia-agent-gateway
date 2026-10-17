@@ -15,6 +15,7 @@ import (
 
 	"agw/internal/platform"
 	"agw/internal/store"
+	"agw/internal/testpg"
 	"agw/internal/watch"
 )
 
@@ -26,7 +27,7 @@ func testStore(t *testing.T) *store.Store {
 		t.Skip("AGW_TEST_DATABASE_URL not set")
 	}
 	ctx := context.Background()
-	st, err := store.OpenSchema(ctx, url, "assess_"+strings.ReplaceAll(time.Now().Format("150405.000000"), ".", "_"))
+	st, err := store.OpenSchema(ctx, url, testpg.Schema("assess"))
 	if err != nil {
 		t.Fatal(err)
 	}

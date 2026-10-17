@@ -15,6 +15,7 @@ import (
 	"agw/internal/config"
 	"agw/internal/pool"
 	"agw/internal/store"
+	"agw/internal/testpg"
 )
 
 // The short list of a chat's subagent runs (issue #60): own chats only, fields for title and state, and reading it
@@ -25,7 +26,7 @@ func TestSubagentRunsList(t *testing.T) {
 		t.Skip("AGW_TEST_DATABASE_URL not set")
 	}
 	ctx := context.Background()
-	st, err := store.OpenSchema(ctx, url, "apitest_runs_"+strings.ReplaceAll(time.Now().Format("150405.000000"), ".", "_"))
+	st, err := store.OpenSchema(ctx, url, testpg.Schema("apitest_runs"))
 	if err != nil {
 		t.Fatal(err)
 	}

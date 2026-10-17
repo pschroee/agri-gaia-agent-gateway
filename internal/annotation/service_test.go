@@ -18,10 +18,10 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"agw/internal/platform"
 	"agw/internal/store"
+	"agw/internal/testpg"
 )
 
 // testJWT builds an unsigned token with the given claims; the gateway only reads its payload.
@@ -542,7 +542,7 @@ func newTestEnv(t *testing.T, operator ...string) *testEnv {
 	t.Cleanup(psrv.Close)
 	csrv := httptest.NewServer(fc)
 	t.Cleanup(csrv.Close)
-	st, err := store.OpenSchema(context.Background(), url, "anntest_"+strings.ReplaceAll(time.Now().Format("150405.000000"), ".", "_"))
+	st, err := store.OpenSchema(context.Background(), url, testpg.Schema("anntest"))
 	if err != nil {
 		t.Fatal(err)
 	}
