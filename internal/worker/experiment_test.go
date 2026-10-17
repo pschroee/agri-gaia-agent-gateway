@@ -218,8 +218,9 @@ func TestPlatformExpIsGenerated(t *testing.T) {
 	if _, err := os.Stat(filepath.Join("..", "..", "images", "agw-basis", "skills", "build-platform-exp.mjs")); err != nil {
 		t.Fatal(err)
 	}
+	// One RUN per image; the script names itself once to run and once to remove.
 	d := repoFile(t, "images/agw-basis/Dockerfile")
-	if n := strings.Count(d, "build-platform-exp.mjs"); n != 2 {
+	if n := strings.Count(d, "RUN node /opt/agw/skills/build-platform-exp.mjs"); n != 2 {
 		t.Errorf("build script runs in %d images, want 2 (pi and exec)", n)
 	}
 }
