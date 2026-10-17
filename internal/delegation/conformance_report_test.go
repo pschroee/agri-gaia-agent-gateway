@@ -56,8 +56,8 @@ func TestReportJSONRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var r Report
-	if err := json.Unmarshal(data, &r); err != nil {
+	r, err := ReportFromJSON(data)
+	if err != nil {
 		t.Fatal(err)
 	}
 	if r.Check != CheckManager || r.Cases != 3 || r.Forbidden != 2 || r.Controls != 1 || r.Refused != 1 || len(r.Deviations) != 1 {
@@ -66,8 +66,11 @@ func TestReportJSONRoundTrip(t *testing.T) {
 	if r.Results[0].Case != "list datasets" || !r.Results[0].Want || !r.Results[0].Got {
 		t.Errorf("round trip lost a row: %+v", r.Results[0])
 	}
-	if r.Deviations[0].Case != "change another user's dataset" || r.Deviations[0].Got {
-		t.Errorf("round trip lost the deviation: %+v", r.Deviations[0])
+	// The deviation row keeps what makes it one: the case was allowed, though it should have been
+	// refused.
+	dev := r.Deviations[0]
+	if dev.Case != "change another user's dataset" || dev.Want || !dev.Got {
+		t.Errorf("round trip lost the deviation: %+v", dev)
 	}
 	if r.Meta.Version != "abc123" || !r.Meta.Time.Equal(time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC)) {
 		t.Errorf("round trip lost the meta data: %+v", r.Meta)

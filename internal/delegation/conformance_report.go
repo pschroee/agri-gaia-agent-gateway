@@ -141,6 +141,21 @@ func ReportJSON(results []Result, meta Meta) ([]byte, error) {
 	return json.MarshalIndent(NewReport(results, meta), "", "  ")
 }
 
+// ReportFromJSON reads a report and derives the counters and the deviation list from its rows, so
+// that a stored or partial report can never disagree with its own rows: a row that was allowed
+// though it should have been refused is a deviation again after reading.
+func ReportFromJSON(data []byte) (Report, error) {
+	var stored Report
+	if err := json.Unmarshal(data, &stored); err != nil {
+		return Report{}, err
+	}
+	r := NewReport(stored.Results, stored.Meta)
+	if r.Check == "" {
+		r.Check = stored.Check
+	}
+	return r, nil
+}
+
 // reportDocument is the combined report of all check paths.
 type reportDocument struct {
 	Version string   `json:"version"`
@@ -182,8 +197,8 @@ func WriteConformanceReport(path string, meta Meta, results []Result) error {
 			}
 			return err
 		}
-		var r Report
-		if err := json.Unmarshal(data, &r); err != nil {
+		r, err := ReportFromJSON(data)
+		if err != nil {
 			return fmt.Errorf("conformance report %s.%s.json: %w", base, c, err)
 		}
 		doc.Checks = append(doc.Checks, r)
