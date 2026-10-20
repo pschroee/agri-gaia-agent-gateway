@@ -5,15 +5,18 @@
 package watch
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"regexp"
 	"strconv"
 
 	"agw/internal/delegation"
 	"agw/internal/platform"
+	"agw/internal/search"
 )
 
 // A started training container (A-E2): POST /train/containers/<id>/run starts Docker's container and
@@ -54,9 +57,10 @@ type trainingDoc struct {
 	Score  *float64 `json:"score"`
 }
 
-// pollTrainingRun reads the container's status and, for a container that is still running, the end of
-// its log. The percent stays unknown: a training without tensor metadata reports none, and epochs
-// parsed out of the log would depend on the template (D2.4).
+// pollTrainingRun reads the container's status, the end of its log and, since issue #168, the figures of the
+// run (GET /train/containers/<id>/metrics, written by the template as metrics.jsonl). The percent comes from
+// those figures (epoch / epochs); without them it stays unknown, because epochs parsed out of the log would depend
+// on the template (D2.4).
 func pollTrainingRun(ctx context.Context, j Job, read Reader) (Progress, error) {
 	if j.Ref == "" {
 		return Progress{}, fmt.Errorf("job %s names no container", j.ID)
@@ -80,6 +84,7 @@ func pollTrainingRun(ctx context.Context, j Job, read Reader) (Progress, error) 
 	}
 	tail, terr := trainingLogTail(ctx, read, j.Ref)
 	p := Progress{State: StateRunning, Message: oneLine(trainingMessage(doc)), LogTail: tail}
+	p.Metrics = trainingMetrics(ctx, read, j.Ref)
 	switch doc.Status {
 	case "exited":
 		if doc.Score != nil || (terr == nil && !logShowsError(tail)) {
@@ -90,7 +95,82 @@ func pollTrainingRun(ctx context.Context, j Job, read Reader) (Progress, error) 
 	case "dead":
 		p.State = StateFailed
 	}
+	p.Percent = MetricsPercent(p.Metrics, p.State == StateDone)
 	return p, nil
+}
+
+// metricsDoc is the answer to GET /train/containers/<id>/metrics (issue #168, backend fork): the lines of
+// metrics.jsonl as objects, the GPU samples as objects, and whether the template writes metrics at all.
+type metricsDoc struct {
+	Supported    bool              `json:"supported"`
+	Epochs       []json.RawMessage `json:"epochs"`
+	GPU          []metricsGPUDoc   `json:"gpu"`
+	GPUAvailable bool              `json:"gpu_available"`
+}
+
+type metricsGPUDoc struct {
+	At         string  `json:"at"`
+	Util       float64 `json:"util"`
+	MemUsedMB  float64 `json:"mem_used_mb"`
+	MemTotalMB float64 `json:"mem_total_mb"`
+}
+
+// trainingMetrics reads the figures of a training container. A failure is not fatal (the status decides): an
+// older backend without the route, a container without figures or an unreadable answer give nil. What the
+// platform sends is read like a file the run wrote: line by line through the parsers of internal/search.
+func trainingMetrics(ctx context.Context, read Reader, containerID string) *Metrics {
+	res, err := read(ctx, platform.Request{Method: http.MethodGet, Path: "/train/containers/" + containerID + "/metrics"})
+	if err != nil || res.Status == "error" || res.HTTPStatus >= 400 {
+		return nil
+	}
+	var doc metricsDoc
+	if err := json.Unmarshal([]byte(res.Body), &doc); err != nil {
+		return nil
+	}
+	m := &Metrics{Supported: doc.Supported, GPUAvailable: doc.GPUAvailable}
+	// Each epoch object goes through the same line parser as a file; an element that is no object falls away there.
+	var lines []byte
+	for _, e := range doc.Epochs {
+		lines = append(lines, bytes.TrimSpace(e)...)
+		lines = append(lines, '\n')
+	}
+	m.Epochs = search.ParseMetricsJSONL(lines)
+	if len(doc.GPU) > search.MaxGPULines {
+		doc.GPU = doc.GPU[len(doc.GPU)-search.MaxGPULines:]
+	}
+	for _, g := range doc.GPU {
+		if s, ok := search.GPUSampleOf(g.At, fmt.Sprint(g.Util), wholeText(g.MemUsedMB), wholeText(g.MemTotalMB)); ok {
+			m.GPU = append(m.GPU, s)
+		}
+	}
+	return m
+}
+
+// wholeText writes a number as a whole-number text, "x" (which no parser takes) for one that is not.
+func wholeText(f float64) string {
+	if f != math.Trunc(f) || f < 0 || f > 1<<31 {
+		return "x"
+	}
+	return strconv.FormatInt(int64(f), 10)
+}
+
+// MetricsPercent is the percent of a run from its figures: the last epoch of the epochs the run names, at most 99
+// while it runs and 100 once it ended well (issue #168; with it the ETA of the watcher works for the template).
+// nil while no line names the number of epochs.
+func MetricsPercent(m *Metrics, done bool) *float64 {
+	if m == nil || len(m.Epochs) == 0 {
+		return nil
+	}
+	last := m.Epochs[len(m.Epochs)-1]
+	if done {
+		p := 100.0
+		return &p
+	}
+	if last.Epochs < 1 {
+		return nil
+	}
+	p := math.Min(float64(last.Epoch)/float64(last.Epochs)*100, 99)
+	return &p
 }
 
 // trainingMessage is the one line the job shows about a training container: the Docker status and, if
