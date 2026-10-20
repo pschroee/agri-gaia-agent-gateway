@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"agw/internal/config"
+	"agw/internal/delegation"
 	"agw/internal/platform"
 	"agw/internal/store"
 	"agw/internal/watch"
@@ -113,7 +114,7 @@ var RunRoutePath = regexp.MustCompile(`^` + regexp.QuoteMeta(platform.Annotation
 // The build of a function (V2) is observed with the kind platform_task of that plan: this service
 // brings only the route, no kind and no polling of its own.
 func (s *Service) RegisterWatch() {
-	watch.Register(watch.Kind{Name: WatchKindName, Poll: s.poll})
+	watch.Register(watch.Kind{Name: WatchKindName, Resource: delegation.Dataset, Poll: s.poll})
 	watch.RegisterRoute(http.MethodPost, RunRoutePath, WatchKindName, RunRef)
 	watch.RegisterRoute(http.MethodPost, FunctionRoutePath, WatchKindPlatformTask, FunctionRef)
 }

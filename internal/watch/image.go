@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"regexp"
 
+	"agw/internal/delegation"
 	"agw/internal/platform"
 )
 
@@ -24,7 +25,7 @@ const kindImageBuild = "image_build"
 var buildPath = regexp.MustCompile(`^/container-images/build$`)
 
 func init() {
-	Register(Kind{Name: kindImageBuild, Poll: pollImageBuild})
+	Register(Kind{Name: kindImageBuild, Resource: delegation.ContainerImage, Poll: pollImageBuild})
 	RegisterRoute(http.MethodPost, buildPath, kindImageBuild, chainedTaskRef(chainImage, imageRefFromRequest))
 }
 

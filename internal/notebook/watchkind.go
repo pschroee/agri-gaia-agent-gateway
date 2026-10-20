@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"time"
 
+	"agw/internal/delegation"
 	"agw/internal/platform"
 	"agw/internal/watch"
 )
@@ -41,7 +42,7 @@ func RunIDFrom(_ platform.Request, res platform.Result) (string, bool) {
 
 // WatchKind is the kind of job that observes one run of this chat's notebook server.
 func (n *Notebooks) WatchKind() watch.Kind {
-	return watch.Kind{Name: KindName, Poll: n.poll, Stop: stopRun}
+	return watch.Kind{Name: KindName, Resource: delegation.Notebook, Poll: n.poll, Stop: stopRun}
 }
 
 // StoppingCall reports whether a call stops this chat's notebook server (own code C-E4): the run that was going

@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strings"
 
+	"agw/internal/delegation"
 	"agw/internal/platform"
 )
 
@@ -20,7 +21,7 @@ import (
 // watch_jobs come with the autonomy plan (A-E2); the agent asks platform_deployment_status for the
 // state. init registers kind and routes, so no wiring in main.go is needed.
 func init() {
-	Register(Kind{Name: EdgeDeploymentKind, Poll: pollEdgeDeployment, Stop: stopEdgeDeployment})
+	Register(Kind{Name: EdgeDeploymentKind, Resource: delegation.ContainerDeployment, Poll: pollEdgeDeployment, Stop: stopEdgeDeployment})
 	RegisterRoute(http.MethodPut, edgeDeployRoute, EdgeDeploymentKind, edgeDeploymentRef)
 	RegisterRoute(http.MethodPut, edgeUndeployRoute, EdgeDeploymentKind, edgeDeploymentRef)
 }

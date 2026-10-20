@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strconv"
 
+	"agw/internal/delegation"
 	"agw/internal/platform"
 )
 
@@ -34,7 +35,7 @@ var runPath = regexp.MustCompile(`^/train/containers/[^/]+/run$`)
 var containerPath = regexp.MustCompile(`^/train/containers/([^/]+)`)
 
 func init() {
-	Register(Kind{Name: kindTrainingRun, Poll: pollTrainingRun, Stop: stopTrainingRun})
+	Register(Kind{Name: kindTrainingRun, Resource: delegation.Training, Poll: pollTrainingRun, Stop: stopTrainingRun})
 	RegisterRoute(http.MethodPost, runPath, kindPlatformTask, chainedTaskRef(chainTraining, containerIDFromRequest))
 }
 

@@ -617,6 +617,7 @@ Each event is a `data:` line with JSON `{"kind": …, "data": …}`. Every 15 s 
 | `user_meta` | `{turn_id, trigger, origin, sources}`: origin of the user message that follows as the next `pi` event (`message_end`, role user); the UI assigns it to that message |
 | `auto_held` | `{reason: "wake_limit" \| "auto_turns", limit, count}`: notes stay queued because a limit on turns without the user has been reached (wake-ups per hour or in a row); they go with the next message or via `POST …/queue/send` |
 | `plan_alert` | `PlanAlert` (A-E4): an autonomous plan of this chat reached a state the user has to know about. `kind` is `completed`, `failed`, `paused`, `needs_input` or `attention`; `step` and `reason` name the step and the cause where there is one. Also carried by *Events across chats* |
+| `platform_changed` | `PlatformChanged` (#167): the agent changed something on the platform or an observed job handed over or ended; same data as in *SSE `GET /api/events`*. Also carried by *Events across chats* |
 | `error` | `{message: string}`; also notes about the workspace: starts with "Workspace not saved" (above the limit, once per state; the UI shows a warning) or "Workspace could not be restored" |
 
 **Assembling the stream:** `message_start` with `message.role == "assistant"` starts a response.
@@ -639,6 +640,7 @@ reconnects after 2 s.
 | `approvals` | `Approval[]`: the pending approvals of the user's chats, oldest first. Always the first event, also after every reconnect: it replaces whatever the client held. |
 | `approval` | `Approval` (new or decided, with `chat_id`): `state: "pending"` adds it, any other state (`approved`, `rejected`, `expired`) removes it. |
 | `plan_alert` | `PlanAlert` (A-E4): an autonomous plan of one of the user's chats reached a state that needs attention (`kind`: `completed`, `failed`, `paused`, `needs_input`, `attention`). Carries `chat_id`, `plan_id`, the plan's `title` and, where there is one, `step` and `reason`. Unlike the snapshot above it is not repeated after a reconnect: a client that was away for the state change does not get it again. |
+| `platform_changed` | `{"chat_id","source","path","job_id","changes":[{"resource","action","id"}],"at"}` (#167): sent after every successful writing platform call of the agent and when an observed job hands over or ends; never for reads, refusals, failures or rejected approvals. `source` is `call` (agent call; `path` set), `job` (observed job; `path` empty, `job_id` set) or `stop` (the user stopped a job in the UI). `resource` and `action` are the names of the delegation (`dataset`, `model`, `training`, `task`, `container_image`, `container_template`, `container_deployment`, `edge_device`, `notebook`, `assessment`, `annotation_function`, `api`; `create`, `update`, `delete`, `run`); `id` is left out when unknown. No body, no answer. Platform pages reload on it. Not repeated after a reconnect. |
 
 The subscription starts before the snapshot is read, so an approval decided in between is never lost; an event may
 repeat a state the snapshot already has, so applying it must be idempotent (keyed by `id`). Approvals expired by a
