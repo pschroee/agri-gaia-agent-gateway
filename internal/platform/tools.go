@@ -559,6 +559,11 @@ var Tools = []Tool{
 			if why := AssessCallRefusal(r); why != "" {
 				return r, errors.New(why)
 			}
+			// The search paths belong to the search tools (issue #168): the proposal reads files of the sandbox,
+			// and the gateway decides what a trial may run.
+			if why := SearchCallRefusal(r); why != "" {
+				return r, errors.New(why)
+			}
 			return r, nil
 		}},
 }
