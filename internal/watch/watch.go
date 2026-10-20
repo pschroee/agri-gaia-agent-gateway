@@ -40,6 +40,9 @@ type Progress struct {
 	Message string   // one line, from the platform, at most 200 runes
 	LogTail string   // at most 20 lines / 4000 runes
 	Outputs []Output // objects the job produced: {Resource, ID, Label}
+	// Created is the object a later plan step means by {{stepN.id}}; only with StateDone, read by the
+	// gateway from the platform, never from the agent.
+	Created *Output
 	// Link is what the user opens for this job, when the kind knows such an address (the kind
 	// notebook_run carries the run in the user's JupyterHub). Empty for the kinds without one, and the
 	// card builds no address of its own (own code C-E4).

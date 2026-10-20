@@ -114,3 +114,27 @@ func TestSummary(t *testing.T) {
 		t.Fatalf("summary: %s", s)
 	}
 }
+
+func TestCreatedTrainingFromBody(t *testing.T) {
+	r, id, ok := Created(Access{Action: Create, Resource: Training},
+		platform.Result{Status: "ok", HTTPStatus: 201, Body: `{"id":63,"dataset_id":59}`, Location: "/tasks/9"})
+	if !ok || r != Training || id != "63" {
+		t.Fatalf("%s %s %v", r, id, ok)
+	}
+}
+
+func TestCreatedTrainingTaskFromLocation(t *testing.T) {
+	r, id, ok := Created(Access{Action: Create, Resource: Training},
+		platform.Result{Status: "ok", HTTPStatus: 202, Location: "/tasks/9"})
+	if !ok || r != Task || id != "9" {
+		t.Fatalf("%s %s %v", r, id, ok)
+	}
+}
+
+func TestCreatedSplitDataset(t *testing.T) {
+	r, id, ok := Created(Access{Action: Create, Resource: Dataset},
+		platform.Result{Status: "ok", HTTPStatus: 200, Body: `{"train_dataset_id":77}`})
+	if !ok || r != Dataset || id != "77" {
+		t.Fatalf("%s %s %v", r, id, ok)
+	}
+}
