@@ -48,6 +48,9 @@ func (m *Manager) searchEnabled() bool {
 	return ok
 }
 
+// SearchMaxHours is the longest a search runs (GET /api/config tells the approval card).
+func (m *Manager) SearchMaxHours() int { return m.searchMaxHours() }
+
 // searchMaxHours is the longest a search runs.
 func (m *Manager) searchMaxHours() int {
 	if m.opt.SearchMaxHours > 0 {

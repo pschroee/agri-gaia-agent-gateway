@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"time"
 
+	"agw/internal/platform"
 	"agw/internal/search"
 	"agw/internal/store"
 	"agw/internal/watch"
@@ -23,6 +24,9 @@ type SearchView struct {
 	ComputeLeft int         `json:"compute_left"`
 	// RunningTrial is the idx of the trial that is declared or running, if any.
 	RunningTrial *int `json:"running_trial,omitempty"`
+	// EndNote is the agent's own closing note of a search it ended itself (end_search); the UI shows it as not
+	// verified.
+	EndNote string `json:"end_note,omitempty"`
 }
 
 // TrialView is a trial as the API carries it: the row plus its duration and the end the watcher expects.
@@ -115,7 +119,11 @@ func (m *Manager) searchView(ctx context.Context, s store.Search) (SearchView, e
 	if err != nil {
 		return SearchView{Search: s}, err
 	}
+	s = m.withFinalResult(ctx, s)
 	v := SearchView{Search: s, Used: st.used, BestIdx: st.bestIdx, ComputeLeft: m.computeLeft(ctx, s.ChatID)}
+	if s.State == store.SearchEnded && s.EndReason == endByAgent {
+		v.EndNote = m.endNoteOf(ctx, s.ID)
+	}
 	if st.open != nil {
 		idx := st.open.Idx
 		v.RunningTrial = &idx
@@ -206,4 +214,82 @@ func (m *Manager) Trials(ctx context.Context, chatID string) ([]TrialView, error
 		out = append(out, m.trialView(ctx, t, jobs))
 	}
 	return out, nil
+}
+
+// endNoteOf reads the note the agent gave when it ended the search (the record's "ended" line).
+func (m *Manager) endNoteOf(ctx context.Context, searchID string) string {
+	events, err := m.st.SearchEvents(ctx, searchID)
+	if err != nil {
+		return ""
+	}
+	for i := len(events) - 1; i >= 0; i-- {
+		if events[i].Kind != "ended" {
+			continue
+		}
+		var d struct {
+			Note string `json:"note"`
+		}
+		if json.Unmarshal(events[i].Data, &d) == nil {
+			return platform.VisibleControls(d.Note)
+		}
+		return ""
+	}
+	return ""
+}
+
+// FinalResult is what the final test of a search measured, copied from its check into holdout.result.
+type FinalResult struct {
+	State    string   `json:"state"` // finished | failed
+	Accuracy *float64 `json:"accuracy,omitempty"`
+	Images   int      `json:"images,omitempty"`
+	Verdict  string   `json:"verdict,omitempty"`
+}
+
+// withFinalResult fills holdout.result of a search whose final test has ended, from the check the search names
+// (holdout.check_id). The result is stored once, so that later reads and the export carry it too. A search without
+// a finished check is returned as it is.
+func (m *Manager) withFinalResult(ctx context.Context, s store.Search) store.Search {
+	if len(s.Holdout) == 0 {
+		return s
+	}
+	var ho SearchHoldout
+	if json.Unmarshal(s.Holdout, &ho) != nil || ho.CheckID == "" || len(ho.Result) > 0 {
+		return s
+	}
+	row, err := m.st.Assessment(ctx, s.ChatID, ho.CheckID)
+	if err != nil || (row.State != store.AssessFinished && row.State != store.AssessFailed) {
+		return s
+	}
+	res := FinalResult{State: row.State}
+	var rep struct {
+		Figures struct {
+			Overall struct {
+				Accuracy *float64 `json:"accuracy"`
+			} `json:"overall"`
+			Accuracy *float64 `json:"accuracy"`
+		} `json:"figures"`
+		MeasuredImages int    `json:"measured_images"`
+		Verdict        string `json:"verdict"`
+	}
+	if len(row.Report) > 0 && json.Unmarshal(row.Report, &rep) == nil {
+		res.Accuracy = rep.Figures.Overall.Accuracy
+		if res.Accuracy == nil {
+			res.Accuracy = rep.Figures.Accuracy
+		}
+		res.Images, res.Verdict = rep.MeasuredImages, platform.VisibleControls(rep.Verdict)
+	}
+	raw, err := json.Marshal(res)
+	if err != nil {
+		return s
+	}
+	ho.Result = raw
+	out, err := json.Marshal(ho)
+	if err != nil {
+		return s
+	}
+	if err := m.st.SetSearchHoldout(ctx, s.ID, out); err != nil {
+		slog.Warn("final result of a search not stored", "search", s.ID, "error", err)
+	}
+	s.Holdout = out
+	return s
 }

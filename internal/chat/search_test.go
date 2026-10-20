@@ -489,3 +489,57 @@ func runningSearchIn(t *testing.T, e *env, c ChatView) (store.Search, error) {
 	s, _, err = e.st.DecideSearch(ctx, s.ID, store.SearchRunning, &ends)
 	return s, err
 }
+
+// The final test's result is copied from its check into holdout.result, and the agent's closing note of a search
+// it ended itself is part of the view (#168).
+func TestSearchViewCarriesFinalResultAndEndNote(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	c, s := runningSearch(t, e, `{"max_runs":3}`)
+	check, err := e.st.CreateAssessment(ctx, store.Assessment{ChatID: c.ID, Kind: "training", Subject: "model:5", EvalDatasetID: 9, Final: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ho, _ := json.Marshal(SearchHoldout{Available: true, FinalState: "started", CheckID: check.ID})
+	if err := e.st.SetSearchHoldout(ctx, s.ID, ho); err != nil {
+		t.Fatal(err)
+	}
+	view := func() SearchView {
+		list, err := e.m.Searches(ctx, c.ID)
+		if err != nil || len(list) != 1 {
+			t.Fatalf("searches: %v %v", list, err)
+		}
+		return list[0]
+	}
+	resultOf := func(v SearchView) []byte {
+		var h SearchHoldout
+		_ = json.Unmarshal(v.Holdout, &h)
+		return h.Result
+	}
+	if r := resultOf(view()); len(r) != 0 {
+		t.Fatalf("a result before the check ended: %s", r)
+	}
+	report := `{"figures":{"overall":{"accuracy":0.87}},"measured_images":92,"verdict":"usable"}`
+	if err := e.st.FinishAssessment(ctx, c.ID, check.ID, store.AssessFinished, json.RawMessage(report), ""); err != nil {
+		t.Fatal(err)
+	}
+	var got FinalResult
+	if err := json.Unmarshal(resultOf(view()), &got); err != nil || got.State != "finished" || got.Accuracy == nil || *got.Accuracy != 0.87 ||
+		got.Images != 92 || got.Verdict != "usable" {
+		t.Fatalf("result: %+v %v", got, err)
+	}
+	// stored, so that the export and later reads carry it as well
+	stored, _ := e.st.GetSearch(ctx, c.ID, s.ID)
+	var h SearchHoldout
+	_ = json.Unmarshal(stored.Holdout, &h)
+	if len(h.Result) == 0 {
+		t.Error("the result was not stored")
+	}
+	// the note of the agent that ended the search
+	if ended, _ := e.m.finishSearch(ctx, s, endByAgent, nil, "good enough"); !ended {
+		t.Fatal("search not ended")
+	}
+	if n := view().EndNote; n != "good enough" {
+		t.Errorf("end note: %q", n)
+	}
+}
