@@ -49,6 +49,8 @@ type NotebookServer struct {
 	ChatID  string
 	HubUser string
 	Server  string
+	// RunID is the chat's last run row, on which the reaper records the stop.
+	RunID string
 }
 
 const notebookRunCols = `id, chat_id::text, hub_user, server, entry, files, dataset_ids, timeout_min, started_at, finished_at, exit_code`
@@ -133,15 +135,16 @@ WHERE chat_id=$1 AND finished_at IS NULL ORDER BY started_at DESC LIMIT 1`, chat
 }
 
 // IdleNotebookServers names the notebook servers of chats whose last run ended before the given time
-// and which have no run going: the servers the reaper stops. The reaper stops them; it does not
-// change the runs (the runner or the watcher records an end).
+// and which have no run going: the servers the reaper stops. Servers whose last run already carries
+// a recorded stop are left out. The reaper does not change the runs (the runner or the watcher
+// records an end); it only records its stop.
 func (s *Store) IdleNotebookServers(ctx context.Context, before time.Time) ([]NotebookServer, error) {
-	rows, err := s.pool.Query(ctx, `SELECT last.chat_id::text, last.hub_user, last.server
+	rows, err := s.pool.Query(ctx, `SELECT last.chat_id::text, last.hub_user, last.server, last.id
 FROM (
-    SELECT DISTINCT ON (chat_id) chat_id, hub_user, server, finished_at
+    SELECT DISTINCT ON (chat_id) id, chat_id, hub_user, server, finished_at, server_stopped_at
     FROM notebook_runs ORDER BY chat_id, started_at DESC
 ) last
-WHERE last.finished_at IS NOT NULL AND last.finished_at < $1
+WHERE last.finished_at IS NOT NULL AND last.finished_at < $1 AND last.server_stopped_at IS NULL
   AND NOT EXISTS (SELECT 1 FROM notebook_runs a WHERE a.chat_id = last.chat_id AND a.finished_at IS NULL)`, before)
 	if err != nil {
 		return nil, err
@@ -150,12 +153,19 @@ WHERE last.finished_at IS NOT NULL AND last.finished_at < $1
 	out := []NotebookServer{}
 	for rows.Next() {
 		var n NotebookServer
-		if err := rows.Scan(&n.ChatID, &n.HubUser, &n.Server); err != nil {
+		if err := rows.Scan(&n.ChatID, &n.HubUser, &n.Server, &n.RunID); err != nil {
 			return nil, err
 		}
 		out = append(out, n)
 	}
 	return out, rows.Err()
+}
+
+// MarkNotebookServerStopped records that the reaper stopped the server after the given run (or found
+// it stopped). A later run is a new row, so it is not affected.
+func (s *Store) MarkNotebookServerStopped(ctx context.Context, runID string, at time.Time) error {
+	_, err := s.pool.Exec(ctx, `UPDATE notebook_runs SET server_stopped_at=$2 WHERE id=$1 AND server_stopped_at IS NULL`, runID, at)
+	return err
 }
 
 // scanNotebookRun reads a row of notebook_runs (a single row or one of a result set).

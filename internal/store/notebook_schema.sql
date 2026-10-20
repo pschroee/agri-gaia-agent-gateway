@@ -24,3 +24,7 @@ CREATE TABLE IF NOT EXISTS notebook_runs (
     exit_code   int
 );
 CREATE INDEX IF NOT EXISTS notebook_runs_chat ON notebook_runs (chat_id, started_at DESC);
+
+-- The reaper stopped the server after this run, or found it stopped (set on the chat's last run only).
+-- A new run is a new row with NULL, so the server becomes a candidate again.
+ALTER TABLE notebook_runs ADD COLUMN IF NOT EXISTS server_stopped_at timestamptz;
