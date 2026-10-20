@@ -69,8 +69,10 @@ type Reader func(ctx context.Context, r platform.Request) (platform.Result, erro
 // stops the job, if it can be stopped.
 type Kind struct {
 	Name string
-	Poll func(ctx context.Context, j Job, read Reader) (Progress, error)
-	Stop func(j Job) (platform.Request, bool)
+	// Resource is what the job changes on the platform (#167); it feeds platform_changed.
+	Resource string
+	Poll     func(ctx context.Context, j Job, read Reader) (Progress, error)
+	Stop     func(j Job) (platform.Request, bool)
 }
 
 // Ref reads the job's reference (e.g. the task id) out of a call and its answer.

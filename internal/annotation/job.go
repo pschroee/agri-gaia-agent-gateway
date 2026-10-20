@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"agw/internal/delegation"
 	"agw/internal/platform"
 	"agw/internal/store"
 	"agw/internal/watch"
@@ -93,7 +94,7 @@ func JobRef(_ platform.Request, res platform.Result) (string, bool) {
 // JobWatch is the kind that observes one job: its poll reads the row in annotation_jobs and nothing
 // else — no platform call and no CVAT (V3).
 func JobWatch(st *store.Store) watch.Kind {
-	return watch.Kind{Name: JobKindName, Poll: func(ctx context.Context, j watch.Job, _ watch.Reader) (watch.Progress, error) {
+	return watch.Kind{Name: JobKindName, Resource: delegation.Dataset, Poll: func(ctx context.Context, j watch.Job, _ watch.Reader) (watch.Progress, error) {
 		row, err := st.AnnotationJob(ctx, j.ChatID, j.Ref)
 		if errors.Is(err, store.ErrNotFound) {
 			return watch.Progress{State: watch.StateFailed, Message: "the job is gone"}, nil

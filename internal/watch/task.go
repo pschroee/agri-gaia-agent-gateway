@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strings"
 
+	"agw/internal/delegation"
 	"agw/internal/platform"
 )
 
@@ -36,7 +37,7 @@ const (
 )
 
 func init() {
-	Register(Kind{Name: kindPlatformTask, Poll: pollPlatformTask})
+	Register(Kind{Name: kindPlatformTask, Resource: delegation.Task, Poll: pollPlatformTask})
 	RegisterRoute(http.MethodPost, taskStartPath, kindPlatformTask, taskRef)
 }
 

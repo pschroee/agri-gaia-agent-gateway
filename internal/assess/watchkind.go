@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"regexp"
 
+	"agw/internal/delegation"
 	"agw/internal/platform"
 	"agw/internal/store"
 	"agw/internal/watch"
@@ -41,7 +42,9 @@ func RunIDFrom(_ platform.Request, res platform.Result) (string, bool) {
 }
 
 // WatchKind is the kind of job that observes one check of this chat.
-func (s *Service) WatchKind() watch.Kind { return watch.Kind{Name: KindName, Poll: s.poll} }
+func (s *Service) WatchKind() watch.Kind {
+	return watch.Kind{Name: KindName, Resource: delegation.Assessment, Poll: s.poll}
+}
 
 // poll answers the state of a check out of its row: queued and running are "running" for the watcher,
 // finished is "done" with the header of the report as its line, failed names the error.
