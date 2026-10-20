@@ -9,9 +9,11 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"agw/internal/platform"
 	"agw/internal/store"
+	"agw/internal/watch"
 )
 
 func TestApprovalDataLimitsGPU(t *testing.T) {
@@ -144,5 +146,64 @@ func TestRunInfoNoteGPUMismatch(t *testing.T) {
 	reply("started\t2026-01-01T10:00:00Z\n") // an older run recorded nothing
 	if info, err = n.Status(ctx, chatID, runID); err != nil || info.GPU != "" || info.Note != "" {
 		t.Errorf("old run: %+v %v", info, err)
+	}
+}
+
+func TestRunScriptSamplesGPUOnlyWithOne(t *testing.T) {
+	script := runScript("r20260101120000-abcd", "train.py", nil, 10)
+	for _, w := range []string{"if [ -s .agw/gpu ]; then", ">> .agw/gpu.csv", "-l 5", `kill "$SMI"`} {
+		if !strings.Contains(script, w) {
+			t.Errorf("script without %q:\n%s", w, script)
+		}
+	}
+	// The sampling stops after the exit code is written, so that it never changes the code.
+	if strings.Index(script, "echo $? > .agw/exit_code") > strings.Index(script, `kill "$SMI"`) {
+		t.Errorf("the sampling is stopped before the exit code is read:\n%s", script)
+	}
+}
+
+// Issue #168: a poll of a run reads the figures, the GPU samples and the parameters out of the run directory.
+func TestNotebookPollReadsMetrics(t *testing.T) {
+	st := testStore(t)
+	chatID := testChat(t, st)
+	hub := newFakeHub()
+	docker := &fakeDocker{ids: []string{"c1"}}
+	n, _ := testService(t, st, docker, hub)
+	run := store.NotebookRun{ID: "r20260101120000-abcd", ChatID: chatID, HubUser: "agent-test", Server: n.Server(chatID),
+		Entry: "train.py", TimeoutMin: 60, StartedAt: time.Now()}
+	if err := st.CreateNotebookRun(context.Background(), run); err != nil {
+		t.Fatal(err)
+	}
+	docker.reply = func(cmd []string, _ []byte) ([]byte, int) {
+		script := strings.Join(cmd, " ")
+		switch {
+		case strings.Contains(script, "outputs/metrics.jsonl"):
+			return []byte("{\"epoch\":1,\"epochs\":4,\"val_acc\":0.5}\nbroken\n"), 0
+		case strings.Contains(script, ".agw/gpu.csv"):
+			return []byte("2026/01/01 10:00:05.000, 50, 100, 200\n"), 0
+		case strings.Contains(script, "params.json"):
+			return []byte("{ \"lr\": 0.01, \"batch\": 8 }\n"), 0
+		}
+		return nil, 0
+	}
+	m := n.runMetrics(context.Background(), chatID, run.ID)
+	if m == nil || len(m.Epochs) != 1 || m.Epochs[0].Values["val_acc"] != 0.5 || len(m.GPU) != 1 || !m.GPUAvailable {
+		t.Fatalf("metrics: %+v", m)
+	}
+	if string(m.Params) != `{"batch":8,"lr":0.01}` {
+		t.Errorf("params: %s", m.Params)
+	}
+	if pct := watch.MetricsPercent(m, false); pct == nil || *pct != 25 {
+		t.Errorf("percent: %v", pct)
+	}
+	// A run that wrote nothing has no metrics; a params.json that is no object is none.
+	docker.reply = func(cmd []string, _ []byte) ([]byte, int) {
+		if strings.Contains(strings.Join(cmd, " "), "params.json") {
+			return []byte("[1,2]"), 0
+		}
+		return nil, 0
+	}
+	if m := n.runMetrics(context.Background(), chatID, run.ID); m != nil {
+		t.Errorf("nothing written: %+v", m)
 	}
 }

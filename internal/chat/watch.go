@@ -84,7 +84,11 @@ func watchDue(j store.WatchJob, now time.Time) bool {
 	if j.CheckedAt == nil || j.CheckedAt.IsZero() {
 		return true
 	}
-	return !now.Before(j.CheckedAt.Add(watchInterval(now.Sub(j.StartedAt), j.FailReads)))
+	d := watchInterval(now.Sub(j.StartedAt), j.FailReads)
+	if j.FailReads == 0 && d > trialPollEvery && isTrialJob(j.ID) {
+		d = trialPollEvery // the curves of a trial are to rise while one watches (issue #168)
+	}
+	return !now.Before(j.CheckedAt.Add(d))
 }
 
 // watchKind returns the kind registered under the name of the job; a kind that this build does not know

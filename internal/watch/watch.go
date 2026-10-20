@@ -12,11 +12,13 @@ package watch
 
 import (
 	"context"
+	"encoding/json"
 	"regexp"
 	"sync"
 
 	"agw/internal/delegation"
 	"agw/internal/platform"
+	"agw/internal/search"
 )
 
 // States of a job, as its row in watch_jobs keeps them (store.JobRunning, JobDone, JobFailed).
@@ -43,6 +45,9 @@ type Progress struct {
 	// Created is the object a later plan step means by {{stepN.id}}; only with StateDone, read by the
 	// gateway from the platform, never from the agent.
 	Created *Output
+	// Metrics are the figures a training or a notebook run wrote (epochs, GPU samples; issue #168); nil for the
+	// kinds that have none and when nothing could be read.
+	Metrics *Metrics
 	// Link is what the user opens for this job, when the kind knows such an address (the kind
 	// notebook_run carries the run in the user's JupyterHub). Empty for the kinds without one, and the
 	// card builds no address of its own (own code C-E4).
@@ -51,6 +56,20 @@ type Progress struct {
 	// started another job (a started training container, a built image), and the same row is observed
 	// on as that job. nil for every kind that follows its job to its end.
 	Next *Job
+}
+
+// Metrics are what the platform (training) or the run directory (notebook) says about the course of a run: the
+// lines of metrics.jsonl and the GPU samples, already parsed and checked by internal/search. The watcher reads
+// the whole series every time (at most 1 000 epochs and 2 000 samples); the one that stores them knows what is new.
+type Metrics struct {
+	Epochs []search.Epoch
+	GPU    []search.GPUSample
+	// Supported: the training template writes metrics.jsonl (label agrigaia.metrics); a notebook run is always true.
+	Supported bool
+	// GPUAvailable: the run sampled a GPU (gpu.csv exists).
+	GPUAvailable bool
+	// Params are the parameters of a notebook run (its params.json, canonical JSON object); nil when it has none.
+	Params json.RawMessage
 }
 
 // Output is an object a job produced. Size is its size in bytes when the kind knows it (the result files

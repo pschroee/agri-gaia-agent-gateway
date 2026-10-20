@@ -86,7 +86,7 @@ func TestTrainingRunStates(t *testing.T) {
 		if c.logInMessage != "" && !strings.Contains(p.LogTail, c.logInMessage) {
 			t.Errorf("%s: log %q misses %q", c.name, p.LogTail, c.logInMessage)
 		}
-		if len(calls()) != 2 {
+		if len(calls()) != 3 { // status, logs, metrics (issue #168)
 			t.Errorf("%s: calls %v", c.name, calls())
 		}
 	}
@@ -120,5 +120,55 @@ func TestTrainingRunStop(t *testing.T) {
 	k, ok = Lookup(kindTrainingRun)
 	if !ok || k.Poll == nil || k.Stop == nil {
 		t.Fatalf("training_run: %+v %v", k, ok)
+	}
+}
+
+// Issue #168: the figures of the run give the training a percent (epoch / epochs, at most 99 while it runs) and
+// with it an ETA; the GPU samples come along.
+func TestPollTrainingRunPercentFromEpochs(t *testing.T) {
+	metrics := `{"supported":true,"gpu_available":true,"epochs":[` +
+		`{"epoch":0,"epochs":10,"val_acc":0.4,"at":"2026-10-20T10:00:00Z"},` +
+		`{"epoch":3,"epochs":10,"val_acc":0.6,"at":"2026-10-20T10:01:00Z"}],` +
+		`"gpu":[{"at":"2026-10-20T10:00:05Z","util":80,"mem_used_mb":1000,"mem_total_mb":8000},` +
+		`{"at":"2026-10-20T10:00:10Z","util":120,"mem_used_mb":1000,"mem_total_mb":8000}]}`
+	read, _ := recorded(t, map[string]string{
+		"GET /train/containers/9/status":       `{"status":"running","score":null}`,
+		"GET /train/containers/9/logs?tail=20": `{"logs":""}`,
+		"GET /train/containers/9/metrics":      metrics,
+	})
+	p, err := pollTrainingRun(context.Background(), Job{ID: "w1", Ref: "9"}, read)
+	if err != nil || p.State != StateRunning {
+		t.Fatalf("poll: %+v %v", p, err)
+	}
+	if p.Percent == nil || *p.Percent != 30 {
+		t.Fatalf("percent: %v", p.Percent)
+	}
+	if p.Metrics == nil || !p.Metrics.Supported || !p.Metrics.GPUAvailable || len(p.Metrics.Epochs) != 2 {
+		t.Fatalf("metrics: %+v", p.Metrics)
+	}
+	if len(p.Metrics.GPU) != 1 || p.Metrics.GPU[0].Util != 80 {
+		t.Errorf("a sample above 100 percent falls away: %+v", p.Metrics.GPU)
+	}
+	// The last epoch while running never reaches 100.
+	m := &Metrics{Epochs: nil}
+	if MetricsPercent(m, false) != nil {
+		t.Error("no epochs, no percent")
+	}
+	// A finished run is 100; a failed one is not.
+	read, _ = recorded(t, map[string]string{
+		"GET /train/containers/9/status":       `{"status":"exited","score":0.9}`,
+		"GET /train/containers/9/logs?tail=20": `{"logs":""}`,
+		"GET /train/containers/9/metrics":      metrics,
+	})
+	if p, _ = pollTrainingRun(context.Background(), Job{ID: "w1", Ref: "9"}, read); p.State != StateDone || p.Percent == nil || *p.Percent != 100 {
+		t.Errorf("done: %+v", p)
+	}
+	// An older backend or an unreadable answer: no figures, no percent, the status decides.
+	read, _ = recorded(t, map[string]string{
+		"GET /train/containers/9/status":  `{"status":"running","score":null}`,
+		"GET /train/containers/9/metrics": `{"supported":false,"epochs":[],"gpu":[],"gpu_available":false}`,
+	})
+	if p, _ = pollTrainingRun(context.Background(), Job{ID: "w1", Ref: "9"}, read); p.Percent != nil || p.Metrics == nil || p.Metrics.Supported {
+		t.Errorf("unsupported: %+v", p)
 	}
 }

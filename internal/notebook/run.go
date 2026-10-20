@@ -59,8 +59,14 @@ func runScript(runID, entry string, args []string, timeoutMin int) string {
 		"cd " + q(runsDir+"/"+runID) + " || exit 99\n" +
 		"date -u +%FT%TZ > .agw/started\n" +
 		"nvidia-smi -L 2>/dev/null | head -n 1 > .agw/gpu\n" +
+		// The GPU is sampled every 5 s into .agw/gpu.csv while the run goes (issue #168), only when there is one.
+		"if [ -s .agw/gpu ]; then\n" +
+		"  nvidia-smi --query-gpu=timestamp,utilization.gpu,memory.used,memory.total --format=csv,noheader,nounits -l 5 >> .agw/gpu.csv 2>/dev/null &\n" +
+		"  SMI=$!\n" +
+		"fi\n" +
 		fmt.Sprintf("timeout --signal=TERM --kill-after=30s %dm %s > run.log 2>&1\n", timeoutMin, cmd) +
 		"echo $? > .agw/exit_code\n" +
+		"[ -n \"$SMI\" ] && kill \"$SMI\" 2>/dev/null\n" +
 		"date -u +%FT%TZ > .agw/finished\n"
 }
 
