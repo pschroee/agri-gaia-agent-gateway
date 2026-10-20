@@ -93,7 +93,12 @@ func (n *Notebooks) Run(ctx context.Context, chatID, user string, body platform.
 		return store.NotebookRun{}, err
 	}
 	server := n.Server(chatID)
-	if err := n.hub.Start(ctx, user, server); err != nil {
+	// The lock covers the time in which this run has no row yet, so the reaper cannot see the chat as
+	// idle and stop the server under the starting run.
+	mu := n.chatLock(chatID)
+	mu.Lock()
+	defer mu.Unlock()
+	if err := n.startServer(ctx, user, server); err != nil {
 		return store.NotebookRun{}, err
 	}
 	if err := n.waitReady(ctx, user, server); err != nil {
@@ -212,7 +217,30 @@ func (n *Notebooks) runResult(ctx context.Context, chatID, user, server string, 
 var (
 	serverReadyTimeout = 120 * time.Second
 	serverReadyEvery   = 2 * time.Second
+	// serverStopWaitTimeout: how long a run waits for a server that the hub is still stopping (the
+	// hub's slow stop timeout is 10 s, the container stop up to 10 s more).
+	serverStopWaitTimeout = 60 * time.Second
 )
+
+// startServer starts the server; while the hub is still stopping it, it tries again every
+// serverReadyEvery, up to serverStopWaitTimeout.
+func (n *Notebooks) startServer(ctx context.Context, user, server string) error {
+	deadline := time.Now().Add(serverStopWaitTimeout)
+	for {
+		err := n.hub.Start(ctx, user, server)
+		if !errors.Is(err, ErrStopPending) {
+			return err
+		}
+		if !time.Now().Before(deadline) {
+			return fmt.Errorf("the notebook server %s is still stopping after %s; try the run again in a minute", server, serverStopWaitTimeout)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(serverReadyEvery):
+		}
+	}
+}
 
 // waitReady waits until the hub reports the started server as ready.
 func (n *Notebooks) waitReady(ctx context.Context, user, server string) error {

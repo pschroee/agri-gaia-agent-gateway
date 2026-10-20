@@ -987,3 +987,164 @@ func TestNotebookStoppingCall(t *testing.T) {
 		}
 	}
 }
+
+// --- the lock between a starting run and the reaper (#171) ---
+
+// A hub that reports pending "stop" yields the state "stopping".
+func TestHubServerStateStopping(t *testing.T) {
+	hub := newFakeHub()
+	hub.server, hub.pending = "agw-x", "stop"
+	_, srv := testService(t, testStore(t), &fakeDocker{}, hub)
+	h := NewHub(srv.URL+"/hub/api", "tok", nil)
+	state, err := h.ServerState(context.Background(), "agent-test", "agw-x")
+	if err != nil || state != "stopping" {
+		t.Fatalf("state %q, err %v (want stopping)", state, err)
+	}
+}
+
+// A start that the hub refuses with "pending stop" is ErrStopPending, not a hub failure.
+func TestHubStartStopPending(t *testing.T) {
+	hub := newFakeHub()
+	hub.server, hub.pending, hub.pendingPosts = "agw-x", "stop", -1
+	_, srv := testService(t, testStore(t), &fakeDocker{}, hub)
+	h := NewHub(srv.URL+"/hub/api", "tok", nil)
+	err := h.Start(context.Background(), "agent-test", "agw-x")
+	if !errors.Is(err, ErrStopPending) || errors.Is(err, ErrHub) {
+		t.Fatalf("start: %v (want ErrStopPending, not ErrHub)", err)
+	}
+}
+
+// A chat whose lock is held (a run is starting) is skipped; the next round stops the server once.
+func TestReaperSkipsLockedChat(t *testing.T) {
+	n, hub, _, chat := reaperFixture(t)
+	ctx := context.Background()
+	mu := n.chatLock(chat)
+	mu.Lock()
+	if err := n.StopIdle(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(hub.deleted()); got != 0 {
+		t.Fatalf("DELETE while the chat is locked: %d", got)
+	}
+	mu.Unlock()
+	if err := n.StopIdle(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := n.StopIdle(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(hub.deleted()); got != 1 {
+		t.Errorf("DELETE after the release: %d (want 1)", got)
+	}
+}
+
+// A run that began after the reaper listed its candidates is seen under the lock: no stop.
+func TestReaperRechecksUnderLock(t *testing.T) {
+	n, hub, st, chat := reaperFixture(t)
+	ctx := context.Background()
+	before := time.Now().Add(-time.Duration(n.cfg.IdleMin) * time.Minute)
+	servers, err := st.IdleNotebookServers(ctx, before)
+	if err != nil || len(servers) != 1 {
+		t.Fatalf("candidates: %v, %v", servers, err)
+	}
+	if err := st.CreateNotebookRun(ctx, store.NotebookRun{ID: "r20260101140000-cccc", ChatID: chat, HubUser: "agent-test",
+		Server: n.Server(chat), Entry: "train.py", TimeoutMin: 60, StartedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	if err := n.stopOne(ctx, servers[0], before); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(hub.deleted()); got != 0 {
+		t.Errorf("DELETE for a chat with a new run: %d", got)
+	}
+}
+
+func runInputs() (platform.RunBody, []platform.Upload, func(context.Context, int64) (io.ReadCloser, error)) {
+	body := platform.RunBody{Entry: "train.py", TimeoutMinutes: 60}
+	files := []platform.Upload{{Field: "file", Name: "train.py", Data: []byte("x"), SHA256: "aa"}}
+	return body, files, func(context.Context, int64) (io.ReadCloser, error) { return nil, errors.New("no dataset expected") }
+}
+
+// A run waits while the hub stops the server and then starts it once.
+func TestRunWaitsForPendingStop(t *testing.T) {
+	st := testStore(t)
+	chat := testChat(t, st)
+	hub := newFakeHub()
+	n, _ := testService(t, st, &fakeDocker{ids: []string{"c1"}}, hub)
+	hub.server, hub.pending, hub.pendingPosts = n.Server(chat), "stop", 2
+	oldEvery := serverReadyEvery
+	serverReadyEvery = 5 * time.Millisecond
+	defer func() { serverReadyEvery = oldEvery }()
+	body, files, ds := runInputs()
+	if _, err := n.Run(context.Background(), chat, "agent-test", body, files, ds); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	// Two refused starts and one that went through.
+	if got := hub.requestCount(http.MethodPost); got != 3 {
+		t.Errorf("POST requests: %d (want 3)", got)
+	}
+}
+
+// A server that stays in "pending stop" ends the run with a clear message, not "unavailable".
+func TestRunStopPendingTimeout(t *testing.T) {
+	st := testStore(t)
+	chat := testChat(t, st)
+	hub := newFakeHub()
+	n, _ := testService(t, st, &fakeDocker{ids: []string{"c1"}}, hub)
+	hub.server, hub.pending, hub.pendingPosts = n.Server(chat), "stop", -1
+	oldEvery, oldWait := serverReadyEvery, serverStopWaitTimeout
+	serverReadyEvery, serverStopWaitTimeout = 5*time.Millisecond, 30*time.Millisecond
+	defer func() { serverReadyEvery, serverStopWaitTimeout = oldEvery, oldWait }()
+	body, files, ds := runInputs()
+	_, err := n.Run(context.Background(), chat, "agent-test", body, files, ds)
+	if err == nil || !strings.Contains(err.Error(), "still stopping") || errors.Is(err, ErrHub) {
+		t.Fatalf("run: %v (want a still-stopping message, not ErrHub)", err)
+	}
+}
+
+// While a run waits for its server, the reaper leaves the chat alone; after the run its row exists.
+func TestRunHoldsLockUntilRecorded(t *testing.T) {
+	st := testStore(t)
+	chat := testChat(t, st)
+	hub := newFakeHub()
+	n, _ := testService(t, st, &fakeDocker{ids: []string{"c1"}}, hub)
+	addFinishedRun(t, st, n, chat, "r20260101120000-aaaa", time.Now().Add(-2*time.Hour))
+	hub.server = n.Server(chat)
+	hub.gate = make(chan struct{})
+	oldEvery := serverReadyEvery
+	serverReadyEvery = 5 * time.Millisecond
+	defer func() { serverReadyEvery = oldEvery }()
+	body, files, ds := runInputs()
+	type result struct {
+		run store.NotebookRun
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		r, err := n.Run(context.Background(), chat, "agent-test", body, files, ds)
+		done <- result{r, err}
+	}()
+	// Wait until the run holds the lock (it is blocked reading the user model).
+	deadline := time.Now().Add(5 * time.Second)
+	for n.chatLock(chat).TryLock() {
+		n.chatLock(chat).Unlock()
+		if time.Now().After(deadline) {
+			t.Fatal("the run never took the chat lock")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if err := n.StopIdle(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(hub.deleted()); got != 0 {
+		t.Errorf("DELETE during a starting run: %d", got)
+	}
+	close(hub.gate)
+	res := <-done
+	if res.err != nil {
+		t.Fatalf("run: %v", res.err)
+	}
+	if _, err := st.GetNotebookRun(context.Background(), chat, res.run.ID); err != nil {
+		t.Errorf("the run row is missing after Run: %v", err)
+	}
+}

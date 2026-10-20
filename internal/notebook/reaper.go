@@ -9,6 +9,8 @@ import (
 	"errors"
 	"log/slog"
 	"time"
+
+	"agw/internal/store"
 )
 
 // The reaper stops the notebook server of a chat that had no run for AGW_NOTEBOOK_IDLE_MIN minutes.
@@ -17,6 +19,7 @@ import (
 // runs themselves: the status call and the watcher record an end (they see the exit code in the run
 // directory), the store keeps what the run itself wrote. A stop is recorded on the chat's last run row,
 // so the server is stopped once; the next run is a new row and makes the server a candidate again.
+// A run holds the chat's lock (chatLock) while it starts; the reaper only stops under that lock.
 //
 // How often the reaper looks; a variable, so that a test does not wait.
 var reaperEvery = 5 * time.Minute
@@ -52,29 +55,53 @@ func (n *Notebooks) StopIdle(ctx context.Context) error {
 		return err
 	}
 	for _, s := range servers {
-		state, err := n.hub.ServerState(ctx, s.HubUser, s.Server)
-		switch {
-		case errors.Is(err, ErrNoHubUser):
-			state = "not started"
-		case err != nil:
-			slog.Warn("idle notebook server state unknown", "chat", s.ChatID, "server", s.Server, "error", err)
-			continue
-		}
-		running := state != "not started"
-		if running {
-			if err := n.hub.Stop(ctx, s.HubUser, s.Server); err != nil {
-				slog.Warn("idle notebook server not stopped", "chat", s.ChatID, "server", s.Server, "error", err)
-				continue
-			}
-		}
-		if err := n.store.MarkNotebookServerStopped(ctx, s.RunID, n.now()); err != nil {
+		if err := n.stopOne(ctx, s, before); err != nil {
 			return err
 		}
-		if running {
-			slog.Info("idle notebook server stopped", "chat", s.ChatID, "server", s.Server)
-		} else {
-			slog.Debug("idle notebook server was not running", "chat", s.ChatID, "server", s.Server)
+	}
+	return nil
+}
+
+// stopOne stops one idle server under the chat's lock. A chat whose lock is taken has a run that
+// is starting; it is skipped, and the next round sees its new run row. Under the lock the chat is
+// checked again, because a run may have begun and written its row since the list was read.
+func (n *Notebooks) stopOne(ctx context.Context, s store.NotebookServer, before time.Time) error {
+	mu := n.chatLock(s.ChatID)
+	if !mu.TryLock() {
+		slog.Debug("idle notebook server skipped, a run is starting", "chat", s.ChatID, "server", s.Server)
+		return nil
+	}
+	defer mu.Unlock()
+	idle, err := n.store.NotebookServerIdle(ctx, s.ChatID, s.RunID, before)
+	if err != nil {
+		return err
+	}
+	if !idle {
+		return nil
+	}
+	state, err := n.hub.ServerState(ctx, s.HubUser, s.Server)
+	switch {
+	case errors.Is(err, ErrNoHubUser):
+		state = "not started"
+	case err != nil:
+		slog.Warn("idle notebook server state unknown", "chat", s.ChatID, "server", s.Server, "error", err)
+		return nil
+	}
+	// "stopping" counts like "running": the stop is asked again (the hub answers 202) and recorded.
+	running := state != "not started"
+	if running {
+		if err := n.hub.Stop(ctx, s.HubUser, s.Server); err != nil {
+			slog.Warn("idle notebook server not stopped", "chat", s.ChatID, "server", s.Server, "error", err)
+			return nil
 		}
+	}
+	if err := n.store.MarkNotebookServerStopped(ctx, s.RunID, n.now()); err != nil {
+		return err
+	}
+	if running {
+		slog.Info("idle notebook server stopped", "chat", s.ChatID, "server", s.Server)
+	} else {
+		slog.Debug("idle notebook server was not running", "chat", s.ChatID, "server", s.Server)
 	}
 	return nil
 }

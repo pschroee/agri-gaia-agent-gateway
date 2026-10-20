@@ -65,6 +65,13 @@ type fakeHub struct {
 	// reachable false: every call fails as if the hub were down.
 	reachable bool
 	stopped   int
+	// pending "stop": the hub is stopping the server; a start answers 400 "pending stop" and the user
+	// model carries "pending". pendingPosts counts the starts that are refused before the stop ends
+	// (-1: never).
+	pending      string
+	pendingPosts int
+	// gate, when set, holds every read of the user model until it is closed.
+	gate chan struct{}
 }
 
 func newFakeHub() *fakeHub { return &fakeHub{userKnown: true, ready: true, reachable: true} }
@@ -76,6 +83,7 @@ func (h *fakeHub) handler() http.Handler {
 		reachable := h.reachable
 		known, ready, server := h.userKnown, h.ready, h.server
 		startCode, startBody := h.startCode, h.startBody
+		gate := h.gate
 		h.mu.Unlock()
 		if !reachable {
 			w.WriteHeader(http.StatusBadGateway)
@@ -87,6 +95,20 @@ func (h *fakeHub) handler() http.Handler {
 		}
 		switch {
 		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/servers/"):
+			h.mu.Lock()
+			if h.pending == "stop" {
+				if h.pendingPosts != 0 {
+					if h.pendingPosts > 0 {
+						h.pendingPosts--
+					}
+					h.mu.Unlock()
+					w.WriteHeader(http.StatusBadRequest)
+					_, _ = w.Write([]byte(`{"status":400,"message":"` + lastSegment(r.URL.Path) + ` is pending stop"}`))
+					return
+				}
+				h.pending = ""
+			}
+			h.mu.Unlock()
 			if startCode != 0 {
 				w.WriteHeader(startCode)
 				_, _ = w.Write([]byte(startBody))
@@ -108,6 +130,12 @@ func (h *fakeHub) handler() http.Handler {
 			h.mu.Unlock()
 			w.WriteHeader(http.StatusNoContent)
 		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/users/"):
+			if gate != nil {
+				<-gate
+			}
+			h.mu.Lock()
+			pending := h.pending
+			h.mu.Unlock()
 			if !known {
 				w.WriteHeader(http.StatusNotFound)
 				_, _ = w.Write([]byte(`{"detail":"No such user"}`))
@@ -115,7 +143,7 @@ func (h *fakeHub) handler() http.Handler {
 			}
 			servers := "{}"
 			if server != "" {
-				servers = fmt.Sprintf(`{"%s":{"ready":%t}}`, server, ready)
+				servers = fmt.Sprintf(`{"%s":{"ready":%t,"pending":%q}}`, server, ready, pending)
 			}
 			fmt.Fprintf(w, `{"name":%q,"servers":%s}`, lastSegment(r.URL.Path), servers)
 		default:

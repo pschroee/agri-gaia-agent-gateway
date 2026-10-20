@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"agw/internal/platform"
@@ -59,6 +60,17 @@ type Notebooks struct {
 	LogCall func(ctx context.Context, chatID, detail, result string)
 	// now is the clock (tests replace it).
 	now func() time.Time
+	// locks holds one *sync.Mutex per chat (see chatLock).
+	locks sync.Map
+}
+
+// chatLock returns the mutex of a chat's notebook server. It excludes a run that is starting from
+// the reaper that stops the idle server, so the reaper never stops a server under a starting run.
+// It holds because the gateway is one process; a second gateway process would need a database lock
+// (pg_advisory_xact_lock in the reaper plus the re-check) instead.
+func (n *Notebooks) chatLock(chatID string) *sync.Mutex {
+	m, _ := n.locks.LoadOrStore(chatID, &sync.Mutex{})
+	return m.(*sync.Mutex)
 }
 
 // notebookUID is the user of the notebook image (jovyan) and the group of the gateway's labels.

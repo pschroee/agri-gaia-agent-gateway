@@ -161,6 +161,19 @@ WHERE last.finished_at IS NOT NULL AND last.finished_at < $1 AND last.server_sto
 	return out, rows.Err()
 }
 
+// NotebookServerIdle reports whether the chat's server is still a candidate for the reaper: the
+// chat's last run is runID, it ended before the given time, no stop is recorded on it and the chat
+// has no run going. The reaper asks again under the chat's lock.
+func (s *Store) NotebookServerIdle(ctx context.Context, chatID, runID string, before time.Time) (bool, error) {
+	var idle bool
+	err := s.pool.QueryRow(ctx, `SELECT COALESCE((
+    SELECT last.id = $2 AND last.finished_at IS NOT NULL AND last.finished_at < $3 AND last.server_stopped_at IS NULL
+    FROM (SELECT id, finished_at, server_stopped_at FROM notebook_runs WHERE chat_id=$1 ORDER BY started_at DESC LIMIT 1) last
+  ), false)
+  AND NOT EXISTS (SELECT 1 FROM notebook_runs a WHERE a.chat_id=$1 AND a.finished_at IS NULL)`, chatID, runID, before).Scan(&idle)
+	return idle, err
+}
+
 // MarkNotebookServerStopped records that the reaper stopped the server after the given run (or found
 // it stopped). A later run is a new row, so it is not affected.
 func (s *Store) MarkNotebookServerStopped(ctx context.Context, runID string, at time.Time) error {
