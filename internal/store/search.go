@@ -61,6 +61,9 @@ type SearchFile struct {
 	Name   string `json:"name"`
 	SHA256 string `json:"sha256"`
 	Size   int64  `json:"size"`
+	// Text is the text of the approved file (UTF-8 and not too large), kept so that a later change can be shown as a
+	// diff in the question to the user; empty for a binary or large file.
+	Text string `json:"text,omitempty"`
 }
 
 // SearchCode is the code a notebook search was approved with: the files with their hashes, the entry, the
@@ -96,6 +99,8 @@ type Search struct {
 	Session    string `json:"session,omitempty"`
 	ApprovalID string `json:"approval_id,omitempty"`
 	ToolCallID string `json:"tool_call_id,omitempty"`
+	// AutoTurns counts the turns the agent was woken for by this search (against its wake limit).
+	AutoTurns int `json:"auto_turns"`
 
 	CreatedAt time.Time  `json:"created_at"`
 	StartedAt *time.Time `json:"started_at,omitempty"`
@@ -125,6 +130,10 @@ type Trial struct {
 	Score       *float64        `json:"score,omitempty"`
 	ScoreEpoch  *int            `json:"score_epoch,omitempty"`
 	GPU         json.RawMessage `json:"gpu,omitempty"`
+	// Figures: "" unknown, "none" the training template writes no figures, "ok" it does.
+	Figures string `json:"figures,omitempty"`
+	// GPUAvailable: the run sampled a GPU; nil while unknown.
+	GPUAvailable *bool  `json:"gpu_available,omitempty"`
 	Error       string          `json:"error,omitempty"`
 	StoppedBy   string          `json:"stopped_by,omitempty"`
 	DeclaredAt  time.Time       `json:"declared_at"`
@@ -175,13 +184,13 @@ func jsonOr(raw json.RawMessage, empty string) string {
 }
 
 const searchCols = `id, chat_id::text, title, state, path, objective::text, space::text, budget::text, base::text, code::text, holdout::text,
-note, end_reason, winner_idx, session, approval_id, tool_call_id, created_at, started_at, ends_by, ended_at`
+note, end_reason, winner_idx, session, approval_id, tool_call_id, auto_turns, created_at, started_at, ends_by, ended_at`
 
 func scanSearch(row pgx.Row) (Search, error) {
 	var s Search
 	var objective, space, budget, base, code, holdout string
 	err := row.Scan(&s.ID, &s.ChatID, &s.Title, &s.State, &s.Path, &objective, &space, &budget, &base, &code, &holdout,
-		&s.Note, &s.EndReason, &s.WinnerIdx, &s.Session, &s.ApprovalID, &s.ToolCallID, &s.CreatedAt, &s.StartedAt, &s.EndsBy, &s.EndedAt)
+		&s.Note, &s.EndReason, &s.WinnerIdx, &s.Session, &s.ApprovalID, &s.ToolCallID, &s.AutoTurns, &s.CreatedAt, &s.StartedAt, &s.EndsBy, &s.EndedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return s, ErrNotFound
 	}
@@ -347,6 +356,22 @@ func (s *Store) SetSearchHoldout(ctx context.Context, id string, holdout json.Ra
 	return err
 }
 
+// SetSearchBase stores the base of a template search again (the configuration read when the approval is decided).
+func (s *Store) SetSearchBase(ctx context.Context, id string, base json.RawMessage) error {
+	_, err := s.pool.Exec(ctx, `UPDATE searches SET base=$2::jsonb WHERE id=$1`, id, jsonOr(base, "{}"))
+	return err
+}
+
+// IncSearchAutoTurns counts one more turn the agent was woken for by the search and returns the count.
+func (s *Store) IncSearchAutoTurns(ctx context.Context, id string) (int, error) {
+	var n int
+	err := s.pool.QueryRow(ctx, `UPDATE searches SET auto_turns = auto_turns + 1 WHERE id=$1 RETURNING auto_turns`, id).Scan(&n)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, ErrNotFound
+	}
+	return n, err
+}
+
 // SetSearchApproval records the approval a search was proposed with.
 func (s *Store) SetSearchApproval(ctx context.Context, id, approvalID string) error {
 	_, err := s.pool.Exec(ctx, `UPDATE searches SET approval_id=$2 WHERE id=$1`, id, approvalID)
@@ -356,13 +381,13 @@ func (s *Store) SetSearchApproval(ctx context.Context, id, approvalID string) er
 // --- trials ---
 
 const trialCols = `id, chat_id::text, COALESCE(search_id,''), seq, idx, path, state, params::text, note, ref, job_id, code_version, source,
-epoch, epochs, score, score_epoch, COALESCE(gpu::text,''), error, stopped_by, declared_at, started_at, ended_at`
+epoch, epochs, score, score_epoch, COALESCE(gpu::text,''), figures, gpu_available, error, stopped_by, declared_at, started_at, ended_at`
 
 func scanTrial(row pgx.Row) (Trial, error) {
 	var t Trial
 	var params, gpu string
 	err := row.Scan(&t.ID, &t.ChatID, &t.SearchID, &t.Seq, &t.Idx, &t.Path, &t.State, &params, &t.Note, &t.Ref, &t.JobID, &t.CodeVersion,
-		&t.Source, &t.Epoch, &t.Epochs, &t.Score, &t.ScoreEpoch, &gpu, &t.Error, &t.StoppedBy, &t.DeclaredAt, &t.StartedAt, &t.EndedAt)
+		&t.Source, &t.Epoch, &t.Epochs, &t.Score, &t.ScoreEpoch, &gpu, &t.Figures, &t.GPUAvailable, &t.Error, &t.StoppedBy, &t.DeclaredAt, &t.StartedAt, &t.EndedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return t, ErrNotFound
 	}
@@ -458,6 +483,12 @@ score_epoch = COALESCE($5, score_epoch), gpu = COALESCE(NULLIF($6,'')::jsonb, gp
 	return err
 }
 
+// SetTrialFigures records what the run of a trial writes: figures "none" or "ok" and whether it sampled a GPU.
+func (s *Store) SetTrialFigures(ctx context.Context, id, figures string, gpuAvailable bool) error {
+	_, err := s.pool.Exec(ctx, `UPDATE experiment_trials SET figures=$2, gpu_available=$3 WHERE id=$1`, id, figures, gpuAvailable)
+	return err
+}
+
 // TrialByJob returns the trial of an observed job; ErrNotFound when the job belongs to none.
 func (s *Store) TrialByJob(ctx context.Context, jobID string) (Trial, error) {
 	if jobID == "" {
@@ -483,6 +514,53 @@ func (s *Store) SetTrialRef(ctx context.Context, id, ref string) (bool, error) {
 		return false, err
 	}
 	return tag.RowsAffected() == 1, nil
+}
+
+// ClaimTrialClone reserves the copy of the base container for a declared trial that has none yet (its ref is
+// empty): the first call gets true, a second one for the same trial gets false. ReleaseTrialClone gives it back.
+func (s *Store) ClaimTrialClone(ctx context.Context, id string) (bool, error) {
+	tag, err := s.pool.Exec(ctx, `UPDATE experiment_trials SET ref='-' WHERE id=$1 AND state='declared' AND ref=''`, id)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
+// ReleaseTrialClone gives back a copy that was reserved but not made.
+func (s *Store) ReleaseTrialClone(ctx context.Context, id string) error {
+	_, err := s.pool.Exec(ctx, `UPDATE experiment_trials SET ref='' WHERE id=$1 AND state='declared' AND ref='-'`, id)
+	return err
+}
+
+// ClaimTrialStart moves a declared trial to "running" for a call that starts it (the start of the copy, the
+// notebook run) and reserves it: the first call gets true, a second one false. ref must be the ref the trial has
+// ("" for a notebook trial, whose run id is known after the start). ReleaseTrialStart gives it back when the call
+// failed; SetTrialJob completes it when it worked.
+func (s *Store) ClaimTrialStart(ctx context.Context, id, ref string) (bool, error) {
+	tag, err := s.pool.Exec(ctx, `UPDATE experiment_trials SET state='running', started_at=now()
+WHERE id=$1 AND state='declared' AND ref=$2`, id, ref)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
+// ReleaseTrialStart undoes ClaimTrialStart for a trial whose start did not happen (it has no job yet).
+func (s *Store) ReleaseTrialStart(ctx context.Context, id string) error {
+	_, err := s.pool.Exec(ctx, `UPDATE experiment_trials SET state='declared', started_at=NULL WHERE id=$1 AND state='running' AND job_id=''`, id)
+	return err
+}
+
+// SetTrialJob records the run and the observed job of a trial that is running; an empty ref leaves the ref as it is.
+func (s *Store) SetTrialJob(ctx context.Context, id, ref, jobID string) error {
+	_, err := s.pool.Exec(ctx, `UPDATE experiment_trials SET ref=COALESCE(NULLIF($2,''), ref), job_id=$3 WHERE id=$1 AND state='running'`, id, ref, jobID)
+	return err
+}
+
+// SetTrialCodeVersion records the version of the code a trial ran with (a change the user approved).
+func (s *Store) SetTrialCodeVersion(ctx context.Context, id string, version int) error {
+	_, err := s.pool.Exec(ctx, `UPDATE experiment_trials SET code_version=$2 WHERE id=$1`, id, version)
+	return err
 }
 
 // ListTrials returns every trial of a chat in the order they were declared (the book of trials).

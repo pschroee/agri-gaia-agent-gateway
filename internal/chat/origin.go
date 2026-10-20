@@ -135,7 +135,11 @@ func composeMessage(entries []store.QueueEntry, notices ...*systemNote) composed
 			parts = append(parts, part{note: &n, src: store.Source{Kind: store.QueueSystem, Type: n.Type, Refs: n.Refs, QueueID: e.ID, Audience: store.NoteAudience(n.Type), Context: n.Context}})
 			all.WriteString(n.Text())
 		}
-		parts = append(parts, part{src: store.Source{Kind: store.QueueUser, QueueID: e.ID}, text: t})
+		src := store.Source{Kind: store.QueueUser, QueueID: e.ID}
+		if e.SearchHint != "" {
+			src.SearchHint = &store.SearchHintRef{SearchID: e.SearchHint}
+		}
+		parts = append(parts, part{src: src, text: t})
 		all.WriteString(t)
 	}
 	var out []string

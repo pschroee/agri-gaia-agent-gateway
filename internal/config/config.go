@@ -394,6 +394,9 @@ type Env struct {
 	// anything above these (plan.Limits). PlanMaxDuration never exceeds oidc.MaxSession - 1 h.
 	PlanMaxDuration time.Duration
 	PlanMaxLLMCost  float64
+	// SearchMaxHours: a training search ends after this many hours at the latest (AGW_SEARCH_MAX_HOURS, default 12,
+	// issue #168), and always with the login session that carries its calls.
+	SearchMaxHours int
 
 	// X3: limits of an experiment run at the model pass-through. The model, the provider and the upstream
 	// address stay per run (the chat's model and the catalog), so a self hosted model can come later without
@@ -578,6 +581,8 @@ const (
 const (
 	DefaultPlanMaxDuration = 8 * time.Hour
 	DefaultPlanMaxLLMCost  = 5.00
+	// DefaultSearchMaxHours is the longest a training search runs (#168).
+	DefaultSearchMaxHours = 12
 	// PlanDurationCap never exceeds oidc.MaxSession (12 h) minus one hour of headroom.
 	PlanDurationCap = 11 * time.Hour
 )
@@ -656,6 +661,7 @@ func FromEnv() Env {
 		ComputeMaxPerChat:    max(1, num("AGW_COMPUTE_MAX_PER_CHAT", DefaultComputeMaxPerChat)),
 		PlanMaxDuration:      planMaxDuration(),
 		PlanMaxLLMCost:       planMaxLLMCost(),
+		SearchMaxHours:       max(1, num("AGW_SEARCH_MAX_HOURS", DefaultSearchMaxHours)),
 
 		// X3: limits of an experiment run (placeholders until XE5).
 		ExpMaxCostUSD:        exp.MaxCostUSD,

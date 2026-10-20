@@ -92,3 +92,14 @@ CREATE INDEX IF NOT EXISTS search_events_search ON search_events (search_id, id)
 -- The structured data of the approval of a search, or of a changed code inside a search (issue #168): built by
 -- the chat package and written as it is. NULL for every other kind of approval.
 ALTER TABLE approvals ADD COLUMN IF NOT EXISTS search jsonb;
+
+-- Turns the agent was woken for without the user, counted against the wake limit of the search (issue #168).
+ALTER TABLE searches ADD COLUMN IF NOT EXISTS auto_turns integer NOT NULL DEFAULT 0;
+
+-- A message of the user that is a hint for a training search carries the search's id as metadata (issue #168).
+ALTER TABLE chat_queue ADD COLUMN IF NOT EXISTS search_hint text NOT NULL DEFAULT '';
+
+-- What the run of a trial writes (issue #168): figures "" unknown, "none" the template writes none, "ok"; gpu_available
+-- says whether the run sampled a GPU.
+ALTER TABLE experiment_trials ADD COLUMN IF NOT EXISTS figures text NOT NULL DEFAULT '';
+ALTER TABLE experiment_trials ADD COLUMN IF NOT EXISTS gpu_available boolean;

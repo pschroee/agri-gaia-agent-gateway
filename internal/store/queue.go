@@ -32,6 +32,8 @@ type QueueEntry struct {
 	// Context: page context of a message from the user (only user entries; nil: none). It goes to
 	// pi as a note of its own (NoteContext) before the text, never inside it.
 	Context *PageContext `json:"context,omitempty"`
+	// SearchHint: the id of the training search this message of the user is a hint for (issue #168); empty otherwise.
+	SearchHint string `json:"search_hint,omitempty"`
 	// Subagent: only for NoteSubagentUser entries (issue #82), read from the entry; not stored.
 	Subagent *SubagentNote `json:"subagent,omitempty"`
 }
@@ -127,9 +129,12 @@ const (
 	// NotePlanStep: a step of an autonomous plan ended — its observed platform job finished or failed, or
 	// a parked approval was decided (A-E2). Such a note is what wakes a resting chat.
 	NotePlanStep = "plan_step"
+	// NoteSearch: a trial of a training search ended, the search ended, or the user intervened in it (issue #168).
+	// Such a note wakes a resting chat like the end of a plan step, within the wake limit of the search.
+	NoteSearch = "search"
 )
 
-const queueCols = `id::text, chat_id::text, text, attachments, created_at, kind, note, refs, context`
+const queueCols = `id::text, chat_id::text, text, attachments, created_at, kind, note, refs, context, search_hint`
 
 func scanQueue(rows pgx.Rows) ([]QueueEntry, error) {
 	defer rows.Close()
@@ -137,7 +142,7 @@ func scanQueue(rows pgx.Rows) ([]QueueEntry, error) {
 	for rows.Next() {
 		var e QueueEntry
 		var att, refs, pc []byte
-		if err := rows.Scan(&e.ID, &e.ChatID, &e.Text, &att, &e.CreatedAt, &e.Kind, &e.Note, &refs, &pc); err != nil {
+		if err := rows.Scan(&e.ID, &e.ChatID, &e.Text, &att, &e.CreatedAt, &e.Kind, &e.Note, &refs, &pc, &e.SearchHint); err != nil {
 			return nil, err
 		}
 		if len(pc) > 0 {
@@ -170,20 +175,26 @@ func (s *Store) Enqueue(ctx context.Context, chatID, text string, attachments []
 // EnqueueUser enqueues a message from the user with its page context (nil: none; checked by the
 // caller).
 func (s *Store) EnqueueUser(ctx context.Context, chatID, text string, attachments []string, pc *PageContext) (QueueEntry, error) {
-	return s.enqueue(ctx, chatID, QueueUser, text, attachments, "", nil, pc)
+	return s.enqueue(ctx, chatID, QueueUser, text, attachments, "", nil, pc, "")
+}
+
+// EnqueueUserHint enqueues a message of the user that is a hint for a training search (issue #168): the id of the
+// search goes with the entry as metadata.
+func (s *Store) EnqueueUserHint(ctx context.Context, chatID, text string, pc *PageContext, searchID string) (QueueEntry, error) {
+	return s.enqueue(ctx, chatID, QueueUser, text, nil, "", nil, pc, searchID)
 }
 
 // EnqueueKind enqueues an entry of the given kind (QueueUser, QueueSystem).
 func (s *Store) EnqueueKind(ctx context.Context, chatID, kind, text string, attachments []string) (QueueEntry, error) {
-	return s.enqueue(ctx, chatID, kind, text, attachments, "", nil, nil)
+	return s.enqueue(ctx, chatID, kind, text, attachments, "", nil, nil, "")
 }
 
 // EnqueueSystem enqueues an orchestrator note (note: NoteBackground, NoteSandbox).
 func (s *Store) EnqueueSystem(ctx context.Context, chatID, note string, refs []string, text string) (QueueEntry, error) {
-	return s.enqueue(ctx, chatID, QueueSystem, text, nil, note, refs, nil)
+	return s.enqueue(ctx, chatID, QueueSystem, text, nil, note, refs, nil, "")
 }
 
-func (s *Store) enqueue(ctx context.Context, chatID, kind, text string, attachments []string, note string, refs []string, pc *PageContext) (QueueEntry, error) {
+func (s *Store) enqueue(ctx context.Context, chatID, kind, text string, attachments []string, note string, refs []string, pc *PageContext, hint string) (QueueEntry, error) {
 	if attachments == nil {
 		attachments = []string{}
 	}
@@ -201,8 +212,8 @@ func (s *Store) enqueue(ctx context.Context, chatID, kind, text string, attachme
 	if pc != nil {
 		pj, _ = json.Marshal(pc)
 	}
-	rows, err := s.pool.Query(ctx, `INSERT INTO chat_queue (chat_id, text, attachments, kind, note, refs, context) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING `+queueCols,
-		chatID, text, att, kind, note, rj, pj)
+	rows, err := s.pool.Query(ctx, `INSERT INTO chat_queue (chat_id, text, attachments, kind, note, refs, context, search_hint) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING `+queueCols,
+		chatID, text, att, kind, note, rj, pj, hint)
 	if err != nil {
 		return QueueEntry{}, err
 	}

@@ -161,10 +161,11 @@ func (p ParamSpec) normalised() (ParamSpec, error) {
 			if err != nil || len(c) == 0 || c[0] == '{' || c[0] == '[' || string(c) == "null" {
 				return p, errors.New("a value must be a string, a number or a bool")
 			}
-			if seen[string(c)] {
+			key := choiceKey(c)
+			if seen[key] {
 				return p, fmt.Errorf("value %s appears twice", c)
 			}
-			seen[string(c)] = true
+			seen[key] = true
 			vals[i] = c
 		}
 		p.Values = vals
@@ -218,8 +219,14 @@ func (p ParamSpec) allows(v json.RawMessage) error {
 			return errors.New("not a bool")
 		}
 	case "choice":
-		for _, c := range p.Values { // values were canonicalised when the search was parsed
-			if bytes.Equal(c, v) {
+		// Numbers compare by value (0.001 is 1e-3), strings and bools by their content; a quoted number is a
+		// string and never equals a number.
+		want := choiceKey(v)
+		if want == "" {
+			return errors.New("not a string, a number or a bool")
+		}
+		for _, c := range p.Values {
+			if choiceKey(c) == want {
 				return nil
 			}
 		}
@@ -246,6 +253,96 @@ func (p ParamSpec) allows(v json.RawMessage) error {
 		return errors.New("unknown parameter type")
 	}
 	return nil
+}
+
+// choiceKey is the identity of a scalar JSON value for the comparison of a choice: "n:<number>" for a number (the
+// value, not the spelling: 0.001 and 1e-3 give the same key), "s:<text>" for a string, "b:<bool>" for a bool.
+// It is "" for anything else (null, object, array, unreadable), which never equals a value of a choice.
+func choiceKey(raw json.RawMessage) string {
+	d := json.NewDecoder(bytes.NewReader(raw))
+	d.UseNumber()
+	var v any
+	if err := d.Decode(&v); err != nil || d.More() {
+		return ""
+	}
+	switch x := v.(type) {
+	case json.Number:
+		f, err := x.Float64()
+		if err != nil || math.IsNaN(f) || math.IsInf(f, 0) {
+			return ""
+		}
+		if f == 0 {
+			f = 0 // -0 and 0 are the same value
+		}
+		return "n:" + strconv.FormatFloat(f, 'g', -1, 64)
+	case string:
+		return "s:" + x
+	case bool:
+		return "b:" + strconv.FormatBool(x)
+	}
+	return ""
+}
+
+// SameJSON reports whether two JSON values are the same by value: object keys in any order, numbers by value
+// (0.001 and 1e-3 are the same), everything else by content. A configuration that is the same by this measure
+// does the same on the platform, whatever its spelling. Unreadable input is never the same.
+func SameJSON(a, b []byte) bool {
+	va, ok := decodeNumbers(a)
+	if !ok {
+		return false
+	}
+	vb, ok := decodeNumbers(b)
+	if !ok {
+		return false
+	}
+	return sameValue(va, vb)
+}
+
+func decodeNumbers(raw []byte) (any, bool) {
+	d := json.NewDecoder(bytes.NewReader(raw))
+	d.UseNumber()
+	var v any
+	if err := d.Decode(&v); err != nil || d.More() {
+		return nil, false
+	}
+	return v, true
+}
+
+func sameValue(a, b any) bool {
+	switch x := a.(type) {
+	case map[string]any:
+		y, ok := b.(map[string]any)
+		if !ok || len(x) != len(y) {
+			return false
+		}
+		for k, v := range x {
+			w, ok := y[k]
+			if !ok || !sameValue(v, w) {
+				return false
+			}
+		}
+		return true
+	case []any:
+		y, ok := b.([]any)
+		if !ok || len(x) != len(y) {
+			return false
+		}
+		for i := range x {
+			if !sameValue(x[i], y[i]) {
+				return false
+			}
+		}
+		return true
+	case json.Number:
+		y, ok := b.(json.Number)
+		if !ok {
+			return false
+		}
+		f, err1 := x.Float64()
+		g, err2 := y.Float64()
+		return err1 == nil && err2 == nil && f == g
+	}
+	return a == b
 }
 
 // Merge lays the params of a trial over the base configuration of the training and returns the canonical JSON of
