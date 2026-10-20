@@ -1199,13 +1199,21 @@ merged (strand G-B), an approved plan does not yet change how the steps are appr
 - **Placeholders:** the id of an object an earlier step created is written `"{{stepN.id}}"`, as a whole argument, body
   value, path segment or query value. It resolves only to an object that this plan created in this chat (the
   provenance register `delegation_objects`), and only once that step is `done`. A placeholder may point only backwards,
-  and only at steps whose delegation action is `create` or `run`.
+  and only at steps whose delegation action is `create`; a step that only starts a job (`run`: `start_training`,
+  `start_deployment`) creates no object and is refused (the step that created the object is meant).
+  **Objects of platform jobs:** for `create_training` the placeholder is the **training container** the build creates,
+  not the task id; for `build_inference_image` it is the numeric image id; for `split_dataset` the training dataset.
+  The gateway reads the container from the build task's message (`Train Container #<id> created.`), checks it in
+  `GET /train/containers` and registers it in `delegation_objects`; the next step runs only after the job ended. A call
+  that looks like the next step is refused with the reason while the job runs. If the platform names no object and a
+  later step needs it, the step fails without a retry.
 - **Matching:** after the delegation check, a non-reading call matches the next open step only if method, path, query,
   canonical body (key order and whitespace ignored, numbers as written), form and upload SHA-256 are equal. The step is
   then claimed (`running`) and runs without a new approval. Any other call needs its own approval.
 - **Irreversible steps** (delete, toggle-public, and what #63 classifies as irreversible) are shown in the plan with
   `covered: false`. They still ask for their own approval; the plan does not approve them.
-- **Validity:** 30 minutes after the approval (`expires_at`), bound to the chat and to the agent session (main agent
+- **Validity:** 30 minutes after the approval (`expires_at`; an interactive plan counts them again from the end of each
+  step that waited for a platform job), bound to the chat and to the agent session (main agent
   or subagent run). A newly approved plan of the same session ends the older approved ones (`superseded`). A failed
   step fails the plan; when all steps are done it is `completed`. A restart fails running steps and expires proposals.
 - **Uploads:** the orchestrator reads each uploaded file when the plan is proposed and writes its SHA-256 into the

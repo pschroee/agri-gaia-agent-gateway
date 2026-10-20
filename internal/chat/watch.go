@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -350,15 +351,20 @@ func (m *Manager) startWatching(ctx context.Context, chatID string, st *store.Pl
 // following the job itself like before A-E2.
 func (m *Manager) watchNote(ctx context.Context, st *store.PlanStep, jobID string) string {
 	woken := false
+	extra := ""
 	if p, err := m.st.GetPlan(ctx, st.PlanID); err == nil {
 		woken = p.Mode == plan.ModeAutonomous && p.State == plan.StateApproved
+		if plan.Referenced(p.Steps, st.Idx) > 0 {
+			extra = fmt.Sprintf(" Later steps use {{step%d.id}}: the %s this job creates. The gateway names it when the job ends.",
+				st.Idx, objectName(st))
+		}
 	}
 	if woken {
 		return fmt.Sprintf("The gateway observes this platform job (job %s) for step %d and wakes you when it ends; "+
-			"do not poll the job yourself — end your turn.", jobID, st.Idx)
+			"do not poll the job yourself — end your turn.", jobID, st.Idx) + extra
 	}
 	return fmt.Sprintf("The gateway observes this platform job (job %s) for step %d; its state and the step's are in "+
-		"GET /api/chats/<chat>/jobs. This plan does not wake you, so keep an eye on it yourself.", jobID, st.Idx)
+		"GET /api/chats/<chat>/jobs. This plan does not wake you, so keep an eye on it yourself.", jobID, st.Idx) + extra
 }
 
 // recordJobOutsidePlan observes a call that started a job without a plan (A-E2.2): the row is there for
@@ -394,6 +400,8 @@ func (m *Manager) stopJobByTheAgent(ctx context.Context, chatID string, req plat
 // for a covered step), the plan completes or fails, and the agent is told. A job outside a plan is only
 // closed in its row.
 func (m *Manager) finishWatched(ctx context.Context, j store.WatchJob, p watch.Progress) {
+	// An object the job created enters the register whether or not a plan waits for it (#169).
+	m.recordJobObject(ctx, j, p)
 	if j.PlanID == "" {
 		return
 	}
@@ -411,17 +419,33 @@ func (m *Manager) finishWatched(ctx context.Context, j store.WatchJob, p watch.P
 		return
 	}
 	to, result := plan.StepDone, fmt.Sprintf("job %s done", j.ID)
-	if p.State == watch.StateFailed {
+	resource, id := st.CreatedResource, st.CreatedID
+	noRetry := false
+	switch {
+	case p.State == watch.StateFailed:
 		to, result = plan.StepFailed, fmt.Sprintf("job %s failed", j.ID)
+		if msg := watch.ClipRunes(oneLine(platform.RedactText(p.Message)), watch.MaxMessage); msg != "" {
+			result += ": " + msg
+		}
+	case p.Created != nil && p.Created.ID != "":
+		resource, id = p.Created.Resource, p.Created.ID
+		result = fmt.Sprintf("job %s done, created %s %s", j.ID, resource, id)
+	case (resource == "" || resource == delegation.Task) && plan.Referenced(pl.Steps, st.Idx) > 0:
+		// The platform named no object this step created, and a later step needs it: failing now gives a
+		// readable reason, where a step that is done without the object would hang the plan.
+		to, noRetry = plan.StepFailed, true
+		result = fmt.Sprintf("job %s done, but the platform named no %s it built; step %d needs it", j.ID,
+			objectName(st), plan.Referenced(pl.Steps, st.Idx))
+		p.State, p.Message = watch.StateFailed, result // the note tells the agent the step failed
 	}
-	ok, err := m.st.FinishPlanStep(ctx, j.PlanID, j.StepIdx, plan.StepWaiting, to, result, st.CreatedResource, st.CreatedID)
+	ok, err := m.st.FinishPlanStep(ctx, j.PlanID, j.StepIdx, plan.StepWaiting, to, result, resource, id)
 	if err != nil || !ok {
 		slog.Error("watched step not finished", "plan", j.PlanID, "step", j.StepIdx, "error", err)
 		return
 	}
 	if to == plan.StepFailed {
 		retried := false
-		if st.Covered {
+		if st.Covered && !noRetry {
 			var rerr error
 			retried, rerr = m.st.RetryPlanStep(ctx, j.PlanID, j.StepIdx)
 			if rerr != nil {
@@ -438,11 +462,44 @@ func (m *Manager) finishWatched(ctx context.Context, j store.WatchJob, p watch.P
 			slog.Error("plan not completed", "plan", j.PlanID, "error", err)
 		}
 	}
+	if to == plan.StepDone && pl.Mode == plan.ModeInteractive {
+		// The approval counts its minutes again from the end of a step that waited for a job (#169).
+		if _, err := m.st.ExtendPlan(ctx, j.PlanID, watchNow().Add(plan.ValidFor)); err != nil {
+			slog.Error("plan validity not extended", "plan", j.PlanID, "error", err)
+		}
+	}
 	m.publishPlan(ctx, j.PlanID)
 	// Whether this note may wake the chat is decided by the plan as it was before this step ended: a step
 	// that finishes the plan completes it right above, and that note is exactly the one the user waits for.
 	m.noteJobEnd(ctx, j, st, p, dur, pl.Mode == plan.ModeAutonomous && pl.State == plan.StateApproved)
 }
+
+// objectName names what a step builds, for the texts about it.
+func objectName(st *store.PlanStep) string {
+	switch {
+	case strings.HasSuffix(st.Path, "/container-images/build"):
+		return "container image id"
+	case strings.HasSuffix(st.Path, "/train/config"):
+		return "training container"
+	}
+	return "object"
+}
+
+// recordJobObject registers the object a finished job created: only from the gateway's own reading of the
+// platform (watch.Progress.Created), and only for a job of this chat (the row of watch_jobs belongs to it).
+func (m *Manager) recordJobObject(ctx context.Context, j store.WatchJob, p watch.Progress) {
+	if p.State != watch.StateDone || p.Created == nil || p.Created.ID == "" {
+		return
+	}
+	if !jobObjectIDRe.MatchString(p.Created.ID) {
+		slog.Warn("job named an object with an unusable id", "job", j.ID, "id", p.Created.ID)
+		return
+	}
+	slog.Info("job created an object", "job", j.ID, "chat", j.ChatID, "object", p.Created.Resource+" "+p.Created.ID)
+	m.recordDelegationObject(ctx, j.ChatID, p.Created.Resource, p.Created.ID)
+}
+
+var jobObjectIDRe = regexp.MustCompile(`^[0-9]+$`)
 
 // stepOf finds a step of a plan by its index.
 func stepOf(p store.Plan, idx int) *store.PlanStep {
@@ -457,7 +514,7 @@ func stepOf(p store.Plan, idx int) *store.PlanStep {
 // JobNote is the note to the agent at the end of an observed plan step (D2.5). The head is built by the
 // gateway from its own data, the platform's message and the log tail go below it into the fence (they
 // are foreign content, see origin.go).
-func JobNote(j store.WatchJob, st *store.PlanStep, state string, dur time.Duration) systemNote {
+func JobNote(j store.WatchJob, st *store.PlanStep, state string, dur time.Duration, created *watch.Output) systemNote {
 	var h strings.Builder
 	if st != nil {
 		fmt.Fprintf(&h, "Plan step %d %q ", st.Idx, watch.ClipRunes(oneLine(st.Description), 60))
@@ -469,6 +526,15 @@ func JobNote(j store.WatchJob, st *store.PlanStep, state string, dur time.Durati
 		phrase = "failed"
 	}
 	h.WriteString(phrase + " (" + j.Kind + ") after " + FormatRuntime(dur) + ".")
+	if created != nil && created.ID != "" && st != nil && state != watch.StateFailed {
+		// Data of the gateway, read from the platform: the agent calls the next step with this id (the
+		// comparison is exact).
+		name := strings.ReplaceAll(created.Resource, "_", " ")
+		if created.Resource == delegation.Training {
+			name = "training container"
+		}
+		fmt.Fprintf(&h, " Created %s %s; {{step%d.id}} is %s.", name, created.ID, st.Idx, created.ID)
+	}
 	var b strings.Builder
 	if j.Message != "" {
 		b.WriteString("Platform message: " + watch.ClipRunes(oneLine(platform.RedactText(j.Message)), watch.MaxMessage))
@@ -506,7 +572,7 @@ func (m *Manager) noteJobEnd(ctx context.Context, j store.WatchJob, st *store.Pl
 	if j.PlanID == "" {
 		return
 	}
-	note := JobNote(j, st, p.State, dur)
+	note := JobNote(j, st, p.State, dur, p.Created)
 	if _, err := m.st.EnqueueSystem(ctx, j.ChatID, note.Type, note.Refs, note.Text()); err != nil {
 		slog.Error("note about the end of a job not queued", "chat", j.ChatID, "job", j.ID, "error", err)
 		return
@@ -605,14 +671,7 @@ func (m *Manager) parkedHere(ctx context.Context, chatID string, req platform.Re
 	if err != nil {
 		return false
 	}
-	resolve := func(n int) (string, bool) {
-		ref := stepOf(p, n)
-		if ref == nil || ref.State != plan.StepDone || ref.CreatedID == "" {
-			return "", false
-		}
-		ok, err := m.st.IsDelegationObject(ctx, p.ChatID, ref.CreatedResource, ref.CreatedID)
-		return ref.CreatedID, err == nil && ok
-	}
+	resolve := m.stepResolve(ctx, p.ChatID, p.Steps)
 	if plan.IsToolStep(st) {
 		inv, has := platform.InvocationFrom(ctx)
 		if !has {
@@ -755,14 +814,7 @@ func (m *Manager) noteParkedStep(ctx context.Context, chatID string, st *store.P
 
 // parkedCall rebuilds the call of a step with every placeholder resolved from the plan's earlier steps.
 func (m *Manager) parkedCall(ctx context.Context, p store.Plan, st store.PlanStep) (platform.Request, json.RawMessage, error) {
-	resolve := func(n int) (string, bool) {
-		ref := stepOf(p, n)
-		if ref == nil || ref.State != plan.StepDone || ref.CreatedID == "" {
-			return "", false
-		}
-		ok, err := m.st.IsDelegationObject(ctx, p.ChatID, ref.CreatedResource, ref.CreatedID)
-		return ref.CreatedID, err == nil && ok
-	}
+	resolve := m.stepResolve(ctx, p.ChatID, p.Steps)
 	return plan.StepCall(st, resolve)
 }
 

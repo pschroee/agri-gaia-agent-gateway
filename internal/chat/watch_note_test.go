@@ -107,7 +107,7 @@ func TestJobNoteRedactsTokens(t *testing.T) {
 	const token = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhZ2VudC10ZXN0In0.c2lnbmF0dXJl"
 	note := JobNote(store.WatchJob{ID: "w1", Kind: "task",
 		Message: "assume role failed: " + token,
-		LogTail: "WARN token " + token + " expired"}, nil, watch.StateFailed, time.Second)
+		LogTail: "WARN token " + token + " expired"}, nil, watch.StateFailed, time.Second, nil)
 	text := note.Text()
 	if strings.Contains(text, token) {
 		t.Fatalf("the token reached the note: %s", text)

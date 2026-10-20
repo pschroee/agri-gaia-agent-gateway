@@ -330,7 +330,7 @@ var Tools = []Tool{
 	// devices' deployments and the deployments of the platform (list_deployments).
 	{Name: "list_container_images", CLI: "container-images", Desc: "Lists the container images in the platform's registry.",
 		Params: nil, build: get("/container-images")},
-	{Name: "create_training", CLI: "create-training", Desc: "Creates a training container (POST /train/config): the platform builds a training image from the installed template in the background. Effect compute: uses compute time, the user must approve, and a chat has a limited number of compute calls (default 3). Response: Location with the task (/tasks/<id>). Get the values for train_config with platform_train_options first. Values of train_config must be numbers, true/false, null or short text of letters, digits, _.,:/+- (the platform passes them through a shell).",
+	{Name: "create_training", CLI: "create-training", Desc: "Creates a training container (POST /train/config): the platform builds a training image from the installed template in the background. Effect compute: uses compute time, the user must approve, and a chat has a limited number of compute calls (default 3). Response: Location with the task (/tasks/<id>). When the task is completed, its message names the container: \"Train Container #<id> created.\" Get the values for train_config with platform_train_options first. Values of train_config must be numbers, true/false, null or short text of letters, digits, _.,:/+- (the platform passes them through a shell).",
 		Params: []Param{
 			{Name: "provider", Type: "string", Desc: "provider, e.g. Torchvision", Required: true},
 			{Name: "architecture", Type: "string", Desc: "architecture, e.g. EfficientNet", Required: true},

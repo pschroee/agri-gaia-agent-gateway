@@ -251,17 +251,7 @@ func (m *Manager) planMatch(ctx context.Context, chatID string, req platform.Req
 	if next == nil || next.State != plan.StepOpen {
 		return nil
 	}
-	resolve := func(n int) (string, bool) {
-		if n < 1 || n > len(p.Steps) {
-			return "", false
-		}
-		ref := p.Steps[n-1]
-		if ref.State != plan.StepDone || ref.CreatedID == "" {
-			return "", false
-		}
-		ok, err := m.st.IsDelegationObject(ctx, chatID, ref.CreatedResource, ref.CreatedID)
-		return ref.CreatedID, err == nil && ok
-	}
+	resolve := m.stepResolve(ctx, chatID, p.Steps)
 	var ok bool
 	var why string
 	if plan.IsToolStep(*next) {
@@ -697,4 +687,23 @@ func undoneSteps(p store.Plan) string {
 		return "none"
 	}
 	return strings.Join(idx, ", ")
+}
+
+// stepResolve gives the id that placeholder {{stepN.id}} stands for: the object step N created, once the
+// step is done and the object is one this chat created (the register of delegation objects).
+func (m *Manager) stepResolve(ctx context.Context, chatID string, steps []store.PlanStep) plan.Resolve {
+	return func(n int) (string, bool) {
+		var ref *store.PlanStep
+		for i := range steps {
+			if steps[i].Idx == n {
+				ref = &steps[i]
+				break
+			}
+		}
+		if ref == nil || ref.State != plan.StepDone || ref.CreatedID == "" {
+			return "", false
+		}
+		ok, err := m.st.IsDelegationObject(ctx, chatID, ref.CreatedResource, ref.CreatedID)
+		return ref.CreatedID, err == nil && ok
+	}
 }

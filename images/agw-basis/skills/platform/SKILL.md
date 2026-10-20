@@ -1,6 +1,6 @@
 ---
 name: platform
-description: Work with the Agri-Gaia platform (datasets, models, training, background tasks, edge devices, container images) via agw-platform. Use when the user asks about data or models on the platform or wants to create, start or follow a training there, and to deploy inference images to edge devices when capabilities shows an edge device online, otherwise build the image and tell the user that no device is available.
+description: Work with the Agri-Gaia platform (datasets, models, training, background tasks, edge devices, container images) via agw-platform. Use when the user asks about data or models on the platform or wants to create, start or follow a training there, and to deploy inference images to edge devices when capabilities shows an edge device online, otherwise build the image and tell the user that no device is available. For a task with several writing calls (e.g. split, train, take over the model) propose one plan with all known steps.
 ---
 
 # Agri-Gaia platform
@@ -36,8 +36,8 @@ The output is `HTTP <code>` followed by JSON. Exit code 0 ok, 3 rejected by the 
 3. Create: `agw-platform create-training Torchvision EfficientNet Classification <dataset_id> @train_config.json`
    — the platform builds the training image in the background. The response names `Location: /tasks/<id>`.
 4. Follow the build: `agw-platform task <id>` until `status` is `completed` or `failed` (not in a tight
-   loop; wait at least 20 seconds between queries). Then `agw-platform trainings`:
-   the new entry has the `id` of the training container.
+   loop; wait at least 20 seconds between queries). When the task is completed, its message names the
+   training container ("Train Container #<id> created."); `agw-platform trainings` shows it too.
 5. Start: `agw-platform start-training <train_container_id>`, follow with
    `agw-platform training-status <id>` and `agw-platform training-logs <id> --tail 50`.
 
@@ -48,6 +48,41 @@ from it (ONNX when the training was created with an export). It needs approval. 
 model**, so do it once per training and only when the user wants the model. Without `export_config` in
 `create-training` the model has no tensor metadata and no inference container can be built from it; the example
 is in `agw-platform create-training --help`.
+
+## One plan for a whole task
+
+When the user wants a whole task done (train and take over the model, build and deploy an image), propose **one**
+plan with every step you already know, not one plan per step. The user approves it once. Example: split dataset 59,
+train on the training part, take over the model.
+
+```bash
+agw-platform propose-plan '{"title": "tf-flowers: split, train EfficientNet, take over the model", "steps": [
+  {"tool": "split_dataset", "args": {"dataset_id": 59, "train_share": 70},
+   "description": "Split tf-flowers 70/30"},
+  {"tool": "create_training", "args": {"provider": "Torchvision", "architecture": "EfficientNet",
+   "category": "Classification", "dataset_id": "{{step1.id}}",
+   "train_config": {"architecture": "efficientnet_v2_s", "epochs": 2, "batch-size": 16, "img-size": 64,
+     "optimizer": "AdamW", "learning-rate": 0.001, "lr-scheduler": "ReduceLROnPlateau",
+     "train-split": 0.8, "test-split": 0.2},
+   "export_config": {"model_type": "pytorch", "input_names": [], "output_names": [],
+     "input_shapes": [[1, 3, 64, 64]], "input_types": ["float32"], "verbose": false, "dynamo": false,
+     "opset_version": 18}},
+   "description": "Build the training container"},
+  {"tool": "start_training", "args": {"train_container_id": "{{step2.id}}"},
+   "description": "Train"},
+  {"tool": "model_from_training", "args": {"train_container_id": "{{step2.id}}"},
+   "description": "Take over the model"}]}'
+```
+
+- `{{step1.id}}` is the training dataset the split created; `{{step2.id}}` is the **training container** the build
+  creates — not the task id of the build. A placeholder never points at a start (`start_training`,
+  `start_deployment`): use the step that created the object.
+- Steps 2 and 3 start platform jobs. The gateway observes them; the next step runs only after the job ended.
+  Calling it earlier is refused with the reason. End your turn while a job runs; the gateway's note at its end
+  names the object, e.g. "Created training container 63; {{step2.id}} is 63". Then make the next call with that id.
+- If a job fails, the plan ends; the note says why. Propose a new plan for what is left.
+- Take the `train_config` keys and values from `agw-platform train-options <provider> <architecture>`; the values
+  above are only an example.
 
 ## Uploading files
 

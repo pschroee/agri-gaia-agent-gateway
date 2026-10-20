@@ -605,8 +605,9 @@ func contains(l []string, s string) bool {
 
 // Created determines the new object after a successful create call (provenance rule): the
 // identifier from the body for datasets, models and container deployments, the task from Location
-// for training and for container deployments. Training containers are created asynchronously and
-// cannot be attributed this way (limitation).
+// for training and for container deployments. A training container comes from the answer's body
+// (a clone) or, for a build, only later from its job (watch.Progress.Created); the build itself
+// names its task.
 func Created(a Access, res platform.Result) (resource, id string, ok bool) {
 	if res.Status != "ok" || res.HTTPStatus < 200 || res.HTTPStatus >= 300 {
 		return "", "", false
@@ -626,7 +627,15 @@ func Created(a Access, res platform.Result) (resource, id string, ok bool) {
 		if id := bodyID([]byte(res.Body), "id"); id != "" {
 			return a.Resource, id, true
 		}
+		if a.Resource == Dataset {
+			if id := bodyID([]byte(res.Body), "train_dataset_id"); id != "" { // split_dataset
+				return Dataset, id, true
+			}
+		}
 	case Training:
+		if id := bodyID([]byte(res.Body), "id"); id != "" {
+			return Training, id, true
+		}
 		if m := taskLoc.FindStringSubmatch(res.Location); m != nil {
 			return Task, canonID(m[1]), true
 		}
