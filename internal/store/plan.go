@@ -388,6 +388,18 @@ WHERE plan_id=$1 AND idx=$2 AND state=$3`, planID, idx, from, to, result, resour
 	return tag.RowsAffected() > 0, err
 }
 
+// ExtendPlan moves the end of an approved interactive plan to until when that is later (never shorter):
+// a step that waited for an observed platform job counts the plan's validity again from its end (#169).
+// An autonomous plan has its own budget and is not touched; ok is false when nothing changed.
+func (s *Store) ExtendPlan(ctx context.Context, planID string, until time.Time) (bool, error) {
+	if !isUUID(planID) {
+		return false, ErrNotFound
+	}
+	tag, err := s.pool.Exec(ctx, `UPDATE plans SET expires_at=GREATEST(expires_at,$2)
+WHERE id=$1 AND state='approved' AND mode='interactive'`, planID, until)
+	return tag.RowsAffected() > 0, err
+}
+
 // --- Autonomous plans (A-E1) ---
 
 // ModeInteractive is the default mode of a plan; only "autonomous" carries a budget and a grant.
