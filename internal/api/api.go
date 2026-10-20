@@ -639,6 +639,8 @@ func (s *Server) config(w http.ResponseWriter, r *http.Request) {
 		"bg_wakes_per_hour":     o.BgWakesPerHour,
 		"bg_keepalive_s":        int(o.BgKeepAlive.Seconds()),
 		"auto_turns_max":        o.AutoTurnsMax,
+		// The longest a training search runs (#168): the approval card says "ends after {h} h at the latest".
+		"search_max_hours": s.M.SearchMaxHours(),
 		// Tools whose execution is evidenced at the socket (E9, L6): the UI matches against them
 		// instead of keeping the list itself.
 		"executed_tools": chat.ExecutedToolNames(),
