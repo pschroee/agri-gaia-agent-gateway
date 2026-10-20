@@ -363,6 +363,10 @@ func blockedCall(r Request) string {
 	if p == "/train/config" && (r.Method == http.MethodPost || r.Method == http.MethodPut) {
 		return CheckTrainConfig(r.Body)
 	}
+	// A copy of a training container (issue #168) carries a train_config that reaches the same shell command.
+	if r.Method == http.MethodPost && trainCloneRe.MatchString(p) {
+		return CheckTrainConfig(r.Body)
+	}
 	if p == "/train/template" || strings.HasPrefix(p, "/train/template/") {
 		if r.Method != http.MethodGet {
 			return "changing training templates is not allowed for the agent"

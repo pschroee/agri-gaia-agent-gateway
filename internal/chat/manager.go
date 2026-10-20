@@ -2277,6 +2277,13 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 		pres.Decision, pres.Reason = platform.DecisionAllowed, "virtual"
 		return pres, perr
 	}
+	if req.Path == platform.SearchPrefix && req.Method == http.MethodPost {
+		// A proposal of a training search is answered by the gateway too (issue #168); the paths below the
+		// prefix go to the search service registered as a virtual doer.
+		sres, serr := m.ProposeSearch(ctx, chatID, slotID, via, req)
+		sres.Decision, sres.Reason = platform.DecisionAllowed, "virtual"
+		return sres, serr
+	}
 	if req.Path == platform.CapabilitiesPath {
 		// The overview of this chat's setup (G1.10): reading, without approval, like the rights.
 		res, _ := m.capabilitiesResult(ctx, chatID)
@@ -2354,6 +2361,12 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 				Decision: platform.DecisionDeniedFixed, Reason: "files_changed", Rule: rule, WithinDelegation: within}, nil
 		}
 	}
+	// A call that is the next call of a trial of the running training search (issue #168) is covered by the
+	// approval of the search, as far as the search says so; only a call no plan step claims is asked.
+	var claim *trialClaim
+	if step == nil && (access.Effect != delegation.EffectRead || req.Writes()) {
+		claim = m.searchMatch(ctx, chatID, req) // nil: no search applies
+	}
 	planStep := func(s *store.PlanStep) *int {
 		if s == nil {
 			return nil
@@ -2375,7 +2388,7 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 	approvedHere := m.parkedHere(ctx, chatID, req)
 	approvalID, approvalBy, executedDecision := "", "none", platform.DecisionAllowed
 	approvedManifest := "" // SHA-256 over the list of the uploaded files the user approved (issue #164)
-	if needsApproval(access, req.Writes(), del) && (step == nil || !step.Covered) && !approvedHere {
+	if needsApproval(access, req.Writes(), del) && (step == nil || !step.Covered) && !(claim != nil && claim.Covered) && !approvedHere {
 		// A step that already waits for the user's decision is not asked a second time (A-E2, D2.8): its
 		// approval stays open until the plan expires, and a second one would run the same irreversible call
 		// twice. The same answer as at the first call, so that the agent ends its turn either way.
@@ -2488,7 +2501,8 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 		m.logSummaryReads(ctx, chatID, apID, "proposed", rl)
 		ap, err := m.st.CreateApproval(ctx, store.Approval{ID: apID, ChatID: chatID, Kind: "platform_write", Via: via, Name: req.String(), Size: size,
 			ContentType: "application/json", PendingKey: "-", Preview: preview, Session: store.SessionFrom(ctx), ToolCallID: store.ToolCallFrom(ctx),
-			Effect: string(access.Effect), Summary: summary, Notebook: notebookData, Uploads: uploadsData, UploadEntries: uploadEntries})
+			Effect: string(access.Effect), Summary: summary, Notebook: notebookData, Uploads: uploadsData, UploadEntries: uploadEntries,
+			Search: claim.ApprovalData()})
 		if err != nil {
 			return platform.Result{Decision: platform.DecisionError, Reason: "approval_failed"}, err
 		}
@@ -2626,6 +2640,9 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 		// No plan step: a started job is only observed for the cards (A-E2.2, no note, no wake-up).
 		m.recordJobOutsidePlan(ctx, chatID, access, req, res)
 	}
+	// The outcome of a call of a search's trial: after the job of a started run is observed, so that the trial can
+	// name it (issue #168). A nil claim does nothing.
+	m.searchFinish(ctx, chatID, claim, req, res, err)
 	// A call that stops a job (own code C-E4): the job records the agent as the one who stopped it, and the
 	// user's own route does the same in StopJob.
 	m.stopJobByTheAgent(ctx, chatID, req, res)
