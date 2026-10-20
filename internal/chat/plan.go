@@ -116,6 +116,44 @@ func (m *Manager) ProposePlan(ctx context.Context, chatID, slotID, via string, r
 	// registration would skip the re-read and approve the summaries as proposed (issue #154).
 	apID := uuid.NewString()
 	defer m.registerRecheck(apID, m.planRecheck(chatID, apID, p.Title, steps, calls, auto))()
+	d := &planDecision{apply: func(bg context.Context, final string) (bool, error) {
+		if final != store.ApprovalApproved {
+			state := plan.StateRejected
+			if final == store.ApprovalExpired {
+				state = plan.StateExpired
+			}
+			if _, err := m.st.DecidePlan(bg, pl.ID, state, nil); err != nil {
+				slog.Error("plan decision not recorded", "plan", pl.ID, "error", err)
+			}
+			m.publishPlan(bg, pl.ID)
+			return false, nil
+		}
+		expires := planNow().Add(plan.ValidFor)
+		if p.Autonomous() {
+			// The plan's own duration bounds it (A-E1, D1.8); the validity of an interactive plan does not apply.
+			expires = planNow().Add(time.Duration(p.Budget.MaxDurationMinutes) * time.Minute)
+			if auto.EndsAt != nil {
+				// D3.3: the login session of the owner ends earlier than the plan's own duration.
+				expires = *auto.EndsAt
+			}
+		}
+		ok, err := m.st.DecidePlan(bg, pl.ID, plan.StateApproved, &expires)
+		if err != nil || !ok {
+			return ok, err
+		}
+		if err := m.st.SupersedePlans(bg, chatID, session, pl.ID); err != nil {
+			slog.Error("older plans not superseded", "chat", chatID, "plan", pl.ID, "error", err)
+		}
+		if p.Autonomous() && p.Replaces != "" {
+			// A changed plan replaces the running one it names, independent of the session (A-E1, D1.12).
+			if _, err := m.st.SupersedePlan(bg, p.Replaces); err != nil {
+				slog.Error("replaced plan not superseded", "chat", chatID, "plan", p.Replaces, "error", err)
+			}
+		}
+		m.publishPlan(bg, pl.ID)
+		return true, nil
+	}}
+	defer m.registerPlanDecision(apID, d)()
 	// The reads of the summaries are one activity entry of the system (issue L2/#119), and while the plan waits,
 	// approving re-reads them first (DL2.1). It is written before the approval row exists: an approval that the
 	// API shows must never be visible without the entry that explains its summaries (issue #157).
@@ -143,43 +181,21 @@ func (m *Manager) ProposePlan(ctx context.Context, chatID, slotID, via string, r
 		s.SetActivity("tool", "")
 	}
 	m.publishChat(bg, chatID)
+	// Normally Decide has recorded the outcome already and this returns the stored result (issue #166).
+	ok, err := d.decide(bg, final)
 	if final != store.ApprovalApproved {
-		state, msg := plan.StateRejected, "plan not approved by the user; nothing executed. Ask the user what to change and propose a new plan"
+		msg := "plan not approved by the user; nothing executed. Ask the user what to change and propose a new plan"
 		if final == store.ApprovalExpired {
-			state, msg = plan.StateExpired, "no decision on the plan within the waiting time; nothing executed"
+			msg = "no decision on the plan within the waiting time; nothing executed"
 		}
-		if _, err := m.st.DecidePlan(bg, pl.ID, state, nil); err != nil {
-			slog.Error("plan decision not recorded", "plan", pl.ID, "error", err)
-		}
-		m.publishPlan(bg, pl.ID)
 		return platform.Result{Status: "rejected", Message: msg}, nil
 	}
-	expires := planNow().Add(plan.ValidFor)
-	if p.Autonomous() {
-		// The plan's own duration bounds it (A-E1, D1.8); the validity of an interactive plan does not apply.
-		expires = planNow().Add(time.Duration(p.Budget.MaxDurationMinutes) * time.Minute)
-		if auto.EndsAt != nil {
-			// D3.3: the login session of the owner ends earlier than the plan's own duration.
-			expires = *auto.EndsAt
-		}
-	}
-	ok, err := m.st.DecidePlan(bg, pl.ID, plan.StateApproved, &expires)
 	if err != nil {
 		return platform.Result{}, err
 	}
 	if !ok {
 		return platform.Result{Status: "error", Message: "plan was decided elsewhere; nothing executed"}, nil
 	}
-	if err := m.st.SupersedePlans(bg, chatID, session, pl.ID); err != nil {
-		slog.Error("older plans not superseded", "chat", chatID, "plan", pl.ID, "error", err)
-	}
-	if p.Autonomous() && p.Replaces != "" {
-		// A changed plan replaces the running one it names, independent of the session (A-E1, D1.12).
-		if _, err := m.st.SupersedePlan(bg, p.Replaces); err != nil {
-			slog.Error("replaced plan not superseded", "chat", chatID, "plan", p.Replaces, "error", err)
-		}
-	}
-	m.publishPlan(bg, pl.ID)
 	stored, err := m.st.GetPlan(bg, pl.ID)
 	if err != nil {
 		return platform.Result{}, err
@@ -273,6 +289,7 @@ func (m *Manager) planMatch(ctx context.Context, chatID string, req platform.Req
 	}
 	next.State = plan.StepRunning
 	next.Attempts++
+	m.publishPlan(context.WithoutCancel(ctx), p.ID)
 	return next
 }
 
