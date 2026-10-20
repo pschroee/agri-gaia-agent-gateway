@@ -179,6 +179,9 @@ func (m *Manager) pollJob(ctx context.Context, j store.WatchJob, kind watch.Kind
 			j.Kind, j.Ref = p.Next.Kind, p.Next.Ref
 		}
 		m.publishJob(ctx, j, p)
+		if next, ok := watchKind(p.Next.Kind); ok {
+			m.PublishPlatformChanged(j.ChatID, PlatformChangedEvent{Source: ChangeSourceJob, JobID: j.ID, Changes: jobChanges(next, p, false)})
+		}
 		return
 	}
 	// A token in the platform's message or log is kept out of the row as well (issue #141): older
@@ -203,6 +206,7 @@ func (m *Manager) pollJob(ctx context.Context, j store.WatchJob, kind watch.Kind
 	j.State = prog.State
 	m.publishJob(ctx, j, p)
 	if prog.State != watch.StateRunning {
+		m.PublishPlatformChanged(j.ChatID, PlatformChangedEvent{Source: ChangeSourceJob, JobID: j.ID, Changes: jobChanges(kind, p, true)})
 		m.finishWatched(ctx, j, p)
 	}
 }
@@ -855,6 +859,7 @@ func (m *Manager) StopJob(ctx context.Context, chatID, jobID string) (store.Watc
 		slog.Error("who stopped the job not recorded", "chat", chatID, "job", job.ID, "error", err)
 	}
 	slog.Info("job stopped by the user", "chat", chatID, "job", job.ID, "kind", job.Kind)
+	m.PublishPlatformChanged(chatID, PlatformChangedEvent{Source: ChangeSourceStop, JobID: job.ID, Changes: jobChanges(kind, watch.Progress{}, false)})
 	return job, nil
 }
 

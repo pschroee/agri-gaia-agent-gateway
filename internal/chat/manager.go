@@ -104,7 +104,7 @@ type ChatEvent struct {
 
 // crossChatKinds: event kinds that also go to the subscribers of all chats. "plan_alert" (A-E4, D4.3) is
 // carried by the same stream as an approval and filtered by the same owner check (GET /api/events).
-var crossChatKinds = map[string]bool{"approval": true, "plan_alert": true}
+var crossChatKinds = map[string]bool{"approval": true, "plan_alert": true, KindPlatformChanged: true}
 
 type ChatView struct {
 	store.Chat
@@ -2609,6 +2609,11 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 		res.Decision, res.Reason, res.Rule = platform.DecisionAllowedViolation, delDecision.Code, delDecision.Rule
 	}
 	res.ApprovalID, res.ApprovalDecision, res.PlanStep = approvalID, approvalBy, planStep(step)
+	// Platform pages reload after a successful writing call (#167): reads, refusals and failures send nothing.
+	if res.Status == "ok" && res.HTTPStatus >= 200 && res.HTTPStatus < 300 && access.Effect != delegation.EffectRead {
+		m.PublishPlatformChanged(chatID, PlatformChangedEvent{Source: ChangeSourceCall, Path: req.Path,
+			Changes: delegation.Changes(access, req, res)})
+	}
 	// Provenance (edge D1.7, D1.9): images, container deployments and the tasks of a deployment are
 	// recorded in every chat, also without a delegation, because the edge guard needs them live.
 	// Every other object keeps the old rule and is recorded only with a delegation.

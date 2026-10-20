@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"agw/internal/chat"
+	"agw/internal/delegation"
 	"agw/internal/oidc/oidctest"
 	"agw/internal/store"
 )
@@ -205,5 +207,40 @@ func TestEventsNeedLogin(t *testing.T) {
 	srv, _ := oidcServer(t, nil, nil, nil, nil)
 	if code, _ := call(t, oidctest.NewBrowser(t), "GET", srv.URL+"/api/events", ""); code != 401 {
 		t.Fatalf("without session: %d", code)
+	}
+}
+
+// platform_changed (issue #167) goes through the stream across chats only to the owner of the chat.
+func TestAllEventsPlatformChangedOwner(t *testing.T) {
+	m, p, cat, st := ownershipEnv(t)
+	srv, is := oidcServer(t, m, p, cat, nil)
+	a := loggedIn(t, srv, is, anna)
+	ctx := context.Background()
+	mk := func(owner string) store.Chat {
+		c, err := st.CreateChat(ctx, store.NewChat{Title: owner, Model: "p/m", Variant: "cli", Owner: owner})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = st.SetState(ctx, c.ID, store.StateDormant)
+		return c
+	}
+	mine, foreign := mk(anna.Sub), mk(bert.Sub)
+	evA, _, _ := openEvents(t, a, srv.URL)
+	nextEvent(t, evA, "snapshot")
+	change := []delegation.Change{{Resource: "dataset", Action: "update", ID: "5"}}
+	m.PublishPlatformChanged(foreign.ID, chat.PlatformChangedEvent{Source: "call", Path: "/datasets/5", Changes: change})
+	m.PublishPlatformChanged(mine.ID, chat.PlatformChangedEvent{Source: "call", Path: "/datasets/6", Changes: change})
+	ev := nextEvent(t, evA, "own platform_changed")
+	if ev.Kind != "platform_changed" {
+		t.Fatalf("expected platform_changed, got %s %s", ev.Kind, ev.Data)
+	}
+	var d chat.PlatformChangedEvent
+	if err := json.Unmarshal(ev.Data, &d); err != nil || d.ChatID != mine.ID || d.Path != "/datasets/6" {
+		t.Fatalf("event of another chat reached Anna first: %+v %v", d, err)
+	}
+	select {
+	case ev := <-evA:
+		t.Fatalf("a further event: %s %s", ev.Kind, ev.Data)
+	case <-time.After(200 * time.Millisecond):
 	}
 }
