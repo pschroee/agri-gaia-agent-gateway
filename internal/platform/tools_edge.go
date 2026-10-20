@@ -145,8 +145,8 @@ func imageRef(img imageEntry) string {
 func deploymentOutOf(d deploymentRec, withDevice bool) deploymentOut {
 	o := deploymentOut{
 		ID: d.ID, Name: d.Name, Status: d.Status,
-		Image: imageRef(d.Image),
-		Ports: portsText(d.PortBindings),
+		Image:             imageRef(d.Image),
+		Ports:             portsText(d.PortBindings),
 		DockerContainerID: d.DockerContainerID != nil && *d.DockerContainerID != "",
 	}
 	if withDevice {
@@ -159,7 +159,7 @@ func deploymentOutOf(d deploymentRec, withDevice bool) deploymentOut {
 // also hides portainer_id and only blacks out edge_key (edge D2.2).
 var listEdgeDevicesTool = Tool{
 	Name: "list_edge_devices", CLI: "edge-devices",
-	Desc: "Lists the platform's edge devices with architecture, whether they are online (checked in within 5 minutes), tags and the containers deployed on them (reads; the platform refreshes the heartbeats while listing). Edge devices cannot be created, changed or deleted by the agent.",
+	Desc:   "Lists the platform's edge devices with architecture, whether they are online (checked in within 5 minutes), tags and the containers deployed on them (reads; the platform refreshes the heartbeats while listing). Edge devices cannot be created, changed or deleted by the agent.",
 	Params: nil,
 	build:  get("/edge-devices"),
 	steps:  listEdgeDevicesSteps,
@@ -541,7 +541,7 @@ var startDeploymentTool = Tool{
 	Desc: "Starts a deployment created in this chat: the edge device pulls the image (several GB the first time) and starts the container with network access. " +
 		"Effect compute: the user approves every start, also inside a plan, and it counts against the compute calls of the chat. " +
 		"Response: the task (/tasks/<id>); follow it with platform_deployment_status.",
-	Write: true,
+	Write:  true,
 	Params: []Param{{Name: "deployment_id", Type: "integer", Desc: "id of the deployment (platform_list_deployments or the answer of platform_create_deployment)", Required: true}},
 	build:  byID(http.MethodPut, "/container-deployments", "deployment_id", "/deploy"),
 	steps:  startDeploymentSteps,

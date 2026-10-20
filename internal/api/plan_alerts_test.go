@@ -49,7 +49,7 @@ func TestPlanAlertCrossChatOwnerOnly(t *testing.T) {
 	mkPlan := func(chatID, title string) store.Plan {
 		pl, err := st.CreatePlan(ctx, store.Plan{ChatID: chatID, Title: title, Via: "cli", Mode: plan.ModeAutonomous,
 			Budget: store.PlanBudget{MaxDurationS: 3600, MaxLLMCost: 1.5, MaxAutoTurns: 20},
-			Steps: []store.PlanStep{{Idx: 1, Method: "POST", Path: "/datasets", Effect: plan.EffectWrite, State: plan.StepOpen}}})
+			Steps:  []store.PlanStep{{Idx: 1, Method: "POST", Path: "/datasets", Effect: plan.EffectWrite, State: plan.StepOpen}}})
 		if err != nil {
 			t.Fatal(err)
 		}

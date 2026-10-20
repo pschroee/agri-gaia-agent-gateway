@@ -61,8 +61,8 @@ func TestEdgeDeploymentKind(t *testing.T) {
 
 	// The task is done and the deployment is deployed: the job is done.
 	p, err = k.Poll(t.Context(), job, edgeReader(map[string]string{
-		"/tasks/12":                    `{"status":"completed","completion_percentage":100}`,
-		"/container-deployments/9":     `{"id":9,"name":"agw-mnist","status":"deployed"}`,
+		"/tasks/12":                `{"status":"completed","completion_percentage":100}`,
+		"/container-deployments/9": `{"id":9,"name":"agw-mnist","status":"deployed"}`,
 	}))
 	if err != nil || p.State != "done" || p.Message != "deployed" || p.Percent == nil || *p.Percent != 100 {
 		t.Fatalf("done: %+v %v", p, err)
