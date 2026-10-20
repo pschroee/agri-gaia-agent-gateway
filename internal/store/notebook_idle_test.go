@@ -52,3 +52,36 @@ func TestIdleNotebookServersSkipsStopped(t *testing.T) {
 		t.Fatalf("after a new run: %+v", got)
 	}
 }
+
+// The reaper's re-check is false for another run id, an open run and a recorded stop.
+func TestNotebookServerIdle(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	c, err := s.CreateChat(ctx, NewChat{Title: "notebook", Model: "p/m", Variant: "cli"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	before := now.Add(-30 * time.Minute)
+	if err := s.CreateNotebookRun(ctx, NotebookRun{ID: "r1", ChatID: c.ID, HubUser: "u", Server: "agw-x",
+		Entry: "a.py", TimeoutMin: 10, StartedAt: now.Add(-3*time.Hour - time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	check := func(runID string, want bool, what string) {
+		t.Helper()
+		got, err := s.NotebookServerIdle(ctx, c.ID, runID, before)
+		if err != nil || got != want {
+			t.Fatalf("%s: got %v, err %v (want %v)", what, got, err, want)
+		}
+	}
+	check("r1", false, "open run")
+	if err := s.FinishNotebookRun(ctx, "r1", 0, now.Add(-3*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	check("r1", true, "finished long ago")
+	check("r0", false, "another run id")
+	if err := s.MarkNotebookServerStopped(ctx, "r1", now); err != nil {
+		t.Fatal(err)
+	}
+	check("r1", false, "recorded stop")
+}
