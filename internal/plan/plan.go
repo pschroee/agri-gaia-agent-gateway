@@ -382,7 +382,8 @@ func BuildStep(spec StepSpec, idx int) (store.PlanStep, platform.Request, []int,
 }
 
 // Build turns a proposal into its steps. Reading calls, placeholders that point forward or at a
-// step that does not create an object (delegation action create or run) are refused. Every step
+// step that does not create an object (delegation action create; a run only starts a job and creates
+// no object) are refused. Every step
 // keeps its own approval rules; the plan only records them. A step that asks for every single
 // approval (confirm each, G1.1) is never covered: the plan's approval does not replace it.
 func Build(p Proposal, classify Classify) ([]store.PlanStep, error) {
@@ -405,7 +406,9 @@ func Build(p Proposal, classify Classify) ([]store.PlanStep, error) {
 			switch {
 			case n >= idx:
 				return nil, fmt.Errorf("step %d: {{step%d.id}} refers to this or a later step", idx, n)
-			case actions[n] != delegation.Create && actions[n] != delegation.Run:
+			case actions[n] == delegation.Run:
+				return nil, fmt.Errorf("step %d: {{step%d.id}} refers to step %d, which starts a job and creates no object; use the placeholder of the step that created the object", idx, n, n)
+			case actions[n] != delegation.Create:
 				return nil, fmt.Errorf("step %d: {{step%d.id}} refers to step %d, which does not create an object", idx, n, n)
 			}
 		}
@@ -422,6 +425,53 @@ func Build(p Proposal, classify Classify) ([]store.PlanStep, error) {
 		out = append(out, st)
 	}
 	return out, nil
+}
+
+// Referenced returns the first step after step n whose path, query, body or arguments contain the
+// placeholder {{stepN.id}}; 0 when no later step uses it.
+func Referenced(steps []store.PlanStep, n int) int {
+	for _, st := range steps {
+		if st.Idx <= n {
+			continue
+		}
+		for _, text := range []string{st.Path, string(st.Query), string(st.Body), string(st.Args)} {
+			for _, m := range anyRefRe.FindAllStringSubmatch(text, -1) {
+				if k, err := strconv.Atoi(m[1]); err == nil && k == n {
+					return st.Idx
+				}
+			}
+		}
+	}
+	return 0
+}
+
+// SameShape tells whether a call looks like the step: the same tool for a tool step, otherwise the same
+// method and path segments, where a placeholder segment fits any non-empty segment. It is no match (the
+// parameters are not compared) but is used to recognise a call made too early.
+func SameShape(st store.PlanStep, tool string, r platform.Request) bool {
+	if st.Tool != "" {
+		return tool == st.Tool
+	}
+	if r.Method != st.Method {
+		return false
+	}
+	want := strings.Split(strings.Trim(st.Path, "/"), "/")
+	got := strings.Split(strings.Trim(r.Path, "/"), "/")
+	if len(want) != len(got) {
+		return false
+	}
+	for i := range want {
+		if _, ok := wholePlaceholder(want[i]); ok {
+			if got[i] == "" {
+				return false
+			}
+			continue
+		}
+		if want[i] != got[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // FileRefs returns the uploads of every step (by step number, from 1) so that the socket can
@@ -525,7 +575,7 @@ func Preview(title string, steps []store.PlanStep, auto *Autonomy) string {
 	fmt.Fprintf(&b, "%s\n", ApprovalName(len(steps)))
 	fmt.Fprintf(&b, "Title by the agent (not verified): %s\n", strconv.Quote(title))
 	if auto == nil {
-		fmt.Fprintf(&b, "Approving runs the steps in this order with exactly these parameters, for %d minutes, in this chat and this agent session only. Steps marked IRREVERSIBLE still ask for their own approval.\n\n",
+		fmt.Fprintf(&b, "Approving runs the steps in this order with exactly these parameters, for %d minutes (counted again from the end of each step that waits for a platform job), in this chat and this agent session only. Steps marked IRREVERSIBLE still ask for their own approval.\n\n",
 			int(ValidFor/time.Minute))
 	} else {
 		fmt.Fprintf(&b, "Autonomous: runs without asking you for up to %s, or until you pause or cancel it.\n", DurationText(time.Duration(auto.Budget.MaxDurationMinutes)*time.Minute))
@@ -670,7 +720,7 @@ func ApprovedText(p store.Plan) string {
 	}
 	auto := p.Mode == ModeAutonomous
 	mode := ""
-	note := "Run the steps in this order with exactly these parameters; each covered step then runs without a new approval until expires_at. Steps with covered=false still ask the user. Use the ids the platform returns for {{stepN.id}}. Any other call needs its own approval."
+	note := "Run the steps in this order with exactly these parameters; each covered step then runs without a new approval until expires_at. Steps with covered=false still ask the user. {{stepN.id}} stands for the object step N created. For a step that starts a platform job (create_training, build_inference_image) it is known only when the job ends; the gateway's note names it. Never use a task id for it. Any other call needs its own approval."
 	grant := ""
 	var budget *Budget
 	if auto {

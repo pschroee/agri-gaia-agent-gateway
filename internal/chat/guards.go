@@ -49,3 +49,10 @@ func (m *Manager) guardRefusal(ctx context.Context, chatID string, req platform.
 	}
 	return platform.Result{}, false, nil
 }
+
+// registerGuardFirst registers a guard that runs before every guard registered so far (#169).
+func registerGuardFirst(g guard) {
+	guardMu.Lock()
+	defer guardMu.Unlock()
+	guards = append([]guard{g}, guards...)
+}
