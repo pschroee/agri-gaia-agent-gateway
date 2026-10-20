@@ -113,7 +113,7 @@ type Budget struct {
 }
 
 // StepSpec is one step as the agent writes it: either a platform tool with its arguments, or a
-// raw call (method, path, query, body). FileSHA256 is set by the socket, not by the agent.
+// raw call (method, path, query, body). FileSHA256 and FileBytes are set by the socket, not by the agent.
 type StepSpec struct {
 	Tool        string            `json:"tool,omitempty"`
 	Args        json.RawMessage   `json:"args,omitempty"`
@@ -123,6 +123,7 @@ type StepSpec struct {
 	Body        json.RawMessage   `json:"body,omitempty"`
 	Description string            `json:"description,omitempty"`
 	FileSHA256  []string          `json:"file_sha256,omitempty"`
+	FileBytes   []int64           `json:"file_bytes,omitempty"`
 	// MaxAttempts: how often an autonomous plan may repeat this step after a failure (1 to 3, A-E1).
 	MaxAttempts int `json:"max_attempts,omitempty"`
 }
@@ -327,6 +328,16 @@ func BuildStep(spec StepSpec, idx int) (store.PlanStep, platform.Request, []int,
 			return fail(errors.New("file_sha256 must be 64 lowercase hex characters"))
 		}
 	}
+	if spec.FileBytes != nil {
+		if len(spec.FileBytes) != len(req.Files) {
+			return fail(fmt.Errorf("%d file_bytes for %d uploads", len(spec.FileBytes), len(req.Files)))
+		}
+		for _, n := range spec.FileBytes {
+			if n < 0 {
+				return fail(errors.New("file_bytes must not be negative"))
+			}
+		}
+	}
 	if sentinelRe.MatchString(FormJSON(req.Form)) {
 		return fail(errPlaceholderText)
 	}
@@ -376,7 +387,12 @@ func BuildStep(spec StepSpec, idx int) (store.PlanStep, platform.Request, []int,
 		if sentinelRe.MatchString(f.Path) {
 			return fail(errPlaceholderText)
 		}
-		st.Files = append(st.Files, store.PlanFile{Field: f.Field, Path: f.Path, SHA256: spec.FileSHA256[i]})
+		pf := store.PlanFile{Field: f.Field, Path: f.Path, SHA256: spec.FileSHA256[i]}
+		if spec.FileBytes != nil {
+			n := spec.FileBytes[i]
+			pf.Bytes = &n
+		}
+		st.Files = append(st.Files, pf)
 	}
 	return st, req, refs, nil
 }
@@ -494,15 +510,25 @@ func FileRefs(raw []byte) (map[int][]platform.File, error) {
 	return out, nil
 }
 
-// SetFileSums writes the pinned SHA-256 of each step's uploads into the proposal and drops every
-// hash the agent wrote itself.
-func SetFileSums(raw []byte, sums map[int][]string) ([]byte, error) {
+// FilePin is what the socket read of one upload when the plan was proposed.
+type FilePin struct {
+	SHA256 string
+	Bytes  int64
+}
+
+// SetFilePins writes the pinned SHA-256 and size of each step's uploads into the proposal and drops every
+// value the agent wrote itself.
+func SetFilePins(raw []byte, pins map[int][]FilePin) ([]byte, error) {
 	p, err := parseProposal(raw)
 	if err != nil {
 		return nil, err
 	}
 	for i := range p.Steps {
-		p.Steps[i].FileSHA256 = sums[i+1]
+		p.Steps[i].FileSHA256, p.Steps[i].FileBytes = nil, nil
+		for _, pin := range pins[i+1] {
+			p.Steps[i].FileSHA256 = append(p.Steps[i].FileSHA256, pin.SHA256)
+			p.Steps[i].FileBytes = append(p.Steps[i].FileBytes, pin.Bytes)
+		}
 	}
 	return json.Marshal(p)
 }
@@ -541,6 +567,9 @@ func Matches(st store.PlanStep, r platform.Request, resolve Resolve) (bool, stri
 	}
 	for i, f := range st.Files {
 		if r.Files[i].Field != f.Field || r.Files[i].Path != f.Path || r.Uploads[i].SHA256 != f.SHA256 {
+			return false, "files"
+		}
+		if f.Bytes != nil && int64(len(r.Uploads[i].Data)) != *f.Bytes {
 			return false, "files"
 		}
 	}
@@ -634,8 +663,15 @@ func Preview(title string, steps []store.PlanStep, auto *Autonomy) string {
 		if len(st.Form) > 0 {
 			fmt.Fprintf(&b, "   form: %s\n", st.Form)
 		}
-		for _, f := range st.Files {
-			fmt.Fprintf(&b, "   file %s: %s  sha256 %s\n", f.Field, f.Path, f.SHA256)
+		if man, ok := StepManifest(st); ok && len(st.Files) > platform.ListedFiles {
+			// Many files: the summary and the manifest hash instead of a line per file (issue #172).
+			for _, line := range man.PreviewLines() {
+				fmt.Fprintf(&b, "   %s\n", line)
+			}
+		} else {
+			for _, f := range st.Files {
+				fmt.Fprintf(&b, "   file %s: %s  sha256 %s\n", f.Field, f.Path, f.SHA256)
+			}
 		}
 		if st.Description != "" {
 			fmt.Fprintf(&b, "   Note by the agent (not verified): %s\n", strconv.Quote(st.Description))
@@ -676,7 +712,11 @@ func SummaryCall(st store.PlanStep) platform.SummaryCall {
 		_ = json.Unmarshal(st.Form, &c.Form)
 	}
 	for _, f := range st.Files {
-		c.Files = append(c.Files, platform.SummaryFile{Field: f.Field, Name: f.Path, Size: -1, SHA256: f.SHA256})
+		size := int64(-1)
+		if f.Bytes != nil {
+			size = *f.Bytes
+		}
+		c.Files = append(c.Files, platform.SummaryFile{Field: f.Field, Name: f.Path, Size: size, SHA256: f.SHA256})
 	}
 	return c
 }

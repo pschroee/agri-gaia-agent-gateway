@@ -198,7 +198,7 @@ func TestMatchesUploads(t *testing.T) {
 	}
 }
 
-func TestFileRefsAndSetFileSums(t *testing.T) {
+func TestFileRefsAndSetFilePins(t *testing.T) {
 	const h = "3333333333333333333333333333333333333333333333333333333333333333"
 	raw := []byte(`{"title":"upload","steps":[
  {"tool":"upload_model","args":{"name":"m","description":"d","format":"onnx","model_file":"/workspace/m.onnx"}},
@@ -210,7 +210,7 @@ func TestFileRefsAndSetFileSums(t *testing.T) {
 	if len(refs) != 1 || len(refs[1]) != 1 || refs[1][0].Path != "/workspace/m.onnx" {
 		t.Fatalf("file refs: %+v", refs)
 	}
-	out, err := SetFileSums(raw, map[int][]string{1: {h}})
+	out, err := SetFilePins(raw, map[int][]FilePin{1: {{SHA256: h, Bytes: 7}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -218,7 +218,10 @@ func TestFileRefsAndSetFileSums(t *testing.T) {
 	if len(p.Steps[0].FileSHA256) != 1 || p.Steps[0].FileSHA256[0] != h {
 		t.Fatalf("pinned sum missing: %+v", p.Steps[0])
 	}
-	if len(p.Steps[1].FileSHA256) != 0 {
+	if len(p.Steps[0].FileBytes) != 1 || p.Steps[0].FileBytes[0] != 7 {
+		t.Fatalf("pinned size missing: %+v", p.Steps[0])
+	}
+	if len(p.Steps[1].FileSHA256) != 0 || len(p.Steps[1].FileBytes) != 0 {
 		t.Fatalf("agent's own sum must be dropped: %+v", p.Steps[1])
 	}
 }

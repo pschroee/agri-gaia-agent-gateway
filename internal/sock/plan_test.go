@@ -60,7 +60,7 @@ func TestPinPlanFiles(t *testing.T) {
 	b := &uploadBackend{platformBackend: platformBackend{fakeBackend: fakeBackend{chat: "chat-pin", decide: "approved"}}}
 	c := startRun(t, b, &fakeRunner{file: []byte("PNGDATA")})
 	const claimed = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	body := `{"title":"upload","steps":[{"tool":"upload_model","args":{"name":"m","description":"d","format":"onnx","model_file":"/workspace/m.onnx"},"file_sha256":["` + claimed + `"]}]}`
+	body := `{"title":"upload","steps":[{"tool":"upload_model","args":{"name":"m","description":"d","format":"onnx","model_file":"/workspace/m.onnx"},"file_sha256":["` + claimed + `"],"file_bytes":[1]}]}`
 	if code, r := cliPlatform(t, c, "propose-plan", `{"plan":`+body+`}`); code != 200 || r.Status != "ok" {
 		t.Fatalf("propose: %d %+v", code, r)
 	}
@@ -74,6 +74,9 @@ func TestPinPlanFiles(t *testing.T) {
 	sum := sha256.Sum256([]byte("PNGDATA"))
 	if len(got.Steps[0].FileSHA256) != 1 || got.Steps[0].FileSHA256[0] != hex.EncodeToString(sum[:]) {
 		t.Fatalf("hash not pinned from the read file: %v", got.Steps[0].FileSHA256)
+	}
+	if len(got.Steps[0].FileBytes) != 1 || got.Steps[0].FileBytes[0] != int64(len("PNGDATA")) {
+		t.Fatalf("size not pinned from the read file (the agent's own value must be dropped): %v", got.Steps[0].FileBytes)
 	}
 }
 
