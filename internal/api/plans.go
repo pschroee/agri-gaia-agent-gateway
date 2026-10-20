@@ -11,6 +11,7 @@ import (
 	"strconv"
 
 	"agw/internal/chat"
+	"agw/internal/plan"
 	"agw/internal/platform"
 	"agw/internal/store"
 )
@@ -23,7 +24,28 @@ func redactPlanText(p store.Plan) store.Plan {
 		p.Steps[i].LogTail = platform.RedactText(p.Steps[i].LogTail)
 		p.Steps[i].Result = platform.RedactText(p.Steps[i].Result)
 	}
-	return p
+	return plan.WithUploads(p)
+}
+
+// planStepUploads answers GET /api/chats/{id}/plans/{plan}/steps/{idx}/uploads: the list of every file (field,
+// path, size, SHA-256) of an upload step, as {"entries": [...]} (issue #172). The plan carries only the summary and
+// the hash over this list.
+func (s *Server) planStepUploads(w http.ResponseWriter, r *http.Request) {
+	idx, err := strconv.Atoi(r.PathValue("idx"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "step is not a number")
+		return
+	}
+	entries, err := s.M.PlanStepUploadEntries(r.Context(), r.PathValue("id"), r.PathValue("plan"), idx)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeErr(w, http.StatusNotFound, "no uploads for this step")
+			return
+		}
+		fail(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"entries": entries})
 }
 
 // plans lists the plans of a chat, oldest first (issue #70). Foreign and unknown chats are 404.

@@ -92,7 +92,10 @@ type PlanStep struct {
 	Form       json.RawMessage `json:"form,omitempty"`
 	FormSHA256 string          `json:"form_sha256,omitempty"`
 	Files      []PlanFile      `json:"files,omitempty"`
-	Effect     string          `json:"effect"`
+	// Uploads is the summary of the step's uploads (platform.UploadManifest without the list of every file). It is
+	// set on the way to the UI only (plan.WithUploads), replaces Files there and has no column (issue #172).
+	Uploads json.RawMessage `json:"uploads,omitempty"`
+	Effect  string          `json:"effect"`
 	// ConfirmEach: the route asks for every single call (G1.1); such a step is never covered by a plan,
 	// also not after the plan was loaded again (A-E2).
 	ConfirmEach     bool       `json:"confirm_each,omitempty"`
@@ -122,11 +125,13 @@ type PlanStep struct {
 	PlanID string `json:"-"`
 }
 
-// PlanFile is an upload of a step, pinned by its SHA-256.
+// PlanFile is an upload of a step, pinned by its SHA-256 and size. Bytes is nil in a row stored before sizes were
+// pinned (issue #172).
 type PlanFile struct {
 	Field  string `json:"field"`
 	Path   string `json:"path"`
 	SHA256 string `json:"sha256"`
+	Bytes  *int64 `json:"bytes,omitempty"`
 }
 
 const planCols = `id::text, chat_id::text, approval_id, title, session, tool_call_id, via, state, mode, max_duration_s, max_llm_cost, max_auto_turns, auto_turns, grant_json, pause_reason, replaces, created_at, decided_at, expires_at, ended_at`

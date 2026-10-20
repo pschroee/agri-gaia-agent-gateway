@@ -89,7 +89,12 @@ func ManifestOf(r Request) (UploadManifest, error) {
 		}
 		entries[i] = UploadEntry{Field: u.Field, Path: p, Bytes: int64(len(u.Data)), SHA256: u.SHA256}
 	}
-	return buildManifest(entries, first(r.Form["includes_annotation_file"]) == "true")
+	return ManifestOfEntries(entries, first(r.Form["includes_annotation_file"]) == "true")
+}
+
+// ManifestOfEntries aggregates entries into a manifest; with annotationLast the last entry is the annotation file.
+func ManifestOfEntries(entries []UploadEntry, annotationLast bool) (UploadManifest, error) {
+	return buildManifest(entries, annotationLast)
 }
 
 // buildManifest aggregates the entries. With annotationLast the last entry is the annotation file: it counts in
@@ -195,7 +200,10 @@ func (m UploadManifest) typesText() string {
 }
 
 // describe is the text of the preview for an upload above ListedFiles.
-func (m UploadManifest) describe() string {
+func (m UploadManifest) describe() string { return strings.Join(m.PreviewLines(), "\n") }
+
+// PreviewLines is the text of the preview for an upload above ListedFiles, one string per line.
+func (m UploadManifest) PreviewLines() []string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s, %d bytes in total, manifest sha256 %s\n", fileCount(m.Files), m.Bytes, m.SHA256)
 	if len(m.Folders) > 0 {
@@ -215,5 +223,5 @@ func (m UploadManifest) describe() string {
 		fmt.Fprintf(&b, "Annotation file: %s: %s  %d bytes  sha256 %s\n", a.Field, a.Path, a.Bytes, a.SHA256)
 	}
 	b.WriteString("The list of all files (path, size, SHA-256) is attached to the approval.")
-	return b.String()
+	return strings.Split(b.String(), "\n")
 }

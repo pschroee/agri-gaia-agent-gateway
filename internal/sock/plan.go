@@ -12,7 +12,7 @@ import (
 	"agw/internal/platform"
 )
 
-// pinPlanFiles writes the SHA-256 of every upload of a plan into the proposal (issue #70), so the
+// pinPlanFiles writes the SHA-256 and size of every upload of a plan into the proposal (issue #70), so the
 // approval covers the content read now, not a hash the agent wrote. A proposal that does not parse
 // is left as it is; the manager reports it.
 func (h *handler) pinPlanFiles(ctx context.Context, req *platform.Request) error {
@@ -20,17 +20,17 @@ func (h *handler) pinPlanFiles(ctx context.Context, req *platform.Request) error
 	if err != nil {
 		return nil
 	}
-	sums := map[int][]string{}
+	pins := map[int][]plan.FilePin{}
 	for idx, files := range refs {
 		rq := platform.Request{Files: files}
 		if err := h.readFiles(ctx, &rq); err != nil {
 			return fmt.Errorf("step %d: %w", idx, err)
 		}
 		for _, u := range rq.Uploads {
-			sums[idx] = append(sums[idx], u.SHA256)
+			pins[idx] = append(pins[idx], plan.FilePin{SHA256: u.SHA256, Bytes: int64(len(u.Data))})
 		}
 	}
-	body, err := plan.SetFileSums(req.Body, sums)
+	body, err := plan.SetFilePins(req.Body, pins)
 	if err != nil {
 		return err
 	}

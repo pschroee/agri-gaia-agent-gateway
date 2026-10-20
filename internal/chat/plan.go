@@ -228,59 +228,67 @@ func (m *Manager) summaryReader(chatID string) platform.Doer {
 // A covered step is claimed (open to running) and the caller runs it without a new approval; an
 // irreversible step is returned unclaimed, so the call still asks the user. nil: no match.
 func (m *Manager) planMatch(ctx context.Context, chatID string, req platform.Request) *store.PlanStep {
+	st, _, _ := m.planNext(ctx, chatID, req)
+	return st
+}
+
+// planNext is planMatch with what a refusal needs: next is the number of the plan's next open step and differs
+// names the first part of the call that is not the step ("files" when only the uploads differ, issue #172);
+// both are empty/zero without an active plan or on a match.
+func (m *Manager) planNext(ctx context.Context, chatID string, req platform.Request) (*store.PlanStep, int, string) {
 	p, err := m.st.ActivePlan(ctx, chatID, store.SessionFrom(ctx))
 	if err != nil {
 		if !errors.Is(err, store.ErrNotFound) {
 			slog.Error("active plan not readable", "chat", chatID, "error", err)
 		}
-		return nil
+		return nil, 0, ""
 	}
 	if p.ExpiresAt != nil && !planNow().Before(*p.ExpiresAt) {
 		if ok, err := m.st.SetPlanState(ctx, p.ID, plan.StateApproved, plan.StateExpired); err == nil && ok {
 			m.publishPlan(ctx, p.ID)
 		}
-		return nil
+		return nil, 0, ""
 	}
-	var next *store.PlanStep
+	var cur *store.PlanStep
 	for i := range p.Steps {
 		if p.Steps[i].State != plan.StepDone {
-			next = &p.Steps[i]
+			cur = &p.Steps[i]
 			break
 		}
 	}
-	if next == nil || next.State != plan.StepOpen {
-		return nil
+	if cur == nil || cur.State != plan.StepOpen {
+		return nil, 0, ""
 	}
 	resolve := m.stepResolve(ctx, chatID, p.Steps)
 	var ok bool
 	var why string
-	if plan.IsToolStep(*next) {
+	if plan.IsToolStep(*cur) {
 		// A tool step matches the tool invocation, not the HTTP request: only the socket sets it, so a raw
 		// request with the same target is not covered (issue #70).
 		inv, has := platform.InvocationFrom(ctx)
 		if !has {
 			ok, why = false, "no tool invocation"
 		} else {
-			ok, why = plan.MatchesTool(*next, inv.Tool, inv.Args, req, resolve)
+			ok, why = plan.MatchesTool(*cur, inv.Tool, inv.Args, req, resolve)
 		}
 	} else {
-		ok, why = plan.Matches(*next, req, resolve)
+		ok, why = plan.Matches(*cur, req, resolve)
 	}
 	if !ok {
-		slog.Info("call is not the plan's next step", "chat", chatID, "plan", p.ID, "step", next.Idx, "differs_in", why)
-		return nil
+		slog.Info("call is not the plan's next step", "chat", chatID, "plan", p.ID, "step", cur.Idx, "differs_in", why)
+		return nil, cur.Idx, why
 	}
-	if !next.Covered {
-		return next
+	if !cur.Covered {
+		return cur, cur.Idx, ""
 	}
-	claimed, err := m.st.ClaimPlanStep(ctx, p.ID, next.Idx)
+	claimed, err := m.st.ClaimPlanStep(ctx, p.ID, cur.Idx)
 	if err != nil || !claimed {
-		return nil
+		return nil, cur.Idx, ""
 	}
-	next.State = plan.StepRunning
-	next.Attempts++
+	cur.State = plan.StepRunning
+	cur.Attempts++
 	m.publishPlan(context.WithoutCancel(ctx), p.ID)
-	return next
+	return cur, cur.Idx, ""
 }
 
 // planFinish records the outcome of a step. A created object enters the provenance register, so a
@@ -397,7 +405,25 @@ func redactPlanText(p store.Plan) store.Plan {
 		p.Steps[i].LogTail = platform.RedactText(p.Steps[i].LogTail)
 		p.Steps[i].Result = platform.RedactText(p.Steps[i].Result)
 	}
-	return p
+	return plan.WithUploads(p)
+}
+
+// PlanStepUploadEntries returns the list of every file of an upload step of a plan of the chat (issue #172): the
+// card fetches it when the user opens the list. The plan event carries only the summary and the manifest hash.
+func (m *Manager) PlanStepUploadEntries(ctx context.Context, chatID, planID string, idx int) ([]platform.UploadEntry, error) {
+	pl, err := m.planOf(ctx, chatID, planID)
+	if err != nil {
+		return nil, err
+	}
+	st := stepOf(pl, idx)
+	if st == nil {
+		return nil, store.ErrNotFound
+	}
+	man, ok := plan.StepManifest(*st)
+	if !ok {
+		return nil, store.ErrNotFound
+	}
+	return man.Entries, nil
 }
 
 // fillPlanUsage writes what the plan has used of its budget onto it (A-E4, D4.5). An unreadable usage

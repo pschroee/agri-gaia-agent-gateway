@@ -2341,7 +2341,17 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 	// step is covered by the plan; an irreversible step is returned unclaimed and still asks the user.
 	var step *store.PlanStep
 	if access.Effect != delegation.EffectRead || req.Writes() {
-		step = m.planMatch(ctx, chatID, req) // nil: no plan step applies
+		var nextStep int
+		var differs string
+		step, nextStep, differs = m.planNext(ctx, chatID, req) // nil: no plan step applies
+		if step == nil && differs == "files" && len(req.Uploads) > 0 {
+			// The call is the next step but for its files: the user approved other files (issue #172). Not a
+			// fall-back to a single approval, so that the agent notices it left the plan; the step stays open.
+			return platform.Result{Status: "error", Message: platform.RefusedPrefix + fmt.Sprintf(
+				"the files of this upload are not the ones approved for plan step %d (a file was changed, added or removed "+
+					"since the plan was approved); nothing was sent. Restore the files, or propose a new plan", nextStep),
+				Decision: platform.DecisionDeniedFixed, Reason: "files_changed", Rule: rule, WithinDelegation: within}, nil
+		}
 	}
 	planStep := func(s *store.PlanStep) *int {
 		if s == nil {
@@ -2567,6 +2577,12 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 					Decision: platform.DecisionDeniedDelegation, Reason: dec.Code, Rule: dec.Rule, WithinDelegation: &allowed,
 					ApprovalID: approvalID, ApprovalDecision: approvalBy, PlanStep: planStep(step)}, nil
 			}
+		}
+	}
+	// A step covered by an approved plan: the plan's manifest, pinned when the plan was proposed (issue #172).
+	if approvedManifest == "" && step != nil && step.Covered && len(req.Uploads) > 0 {
+		if man, ok := plan.StepManifest(*step); ok {
+			approvedManifest = man.SHA256
 		}
 	}
 	// The bytes about to be sent must be the ones whose list the user approved (issue #164). They were read before
