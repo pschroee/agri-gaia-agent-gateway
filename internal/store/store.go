@@ -302,6 +302,12 @@ type Approval struct {
 	// by the notebook service and written as it is — entry, files with size, SHA-256 and text, datasets and limits.
 	// The frontend shows it instead of the text of the preview; empty for every other kind of approval.
 	Notebook json.RawMessage `json:"notebook,omitempty"`
+	// Uploads: the summary of the files of an upload approval (issue #164) — number, size, folders, file types,
+	// annotation file and the SHA-256 over the list of every file — without the list itself. UploadEntries is that
+	// list; it is written with the approval, never read with it (the card fetches it when the user opens the list,
+	// GetApprovalUploadEntries) and so stays out of every approval event and listing.
+	Uploads       json.RawMessage `json:"uploads,omitempty"`
+	UploadEntries json.RawMessage `json:"-"`
 }
 
 type SocketCall struct {
@@ -970,12 +976,12 @@ func (s *Store) DeleteUnsentInput(ctx context.Context, chatID, name string) (Art
 	return Artifact{}, ErrNotFound
 }
 
-const approvalCols = `id::text, chat_id::text, kind, via, name, size, sha256, content_type, pending_key, COALESCE(preview,''), state, created_at, decided_at, decided_by, session, tool_call_id, COALESCE(effect,''), COALESCE(summary,''), COALESCE(summary_proposed,''), summary_changed_at, COALESCE(notebook::text,'')`
+const approvalCols = `id::text, chat_id::text, kind, via, name, size, sha256, content_type, pending_key, COALESCE(preview,''), state, created_at, decided_at, decided_by, session, tool_call_id, COALESCE(effect,''), COALESCE(summary,''), COALESCE(summary_proposed,''), summary_changed_at, COALESCE(notebook::text,''), COALESCE(uploads::text,'')`
 
 func scanApproval(row pgx.Row) (Approval, error) {
 	var a Approval
-	var notebook string
-	err := row.Scan(&a.ID, &a.ChatID, &a.Kind, &a.Via, &a.Name, &a.Size, &a.SHA256, &a.ContentType, &a.PendingKey, &a.Preview, &a.State, &a.CreatedAt, &a.DecidedAt, &a.DecidedBy, &a.Session, &a.ToolCallID, &a.Effect, &a.Summary, &a.SummaryProposed, &a.SummaryChangedAt, &notebook)
+	var notebook, uploads string
+	err := row.Scan(&a.ID, &a.ChatID, &a.Kind, &a.Via, &a.Name, &a.Size, &a.SHA256, &a.ContentType, &a.PendingKey, &a.Preview, &a.State, &a.CreatedAt, &a.DecidedAt, &a.DecidedBy, &a.Session, &a.ToolCallID, &a.Effect, &a.Summary, &a.SummaryProposed, &a.SummaryChangedAt, &notebook, &uploads)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return a, ErrNotFound
 	}
@@ -985,6 +991,9 @@ func scanApproval(row pgx.Row) (Approval, error) {
 	if notebook != "" {
 		a.Notebook = json.RawMessage(notebook)
 	}
+	if uploads != "" {
+		a.Uploads = json.RawMessage(uploads)
+	}
 	return a, nil
 }
 
@@ -993,9 +1002,9 @@ func scanApproval(row pgx.Row) (Approval, error) {
 // assigns one.
 func (s *Store) CreateApproval(ctx context.Context, a Approval) (Approval, error) {
 	return scanApproval(s.pool.QueryRow(ctx, `
-INSERT INTO approvals (id, chat_id, kind, via, name, size, sha256, content_type, pending_key, preview, session, tool_call_id, effect, summary, notebook)
-VALUES (COALESCE(NULLIF($1,'')::uuid, gen_random_uuid()),$2,$3,$4,$5,$6,$7,$8,$9,NULLIF($10,''),$11,$12,NULLIF($13,''),NULLIF($14,''),NULLIF($15,'')::jsonb) RETURNING `+approvalCols,
-		a.ID, a.ChatID, a.Kind, a.Via, a.Name, a.Size, a.SHA256, a.ContentType, a.PendingKey, a.Preview, a.Session, a.ToolCallID, a.Effect, a.Summary, string(a.Notebook)))
+INSERT INTO approvals (id, chat_id, kind, via, name, size, sha256, content_type, pending_key, preview, session, tool_call_id, effect, summary, notebook, uploads, upload_entries)
+VALUES (COALESCE(NULLIF($1,'')::uuid, gen_random_uuid()),$2,$3,$4,$5,$6,$7,$8,$9,NULLIF($10,''),$11,$12,NULLIF($13,''),NULLIF($14,''),NULLIF($15,'')::jsonb,NULLIF($16,'')::jsonb,NULLIF($17,'')::jsonb) RETURNING `+approvalCols,
+		a.ID, a.ChatID, a.Kind, a.Via, a.Name, a.Size, a.SHA256, a.ContentType, a.PendingKey, a.Preview, a.Session, a.ToolCallID, a.Effect, a.Summary, string(a.Notebook), string(a.Uploads), string(a.UploadEntries)))
 }
 
 func (s *Store) GetApproval(ctx context.Context, id string) (Approval, error) {
