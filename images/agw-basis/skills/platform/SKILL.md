@@ -52,7 +52,8 @@ is in `agw-platform create-training --help`.
 ## Uploading files
 
 You upload files from the sandbox with two commands; the orchestrator reads them itself from the
-sandbox, and before approving the user sees name, size and SHA-256 of every file:
+sandbox, and before approving the user sees the number, size, folders and file types of the files and
+one SHA-256 over the list of all files (up to 10 files: name, size and SHA-256 of each):
 
 ```bash
 # Dataset: name, description, then the files (globs work); classes as a repeated option,
@@ -63,7 +64,9 @@ agw-platform upload-dataset piglet-images "Piglets, barn 3, October" images/*.pn
 agw-platform upload-model mnist-small "MNIST, two classes" onnx model.onnx
 ```
 
-At most 2 000 files and 512 MB per call, each file at most as large as an artifact.
+At most 2 000 files and 512 MB per call, each file at most as large as an artifact. Every call creates a new
+dataset, so upload a dataset in one call. File names must be unique across folders (`daisy/001.jpg` and
+`rose/001.jpg` collide): the platform keeps only the file name.
 Keywords (`--keywords`) are **AGROVOC URIs** for both, not free words; search with
 `agw-platform request GET /agrovoc/keywords --query keyword=pig`. The orchestrator never sets "Classification Dataset" (otherwise a bug in the platform discards the
 classes); the classes go via `--annotation-labels`.
