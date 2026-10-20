@@ -169,14 +169,14 @@ func TestPlatformCallUploadPreview(t *testing.T) {
 	defer cancel()
 	req := platform.Request{Method: "POST", Path: "/models", Form: map[string][]string{"name": {"m"}, "format": {"onnx"}},
 		Files:   []platform.File{{Field: "modelfile", Path: "/workspace/m.onnx"}},
-		Uploads: []platform.Upload{{Field: "modelfile", Name: "m.onnx", Data: []byte("12345"), SHA256: "abc123"}}}
+		Uploads: []platform.Upload{{Field: "modelfile", Name: "m.onnx", Data: []byte("12345"), SHA256: upSum("12345")}}}
 	done := make(chan platform.Result, 1)
 	go func() {
 		r, _ := e.m.PlatformCall(ctx, c.ID, slot, "mcp", req)
 		done <- r
 	}()
 	ap := waitEvent(t, events, "approval", "").Data.(store.Approval)
-	if ap.Name != "POST /models (multipart, 1 file)" || ap.Size != 5 || !strings.Contains(ap.Preview, "modelfile: m.onnx  5 bytes  sha256 abc123") || !strings.Contains(ap.Preview, "format = onnx") {
+	if ap.Name != "POST /models (multipart, 1 file)" || ap.Size != 5 || !strings.Contains(ap.Preview, "modelfile: m.onnx  5 bytes  sha256 "+upSum("12345")) || !strings.Contains(ap.Preview, "format = onnx") {
 		t.Fatalf("approval: %+v", ap)
 	}
 	_, _ = e.m.Decide(ctx, ap.ID, true)

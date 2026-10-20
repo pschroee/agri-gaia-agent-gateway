@@ -956,7 +956,7 @@ func TestStepWithFilesAsksSynchronously(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	req.Uploads = []platform.Upload{{Field: "file", Name: "train.py", Data: []byte("print('hi')\n"), SHA256: "aa11"}}
+	req.Uploads = []platform.Upload{{Field: "file", Name: "train.py", Data: []byte("print('hi')\n"), SHA256: upSum("print('hi')\n")}}
 	if len(req.Files) == 0 {
 		t.Fatal("the call of a notebook run carries no files")
 	}

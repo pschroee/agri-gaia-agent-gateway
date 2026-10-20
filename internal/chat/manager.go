@@ -2363,6 +2363,7 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 	// approval the step was parked with. Only then does the repeated call not ask again.
 	approvedHere := m.parkedHere(ctx, chatID, req)
 	approvalID, approvalBy, executedDecision := "", "none", platform.DecisionAllowed
+	approvedManifest := "" // SHA-256 over the list of the uploaded files the user approved (issue #164)
 	if needsApproval(access, req.Writes(), del) && (step == nil || !step.Covered) && !approvedHere {
 		// A step that already waits for the user's decision is not asked a second time (A-E2, D2.8): its
 		// approval stays open until the plan expires, and a second one would run the same irreversible call
@@ -2445,6 +2446,23 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 		for _, u := range req.Uploads {
 			size += int64(len(u.Data))
 		}
+		// The files of an upload (issue #164): the card shows the summary and fetches the list of every file when
+		// the user opens it; the hash over that list is what the user approves and what is checked before sending.
+		var uploadsData, uploadEntries json.RawMessage
+		if len(req.Uploads) > 0 {
+			man, merr := platform.ManifestOf(req)
+			if merr != nil {
+				return platform.Result{Status: "error", Message: platform.RefusedPrefix + merr.Error(),
+					Decision: platform.DecisionDeniedFixed, Reason: "invalid_upload", Rule: rule, WithinDelegation: within, PlanStep: planStep(step)}, nil
+			}
+			if uploadsData, err = json.Marshal(man.Summary()); err == nil {
+				uploadEntries, err = json.Marshal(man.Entries)
+			}
+			if err != nil {
+				return platform.Result{Decision: platform.DecisionError, Reason: "approval_failed"}, err
+			}
+			approvedManifest = man.SHA256
+		}
 		// The id is assigned here and the recheck is registered before the insert: the pending approval is
 		// visible to the API (and to the user) as soon as the row exists, and a click that arrives before the
 		// registration would skip the re-read and approve the summary as proposed (issue #154).
@@ -2459,7 +2477,7 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 		m.logSummaryReads(ctx, chatID, apID, "proposed", rl)
 		ap, err := m.st.CreateApproval(ctx, store.Approval{ID: apID, ChatID: chatID, Kind: "platform_write", Via: via, Name: req.String(), Size: size,
 			ContentType: "application/json", PendingKey: "-", Preview: preview, Session: store.SessionFrom(ctx), ToolCallID: store.ToolCallFrom(ctx),
-			Effect: string(access.Effect), Summary: summary, Notebook: notebookData})
+			Effect: string(access.Effect), Summary: summary, Notebook: notebookData, Uploads: uploadsData, UploadEntries: uploadEntries})
 		if err != nil {
 			return platform.Result{Decision: platform.DecisionError, Reason: "approval_failed"}, err
 		}
@@ -2549,6 +2567,15 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 					Decision: platform.DecisionDeniedDelegation, Reason: dec.Code, Rule: dec.Rule, WithinDelegation: &allowed,
 					ApprovalID: approvalID, ApprovalDecision: approvalBy, PlanStep: planStep(step)}, nil
 			}
+		}
+	}
+	// The bytes about to be sent must be the ones whose list the user approved (issue #164). They were read before
+	// the approval and are never read again, so this holds by construction; the check makes it a step that fails.
+	if approvedManifest != "" {
+		if cerr := platform.CheckManifest(req, approvedManifest); cerr != nil {
+			return platform.Result{Status: "error", Message: platform.RefusedPrefix + cerr.Error(),
+				Decision: platform.DecisionDeniedFixed, Reason: "files_changed", Rule: rule, WithinDelegation: within,
+				ApprovalID: approvalID, ApprovalDecision: approvalBy, PlanStep: planStep(step)}, nil
 		}
 	}
 	// A compute call counts against the chat's limit once the platform takes it (not when refused or not

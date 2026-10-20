@@ -79,7 +79,7 @@ func notebookRunReq(t *testing.T, code string) platform.Request {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r.Uploads = []platform.Upload{{Field: "file", Name: "train.py", Data: []byte(code), SHA256: "aa11"}}
+	r.Uploads = []platform.Upload{{Field: "file", Name: "train.py", Data: []byte(code), SHA256: upSum(code)}}
 	return r
 }
 
@@ -169,7 +169,7 @@ func TestNotebookRunApprovalData(t *testing.T) {
 	if data.Entry != "train.py" {
 		t.Errorf("entry: %q", data.Entry)
 	}
-	if len(data.Files) != 1 || data.Files[0].Name != "train.py" || data.Files[0].SHA256 != "aa11" ||
+	if len(data.Files) != 1 || data.Files[0].Name != "train.py" || data.Files[0].SHA256 != upSum(code) ||
 		data.Files[0].Size != int64(len(code)) {
 		t.Fatalf("files: %+v", data.Files)
 	}
@@ -376,7 +376,7 @@ func TestNotebookPreviewShowsCode(t *testing.T) {
 	done := startCall(e, chatID, slot, notebookRunReq(t, code))
 	ap := pendingApproval(t, e, chatID)
 	// The preview closes with the shown file, so its trailing newline is trimmed.
-	for _, w := range []string{strings.TrimRight(code, "\n"), "sha256 aa11", "Runs train.py in your notebook server", "no internet",
+	for _, w := range []string{strings.TrimRight(code, "\n"), "sha256 "+upSum(code), "Runs train.py in your notebook server", "no internet",
 		"Datasets unpacked before the run: 17", "at most 120 minutes"} {
 		if !strings.Contains(ap.Preview, w) {
 			t.Errorf("preview without %q:\n%s", w, ap.Preview)
@@ -394,7 +394,7 @@ func TestNotebookPreviewShowsCode(t *testing.T) {
 	long.Uploads = nil
 	for _, name := range []string{"a.py", "b.py", "c.py", "d.py"} {
 		long.Uploads = append(long.Uploads, platform.Upload{Field: "file", Name: name,
-			Data: []byte(strings.Repeat("# line\n", 2000)), SHA256: "aa11"})
+			Data: []byte(strings.Repeat("# line\n", 2000)), SHA256: upSum(strings.Repeat("# line\n", 2000))})
 	}
 	res, err := e.m.PlatformCall(ctx, chatID, slot, "cli", long)
 	if err != nil {

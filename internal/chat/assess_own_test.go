@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -64,7 +63,7 @@ func TestModelUploadNotifiesGateway(t *testing.T) {
 		t.Fatal(err)
 	}
 	// What the socket builds for upload_model: the form, the file path and the bytes it read for it.
-	sha := strings.Repeat("ab", 32)
+	sha := upSum("onnx-own") // the gateway checks the bytes against the hash before it sends
 	req, err := platform.Normalize(platform.Request{Method: http.MethodPost, Path: "/models",
 		Form:  map[string][]string{"name": {"mnist_cnn"}, "description": {"own code"}, "format": {"onnx"}},
 		Files: []platform.File{{Field: "modelfile", Path: "/workspace/model.onnx"}}})
