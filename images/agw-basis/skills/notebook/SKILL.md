@@ -83,6 +83,10 @@ One run at a time per chat. `notebook_status` can report the state `stopping` (t
 `model.onnx`, `metrics.json`, `predictions.csv`. The link in the answer opens the run directory for the user
 in JupyterLab; give it to them.
 
+Inside a training search (skill `training-search`) the script reads its parameters from `params.json` in the run
+directory and writes one JSON line per epoch to `outputs/metrics.jsonl` (`epoch`, `epochs`, `train_loss`, `val_loss`,
+`train_acc`, `val_acc`); the search skill has the snippet.
+
 `exit_code` 124 means the run hit the time limit: nothing after that point is in the output. Look at the log,
 make the code faster or ask for a longer limit with a new run.
 

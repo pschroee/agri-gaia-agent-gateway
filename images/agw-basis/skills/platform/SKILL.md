@@ -49,6 +49,11 @@ model**, so do it once per training and only when the user wants the model. With
 `create-training` the model has no tensor metadata and no inference container can be built from it; the example
 is in `agw-platform create-training --help`.
 
+## Several trainings for one goal
+
+When a task needs several training rounds (tuning, comparing architectures), do not create and start trainings one
+by one: propose one search with `propose-search`, see skill `training-search`.
+
 ## One plan for a whole task
 
 When the user wants a whole task done (train and take over the model, build and deploy an image), propose **one**
