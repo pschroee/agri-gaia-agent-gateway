@@ -24,7 +24,7 @@ func TestNotebookSkillDescription(t *testing.T) {
 		t.Errorf("description too long (%d) or not a plain scalar: %s", len(d), d)
 	}
 	for _, w := range []string{
-		"capabilities", "without it", "notebook-run", "2 CPUs, 8 GB, no internet, no platform access",
+		"capabilities", "without it", "notebook-run", "2 CPUs, 8 GB, a shared GPU where the instance has one, no internet, no platform access", "torch.cuda.is_available()",
 		"test the code in the sandbox first", "dataset_ids", "approves every run", "notebook-run-status",
 		"notebook-log", "notebook-fetch", "upload-model", "inference container", "link of the run",
 	} {
