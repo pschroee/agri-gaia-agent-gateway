@@ -148,3 +148,50 @@ func TestMerge(t *testing.T) {
 		t.Errorf("empty base: %s %v", got, err)
 	}
 }
+
+// A choice of numbers compares by value: 0.001 and 1e-3 are the same number, a quoted number is a string (#168).
+func TestChoiceNumbersCompareByValue(t *testing.T) {
+	s := mustSpace(t, `{"lr":{"type":"choice","values":[0.001,0.01,0.1]},"opt":{"type":"choice","values":["adam","0.5"]}}`)
+	good := []string{`{"lr":1e-3,"opt":"adam"}`, `{"lr":0.0100,"opt":"adam"}`, `{"lr":1E-1,"opt":"0.5"}`, `{"lr":0.001,"opt":"adam"}`}
+	for _, g := range good {
+		if _, err := s.Check(json.RawMessage(g)); err != nil {
+			t.Errorf("%s refused: %v", g, err)
+		}
+	}
+	bad := []string{`{"lr":"0.001","opt":"adam"}`, `{"lr":0.002,"opt":"adam"}`, `{"lr":0.001,"opt":0.5}`, `{"lr":null,"opt":"adam"}`,
+		`{"lr":[0.001],"opt":"adam"}`, `{"lr":true,"opt":"adam"}`}
+	for _, b := range bad {
+		if _, err := s.Check(json.RawMessage(b)); err == nil {
+			t.Errorf("%s accepted", b)
+		}
+	}
+	// Two spellings of one number are one value.
+	if _, err := ParseSpace([]byte(`{"lr":{"type":"choice","values":[0.001,1e-3]}}`)); err == nil {
+		t.Error("0.001 and 1e-3 accepted as two values")
+	}
+	// A string "1" and a number 1 are two values.
+	if _, err := ParseSpace([]byte(`{"x":{"type":"choice","values":["1",1]}}`)); err != nil {
+		t.Errorf("a string and a number refused as the same: %v", err)
+	}
+}
+
+func TestSameJSON(t *testing.T) {
+	same := [][2]string{
+		{`{"a":0.001,"b":[1,2]}`, `{"b":[1,2.0],"a":1e-3}`},
+		{`{"s":"x","t":true}`, `{"t":true,"s":"x"}`},
+	}
+	for _, c := range same {
+		if !SameJSON([]byte(c[0]), []byte(c[1])) {
+			t.Errorf("%s and %s are the same", c[0], c[1])
+		}
+	}
+	differ := [][2]string{
+		{`{"a":1}`, `{"a":1,"b":2}`}, {`{"a":1}`, `{"a":"1"}`}, {`{"a":1}`, `{"a":2}`}, {`[1,2]`, `[2,1]`},
+		{`{"a":1}`, `{"a":1} {}`}, {`{`, `{}`}, {`{"a":null}`, `{"a":0}`},
+	}
+	for _, c := range differ {
+		if SameJSON([]byte(c[0]), []byte(c[1])) {
+			t.Errorf("%s and %s differ", c[0], c[1])
+		}
+	}
+}

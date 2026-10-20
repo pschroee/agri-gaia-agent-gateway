@@ -81,7 +81,7 @@ func TestConformanceThroughManager(t *testing.T) {
 	// (in production the gateway wires notebook, annotation and the checks when the instance offers
 	// them). The delegation check runs before the doer, so a forbidden call is still refused before it
 	// is reached.
-	for _, prefix := range []string{platform.NotebookPrefix, platform.AnnotationPrefix, platform.AssessPrefix} {
+	for _, prefix := range []string{platform.NotebookPrefix, platform.AnnotationPrefix, platform.AssessPrefix, platform.SearchPrefix} {
 		e.m.RegisterVirtual(prefix, conformanceVirtual{})
 	}
 	// A notebook run is a writing call: its approval carries the code the user approves, and the manager

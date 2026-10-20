@@ -261,6 +261,9 @@ type Options struct {
 	// (0 = DefaultAutoTurnsMax, < 0 = none). Above that the manager stops (Review 3, H2).
 	AutoTurnsMax int
 
+	// SearchMaxHours: a training search ends after this many hours at the latest (0: config.DefaultSearchMaxHours).
+	SearchMaxHours int
+
 	// Platform talks to the Agri-Gaia platform (nil: binding off).
 	Platform *platform.Client
 
@@ -447,7 +450,7 @@ func (m *Manager) SubscribeAll() (<-chan ChatEvent, func()) {
 func (m *Manager) publish(chatID string, ev Event) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	important := ev.Kind == "approval" || ev.Kind == "chat" || ev.Kind == "error" || ev.Kind == "plan"
+	important := ev.Kind == "approval" || ev.Kind == "chat" || ev.Kind == "error" || ev.Kind == "plan" || ev.Kind == "search"
 	for ch := range m.subs[chatID] {
 		sendDropOldest(ch, ev, important)
 	}
@@ -2335,6 +2338,18 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 		res.Decision, res.Reason, res.Rule, res.WithinDelegation = platform.DecisionDeniedFixed, "guard", ruleJSON, within
 		return res, nil
 	}
+	// The search's own paths (declare a trial, read the search, end it) are the gateway's bookkeeping: delegation and
+	// guards are checked, nothing goes to the platform, and nobody is asked (issue #168).
+	if isSearchControl(req) {
+		t0 := time.Now()
+		sres, serr := m.platformDo(ctx, chatID, req)
+		if serr != nil {
+			return platform.Result{Status: "error", Message: serr.Error(), Decision: platform.DecisionError, Reason: "call_failed", Rule: rule, WithinDelegation: within}, nil
+		}
+		sres.Duration, sres.Violation = time.Since(t0), violation
+		sres.Decision, sres.Reason, sres.Rule, sres.WithinDelegation = platform.DecisionAllowed, "", rule, within
+		return sres, nil
+	}
 	if access.Effect == delegation.EffectCompute {
 		res, allowed, err := m.computeAllowed(ctx, chatID)
 		if err != nil {
@@ -2625,6 +2640,17 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 		}
 		reserved = true
 	}
+	// A covered claim of a search takes its trial now; one that returned earlier took nothing (issue #168).
+	if !m.reserveClaim(context.WithoutCancel(ctx), claim) {
+		if reserved {
+			if rerr := m.st.ReleaseCompute(context.WithoutCancel(ctx), chatID); rerr != nil {
+				slog.Error("compute call not given back", "chat", chatID, "error", rerr)
+			}
+		}
+		return platform.Result{Status: "error", Message: platform.RefusedPrefix + "this trial of the training search was already used or is no longer declared; declare a new one with search_next",
+			Decision: platform.DecisionDeniedFixed, Reason: "trial_unavailable", Rule: rule, WithinDelegation: within,
+			ApprovalID: approvalID, ApprovalDecision: approvalBy, PlanStep: planStep(step)}, nil
+	}
 	// Duration of the round trip to the platform (token exchange included), without the approval's waiting time.
 	t0 := time.Now()
 	res, err = m.platformDo(ctx, chatID, req)
@@ -2636,13 +2662,14 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 	if jobID := m.planFinish(ctx, chatID, step, access, req, res, err); jobID != "" && step != nil {
 		res.Note = m.watchNote(ctx, step, jobID)
 	}
+	jobID := ""
 	if step == nil && err == nil {
 		// No plan step: a started job is only observed for the cards (A-E2.2, no note, no wake-up).
-		m.recordJobOutsidePlan(ctx, chatID, access, req, res)
+		jobID = m.recordJobOutsidePlan(ctx, chatID, access, req, res)
 	}
 	// The outcome of a call of a search's trial: after the job of a started run is observed, so that the trial can
 	// name it (issue #168). A nil claim does nothing.
-	m.searchFinish(ctx, chatID, claim, req, res, err)
+	m.searchFinish(ctx, chatID, claim, access, req, res, err, jobID)
 	// A call that stops a job (own code C-E4): the job records the agent as the one who stopped it, and the
 	// user's own route does the same in StopJob.
 	m.stopJobByTheAgent(ctx, chatID, req, res)

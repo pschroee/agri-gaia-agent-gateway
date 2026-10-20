@@ -196,6 +196,13 @@ func (m *Manager) SendMessage(ctx context.Context, chatID, text string, names []
 	return r, err
 }
 
+// SendSearchHint sends the user's hint for a training search as a message of the user, marked as such in the
+// metadata of its turn (Source.SearchHint, issue #168). The text starts with "Hint for the training search: ".
+func (m *Manager) SendSearchHint(ctx context.Context, chatID, searchID, text string) (SendResult, error) {
+	r, err := m.send(ctx, chatID, &store.QueueEntry{Kind: store.QueueUser, Text: "Hint for the training search: " + strings.TrimSpace(text), SearchHint: searchID})
+	return r, err
+}
+
 // FlushQueue delivers the held entries now (after an abort or when the chat is idle). If pi is
 // working, ErrRunning; if nothing is queued, ErrInvalid.
 func (m *Manager) FlushQueue(ctx context.Context, chatID string) (SendResult, error) {
@@ -238,7 +245,12 @@ func (m *Manager) send(ctx context.Context, chatID string, msg *store.QueueEntry
 			unlock()
 			return SendResult{}, ErrRunning
 		}
-		e, err := m.st.EnqueueUser(ctx, chatID, msg.Text, msg.Attachments, msg.Context)
+		var e store.QueueEntry
+		if msg.SearchHint != "" {
+			e, err = m.st.EnqueueUserHint(ctx, chatID, msg.Text, msg.Context, msg.SearchHint)
+		} else {
+			e, err = m.st.EnqueueUser(ctx, chatID, msg.Text, msg.Attachments, msg.Context)
+		}
 		unlock()
 		if err != nil {
 			return SendResult{}, err
@@ -911,6 +923,9 @@ func (m *Manager) autoLimit(ctx context.Context, chatID string, open []store.Que
 		if ev, limited, handled := m.planWakeLimit(ctx, chatID, planID); handled {
 			return ev, limited
 		}
+	}
+	if ev, limited, handled := m.searchWakeLimit(ctx, chatID, open); handled {
+		return ev, limited
 	}
 	n, err := m.st.WakesSince(ctx, chatID, time.Now().Add(-time.Hour))
 	if err != nil || n >= m.opt.BgWakesPerHour {

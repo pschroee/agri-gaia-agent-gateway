@@ -277,6 +277,7 @@ func run() error {
 		ComputeMaxPerChat: env.ComputeMaxPerChat,
 		PlanMaxDuration:   env.PlanMaxDuration, // A-E1: budget limits of autonomous plans
 		PlanMaxLLMCost:    env.PlanMaxLLMCost,
+		SearchMaxHours:    env.SearchMaxHours, // #168: the longest a training search runs
 		// X3: limits of an experiment run at the model pass-through.
 		ExpMaxCostUSD:      env.ExpMaxCostUSD,
 		ExpMaxTokens:       env.ExpMaxTokens,
@@ -341,6 +342,9 @@ func run() error {
 		watch.RegisterRoute(method, path, notebook.KindName, notebook.RunIDFrom)
 		watch.Register(nb.WatchKind())
 	}
+
+	// The training search (issue #168): its paths below /_agw/search are answered by the manager itself.
+	m.RegisterVirtual(platform.SearchPrefix, m.SearchDoer())
 
 	// R0 — the check paths are answered by the gateway itself (G1.5): delegation, effect class and log
 	// run as for every other call, and the gateway decides what a check runs on. Checks are observed like

@@ -46,10 +46,10 @@ type Setup struct {
 }
 
 // knownCapabilities are the names the overview always reports, in the order of the plan (G1.8): vision,
-// internet, notebook, edge, annotation, compute, checks, bindings. A name no feature registered is
+// internet, notebook, edge, annotation, compute, checks, training search, bindings. A name no feature registered is
 // reported as not part of this gateway version, so that the model never assumes a capability that is
 // not built in (G1.11).
-var knownCapabilities = []string{"vision", "internet", "notebook", "edge", "annotation", "compute", "checks", "bindings"}
+var knownCapabilities = []string{"vision", "internet", "notebook", "edge", "annotation", "compute", "checks", "training search", "bindings"}
 
 // missingCapability is what an entry of a feature says that this gateway version does not hold.
 const missingCapability = "not part of this gateway version"

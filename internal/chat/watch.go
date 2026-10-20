@@ -113,6 +113,7 @@ func (m *Manager) RunWatchers(ctx context.Context) {
 			return
 		case <-t.C:
 			m.watchOnce(ctx, sem)
+			m.searchTick(ctx) // the clock of the training searches (issue #168)
 		}
 	}
 }
@@ -374,17 +375,18 @@ func (m *Manager) watchNote(ctx context.Context, st *store.PlanStep, jobID strin
 
 // recordJobOutsidePlan observes a call that started a job without a plan (A-E2.2): the row is there for
 // the cards and the activity, the agent gets no note and no wake-up.
-func (m *Manager) recordJobOutsidePlan(ctx context.Context, chatID string, access delegation.Access, req platform.Request, res platform.Result) {
+func (m *Manager) recordJobOutsidePlan(ctx context.Context, chatID string, access delegation.Access, req platform.Request, res platform.Result) string {
 	kind, ref, ok := watch.For(access, req, res)
 	if !ok {
-		return
+		return ""
 	}
 	id, err := m.st.AddWatchJob(ctx, store.WatchJob{ChatID: chatID, ToolCallID: store.ToolCallFrom(ctx), Kind: kind, Ref: ref})
 	if err != nil {
 		slog.Error("started job not observed", "chat", chatID, "kind", kind, "error", err)
-		return
+		return ""
 	}
 	slog.Info("job observed without a plan", "chat", chatID, "job", id, "kind", kind, "ref", ref)
+	return id
 }
 
 // stopJobByTheAgent records that a call of the agent's own tools stopped a job (own code C-E4): the job of the

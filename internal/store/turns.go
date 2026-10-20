@@ -41,6 +41,13 @@ type Source struct {
 	// Context: for a NoteContext part the page context it stands for (structured, so that UIs show
 	// "Refers to …" without reading the note's text); QueueID is then the user entry it belongs to.
 	Context *PageContext `json:"context,omitempty"`
+	// SearchHint: this user part is the user's hint for the named training search (issue #168).
+	SearchHint *SearchHintRef `json:"search_hint,omitempty"`
+}
+
+// SearchHintRef marks a message of the user as a hint for a training search.
+type SearchHintRef struct {
+	SearchID string `json:"search_id"`
 }
 
 // AudienceAgent marks a note meant only for the model's context, not for the user (e.g. the

@@ -306,6 +306,7 @@ func (s *Server) Handler() http.Handler {
 	writes("POST /api/chats/{id}/subagent-runs/{run}/stop", s.subagentStop)
 	chat("GET /api/chats/{id}/plans", s.plans)
 	chat("GET /api/chats/{id}/plans/{plan}/steps/{idx}/uploads", s.planStepUploads) // #172: the list of every file of an upload step
+	s.registerSearchRoutes(chat, writes) // the training search (issue #168)
 	// R0 (issue #112): the result checks of a chat with their reports, for the check card.
 	chat("GET /api/chats/{id}/assessments", s.assessments)
 	// V4 (issue #112): the runs and jobs of pre-annotation with their results, for the cards in the

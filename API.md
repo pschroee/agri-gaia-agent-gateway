@@ -2252,9 +2252,8 @@ names what is R2's own.
 ## Training search with a budget (issue #168)
 
 A search lets the user approve a search space and a budget **once**; inside them the agent runs trial after trial on
-its own. Welle 0 (this section's first state) lays the seams only: store, rules, tool table and hooks. The service
-that answers the paths below is added by the follow-up changes; until then every path answers
-`unavailable: training search is not available in this setup …`.
+its own. The service answers the paths below once `Manager.SearchDoer` is registered (`cmd/orchestrator/main.go`);
+without it every path answers `unavailable: training search is not available in this setup …`.
 
 | Tool (CLI) | Path | Class | Approval |
 |---|---|---|---|
@@ -2287,6 +2286,43 @@ that answers the paths below is added by the follow-up changes; until then every
 - **SSE `trial_progress`** (at most every 5 s per trial, the last one is never lost): `{"trial_id","search_id","epoch",
   "epochs","eta","score","points":[{"epoch","at",<figures>}],"gpu":{"at","util","mem_used_mb","mem_total_mb"}}`; `points`
   are the epochs since the last event.
+
+### The search service
+
+- **Approval** (`kind: "search"`, `approval.search`): `{kind:"proposal", search_id, title, objective, space, fixed,
+  budget, compute:{needed,left,left_after}, expires_at, path, base:{container_id,provider,category,architecture,dataset:
+  {id,name,images,classes}}, code (notebook way: entry, files with SHA-256 and text, datasets, limits), holdout:{available,
+  eval_dataset,images}, autonomy:{max_auto_turns}, note}`. Everything but `note` is written by the gateway from what it
+  read; `fixed` is the base configuration without the searched keys. The approval is re-read at the click (`summary_changed`
+  as for any summary): a changed base configuration gives a new summary and replaces `approval.search`.
+- **Code change** (an ordinary `platform_write` approval of a notebook run of the search whose code differs):
+  `approval.search = {kind:"code_change", search_id, title, trial, code_version_from, code_version_to, changed_files,
+  files:[{name, old_sha256, new_sha256, added, removed, diff | diff_too_long + new_text}]}`; a diff over 400 lines is not
+  shown. After the user approves, the new files become version `code_version_to` (event `code_approved`).
+- **Coverage:** a trial of a running search is covered only when the call is exactly the announced one: the copy
+  (`POST /train/containers/{base}/clone`, `train_config` equal by value to the base with the declared params), the start of
+  that copy, a notebook run of the byte-identical approved code with `params.json` equal to the declared params.
+  `assess_model final=true` is refused while a search runs, and covered afterwards only for the winner and the held-back
+  eval dataset. Everything else asks as usual. A covered trial is reserved right before the call goes out.
+- **Ending:** after each trial the budget is asked again (`Admit`); reasons `target_reached`, `budget_runs`, `budget_time`,
+  `patience`, `time_limit`, `compute_limit`, `start_failed` (two trials in a row failed before their first epoch),
+  `stopped_by_user`, `adopted`, `ended_by_agent`. The clock (`searchTick`, every watcher round) stops the running trial when
+  the compute minutes are used up and ends the search at `ends_by` (session end or `AGW_SEARCH_MAX_HOURS`, default 12).
+  After every end `holdout.final_state` is `pending` (a winner and a held-back test set) or `none`; `started` once the
+  final test runs. The agent is woken per trial within `min(50, 3·max_runs+3)` turns of its own (`NoteSearch` notes).
+
+| Route | Answer |
+|---|---|
+| `GET /api/chats/{id}/experiments` | `{"searches":[Search],"trials":[Trial]}`; `Search` = row + `used:{runs,compute_minutes,since_improvement}` (`runs` counts running trials), `best_idx`, `compute_left`, `running_trial`; `Trial` = row + `duration_s`, `eta`, `figures` (`""`, `none`, `ok`), `gpu_available` |
+| `GET /api/chats/{id}/experiments/trials/{trial}` | `{"trial","epochs":[{"epoch","at",<figures by name>}],"gpu":[…],"log_tail"}` |
+| `GET /api/chats/{id}/searches/{search}/export?format=json\|csv` | JSON: search, trials with `series`, events; CSV: one row per trial |
+| `POST …/searches/{search}/stop` | `{"scope":"trial"\|"search"}` |
+| `POST …/searches/{search}/budget` | `{"max_runs":8,"max_compute_minutes":null,"target":0.9,"patience":3}`; `max_runs` ≤ `used.runs + compute_left` (else 400) |
+| `POST …/searches/{search}/hint` | `{"text":"…"}`; sent as a user message `Hint for the training search: …`, marked `search_hint:{search_id}` in the sources of its turn |
+| `POST …/searches/{search}/adopt` | `{"trial":2}` (a finished trial) |
+
+The controls answer the `Search`; 404 for a search of another chat, 409 when it is not running, 400 for a refused input.
+SSE: `search` (the whole search at every change), `trial` (a trial row at every change).
 
 ## Tool executions (E9)
 

@@ -1046,6 +1046,19 @@ func (s *Store) DecideApprovalBy(ctx context.Context, id, state, by string) (App
 	return a, false, err
 }
 
+// ReplaceApprovalSearch overwrites the structured data of a pending search approval (issue #168), together with the
+// summary re-read at the click; ok is false once the approval is decided.
+func (s *Store) ReplaceApprovalSearch(ctx context.Context, id string, data json.RawMessage) (bool, error) {
+	if !isUUID(id) {
+		return false, ErrNotFound
+	}
+	tag, err := s.pool.Exec(ctx, `UPDATE approvals SET search=$2::jsonb WHERE id=$1 AND state='pending'`, id, string(data))
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
 // ReplaceApprovalSummary overwrites the gateway's summary of a pending approval with what a re-read at the moment of
 // the approval found (issue L2/#119). The first proposal stays in summary_proposed (COALESCE), and
 // summary_changed_at marks when the change was seen; an empty preview keeps the stored one. ok reports whether it
