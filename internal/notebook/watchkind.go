@@ -5,15 +5,19 @@
 package notebook
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"regexp"
+	"strconv"
 	"time"
 
 	"agw/internal/delegation"
+	"agw/internal/plan"
 	"agw/internal/platform"
+	"agw/internal/search"
 	"agw/internal/watch"
 )
 
@@ -89,7 +93,90 @@ func (n *Notebooks) poll(ctx context.Context, j watch.Job, _ watch.Reader) (watc
 	if log, err := n.Log(ctx, j.ChatID, j.Ref, 20); err == nil {
 		p.LogTail = log
 	}
+	if m := n.runMetrics(ctx, j.ChatID, j.Ref); m != nil {
+		p.Metrics = m
+		if info.State == StateRunning {
+			// The epochs a run names are a better measure than the share of its time limit (issue #168).
+			if pct := watch.MetricsPercent(m, false); pct != nil {
+				p.Percent = pct
+			}
+		}
+	}
 	return p, nil
+}
+
+// The files a run may write for the training search (issue #168): the figures of every epoch and, when the
+// launcher found a GPU, the samples of nvidia-smi. Both are read from the run directory with realpath, as Fetch
+// does, so that a symbolic link out of the directory reads nothing; the output is bounded in bytes and lines.
+const (
+	metricsFile = "outputs/metrics.jsonl"
+	gpuFile     = ".agw/gpu.csv"
+	paramsFile  = "params.json"
+	// maxParamsBytes is the size of params.json the gateway reads (the trial parameters are at most 4 KiB).
+	maxParamsBytes = 4 << 10
+)
+
+// tailScript prints the last lines of a file of a run: $1 the run directory, $2 the relative path, $3 the number
+// of lines, $4 the number of bytes read at most. A missing file, a link out of the directory and a directory give
+// no output and no error.
+const tailScript = `f=$(realpath -e -- "$1/$2" 2>/dev/null) || exit 0
+case "$f" in "$1"/*) ;; *) exit 0;; esac
+[ -f "$f" ] || exit 0
+tail -c "$4" -- "$f" | tail -n "$3"`
+
+// headScript prints the beginning of a file of a run: $1 the run directory, $2 the relative path, $3 the bytes.
+const headScript = `f=$(realpath -e -- "$1/$2" 2>/dev/null) || exit 0
+case "$f" in "$1"/*) ;; *) exit 0;; esac
+[ -f "$f" ] || exit 0
+head -c "$3" -- "$f"`
+
+// runMetrics reads the figures of a run out of its directory: outputs/metrics.jsonl, .agw/gpu.csv and params.json.
+// It returns nil when the server is not running or the run left nothing; a failure is never fatal, the exit code
+// decides about the run.
+func (n *Notebooks) runMetrics(ctx context.Context, chatID, runID string) *watch.Metrics {
+	row, err := n.store.GetNotebookRun(ctx, chatID, runID)
+	if err != nil {
+		return nil
+	}
+	containerID, err := n.container(ctx, row.HubUser, row.Server)
+	if err != nil {
+		return nil
+	}
+	dir := runDir(runID)
+	read := func(script string, args ...string) []byte {
+		cmd := append([]string{"bash", "-c", script, "_", dir}, args...)
+		out, code, _ := n.exec(ctx, containerID, cmd, nil)
+		if code != 0 {
+			return nil
+		}
+		return out
+	}
+	m := &watch.Metrics{Supported: true}
+	m.Epochs = search.ParseMetricsJSONL(read(tailScript, metricsFile, strconv.Itoa(search.MaxMetricsLines),
+		strconv.Itoa(search.MaxMetricsLines*search.MaxMetricsLine)))
+	if raw := read(tailScript, gpuFile, strconv.Itoa(search.MaxGPULines), "262144"); len(raw) > 0 {
+		m.GPU = search.ParseGPUCSV(raw)
+		m.GPUAvailable = true
+	}
+	m.Params = canonicalParams(read(headScript, paramsFile, strconv.Itoa(maxParamsBytes+1)))
+	if len(m.Epochs) == 0 && len(m.GPU) == 0 && m.Params == nil {
+		return nil
+	}
+	return m
+}
+
+// canonicalParams returns params.json as canonical JSON when it is an object of at most maxParamsBytes; anything
+// else (too long, not JSON, duplicate keys, not an object) is none.
+func canonicalParams(raw []byte) json.RawMessage {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 || len(raw) > maxParamsBytes || raw[0] != '{' {
+		return nil
+	}
+	canon, err := plan.Canonical(raw)
+	if err != nil {
+		return nil
+	}
+	return canon
 }
 
 // runMessage is the one line the watcher shows for a run (at most 200 runes).
