@@ -214,6 +214,11 @@ func (s *summarizer) rest() []string {
 
 func (s *summarizer) fileLines() []string {
 	s.usedFile = true
+	if len(s.call.Files) > ListedFiles {
+		if lines, ok := s.manyFileLines(); ok {
+			return lines
+		}
+	}
 	out := make([]string, 0, len(s.call.Files))
 	for _, f := range s.call.Files {
 		line := fmt.Sprintf("File (%s): %s", f.Field, strconv.Quote(f.Name))
@@ -230,6 +235,49 @@ func (s *summarizer) fileLines() []string {
 		out = append(out, line)
 	}
 	return out
+}
+
+// manyFileLines summarises an upload above ListedFiles instead of listing every file; the list of all files is
+// attached to the approval as a manifest (issue #164). Files that were not read yet (a plan step) have no hash, so
+// there is no manifest line for them.
+func (s *summarizer) manyFileLines() ([]string, bool) {
+	entries := make([]UploadEntry, len(s.call.Files))
+	read := true
+	for i, f := range s.call.Files {
+		if f.Size < 0 {
+			read = false
+		}
+		entries[i] = UploadEntry{Field: f.Field, Path: f.Name, Bytes: max(f.Size, 0), SHA256: f.SHA256}
+	}
+	m, err := buildManifest(entries, first(s.call.Form["includes_annotation_file"]) == "true")
+	if err != nil {
+		return nil, false
+	}
+	folders := fmt.Sprintf("%d folders", len(m.Folders))
+	if len(m.Folders) == 1 {
+		folders = "1 folder"
+	}
+	var out []string
+	if read {
+		out = append(out, fmt.Sprintf("Files: %d (%s) in %s under %s", m.Files, sizeText(m.Bytes), folders, strconv.Quote(m.Root)))
+	} else {
+		out = append(out, fmt.Sprintf("Files: %d in %s under %s (not read yet)", m.Files, folders, strconv.Quote(m.Root)))
+	}
+	if len(m.Extensions) > 0 {
+		out = append(out, "File types: "+m.typesText())
+	}
+	if a := m.Annotation; a != nil {
+		switch {
+		case !read:
+			out = append(out, fmt.Sprintf("Annotation file: %s (not read yet)", strconv.Quote(a.Path)))
+		default:
+			out = append(out, fmt.Sprintf("Annotation file: %s (%s, sha256 %s)", strconv.Quote(a.Path), sizeText(a.Bytes), a.SHA256))
+		}
+	}
+	if read {
+		out = append(out, fmt.Sprintf("Manifest sha256 %s (path, size and SHA-256 of every file; the list is attached)", m.SHA256))
+	}
+	return out, true
 }
 
 // --- templates ---

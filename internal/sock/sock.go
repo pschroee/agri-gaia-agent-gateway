@@ -503,7 +503,7 @@ func (h *handler) readFiles(ctx context.Context, req *platform.Request) error {
 		}
 		total += int64(len(rr.Data))
 		if total > platform.MaxUploadBytes {
-			return fmt.Errorf("files together larger than %d MB", platform.MaxUploadBytes>>20)
+			return fmt.Errorf("files together larger than %d MB per call; every upload creates a new dataset, so choose fewer or smaller files", platform.MaxUploadBytes>>20)
 		}
 		sum := sha256.Sum256(rr.Data)
 		req.Uploads = append(req.Uploads, platform.Upload{Field: f.Field, Name: path.Base(f.Path), Data: rr.Data, SHA256: hex.EncodeToString(sum[:])})

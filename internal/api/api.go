@@ -334,6 +334,7 @@ func (s *Server) Handler() http.Handler {
 	writes("POST /api/chats/{id}/commands", s.runCommand)
 	chat("GET /api/chats/{id}/session", s.session)
 	chat("GET /api/chats/{id}/artifacts", s.artifacts)
+	chat("GET /api/chats/{id}/approvals/{aid}/uploads", s.approvalUploads) // #164: the list of every file of an upload approval
 	chat("GET /api/chats/{id}/artifacts/{name}", s.download)
 	writes("POST /api/chats/{id}/files", s.upload)
 	// L4/#121: an input that was not sent with a message can be taken back (the cross on the tile, a cancelled upload).

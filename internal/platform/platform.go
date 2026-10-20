@@ -29,6 +29,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 )
 
 // Config holds the settings from the environment (AGW_PLATFORM_*).
@@ -177,6 +178,11 @@ func (r Request) Describe() string {
 		}
 	}
 	if len(r.Uploads) > 0 {
+		if m, err := ManifestOf(r); err == nil && len(r.Uploads) > ListedFiles {
+			// Many files: the summary and the manifest hash here, the list of every file on the approval (#164).
+			b.WriteString("\n" + m.describe() + "\n")
+			return strings.TrimRight(b.String(), "\n")
+		}
 		var total int
 		for _, u := range r.Uploads {
 			total += len(u.Data)
@@ -457,7 +463,8 @@ func normalize(r Request, agent bool) (Request, error) {
 			return r, errors.New("either JSON body or form, not both")
 		}
 		if len(r.Files) > MaxFiles || len(r.Uploads) > MaxFiles {
-			return r, fmt.Errorf("at most %d files per call", MaxFiles)
+			return r, fmt.Errorf("too many files for one call (%d, at most %d); every upload creates a new dataset, so choose fewer files",
+				max(len(r.Files), len(r.Uploads)), MaxFiles)
 		}
 		ftotal := 0
 		for k, vs := range r.Form {
@@ -480,6 +487,9 @@ func normalize(r Request, agent bool) (Request, error) {
 			}
 			if !path.IsAbs(f.Path) || path.Clean(f.Path) != f.Path || strings.ContainsRune(f.Path, 0) || f.Path == "/" {
 				return r, fmt.Errorf("file path %q invalid: give it absolute and without . or ..", f.Path)
+			}
+			if strings.IndexFunc(f.Path, unicode.IsControl) >= 0 {
+				return r, fmt.Errorf("file path %q invalid: control characters are not allowed", f.Path)
 			}
 		}
 		// Files and Uploads together are the normal state after the orchestrator read the sandbox
