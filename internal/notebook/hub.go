@@ -22,6 +22,10 @@ import (
 // tool can answer "unavailable" instead of an error the agent would retry (G1.13).
 var ErrHub = errors.New("jupyterhub")
 
+// ErrStopPending: the hub is still stopping the server, so it cannot be started yet (the hub answers
+// 400 "pending stop"). A run waits and starts again.
+var ErrStopPending = errors.New("the notebook server is still stopping")
+
 // ErrNoHubUser: the hub does not know the chat's user, which happens when they never opened
 // JupyterHub (the hub creates users at the first OAuth login, plan E2). The gateway has no
 // admin:users scope on purpose, so it says so instead of creating the user.
@@ -76,6 +80,8 @@ func (h *Hub) Start(ctx context.Context, user, server string) error {
 	switch {
 	case code == http.StatusCreated || code == http.StatusAccepted:
 		return nil
+	case code == http.StatusBadRequest && strings.Contains(strings.ToLower(string(body)), "pending stop"):
+		return ErrStopPending
 	case code == http.StatusBadRequest && strings.Contains(strings.ToLower(string(body)), "already running"):
 		return nil
 	case code == http.StatusNotFound:
@@ -113,7 +119,7 @@ func (h *Hub) Ready(ctx context.Context, user, server string) (bool, error) {
 }
 
 // ServerState names what the hub knows about a server: "not started" (the user model has no entry),
-// "starting" (an entry that is not ready yet) or "running" (ready). ErrNoHubUser when the hub does
+// "starting" (an entry that is not ready yet), "stopping" (the hub is stopping it) or "running" (ready). ErrNoHubUser when the hub does
 // not know the user at all.
 func (h *Hub) ServerState(ctx context.Context, user, server string) (string, error) {
 	if err := check(user, server); err != nil {
@@ -131,7 +137,8 @@ func (h *Hub) ServerState(ctx context.Context, user, server string) (string, err
 	}
 	var doc struct {
 		Servers map[string]struct {
-			Ready bool `json:"ready"`
+			Ready   bool   `json:"ready"`
+			Pending string `json:"pending"`
 		} `json:"servers"`
 	}
 	if err := json.Unmarshal(body, &doc); err != nil {
@@ -141,6 +148,8 @@ func (h *Hub) ServerState(ctx context.Context, user, server string) (string, err
 	switch {
 	case !known:
 		return "not started", nil
+	case s.Pending == "stop":
+		return "stopping", nil
 	case s.Ready:
 		return "running", nil
 	}
