@@ -17,7 +17,7 @@ func TestBuildRefusesPlaceholderOnRun(t *testing.T) {
 	raw := `{"title":"t","steps":[
  {"method":"POST","path":"/train/config","body":{"dataset_id":1}},
  {"tool":"start_training","args":{"train_container_id":"{{step1.id}}"}},
- {"tool":"model_from_training","args":{"train_container_id":"{{step2.id}}"}}]}`
+ {"tool":"create_model_from_training","args":{"train_container_id":"{{step2.id}}"}}]}`
 	p, err := ParseProposal([]byte(raw), testLimits)
 	if err == nil {
 		_, err = Build(p, classify)

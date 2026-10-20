@@ -149,8 +149,9 @@ func TestPlanWaitGuardRefusesNextStep(t *testing.T) {
 		t.Fatalf("reason: %s", res.Message)
 	}
 	other, _ := platform.Normalize(platform.Request{Method: http.MethodPost, Path: "/tags", Body: json.RawMessage(`{"name":"x"}`)})
-	if _, refused, _ := e.m.guardRefusal(ctx, c.ID, other, delegation.Classify(other)); refused {
-		t.Error("an unrelated call must pass the guard")
+	// The plan guard lets an unrelated call pass; the autonomy guard may still refuse it as outside the plan.
+	if r, refused, _ := e.m.guardRefusal(ctx, c.ID, other, delegation.Classify(other)); refused && strings.Contains(r.Message, "cannot run yet") {
+		t.Errorf("an unrelated call must pass the wait guard: %s", r.Message)
 	}
 	read, _ := platform.Normalize(platform.Request{Method: http.MethodGet, Path: "/models/5"})
 	if _, refused, _ := e.m.guardRefusal(ctx, c.ID, read, delegation.Classify(read)); refused {
@@ -168,7 +169,7 @@ func TestPlanValidityExtendedAfterJob(t *testing.T) {
 		t.Fatal(err)
 	}
 	slot := e.m.live[c.ID].slot.ID
-	r, _ := proposeAndDecide(t, e, ctx, c.ID, slot, `{"title":"Train","steps":[{"method":"POST","path":"/train/config"}]}`, true)
+	r, _ := proposeAndDecide(t, e, ctx, c.ID, slot, `{"title":"Train","steps":[{"method":"POST","path":"/train/config"},{"method":"PATCH","path":"/models/5","body":`+modelBody+`}]}`, true)
 	if r.Status != "ok" {
 		t.Fatalf("plan not approved: %+v", r)
 	}

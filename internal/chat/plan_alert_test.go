@@ -33,7 +33,7 @@ func autonomousPlan(t *testing.T, e *env, chatID string) store.Plan {
 	ctx := context.Background()
 	pl, err := e.st.CreatePlan(ctx, store.Plan{ChatID: chatID, Title: "Train pigs v1", Via: "cli", Mode: plan.ModeAutonomous,
 		Budget: store.PlanBudget{MaxDurationS: 3600, MaxLLMCost: 1.5, MaxAutoTurns: 20},
-		Steps: []store.PlanStep{{Idx: 1, Method: "POST", Path: "/datasets", Effect: plan.EffectWrite, State: plan.StepOpen}}})
+		Steps:  []store.PlanStep{{Idx: 1, Method: "POST", Path: "/datasets", Effect: plan.EffectWrite, State: plan.StepOpen}}})
 	if err != nil {
 		t.Fatal(err)
 	}

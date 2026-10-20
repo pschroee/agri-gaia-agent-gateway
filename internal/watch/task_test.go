@@ -123,7 +123,8 @@ func TestImageBuildCarriesItsImage(t *testing.T) {
 	if !ok || kind != kindImageBuild || ref != "task:8|image:u/mnist-triton:v1" {
 		t.Fatalf("For = %q %q %v", kind, ref, ok)
 	}
-	read, _ := recorded(t, map[string]string{"GET /tasks/8": `{"status":"completed","completion_percentage":1.0}`})
+	read, _ := recorded(t, map[string]string{"GET /tasks/8": `{"status":"completed","completion_percentage":1.0}`,
+		"GET /container-images/u/mnist-triton:v1": `[{"id":4}]`})
 	p, err := pollImageBuild(context.Background(), Job{ID: "w1", Kind: kindImageBuild, Ref: ref}, read)
 	if err != nil || p.State != StateDone {
 		t.Fatalf("poll: %+v %v", p, err)
@@ -176,7 +177,9 @@ func TestTaskIDsFromLocationAndRef(t *testing.T) {
 func TestTaskIDsFromBodyReference(t *testing.T) {
 	Register(Kind{Name: "test_taskids_body"})
 	RegisterRoute(http.MethodPost, regexp.MustCompile(`^/test-taskids-body$`), "test_taskids_body",
-		func(_ platform.Request, res platform.Result) (string, bool) { return "task:" + strings.TrimSpace(res.Body), true })
+		func(_ platform.Request, res platform.Result) (string, bool) {
+			return "task:" + strings.TrimSpace(res.Body), true
+		})
 	got := TaskIDs(delegation.Access{}, platform.Request{Method: "POST", Path: "/test-taskids-body"},
 		platform.Result{Status: "ok", HTTPStatus: 200, Body: "33"})
 	if len(got) != 1 || got[0] != "33" {

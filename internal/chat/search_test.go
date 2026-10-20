@@ -325,6 +325,8 @@ func TestStartCoveredOnlyDeclaredRef(t *testing.T) {
 
 func TestFinalTestGuard(t *testing.T) {
 	e := setup(t)
+	countPlatform(t, e)
+	e.m.RegisterVirtual(platform.AssessPrefix, &assessStub{})
 	ctx := context.Background()
 	c, _ := runningSearch(t, e, `{"max_runs":3}`)
 	slot := e.m.live[c.ID].slot.ID

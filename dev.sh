@@ -272,6 +272,9 @@ new_test_logs() {
 # GO_UNIT_FLAGS: empty for ./dev.sh test (Go's test cache, no -race), "-race -count=1" for --full.
 GO_UNIT_FLAGS=""
 go_unit() {
+  # gofmt check first: unformatted files make later diffs noisy (#174).
+  local unformatted; unformatted="$(gofmt -l internal cmd 2>/dev/null)"
+  if [ -n "$unformatted" ]; then echo "gofmt needed:"; echo "$unformatted"; return 1; fi
   # The cache key includes the env vars a test reads (AGW_TEST_DATABASE_URL) and embedded files (schema.sql), but
   # not the state of Postgres itself; the tests create their own schema, so that state should not matter.
   # AGW_CONFORMANCE_REPORT: the conformance check (X10) writes its report to conformance.{md,json} in this run's

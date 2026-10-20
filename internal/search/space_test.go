@@ -62,7 +62,7 @@ func TestParseSpaceRefuses(t *testing.T) {
 
 func TestSpaceCheckAccepts(t *testing.T) {
 	s := mustSpace(t, testSpace)
-	got, err := s.Check(json.RawMessage(`{"lr":0.01,"batch_size":32,"optimizer":"adam","pretrained":true}`))
+	got, err := s.Check(json.RawMessage(`{"lr":0.01,"batch_size":32,"optimizer":"adam","pretrained":true,"weight-decay":0.01}`))
 	if err != nil {
 		t.Fatalf("inside the space: %v", err)
 	}
@@ -70,7 +70,7 @@ func TestSpaceCheckAccepts(t *testing.T) {
 		t.Errorf("params: %v", got)
 	}
 	// The bounds themselves are inside.
-	if _, err := s.Check(json.RawMessage(`{"lr":0.0001,"batch_size":64,"optimizer":"sgd","pretrained":false}`)); err != nil {
+	if _, err := s.Check(json.RawMessage(`{"lr":0.0001,"batch_size":64,"optimizer":"sgd","pretrained":false,"weight-decay":0}`)); err != nil {
 		t.Errorf("bounds: %v", err)
 	}
 }

@@ -7,6 +7,7 @@ package chat
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"sync"
 	"testing"
 
@@ -99,7 +100,8 @@ func TestPlatformCallSearchSeamNil(t *testing.T) {
 	if r := <-done; r.Status != "ok" {
 		t.Fatalf("call: %+v", r)
 	}
-	if n := got(); len(n) != 1 || n[0] != "DELETE /datasets/9" {
+	// The call is preceded by reads (the gateway reads the dataset for the approval and the check); one DELETE.
+	if n := got(); len(n) == 0 || n[len(n)-1] != "DELETE /datasets/9" || strings.Count(strings.Join(n, "|"), "DELETE") != 1 {
 		t.Fatalf("platform calls: %v", n)
 	}
 }
