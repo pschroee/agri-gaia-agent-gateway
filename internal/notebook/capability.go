@@ -31,5 +31,5 @@ func (n *Notebooks) NotebookState(ctx context.Context, chatID string) (available
 	if err != nil {
 		return false, "JupyterHub not reachable (" + err.Error() + ")"
 	}
-	return true, "notebook server " + server + " (" + state + "), 2 CPUs, 8 GB, no internet, no platform access"
+	return true, "notebook server " + server + " (" + state + "), " + n.Shape().Line()
 }

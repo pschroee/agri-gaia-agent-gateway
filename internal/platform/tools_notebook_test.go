@@ -241,7 +241,7 @@ func TestNotebookPreviewShowsCode(t *testing.T) {
 		{Field: "file", Name: "train.py", Data: []byte(code), SHA256: "aa11"},
 		{Field: "file", Name: "config.json", Data: []byte(`{"img-size": 64}`), SHA256: "bb22"},
 	}
-	text, err := NotebookPreview(r)
+	text, err := NotebookPreview(r, DefaultNotebookShape)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -260,7 +260,7 @@ func TestNotebookPreviewShowsCode(t *testing.T) {
 	nb := []byte(`{"cells":[{"cell_type":"markdown","source":["# Title\n"]},
 		{"cell_type":"code","source":["import torch\n","print(1)\n"]},{"cell_type":"code","source":["x = 2\n"]}]}`)
 	r.Uploads = []Upload{{Field: "file", Name: "nb.ipynb", Data: nb, SHA256: "cc33"}}
-	text, err = NotebookPreview(r)
+	text, err = NotebookPreview(r, DefaultNotebookShape)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -276,7 +276,7 @@ func TestNotebookPreviewShowsCode(t *testing.T) {
 	// A file the approval cannot show says so instead of showing nothing.
 	big := strings.Repeat("x", NotebookTextMax+1)
 	r.Uploads = []Upload{{Field: "file", Name: "huge.py", Data: []byte(big), SHA256: "dd44"}}
-	text, err = NotebookPreview(r)
+	text, err = NotebookPreview(r, DefaultNotebookShape)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -284,7 +284,7 @@ func TestNotebookPreviewShowsCode(t *testing.T) {
 		t.Errorf("a huge file: %s", text[:200])
 	}
 	r.Uploads = []Upload{{Field: "file", Name: "model.bin", Data: []byte{0xff, 0xfe, 0x00}, SHA256: "ee55"}}
-	text, err = NotebookPreview(r)
+	text, err = NotebookPreview(r, DefaultNotebookShape)
 	if err != nil {
 		t.Fatal(err)
 	}

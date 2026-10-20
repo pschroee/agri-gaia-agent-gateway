@@ -242,7 +242,7 @@ var notebookStatus = Tool{
 
 var notebookRun = Tool{
 	Name: "notebook_run", CLI: "notebook-run",
-	Desc: "Runs your own code in this chat's notebook server in JupyterHub (2 CPUs, 8 GB, no internet, no platform access). " +
+	Desc: "Runs your own code in this chat's notebook server in JupyterHub (2 CPUs, 8 GB, a shared GPU if this instance has one - notebook_status says, no internet, no platform access). " +
 		"Effect compute: the user approves every run and sees all code; a plan never covers it. Platform datasets in dataset_ids are unpacked to " +
 		"/home/jovyan/work/datasets/<id>/ before the run. Test the code in the sandbox on a small sample first. " +
 		"One run at a time; returns the run id and a link for the user. A note of yours (optional) is shown to the user " +
@@ -447,18 +447,39 @@ const (
 	NotebookTextMax = 20 << 10
 )
 
+// NotebookShape is what a notebook server of this instance gets. It is stated in one place; the
+// approval, the capability, notebook_status and the tool text all take their words from it.
+type NotebookShape struct {
+	CPUs, MemGB int
+	// GPU: the spawner gives the agent's servers a GPU (AGW_NOTEBOOK_GPUS); it is shared with the
+	// platform's trainings.
+	GPU bool
+}
+
+// DefaultNotebookShape is the shape without a configuration.
+var DefaultNotebookShape = NotebookShape{CPUs: 2, MemGB: 8}
+
+// Line names the shape in one sentence fragment.
+func (s NotebookShape) Line() string {
+	gpu := "no GPU"
+	if s.GPU {
+		gpu = "a GPU (shared)"
+	}
+	return fmt.Sprintf("%d CPUs, %d GB, %s, no internet, no platform access", s.CPUs, s.MemGB, gpu)
+}
+
 // NotebookPreview is the body of the approval of a run (own code C-E3): the user must see the code
 // that will run, in full, with the size and SHA-256 of every file. Unlike other calls the approval
 // of a run is not truncated; a run whose code does not fit is refused instead (maxNotebookPreview
 // in the chat package).
-func NotebookPreview(r Request) (string, error) {
+func NotebookPreview(r Request, s NotebookShape) (string, error) {
 	b, err := ParseRunForm(r.Form, NotebookTimeoutMax)
 	if err != nil {
 		return "", err
 	}
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "Runs %s in your notebook server: 2 CPUs, 8 GB, no internet, no platform access, at most %d minutes.\n",
-		b.Entry, b.TimeoutMinutes)
+	fmt.Fprintf(&sb, "Runs %s in your notebook server: %s, at most %d minutes.\n",
+		b.Entry, s.Line(), b.TimeoutMinutes)
 	if len(b.Args) > 0 {
 		fmt.Fprintf(&sb, "Arguments: %s\n", strings.Join(b.Args, " "))
 	}

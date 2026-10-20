@@ -212,7 +212,7 @@ func TestApprovalDataNotebookCells(t *testing.T) {
 		}
 	}
 	// The text of the card and the preview of the call show the same code.
-	preview, err := platform.NotebookPreview(req)
+	preview, err := platform.NotebookPreview(req, platform.DefaultNotebookShape)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -232,7 +232,7 @@ func TestApprovalDataAgreesWithPreview(t *testing.T) {
 		platform.Upload{Field: "file", Name: "a.py", Data: []byte(big), SHA256: "aa11"},
 		platform.Upload{Field: "file", Name: "b.ipynb", Data: []byte("no JSON"), SHA256: "bb22"})
 
-	preview, err := platform.NotebookPreview(req)
+	preview, err := platform.NotebookPreview(req, platform.DefaultNotebookShape)
 	if err != nil {
 		t.Fatal(err)
 	}

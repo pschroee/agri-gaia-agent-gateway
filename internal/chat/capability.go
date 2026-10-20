@@ -22,6 +22,8 @@ type Notebooker interface {
 	// NotebookState reports whether this chat can run its own code in its notebook server right now,
 	// with a reason when it cannot.
 	NotebookState(ctx context.Context, chatID string) (available bool, detail string)
+	// Shape is what a notebook server of this instance gets (CPUs, memory, GPU).
+	Shape() platform.NotebookShape
 	// StopChat stops the chat's notebook server; the files of the runs stay. The trash uses it.
 	StopChat(ctx context.Context, chatID string) error
 	// ApprovalData builds the structured data of the approval of a run (own code C-E4): entry, files with

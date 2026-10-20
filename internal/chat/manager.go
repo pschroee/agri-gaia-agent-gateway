@@ -2382,7 +2382,7 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 		if notebookRun(req) {
 			// A run in the notebook server shows its code, not its form fields: the user approves
 			// what will run (own code C-E3).
-			code, err := platform.NotebookPreview(req)
+			code, err := platform.NotebookPreview(req, m.notebookShape())
 			if err != nil {
 				return platform.Result{Status: "error", Message: platform.RefusedPrefix + err.Error(), Decision: platform.DecisionDeniedFixed,
 					Reason: "invalid_run", Rule: rule, WithinDelegation: within, PlanStep: planStep(step)}, nil
@@ -2998,3 +2998,12 @@ func (m *Manager) Session(ctx context.Context, chatID string) ([]byte, error) {
 	return m.st.LoadSession(ctx, chatID)
 }
 func (m *Manager) Totals(ctx context.Context) (store.Tokens, float64, error) { return m.st.Totals(ctx) }
+
+// notebookShape is the shape of the notebook servers the approval names; without a notebook service
+// the default.
+func (m *Manager) notebookShape() platform.NotebookShape {
+	if m.opt.Notebook == nil {
+		return platform.DefaultNotebookShape
+	}
+	return m.opt.Notebook.Shape()
+}

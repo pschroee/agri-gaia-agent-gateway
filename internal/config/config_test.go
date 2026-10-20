@@ -433,3 +433,12 @@ func TestEnvExperimentFixtures(t *testing.T) {
 		t.Fatalf("platform account was overwritten: %q", e.PlatformUser)
 	}
 }
+
+func TestConfigNotebookGPU(t *testing.T) {
+	for v, want := range map[string]bool{"": false, "none": false, "None": false, "0": true, "all": true} {
+		t.Setenv("AGW_NOTEBOOK_GPUS", v)
+		if got := FromEnv().NotebookGPU; got != want {
+			t.Errorf("AGW_NOTEBOOK_GPUS=%q: %v, expected %v", v, got, want)
+		}
+	}
+}
