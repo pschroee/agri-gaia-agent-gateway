@@ -14,7 +14,8 @@ const testSpace = `{
   "lr": {"type":"float","min":0.0001,"max":0.1,"scale":"log"},
   "batch_size": {"type":"int","min":8,"max":64},
   "optimizer": {"type":"choice","values":["adam","sgd"]},
-  "pretrained": {"type":"bool"}
+  "pretrained": {"type":"bool"},
+  "weight-decay": {"type":"float","min":0,"max":0.1}
 }`
 
 func mustSpace(t *testing.T, raw string) Space {
@@ -76,7 +77,7 @@ func TestSpaceCheckAccepts(t *testing.T) {
 
 func TestSpaceCheckRefuses(t *testing.T) {
 	s := mustSpace(t, testSpace)
-	ok := map[string]string{"lr": "0.01", "batch_size": "32", "optimizer": `"adam"`, "pretrained": "true"}
+	ok := map[string]string{"lr": "0.01", "batch_size": "32", "optimizer": `"adam"`, "pretrained": "true", "weight-decay": "0.01"}
 	with := func(k, v string) string {
 		parts := []string{}
 		for name, val := range ok {
@@ -95,9 +96,9 @@ func TestSpaceCheckRefuses(t *testing.T) {
 		{"nan as text", with("lr", `"NaN"`), "is outside"},
 		{"a value not in the choice", with("optimizer", `"rmsprop"`), `optimizer = "rmsprop" is outside the search space (one of "adam", "sgd")`},
 		{"a number for a bool", with("pretrained", "1"), "pretrained = 1 is outside"},
-		{"a key outside the space", `{"lr":0.01,"batch_size":32,"optimizer":"adam","pretrained":true,"epochs":500}`, "epochs is not in the search space"},
-		{"duplicate key", `{"lr":0.01,"lr":0.02,"batch_size":32,"optimizer":"adam","pretrained":true}`, "params:"},
-		{"a missing key", `{"lr":0.01,"batch_size":32}`, "params must name every parameter of the search space; missing: optimizer, pretrained"},
+		{"a key outside the space", `{"lr":0.01,"batch_size":32,"optimizer":"adam","pretrained":true,"weight-decay":0.01,"epochs":500}`, "epochs is not in the search space"},
+		{"duplicate key", `{"lr":0.01,"lr":0.02,"batch_size":32,"optimizer":"adam","pretrained":true,"weight-decay":0.01}`, "params:"},
+		{"a missing key", `{"lr":0.01,"batch_size":32}`, "params must name every parameter of the search space; missing: optimizer, pretrained, weight-decay"},
 		{"not an object", `[1]`, "params must be a JSON object"},
 		{"null", `null`, "params must be a JSON object"},
 	}

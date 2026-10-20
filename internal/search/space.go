@@ -24,7 +24,8 @@ const (
 	MaxChoiceValues = 32
 )
 
-var paramNameRe = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
+// paramNameRe allows the option names of the training templates, which carry dashes ("learning-rate").
+var paramNameRe = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,40}$`)
 
 // Types of a parameter of the search space.
 const (
