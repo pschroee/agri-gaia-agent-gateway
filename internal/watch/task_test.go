@@ -8,6 +8,8 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"regexp"
+	"strings"
 	"testing"
 
 	"agw/internal/delegation"
@@ -138,3 +140,46 @@ func TestImageBuildCarriesItsImage(t *testing.T) {
 
 // floatPtr is the pointer the tests compare against.
 func floatPtr(f float64) *float64 { return &f }
+
+// #173: the tasks a call started, from Location and from the watched reference.
+func TestTaskIDsFromLocationAndRef(t *testing.T) {
+	ok202 := func(loc string) platform.Result {
+		return platform.Result{Status: "ok", HTTPStatus: 202, Location: loc}
+	}
+	cases := []struct {
+		name string
+		req  platform.Request
+		res  platform.Result
+		want []string
+	}{
+		{"training config", platform.Request{Method: "POST", Path: "/train/config", Body: json.RawMessage(`{"dataset_id":2}`)}, ok202("/tasks/5"), []string{"5"}},
+		{"run with chain", platform.Request{Method: "POST", Path: "/train/containers/7/run"}, ok202("/tasks/11"), []string{"11"}},
+		{"stop without watch", platform.Request{Method: "POST", Path: "/train/containers/7/stop"}, ok202("/tasks/12"), []string{"12"}},
+		{"no task", platform.Request{Method: "PATCH", Path: "/datasets/5"}, platform.Result{Status: "ok", HTTPStatus: 200}, nil},
+		{"other location", platform.Request{Method: "POST", Path: "/datasets"}, ok202("/datasets/3"), nil},
+	}
+	for _, c := range cases {
+		got := TaskIDs(delegation.Access{}, c.req, c.res)
+		if strings.Join(got, ",") != strings.Join(c.want, ",") {
+			t.Errorf("%s: %v, want %v", c.name, got, c.want)
+		}
+	}
+	// The same id from Location and from the reference counts once.
+	got := TaskIDs(delegation.Access{}, platform.Request{Method: "POST", Path: "/train/config"}, ok202("/tasks/5"))
+	if len(got) != 1 || got[0] != "5" {
+		t.Errorf("duplicate id: %v", got)
+	}
+}
+
+// #173: a task named in the body of a virtual call (the annotation build) comes from the watched
+// reference, not from Location.
+func TestTaskIDsFromBodyReference(t *testing.T) {
+	Register(Kind{Name: "test_taskids_body"})
+	RegisterRoute(http.MethodPost, regexp.MustCompile(`^/test-taskids-body$`), "test_taskids_body",
+		func(_ platform.Request, res platform.Result) (string, bool) { return "task:" + strings.TrimSpace(res.Body), true })
+	got := TaskIDs(delegation.Access{}, platform.Request{Method: "POST", Path: "/test-taskids-body"},
+		platform.Result{Status: "ok", HTTPStatus: 200, Body: "33"})
+	if len(got) != 1 || got[0] != "33" {
+		t.Errorf("body reference: %v", got)
+	}
+}

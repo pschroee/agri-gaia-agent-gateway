@@ -34,6 +34,7 @@ import (
 	"agw/internal/store"
 	"agw/internal/titler"
 	"agw/internal/toolset"
+	"agw/internal/watch"
 )
 
 // Agent is the manager's view of a running sandbox with pi.
@@ -2657,7 +2658,7 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 	// Platform pages reload after a successful writing call (#167): reads, refusals and failures send nothing.
 	if res.Status == "ok" && res.HTTPStatus >= 200 && res.HTTPStatus < 300 && access.Effect != delegation.EffectRead {
 		m.PublishPlatformChanged(chatID, PlatformChangedEvent{Source: ChangeSourceCall, Path: req.Path,
-			Changes: delegation.Changes(access, req, res)})
+			Changes: withTasks(delegation.Changes(access, req, res), watch.TaskIDs(access, req, res))})
 	}
 	// Provenance (edge D1.7, D1.9): images, container deployments and the tasks of a deployment are
 	// recorded in every chat, also without a delegation, because the edge guard needs them live.
