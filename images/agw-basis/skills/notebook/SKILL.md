@@ -79,7 +79,7 @@ agw-platform notebook-run-status <run_id>    # state, exit code, duration, files
 agw-platform notebook-log <run_id> --tail 100
 ```
 
-One run at a time per chat. Write the results into the run directory (the working directory of the run):
+One run at a time per chat. `notebook_status` can report the state `stopping` (the server is shutting down); a run then waits up to 60 s for the stop to finish and starts on a fresh server. Write the results into the run directory (the working directory of the run):
 `model.onnx`, `metrics.json`, `predictions.csv`. The link in the answer opens the run directory for the user
 in JupyterLab; give it to them.
 
