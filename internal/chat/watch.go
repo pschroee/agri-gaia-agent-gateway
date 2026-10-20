@@ -205,6 +205,7 @@ func (m *Manager) pollJob(ctx context.Context, j store.WatchJob, kind watch.Kind
 	j.Link = prog.Link
 	j.CheckedAt = timePtr(time.Now())
 	j.State = prog.State
+	m.runJobProgress(ctx, j, p) // seam of the training search (issue #168)
 	m.publishJob(ctx, j, p)
 	if prog.State != watch.StateRunning {
 		m.PublishPlatformChanged(j.ChatID, PlatformChangedEvent{Source: ChangeSourceJob, JobID: j.ID, Changes: jobChanges(kind, p, true)})
@@ -402,6 +403,8 @@ func (m *Manager) stopJobByTheAgent(ctx context.Context, chatID string, req plat
 func (m *Manager) finishWatched(ctx context.Context, j store.WatchJob, p watch.Progress) {
 	// An object the job created enters the register whether or not a plan waits for it (#169).
 	m.recordJobObject(ctx, j, p)
+	// Hooks of features that follow a job outside of plans too (the trials of a training search, issue #168).
+	m.runJobEnded(ctx, j, p)
 	if j.PlanID == "" {
 		return
 	}
