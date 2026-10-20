@@ -235,3 +235,60 @@ func TestPublishPlatformChangedEmptyAndShape(t *testing.T) {
 		t.Fatalf("shape: %s %v", b, err)
 	}
 }
+
+// #173: a call that started a platform task lists it in the event.
+func TestPlatformChangedCarriesTask(t *testing.T) {
+	e := setup(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/token" {
+			_, _ = w.Write([]byte(`{"access_token":"t","expires_in":3600}`))
+			return
+		}
+		w.Header().Set("Location", "/tasks/42")
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	t.Cleanup(srv.Close)
+	c, err := platform.New(platform.Config{APIURL: srv.URL, TokenURL: srv.URL + "/token", User: "u", Password: "p"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.m.opt.Platform = c
+	ctx := context.Background()
+	ch, err := e.m.Create(ctx, NewChat{Delegation: json.RawMessage(`{"rules":[{"action":"create","resource":"container_image","ids":["*"]}],"confirm":"none"}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	all, cancel := e.m.SubscribeAll()
+	defer cancel()
+	r, err := e.m.PlatformCall(ctx, ch.ID, e.m.live[ch.ID].slot.ID, "cli",
+		liveCall(t, "POST", "/container-images/build", `{"repository":"u/i","tag":"v1","model_id":1}`))
+	if err != nil || r.Status != "ok" {
+		t.Fatalf("call: %+v %v", r, err)
+	}
+	ev, ok := nextChanged(all, changedWait)
+	if !ok {
+		t.Fatal("no platform_changed event")
+	}
+	found := false
+	for _, x := range ev.Changes {
+		if x == (delegation.Change{Resource: "task", Action: "create", ID: "42"}) {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("task 42 missing in %+v", ev.Changes)
+	}
+}
+
+// #173: a task the main entry already names is not listed twice.
+func TestWithTasksNoDuplicate(t *testing.T) {
+	ch := []delegation.Change{{Resource: "training", Action: "create", ID: "9"}, {Resource: "task", Action: "create", ID: "5"}}
+	got := withTasks(ch, []string{"5", "6", "6"})
+	if len(got) != 3 || got[2] != (delegation.Change{Resource: "task", Action: "create", ID: "6"}) {
+		t.Fatalf("got %+v", got)
+	}
+	if got := withTasks(nil, nil); len(got) != 0 {
+		t.Fatalf("empty: %+v", got)
+	}
+}

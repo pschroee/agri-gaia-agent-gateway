@@ -65,3 +65,21 @@ func jobChanges(kind watch.Kind, p watch.Progress, ended bool) []delegation.Chan
 	}
 	return out
 }
+
+// withTasks adds a created task to the changes for every id the call started (#173), unless the list
+// already names that task. The front end takes such an entry into its task widget.
+func withTasks(ch []delegation.Change, ids []string) []delegation.Change {
+	for _, id := range ids {
+		have := false
+		for _, c := range ch {
+			if c.Resource == delegation.Task && c.ID == id {
+				have = true
+				break
+			}
+		}
+		if !have {
+			ch = append(ch, delegation.Change{Resource: delegation.Task, Action: delegation.Create, ID: id})
+		}
+	}
+	return ch
+}
