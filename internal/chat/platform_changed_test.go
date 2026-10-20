@@ -255,7 +255,7 @@ func TestPlatformChangedCarriesTask(t *testing.T) {
 	}
 	e.m.opt.Platform = c
 	ctx := context.Background()
-	ch, err := e.m.Create(ctx, NewChat{Delegation: json.RawMessage(`{"rules":[{"action":"create","resource":"container_image","ids":["*"]}],"confirm":"none"}`)})
+	ch, err := e.m.Create(ctx, NewChat{Delegation: json.RawMessage(`{"rules":[{"action":"create","resource":"container_image","ids":["*"]},{"action":"read","resource":"model","ids":["*"]},{"action":"read","resource":"container_template","ids":["*"]}],"confirm":"none"}`)})
 	if err != nil {
 		t.Fatal(err)
 	}

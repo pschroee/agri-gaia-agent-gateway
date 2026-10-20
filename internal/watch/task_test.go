@@ -123,7 +123,8 @@ func TestImageBuildCarriesItsImage(t *testing.T) {
 	if !ok || kind != kindImageBuild || ref != "task:8|image:u/mnist-triton:v1" {
 		t.Fatalf("For = %q %q %v", kind, ref, ok)
 	}
-	read, _ := recorded(t, map[string]string{"GET /tasks/8": `{"status":"completed","completion_percentage":1.0}`})
+	read, _ := recorded(t, map[string]string{"GET /tasks/8": `{"status":"completed","completion_percentage":1.0}`,
+		"GET /container-images/u/mnist-triton:v1": `[{"id":4}]`})
 	p, err := pollImageBuild(context.Background(), Job{ID: "w1", Kind: kindImageBuild, Ref: ref}, read)
 	if err != nil || p.State != StateDone {
 		t.Fatalf("poll: %+v %v", p, err)

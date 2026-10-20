@@ -6,6 +6,7 @@ package chat
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -63,7 +64,9 @@ func TestSingleRunBecomesTrial(t *testing.T) {
 	if tr.SearchID != "" || tr.Idx != 0 || tr.State != store.TrialRunning || tr.Path != store.SearchPathTemplate || tr.Ref != "9" {
 		t.Fatalf("trial: %+v", tr)
 	}
-	if string(tr.Params) != `{"epochs":4,"lr":0.01}` {
+	// jsonb normalises key order and spacing, so compare the values.
+	var gotParams map[string]float64
+	if err := json.Unmarshal(tr.Params, &gotParams); err != nil || len(gotParams) != 2 || gotParams["epochs"] != 4 || gotParams["lr"] != 0.01 {
 		t.Errorf("params: %s", tr.Params)
 	}
 	if !isTrialJob(jobID) {

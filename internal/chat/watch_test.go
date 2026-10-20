@@ -941,7 +941,7 @@ func TestStepWithFilesAsksSynchronously(t *testing.T) {
 	// A run in the notebook server asks for every single call and carries the code from the sandbox.
 	const args = `{"files":["/workspace/train.py"],"entry":"train.py","dataset_ids":["17"]}`
 	body := `{"title":"Run","mode":"autonomous","budget":{"max_duration_minutes":60,"max_llm_cost_usd":1,"max_auto_turns":3},
- "steps":[{"tool":"notebook_run","args":` + args + `,"file_sha256":["` + strings.Repeat("a", 64) + `"]}]}`
+ "steps":[{"tool":"notebook_run","args":` + args + `,"file_sha256":["` + upSum("print('hi')\n") + `"]}]}`
 	c, _, p := autonomousChat(t, e, ctx, body)
 	slot := e.m.live[c.ID].slot.ID
 	steps := stepsOfPlan(t, e, p.ID)
