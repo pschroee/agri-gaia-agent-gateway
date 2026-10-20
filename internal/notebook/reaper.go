@@ -6,6 +6,7 @@ package notebook
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"time"
 )
@@ -14,7 +15,8 @@ import (
 // The server holds 2 CPUs and 8 GB of the instance for nothing once the work is done; its volume
 // stays, so the files of earlier runs remain the work of the user. The reaper does not touch the
 // runs themselves: the status call and the watcher record an end (they see the exit code in the run
-// directory), the store keeps what the run itself wrote.
+// directory), the store keeps what the run itself wrote. A stop is recorded on the chat's last run row,
+// so the server is stopped once; the next run is a new row and makes the server a candidate again.
 //
 // How often the reaper looks; a variable, so that a test does not wait.
 var reaperEvery = 5 * time.Minute
@@ -50,11 +52,29 @@ func (n *Notebooks) StopIdle(ctx context.Context) error {
 		return err
 	}
 	for _, s := range servers {
-		if err := n.hub.Stop(ctx, s.HubUser, s.Server); err != nil {
-			slog.Warn("idle notebook server not stopped", "chat", s.ChatID, "server", s.Server, "error", err)
+		state, err := n.hub.ServerState(ctx, s.HubUser, s.Server)
+		switch {
+		case errors.Is(err, ErrNoHubUser):
+			state = "not started"
+		case err != nil:
+			slog.Warn("idle notebook server state unknown", "chat", s.ChatID, "server", s.Server, "error", err)
 			continue
 		}
-		slog.Info("idle notebook server stopped", "chat", s.ChatID, "server", s.Server)
+		running := state != "not started"
+		if running {
+			if err := n.hub.Stop(ctx, s.HubUser, s.Server); err != nil {
+				slog.Warn("idle notebook server not stopped", "chat", s.ChatID, "server", s.Server, "error", err)
+				continue
+			}
+		}
+		if err := n.store.MarkNotebookServerStopped(ctx, s.RunID, n.now()); err != nil {
+			return err
+		}
+		if running {
+			slog.Info("idle notebook server stopped", "chat", s.ChatID, "server", s.Server)
+		} else {
+			slog.Debug("idle notebook server was not running", "chat", s.ChatID, "server", s.Server)
+		}
 	}
 	return nil
 }

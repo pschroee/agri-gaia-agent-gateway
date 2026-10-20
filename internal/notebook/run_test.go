@@ -573,6 +573,7 @@ func TestReaperStopsIdle(t *testing.T) {
 		}
 	}
 	finish(idle, "r20260101120000-aaaa", old)
+	hub.server = n.Server(idle) // the hub reports the idle chat's server as running
 	finish(recent, "r20260101120000-bbbb", time.Now())
 	if err := st.CreateNotebookRun(ctx, store.NotebookRun{ID: "r20260101120000-cccc", ChatID: running,
 		HubUser: "agent-test", Server: n.Server(running), Entry: "train.py", TimeoutMin: 60, StartedAt: time.Now()}); err != nil {
@@ -602,6 +603,157 @@ func TestReaperStopsIdle(t *testing.T) {
 	}
 	if deleted := hub.deleted(); len(deleted) != 1 {
 		t.Errorf("stopped with an idle time of 0: %v", deleted)
+	}
+}
+
+// reaperFixture creates a chat with one finished run that ended two hours ago and a hub that reports
+// its server as running.
+func reaperFixture(t *testing.T) (*Notebooks, *fakeHub, *store.Store, string) {
+	t.Helper()
+	st := testStore(t)
+	hub := newFakeHub()
+	n, _ := testService(t, st, &fakeDocker{}, hub)
+	chat := testChat(t, st)
+	addFinishedRun(t, st, n, chat, "r20260101120000-aaaa", time.Now().Add(-2*time.Hour))
+	hub.server = n.Server(chat)
+	return n, hub, st, chat
+}
+
+// addFinishedRun stores a run of the chat that started a minute before it ended at the given time.
+func addFinishedRun(t *testing.T, st *store.Store, n *Notebooks, chat, runID string, at time.Time) {
+	t.Helper()
+	ctx := context.Background()
+	if err := st.CreateNotebookRun(ctx, store.NotebookRun{ID: runID, ChatID: chat, HubUser: "agent-test",
+		Server: n.Server(chat), Entry: "train.py", TimeoutMin: 60, StartedAt: at.Add(-time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.FinishNotebookRun(ctx, runID, 0, at); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// requestCount counts the hub requests that start with the given method.
+func (h *fakeHub) requestCount(method string) int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	c := 0
+	for _, r := range h.requests {
+		if strings.HasPrefix(r, method+" ") {
+			c++
+		}
+	}
+	return c
+}
+
+// An idle server is stopped in one round and left alone afterwards: no DELETE and no GET.
+func TestReaperStopsOnce(t *testing.T) {
+	n, hub, _, _ := reaperFixture(t)
+	ctx := context.Background()
+	if err := n.StopIdle(ctx); err != nil {
+		t.Fatal(err)
+	}
+	gets := hub.requestCount(http.MethodGet)
+	if err := n.StopIdle(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(hub.deleted()); got != 1 {
+		t.Errorf("DELETE calls after two rounds: %d (want 1)", got)
+	}
+	if got := hub.requestCount(http.MethodGet); got != gets {
+		t.Errorf("the second round asked the hub again: %d GET after %d", got, gets)
+	}
+}
+
+// A new run is a new row without a recorded stop, so the server is stopped again once it is idle.
+func TestReaperStopsAgainAfterNewRun(t *testing.T) {
+	n, hub, st, chat := reaperFixture(t)
+	ctx := context.Background()
+	if err := n.StopIdle(ctx); err != nil {
+		t.Fatal(err)
+	}
+	addFinishedRun(t, st, n, chat, "r20260101130000-bbbb", time.Now().Add(-90*time.Minute))
+	hub.mu.Lock()
+	hub.server, hub.ready = n.Server(chat), true
+	hub.mu.Unlock()
+	if err := n.StopIdle(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(hub.deleted()); got != 2 {
+		t.Errorf("DELETE calls after the new run: %d (want 2)", got)
+	}
+	if err := n.StopIdle(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(hub.deleted()); got != 2 {
+		t.Errorf("DELETE calls after a third round: %d (want 2)", got)
+	}
+}
+
+// A server that is not running is not stopped, only recorded; later rounds do not ask the hub.
+func TestReaperServerNotRunning(t *testing.T) {
+	n, hub, _, _ := reaperFixture(t)
+	ctx := context.Background()
+	hub.mu.Lock()
+	hub.server = ""
+	hub.mu.Unlock()
+	if err := n.StopIdle(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(hub.deleted()); got != 0 {
+		t.Errorf("DELETE for a server that is not running: %d", got)
+	}
+	before := len(hub.requests)
+	if err := n.StopIdle(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(hub.requests) != before {
+		t.Errorf("the second round called the hub: %v", hub.requests[before:])
+	}
+}
+
+// A hub that is down records nothing; the next round stops the server.
+func TestReaperHubDown(t *testing.T) {
+	n, hub, _, _ := reaperFixture(t)
+	ctx := context.Background()
+	hub.mu.Lock()
+	hub.reachable = false
+	hub.mu.Unlock()
+	if err := n.StopIdle(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(hub.deleted()); got != 0 {
+		t.Fatalf("DELETE while the hub is down: %d", got)
+	}
+	hub.mu.Lock()
+	hub.reachable = true
+	hub.mu.Unlock()
+	if err := n.StopIdle(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(hub.deleted()); got != 1 {
+		t.Errorf("DELETE after the hub is back: %d (want 1)", got)
+	}
+}
+
+// A hub that does not know the user cannot have a server: nothing is stopped, the chat is recorded.
+func TestReaperUnknownHubUser(t *testing.T) {
+	n, hub, _, _ := reaperFixture(t)
+	ctx := context.Background()
+	hub.mu.Lock()
+	hub.userKnown = false
+	hub.mu.Unlock()
+	if err := n.StopIdle(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(hub.deleted()); got != 0 {
+		t.Errorf("DELETE for an unknown user: %d", got)
+	}
+	before := len(hub.requests)
+	if err := n.StopIdle(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(hub.requests) != before {
+		t.Errorf("the second round called the hub: %v", hub.requests[before:])
 	}
 }
 
