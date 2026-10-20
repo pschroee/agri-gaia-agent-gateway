@@ -94,6 +94,16 @@ func recordTrialProgress(ctx context.Context, m *Manager, j store.WatchJob, p wa
 	changed := false
 
 	if p.Metrics != nil {
+		// What the run writes at all (issue #168, G1): the empty charts say why they are empty.
+		figures := "none"
+		if p.Metrics.Supported {
+			figures = "ok"
+		}
+		if t.Figures != figures || t.GPUAvailable == nil || *t.GPUAvailable != p.Metrics.GPUAvailable {
+			if err := m.st.SetTrialFigures(ctx, t.ID, figures, p.Metrics.GPUAvailable); err != nil {
+				slog.Error("figures of a trial not recorded", "trial", t.ID, "error", err)
+			}
+		}
 		changed = m.storeTrialMetrics(ctx, t, p.Metrics, &ev)
 	}
 	if !changed {
