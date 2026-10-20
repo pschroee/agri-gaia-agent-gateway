@@ -83,6 +83,9 @@ agw-platform propose-plan '{"title": "tf-flowers: split, train EfficientNet, tak
 - If a job fails, the plan ends; the note says why. Propose a new plan for what is left.
 - Take the `train_config` keys and values from `agw-platform train-options <provider> <architecture>`; the values
   above are only an example.
+- A plan step may upload many files: the approval shows the number, size, folders and one SHA-256 over the list,
+  pinned when the plan is proposed. Do not change, add or remove those files before the step runs; otherwise the
+  step is refused (files_changed) and you have to propose a new plan.
 
 ## Uploading files
 
