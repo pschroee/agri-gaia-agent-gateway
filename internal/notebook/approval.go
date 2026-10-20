@@ -59,13 +59,15 @@ type ApprovalLimits struct {
 	MemGB      int  `json:"mem_gb"`
 	TimeoutMin int  `json:"timeout_min"`
 	Internet   bool `json:"internet"`
+	// GPU: the instance gives the server a GPU (shared with trainings). Always in the JSON.
+	GPU bool `json:"gpu"`
 }
 
-// The shape of a notebook server of this instance.
-const (
-	serverCPUs  = 2
-	serverMemGB = 8
-)
+// Limits builds the limits of a run from the server's shape and the time limit of the call.
+func (n *Notebooks) Limits(timeoutMin int) ApprovalLimits {
+	s := n.Shape()
+	return ApprovalLimits{CPUs: s.CPUs, MemGB: s.MemGB, TimeoutMin: timeoutMin, Internet: false, GPU: s.GPU}
+}
 
 // ApprovalData builds the structured data of the approval of a run. read answers the reading calls of the
 // chat's user (nil: the names of the datasets stay empty); the caller passes the reader it wrote the
@@ -82,7 +84,7 @@ func (n *Notebooks) ApprovalData(ctx context.Context, req platform.Request, read
 		Note:  platform.VisibleControls(body.Note),
 		// The server of this instance has no internet and no access to the platform; the place is here
 		// rather than in the card, so that the card shows what the gateway states.
-		Limits:   ApprovalLimits{CPUs: serverCPUs, MemGB: serverMemGB, TimeoutMin: body.TimeoutMinutes, Internet: false},
+		Limits:   n.Limits(body.TimeoutMinutes),
 		Files:    make([]ApprovalFile, 0, len(req.Uploads)),
 		Datasets: make([]ApprovalDataset, 0, len(body.DatasetIDs)),
 	}

@@ -1,6 +1,6 @@
 ---
 name: notebook
-description: Own Python code on the platform - use it when the platform's training templates do not fit (other architectures, tabular data, combining models) or the user asks for own code. First check capabilities - with notebook available run the code in the chat's notebook server in JupyterHub (2 CPUs, 8 GB, no internet, no platform access, torch cpu, onnx) with agw-platform notebook-run; without it say so and either train small models in the sandbox (numpy, pandas, no torch) or use a training template. Rules - write and test the code in the sandbox first on a small sample; pass platform datasets with dataset_ids, they appear under /home/jovyan/work/datasets/<id>/; the user approves every run and sees all code, so keep it short; follow the run with notebook-run-status and notebook-log; fetch results with notebook-fetch and upload a model with upload-model, as ONNX for an inference container; give the user the link of the run.
+description: Own Python code on the platform - use it when the platform's training templates do not fit (other architectures, tabular data) or the user asks for own code. First check capabilities - with notebook available run the code in the chat's notebook server in JupyterHub (2 CPUs, 8 GB, a shared GPU where the instance has one, no internet, no platform access, torch with CUDA, onnx) with agw-platform notebook-run; without it say so and either train small models in the sandbox or use a training template. Rules - test the code in the sandbox first on a small sample; pass platform datasets with dataset_ids, they appear under /home/jovyan/work/datasets/<id>/; the user approves every run and sees all code, so keep it short; pick the device with torch.cuda.is_available() and keep a CPU fallback, export ONNX from the CPU; follow the run with notebook-run-status and notebook-log; fetch results with notebook-fetch and upload a model with upload-model, as ONNX for an inference container; give the user the link of the run.
 ---
 
 # Own code in the notebook server
@@ -10,7 +10,7 @@ architectures. For anything else - another architecture, tabular data, combining
 yourself and let it run in this chat's notebook server in JupyterHub.
 
 The server belongs to the user (their JupyterHub account, their files). It has 2 CPUs, 8 GB RAM, **no
-internet** and **no access to the platform**: packages are fixed in the image (`torch` CPU, `torchvision`,
+internet** and **no access to the platform**: packages are fixed in the image (`torch` (CUDA 12.6, runs on the CPU without a GPU), `torchvision`,
 `scikit-learn`, `numpy`, `pandas`, `matplotlib`, `onnx`, `onnxruntime`, `skl2onnx`), and an `pip install`
 fails. Data comes in as a platform dataset, results go out as files.
 
@@ -41,6 +41,20 @@ python train.py --epochs 1 --limit 8                                # small samp
 Only files with the endings `.py .ipynb .txt .json .yaml .yml .csv .md .cfg .toml` can go into a run, at
 most 50 files, 1 MB each and 4 MB together: code and configuration, not data.
 
+## GPU or CPU
+
+`notebook_status` says whether this instance gives the server a GPU (`"gpu": true`). Write the code so that it runs
+either way - the sandbox has no GPU and no torch, so the GPU path is first tried in the run itself:
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print("device:", device, torch.cuda.get_device_name(0) if device.type == "cuda" else "")
+    model.to(device)            # and every batch: x, y = x.to(device), y.to(device)
+
+The GPU is shared with platform trainings and other chats: keep batches moderate, catch
+`torch.cuda.OutOfMemoryError` and fall back to a smaller batch or the CPU. `notebook-run-status` names the GPU the run
+saw (`"gpu"`); tell the user which device trained the model. Before the ONNX export move the model to the CPU:
+`model.cpu().eval()` and a CPU sample.
+
 ## 3. Start the run
 
 ```bash
@@ -65,7 +79,7 @@ agw-platform notebook-run-status <run_id>    # state, exit code, duration, files
 agw-platform notebook-log <run_id> --tail 100
 ```
 
-One run at a time per chat. Write the results into the run directory (the working directory of the run):
+One run at a time per chat. `notebook_status` can report the state `stopping` (the server is shutting down); a run then waits up to 60 s for the stop to finish and starts on a fresh server. Write the results into the run directory (the working directory of the run):
 `model.onnx`, `metrics.json`, `predictions.csv`. The link in the answer opens the run directory for the user
 in JupyterLab; give it to them.
 

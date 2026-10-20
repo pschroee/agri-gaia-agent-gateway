@@ -58,6 +58,7 @@ func runScript(runID, entry string, args []string, timeoutMin int) string {
 	return "#!/bin/bash\n# written by the agent gateway\n" +
 		"cd " + q(runsDir+"/"+runID) + " || exit 99\n" +
 		"date -u +%FT%TZ > .agw/started\n" +
+		"nvidia-smi -L 2>/dev/null | head -n 1 > .agw/gpu\n" +
 		fmt.Sprintf("timeout --signal=TERM --kill-after=30s %dm %s > run.log 2>&1\n", timeoutMin, cmd) +
 		"echo $? > .agw/exit_code\n" +
 		"date -u +%FT%TZ > .agw/finished\n"

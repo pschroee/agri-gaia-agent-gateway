@@ -62,6 +62,9 @@ type RunInfo struct {
 	Files           []store.NotebookFile `json:"files,omitempty"`
 	Results         []RunFile            `json:"results,omitempty"`
 	Link            string               `json:"link,omitempty"`
+	// GPU is the device the run saw (nvidia-smi -L in the run), "none" when there was none; empty
+	// for runs that did not record it. Written by the run's own uid, so it only informs.
+	GPU string `json:"gpu,omitempty"`
 	// Note carries what the store alone cannot say, e.g. that the server is gone.
 	Note string `json:"note,omitempty"`
 }
@@ -77,12 +80,13 @@ type markers struct {
 	Started  string
 	Finished string
 	ExitCode *int
+	GPU      *string // nil: the run recorded nothing
 }
 
 // statusScript reports the markers of a run and the files in its directory. It always ends with 0,
 // so that a missing marker file is no failure of the command.
 const statusScript = `cd "$1" || exit 9
-for f in started finished exit_code; do
+for f in started finished exit_code gpu; do
   if [ -f ".agw/$f" ]; then printf '%s\t%s\n' "$f" "$(cat ".agw/$f")"; fi
 done
 find . -maxdepth 3 -type f -printf 'file\t%P\t%s\n' 2>/dev/null | head -n 200
@@ -106,6 +110,33 @@ func (n *Notebooks) markers(ctx context.Context, containerID, runID string) (mar
 	return m, err
 }
 
+// gpuName reads the name of the GPU from a line of nvidia-smi -L ("GPU 0: Name (UUID: GPU-...)"); no
+// line means "none". The text comes from the run, so controls are made visible and the length is bounded.
+func gpuName(line string) string {
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return "none"
+	}
+	if i := strings.Index(line, ": "); i >= 0 {
+		line = line[i+2:]
+	}
+	if i := strings.Index(line, " (UUID"); i >= 0 {
+		line = line[:i]
+	}
+	line = platform.VisibleControls(strings.TrimSpace(line))
+	if r := []rune(line); len(r) > 120 {
+		line = string(r[:120])
+	}
+	if line == "" {
+		return "none"
+	}
+	return line
+}
+
+// gpuMismatchNote is what the status says when the instance assigns a GPU but the run saw none.
+const gpuMismatchNote = "this instance assigns a GPU to notebook servers, but this run saw none (it ran on the CPU); " +
+	"the server may have started before the GPU was assigned - stop it with notebook-stop and run again"
+
 // parseStatus reads the lines of statusScript.
 func parseStatus(out string) (markers, []RunFile, error) {
 	var m markers
@@ -117,6 +148,9 @@ func parseStatus(out string) (markers, []RunFile, error) {
 			m.Started = f[1]
 		case len(f) == 2 && f[0] == "finished":
 			m.Finished = f[1]
+		case len(f) == 2 && f[0] == "gpu":
+			g := gpuName(f[1])
+			m.GPU = &g
 		case len(f) == 2 && f[0] == "exit_code":
 			code, err := strconv.Atoi(strings.TrimSpace(f[1]))
 			if err != nil {
@@ -176,6 +210,9 @@ func (n *Notebooks) Status(ctx context.Context, chatID, runID string) (RunInfo, 
 		return info, err
 	}
 	applyMarkers(&info, m)
+	if n.Shape().GPU && info.GPU == "none" && info.Note == "" {
+		info.Note = gpuMismatchNote
+	}
 	info.Results = files
 	if m.ExitCode != nil && row.FinishedAt == nil {
 		if err := n.store.FinishNotebookRun(ctx, row.ID, *m.ExitCode, timeOf(n.now(), m.Finished)); err != nil {
@@ -235,6 +272,9 @@ func applyMarkers(info *RunInfo, m markers) {
 		info.ExitCode = m.ExitCode
 		info.State = stateOf(m.ExitCode, true) // the run directory wrote an exit code: the run has ended
 	}
+	if m.GPU != nil {
+		info.GPU = *m.GPU
+	}
 	if info.StartedAt != "" && info.FinishedAt != "" {
 		if from, err := time.Parse(time.RFC3339, info.StartedAt); err == nil {
 			if to, err := time.Parse(time.RFC3339, info.FinishedAt); err == nil {
@@ -265,7 +305,7 @@ func (n *Notebooks) serverStatus(ctx context.Context, chatID, user, server strin
 		link = base + "/user/" + user + "/" + server + "/lab"
 	}
 	answer := map[string]any{
-		"server": server, "state": state, "cpus": 2, "memory_gb": 8,
+		"server": server, "state": state, "cpus": n.Shape().CPUs, "memory_gb": n.Shape().MemGB, "gpu": n.Shape().GPU,
 		"internet": false, "platform_access": false,
 		"timeout_max_minutes": n.timeoutMax(), "max_files": platform.NotebookMaxFiles,
 		"max_file_mb": platform.NotebookFileMaxBytes >> 20, "max_total_mb": platform.NotebookFilesMax >> 20,

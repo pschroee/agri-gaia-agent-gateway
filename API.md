@@ -352,7 +352,7 @@ type NotebookApprovalData = {
   files: { name: string; size: number; sha256: string; text?: string }[];  // text: the file's text as the card shows
                         //   it (a notebook as its code cells in JSON); missing when the approval shows no text of it
   datasets: { id: number; name?: string }[];  // name: as the platform reports it now; missing when it could not be read
-  limits: { cpus: number; mem_gb: number; timeout_min: number; internet: boolean };
+  limits: { cpus: number; mem_gb: number; timeout_min: number; internet: boolean; gpu: boolean };  // gpu: the instance gives the server a GPU (shared with trainings)
   note?: string;        // the agent's own note to the user about what this run is for (at most 500 characters, escaped for
                         //   display). It is the agent's text and **not** something the gateway read or checked: the card
                         //   shows it in a block of its own, marked "not verified", and the summary only names it
@@ -1840,7 +1840,9 @@ The agent writes Python code (or a notebook) in its execution sandbox, tests it 
 own notebook server in JupyterHub. The server belongs to the user of the chat (their JupyterHub account, their
 files); the gateway starts it through the hub API, copies the approved files in with `docker exec` as the notebook
 user (uid 1000) and reads state, log and results back the same way. The server has 2 CPUs, 8 GB, **no internet** and
-**no access to the platform**; the packages are fixed in the image (`torch` CPU, `torchvision`, `scikit-learn`,
+**no access to the platform** and, if the instance sets `AGW_NOTEBOOK_GPUS` (the spawner enforces it), a GPU shared with
+the platform trainings (`notebook_status` answers `"gpu": true`, `notebook_run_status` names the device the run saw in
+`gpu`, `"none"` if it saw none and then adds a note); the packages are fixed in the image (`torch` with CUDA 12.6, `torchvision`, `scikit-learn`,
 `numpy`, `pandas`, `matplotlib`, `onnx`, `onnxruntime`, `skl2onnx`).
 
 | Tool (CLI) | Path (virtual) | Action / resource | Class | Approval |
@@ -1868,7 +1870,7 @@ user (uid 1000) and reads state, log and results back the same way. The server h
 - **Structured data of the approval (own code C-E4).** Next to that text the approval carries the field `notebook`
   (`NotebookApprovalData`, see "Types"): `entry`, `files` with name, size, SHA-256 and the text the card shows,
   `datasets` with the name the gateway read through the summary's reader, and `limits` of this instance (2 CPUs,
-  8 GB, the time limit of the call, no internet). The frontend shows it instead of the preview; the preview stays for
+  8 GB, `gpu`, the time limit of the call, no internet). The frontend shows it instead of the preview; the preview stays for
   the log and for clients from before. A file the preview does not show gets no `text` either, and the `text` of a
   notebook is its code cells as JSON without the outputs — card and preview never disagree about what the user sees of
   a file. Every string is escaped for display: a file name, a dataset name, the entry and the code. The field is

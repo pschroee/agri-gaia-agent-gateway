@@ -220,11 +220,11 @@ func run() error {
 		nb = notebook.New(notebook.Config{
 			APIURL: env.JupyterHubAPIURL, Token: env.JupyterHubToken, PublicURL: env.JupyterHubPublicURL,
 			Prefix: env.NotebookPrefix, TimeoutMaxMin: env.NotebookTimeoutMaxMin,
-			DatasetMaxMB: env.NotebookDatasetMaxMB, IdleMin: env.NotebookIdleMin,
+			DatasetMaxMB: env.NotebookDatasetMaxMB, IdleMin: env.NotebookIdleMin, GPU: env.NotebookGPU,
 		}, plat, st, rt)
 		notebooker = nb
 		slog.Info("notebooks on", "hub", env.JupyterHubAPIURL, "server_prefix", env.NotebookPrefix,
-			"timeout_max_minutes", env.NotebookTimeoutMaxMin, "idle_minutes", env.NotebookIdleMin)
+			"timeout_max_minutes", env.NotebookTimeoutMaxMin, "idle_minutes", env.NotebookIdleMin, "gpu", env.NotebookGPU)
 	}
 	// Warm slots only for the configured combination and the experiment variants of
 	// AGW_EXPERIMENT_POOL (X0.3); chats stored with another one (cli, mcp, api, both, exp:…) get a

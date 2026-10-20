@@ -419,6 +419,9 @@ type Env struct {
 	// NotebookIdleMin: a chat's notebook server is stopped after this long without a run
 	// (AGW_NOTEBOOK_IDLE_MIN, 0 = never; the files stay).
 	NotebookIdleMin int
+	// NotebookGPU: AGW_NOTEBOOK_GPUS names the devices the spawner gives the agent's servers; empty
+	// or "none": no GPU. The gateway only states it, the spawner enforces it.
+	NotebookGPU bool
 
 	// R0 (result checks). The check itself needs no URL: without AGW_IMAGE or the container runtime
 	// the capability "checks" is not available and every check tool answers so.
@@ -669,6 +672,7 @@ func FromEnv() Env {
 		NotebookTimeoutMaxMin: max(1, num("AGW_NOTEBOOK_TIMEOUT_MAX_MIN", DefaultNotebookTimeoutMaxMin)),
 		NotebookDatasetMaxMB:  max(1, num("AGW_NOTEBOOK_DATASET_MAX_MB", DefaultNotebookDatasetMaxMB)),
 		NotebookIdleMin:       max(0, num("AGW_NOTEBOOK_IDLE_MIN", DefaultNotebookIdleMin)),
+		NotebookGPU:           notebookGPU(str("AGW_NOTEBOOK_GPUS", "")),
 
 		// R0 (result checks).
 		AssessMaxPerChat:     max(1, num("AGW_ASSESS_MAX_PER_CHAT", DefaultAssessMaxPerChat)),
@@ -912,4 +916,10 @@ func dur(k string, def time.Duration) time.Duration {
 		return v
 	}
 	return def
+}
+
+// notebookGPU: does the value of AGW_NOTEBOOK_GPUS give the servers a GPU? Empty and "none" do not.
+func notebookGPU(v string) bool {
+	v = strings.TrimSpace(v)
+	return v != "" && !strings.EqualFold(v, "none")
 }

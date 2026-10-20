@@ -46,6 +46,8 @@ type Config struct {
 	TimeoutMaxMin int
 	DatasetMaxMB  int
 	IdleMin       int
+	// GPU: the spawner gives the servers a GPU (AGW_NOTEBOOK_GPUS); only stated to the user and the agent.
+	GPU bool
 }
 
 // Notebooks is the notebook service of the gateway.
@@ -216,4 +218,11 @@ func jsonResult(v any) (platform.Result, error) {
 // errorResult is the answer of a notebook tool that cannot do what it was asked.
 func errorResult(format string, args ...any) (platform.Result, error) {
 	return platform.Result{Status: "error", Message: fmt.Sprintf(format, args...)}, nil
+}
+
+// Shape is what a notebook server of this instance gets: the spawner's limits and, if configured, a GPU.
+func (n *Notebooks) Shape() platform.NotebookShape {
+	s := platform.DefaultNotebookShape
+	s.GPU = n.cfg.GPU
+	return s
 }
