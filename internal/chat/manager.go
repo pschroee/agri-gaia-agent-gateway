@@ -331,6 +331,8 @@ type Manager struct {
 	aborts map[string]uint64
 	// rechecks: how to re-read the summary of a pending approval at the moment of the decision (issue L2/#119).
 	rechecks map[string]recheck
+	// planDecisions: how to record the outcome of a pending plan approval, before the waiting call wakes (issue #166).
+	planDecisions map[string]*planDecision
 	// apMu serializes the decisions on one approval (two clicks at the same time).
 	apMu map[string]*sync.Mutex
 	// virtuals: doers for /_agw/ paths that the gateway answers itself (G1.5), by path prefix.
@@ -444,7 +446,7 @@ func (m *Manager) SubscribeAll() (<-chan ChatEvent, func()) {
 func (m *Manager) publish(chatID string, ev Event) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	important := ev.Kind == "approval" || ev.Kind == "chat" || ev.Kind == "error"
+	important := ev.Kind == "approval" || ev.Kind == "chat" || ev.Kind == "error" || ev.Kind == "plan"
 	for ch := range m.subs[chatID] {
 		sendDropOldest(ch, ev, important)
 	}
@@ -456,7 +458,7 @@ func (m *Manager) publish(chatID string, ev Event) {
 }
 
 // sendDropOldest hands ev to a subscriber without blocking. With a full buffer an unimportant event is
-// dropped (slow reader: do not hold up the chat); approvals and state changes must not get lost, so the
+// dropped (slow reader: do not hold up the chat); approvals, plans and state changes must not get lost, so the
 // oldest buffered event makes room for them.
 func sendDropOldest[T any](ch chan T, ev T, important bool) {
 	select {
@@ -2769,6 +2771,12 @@ func (m *Manager) decide(ctx context.Context, approvalID string, approve bool) (
 		return ap, err
 	}
 	if ok {
+		// A plan is recorded and announced before the waiting call wakes and before the approval goes out (issue #166).
+		if d := m.planDecisionFor(approvalID); d != nil {
+			if _, err := d.decide(ctx, state); err != nil {
+				slog.Error("plan decision not recorded", "approval", approvalID, "error", err)
+			}
+		}
 		m.broker.Resolve(approvalID, approve)
 		m.publish(ap.ChatID, Event{Kind: "approval", Data: ap})
 		m.publishChat(ctx, ap.ChatID)
