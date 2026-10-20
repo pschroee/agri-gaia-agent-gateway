@@ -2249,6 +2249,35 @@ names what is R2's own.
   (`/workspace/inputs/`) is invisible to it — only platform datasets and the files of a run can be held
   against a model.
 
+## Training search with a budget (issue #168)
+
+A search lets the user approve a search space and a budget **once**; inside them the agent runs trial after trial on
+its own. Welle 0 (this section's first state) lays the seams only: store, rules, tool table and hooks. The service
+that answers the paths below is added by the follow-up changes; until then every path answers
+`unavailable: training search is not available in this setup …`.
+
+| Tool (CLI) | Path | Class | Approval |
+|---|---|---|---|
+| `propose_search` (`propose-search`) | `POST /_agw/search` (form fields, files of the sandbox for the notebook way) | proposal, answered by `Manager.ProposeSearch` | the search approval (kind `search`, field `search`) |
+| `search_next` (`search-next`) | `POST /_agw/search/{id}/trials` | declares a trial | no, inside the approved search |
+| `search_status` (`search-status`) | `GET /_agw/search/{id}` | read | no |
+| `end_search` (`end-search`) | `POST /_agw/search/{id}/end` | ends the search | no |
+| `clone_training` (`clone-training`) | `POST /train/containers/{id}/clone` (backend fork) | `create training`, `also read training {id}`, effect `write` | yes, unless a trial of a running search announced it |
+
+- **Raw calls** to `/_agw/search…` through `platform_request` are refused (`SearchCallRefusal`): the proposal reads files
+  of the sandbox, and the gateway alone decides what a trial may run.
+- **`train_config` of a copy** goes through the same shell-injection check as `create_training` (`blockedCall`, issue
+  #93): the entrypoint of the training container puts it into a command line. The body of a copy may carry
+  `train_config` only (field rule).
+- **Tables** (`internal/store/search_schema.sql`): `searches` (one running search per chat, unique index),
+  `experiment_trials` (every training or notebook run of a chat; `search_id` set for trials of a search, `seq` per chat,
+  `idx` per search), `trial_epochs`, `trial_gpu`, `search_events`; the column `approvals.search` carries the structured
+  data of a search approval.
+- **Seams in the chat package:** `registerJobProgress` / `registerJobEnded` (hooks the watcher calls for every job read
+  or ended, inside a plan or outside), `Manager.searchMatch` / `searchFinish` (the claim of a search on a platform call,
+  asked after the plan match), `Manager.ProposeSearch`.
+- **Pure rules** in `internal/search`: `ParseProposal`, `Space.Check`, `Merge`, `Admit`, `Score`, `Winner`.
+
 ## Tool executions (E9)
 
 The orchestrator executes the tools `bash`, `read`, `write`, `edit`, `grep`, `find` and `ls` of the main agent and
