@@ -376,7 +376,7 @@ func TestNotebookPreviewShowsCode(t *testing.T) {
 	done := startCall(e, chatID, slot, notebookRunReq(t, code))
 	ap := pendingApproval(t, e, chatID)
 	// The preview closes with the shown file, so its trailing newline is trimmed.
-	for _, w := range []string{strings.TrimRight(code, "\n"), "sha256 "+upSum(code), "Runs train.py in your notebook server", "no internet",
+	for _, w := range []string{strings.TrimRight(code, "\n"), "sha256 " + upSum(code), "Runs train.py in your notebook server", "no internet",
 		"Datasets unpacked before the run: 17", "at most 120 minutes"} {
 		if !strings.Contains(ap.Preview, w) {
 			t.Errorf("preview without %q:\n%s", w, ap.Preview)

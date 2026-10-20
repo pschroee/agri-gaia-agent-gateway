@@ -133,12 +133,12 @@ type Trial struct {
 	// Figures: "" unknown, "none" the training template writes no figures, "ok" it does.
 	Figures string `json:"figures,omitempty"`
 	// GPUAvailable: the run sampled a GPU; nil while unknown.
-	GPUAvailable *bool  `json:"gpu_available,omitempty"`
-	Error       string          `json:"error,omitempty"`
-	StoppedBy   string          `json:"stopped_by,omitempty"`
-	DeclaredAt  time.Time       `json:"declared_at"`
-	StartedAt   *time.Time      `json:"started_at,omitempty"`
-	EndedAt     *time.Time      `json:"ended_at,omitempty"`
+	GPUAvailable *bool      `json:"gpu_available,omitempty"`
+	Error        string     `json:"error,omitempty"`
+	StoppedBy    string     `json:"stopped_by,omitempty"`
+	DeclaredAt   time.Time  `json:"declared_at"`
+	StartedAt    *time.Time `json:"started_at,omitempty"`
+	EndedAt      *time.Time `json:"ended_at,omitempty"`
 }
 
 // TrialEpoch is the line of one epoch; Data holds the figures (train_loss, val_acc, ...) as the run wrote them.

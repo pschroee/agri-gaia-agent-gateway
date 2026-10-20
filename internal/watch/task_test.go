@@ -176,7 +176,9 @@ func TestTaskIDsFromLocationAndRef(t *testing.T) {
 func TestTaskIDsFromBodyReference(t *testing.T) {
 	Register(Kind{Name: "test_taskids_body"})
 	RegisterRoute(http.MethodPost, regexp.MustCompile(`^/test-taskids-body$`), "test_taskids_body",
-		func(_ platform.Request, res platform.Result) (string, bool) { return "task:" + strings.TrimSpace(res.Body), true })
+		func(_ platform.Request, res platform.Result) (string, bool) {
+			return "task:" + strings.TrimSpace(res.Body), true
+		})
 	got := TaskIDs(delegation.Access{}, platform.Request{Method: "POST", Path: "/test-taskids-body"},
 		platform.Result{Status: "ok", HTTPStatus: 200, Body: "33"})
 	if len(got) != 1 || got[0] != "33" {
