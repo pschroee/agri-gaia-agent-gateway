@@ -2277,6 +2277,16 @@ that answers the paths below is added by the follow-up changes; until then every
   or ended, inside a plan or outside), `Manager.searchMatch` / `searchFinish` (the claim of a search on a platform call,
   asked after the plan match), `Manager.ProposeSearch`.
 - **Pure rules** in `internal/search`: `ParseProposal`, `Space.Check`, `Merge`, `Admit`, `Score`, `Winner`.
+- **Figures of a run** (the watcher): a training reads `GET /train/containers/{id}/metrics` (`supported`, `epochs`, `gpu`,
+  `gpu_available`), a notebook run reads `outputs/metrics.jsonl`, `.agw/gpu.csv` (sampled every 5 s by the launcher when
+  the run sees a GPU) and `params.json` from its directory. Everything goes through `search.ParseMetricsJSONL` /
+  `ParseGPUCSV` (bad lines are dropped, the last line of an epoch wins). `watch.Progress.Metrics` carries them;
+  `Percent` of a training is `epoch / epochs` (99 at most while it runs, 100 when it ended well), so that the ETA works.
+  The hook in `internal/chat/trial_metrics.go` stores epochs, GPU samples and score for the trial of the job (a run no
+  search declared becomes a single trial, ended with its job) and reads the jobs of trials every 15 s.
+- **SSE `trial_progress`** (at most every 5 s per trial, the last one is never lost): `{"trial_id","search_id","epoch",
+  "epochs","eta","score","points":[{"epoch","at",<figures>}],"gpu":{"at","util","mem_used_mb","mem_total_mb"}}`; `points`
+  are the epochs since the last event.
 
 ## Tool executions (E9)
 
