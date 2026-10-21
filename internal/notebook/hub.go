@@ -67,8 +67,18 @@ func check(user, server string) error {
 	return nil
 }
 
+// The states ServerState reports; they appear in tool answers, so the texts stay as they are.
+const (
+	stateNotStarted = "not started"
+	stateStarting   = "starting"
+	stateStopping   = "stopping"
+	stateRunning    = "running"
+)
+
 // Start starts the server of the user. A server that is already running counts as started (the hub
-// answers 400 "already running"), and a hub that does not know the user is ErrNoHubUser.
+// answers 400 "already running"), and a hub that does not know the user is ErrNoHubUser. startServer
+// asks ServerState first, so the 400 cases only occur when the state changes between that read and
+// this call (the reaper, a second tab).
 func (h *Hub) Start(ctx context.Context, user, server string) error {
 	if err := check(user, server); err != nil {
 		return err
@@ -147,13 +157,13 @@ func (h *Hub) ServerState(ctx context.Context, user, server string) (string, err
 	s, known := doc.Servers[server]
 	switch {
 	case !known:
-		return "not started", nil
+		return stateNotStarted, nil
 	case s.Pending == "stop":
-		return "stopping", nil
+		return stateStopping, nil
 	case s.Ready:
-		return "running", nil
+		return stateRunning, nil
 	}
-	return "starting", nil
+	return stateStarting, nil
 }
 
 // HasUser reports whether the hub knows the user (ok false: it does not; the agent then asks the

@@ -1065,13 +1065,100 @@ func runInputs() (platform.RunBody, []platform.Upload, func(context.Context, int
 	return body, files, func(context.Context, int64) (io.ReadCloser, error) { return nil, errors.New("no dataset expected") }
 }
 
-// A run waits while the hub stops the server and then starts it once.
+// A run does not start a server that the hub already runs.
+func TestRunSkipsStartWhenRunning(t *testing.T) {
+	st := testStore(t)
+	chat := testChat(t, st)
+	hub := newFakeHub()
+	n, _ := testService(t, st, &fakeDocker{ids: []string{"c1"}}, hub)
+	hub.server, hub.ready = n.Server(chat), true
+	body, files, ds := runInputs()
+	if _, err := n.Run(context.Background(), chat, "agent-test", body, files, ds); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if got := hub.requestCount(http.MethodPost); got != 0 {
+		t.Errorf("POST requests: %d (want 0)", got)
+	}
+}
+
+// A server that is still starting is not started again.
+func TestStartServerSkipsWhileStarting(t *testing.T) {
+	st := testStore(t)
+	chat := testChat(t, st)
+	hub := newFakeHub()
+	n, _ := testService(t, st, &fakeDocker{ids: []string{"c1"}}, hub)
+	hub.server, hub.ready = n.Server(chat), false
+	if err := n.startServer(context.Background(), "agent-test", n.Server(chat)); err != nil {
+		t.Fatalf("startServer: %v", err)
+	}
+	if got := hub.requestCount(http.MethodPost); got != 0 {
+		t.Errorf("POST requests: %d (want 0)", got)
+	}
+}
+
+// While the hub stops the server, the run only reads its state; it starts the server once afterwards.
+func TestRunWaitsWhileStopping(t *testing.T) {
+	st := testStore(t)
+	chat := testChat(t, st)
+	hub := newFakeHub()
+	n, _ := testService(t, st, &fakeDocker{ids: []string{"c1"}}, hub)
+	hub.server, hub.pending, hub.pendingReads = n.Server(chat), "stop", 2
+	oldEvery := serverReadyEvery
+	serverReadyEvery = 5 * time.Millisecond
+	defer func() { serverReadyEvery = oldEvery }()
+	body, files, ds := runInputs()
+	if _, err := n.Run(context.Background(), chat, "agent-test", body, files, ds); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if got := hub.requestCount(http.MethodPost); got != 1 {
+		t.Errorf("POST requests: %d (want 1)", got)
+	}
+	if got := hub.requestCount(http.MethodGet); got < 3 {
+		t.Errorf("GET requests: %d (want at least 3)", got)
+	}
+}
+
+// The state changes between the read and the start (race): the refused start still counts as started.
+func TestRunStartRaceAlreadyRunning(t *testing.T) {
+	st := testStore(t)
+	chat := testChat(t, st)
+	hub := newFakeHub()
+	n, _ := testService(t, st, &fakeDocker{ids: []string{"c1"}}, hub)
+	hub.startCode, hub.startBody = http.StatusBadRequest, `{"status":400,"message":"agent-test:x is already running"}`
+	hub.startRaces = true
+	body, files, ds := runInputs()
+	if _, err := n.Run(context.Background(), chat, "agent-test", body, files, ds); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if got := hub.requestCount(http.MethodPost); got != 1 {
+		t.Errorf("POST requests: %d (want 1)", got)
+	}
+}
+
+// A hub that is down ends the run with ErrHub before any start.
+func TestRunServerStateHubDown(t *testing.T) {
+	st := testStore(t)
+	chat := testChat(t, st)
+	hub := newFakeHub()
+	hub.reachable = false
+	n, _ := testService(t, st, &fakeDocker{ids: []string{"c1"}}, hub)
+	body, files, ds := runInputs()
+	_, err := n.Run(context.Background(), chat, "agent-test", body, files, ds)
+	if !errors.Is(err, ErrHub) {
+		t.Fatalf("run: %v (want ErrHub)", err)
+	}
+	if got := hub.requestCount(http.MethodPost); got != 0 {
+		t.Errorf("POST requests: %d (want 0)", got)
+	}
+}
+
+// Race: the state read says "not started", the start is refused twice with "pending stop", then it works.
 func TestRunWaitsForPendingStop(t *testing.T) {
 	st := testStore(t)
 	chat := testChat(t, st)
 	hub := newFakeHub()
 	n, _ := testService(t, st, &fakeDocker{ids: []string{"c1"}}, hub)
-	hub.server, hub.pending, hub.pendingPosts = n.Server(chat), "stop", 2
+	hub.pending, hub.pendingPosts = "stop", 2 // the read says "not started" (no entry), the start is refused
 	oldEvery := serverReadyEvery
 	serverReadyEvery = 5 * time.Millisecond
 	defer func() { serverReadyEvery = oldEvery }()
@@ -1099,6 +1186,9 @@ func TestRunStopPendingTimeout(t *testing.T) {
 	_, err := n.Run(context.Background(), chat, "agent-test", body, files, ds)
 	if err == nil || !strings.Contains(err.Error(), "still stopping") || errors.Is(err, ErrHub) {
 		t.Fatalf("run: %v (want a still-stopping message, not ErrHub)", err)
+	}
+	if got := hub.requestCount(http.MethodPost); got != 0 {
+		t.Errorf("POST requests: %d (want 0)", got)
 	}
 }
 
