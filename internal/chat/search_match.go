@@ -201,7 +201,7 @@ func (m *Manager) matchNotebook(ctx context.Context, s store.Search, st searchSt
 }
 
 // fileChanges describes the changed files: hashes of both versions and the diff (or the whole new file when the diff
-// is too long; hashes only for a file without text).
+// is too long; hashes only for a file without text), then the unchanged files of the new version without a diff.
 func fileChanges(old, next store.SearchCode, changed []string) []SearchFileChange {
 	byName := func(c store.SearchCode) map[string]store.SearchFile {
 		out := map[string]store.SearchFile{}
@@ -225,6 +225,17 @@ func fileChanges(old, next store.SearchCode, changed []string) []SearchFileChang
 			}
 		}
 		out = append(out, c)
+	}
+	// Unchanged files follow, hashes only, so the card lists every file of the new version.
+	isChanged := map[string]bool{}
+	for _, name := range changed {
+		isChanged[name] = true
+	}
+	for _, f := range next.Files {
+		if isChanged[f.Name] {
+			continue
+		}
+		out = append(out, SearchFileChange{Name: platform.VisibleControls(f.Name), OldSHA256: o[f.Name].SHA256, NewSHA256: f.SHA256})
 	}
 	return out
 }

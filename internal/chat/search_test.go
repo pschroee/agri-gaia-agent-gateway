@@ -100,6 +100,21 @@ func TestFileChangesDiff(t *testing.T) {
 	}
 }
 
+func TestFileChangesIncludesUnchanged(t *testing.T) {
+	old := testCode()
+	next := testCode()
+	next.Version = 2
+	next.Files[0] = searchFileOf(up("train.py", "print(2)\n"))
+	got := fileChanges(old, next, []string{"train.py"})
+	if len(got) != 2 || got[0].Name != "train.py" || got[1].Name != "util.py" {
+		t.Fatalf("order: %+v", got)
+	}
+	u := got[1]
+	if u.Diff != "" || u.DiffTooLong || u.Added || u.Removed || u.OldSHA256 == "" || u.OldSHA256 != u.NewSHA256 {
+		t.Errorf("unchanged file: %+v", u)
+	}
+}
+
 func TestStartFailedTwice(t *testing.T) {
 	one := 1
 	failed := func(epoch *int) store.Trial { return store.Trial{State: store.TrialFailed, Epoch: epoch} }
