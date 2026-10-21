@@ -415,6 +415,7 @@ type ExpEnvironment struct {
 	CatalogSHA256     string               `json:"catalog_sha256"`
 	SkillsSHA256      string               `json:"skills_sha256"`
 	InstructionSHA256 string               `json:"instruction_sha256"`
+	APIIndexSHA256    string               `json:"api_index_sha256"`
 	ImagesPi          []string             `json:"images_pi"`
 	ImagesExec        []string             `json:"images_exec"`
 	Slots             []ExpEnvironmentSlot `json:"slots"`

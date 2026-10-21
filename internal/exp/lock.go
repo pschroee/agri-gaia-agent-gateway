@@ -44,6 +44,7 @@ type Lock struct {
 	CatalogSHA256     string            `json:"catalog_sha256"`
 	SkillsSHA256      string            `json:"skills_sha256"`
 	InstructionSHA256 string            `json:"instruction_sha256"`
+	APIIndexSHA256    string            `json:"api_index_sha256"`
 	ConformanceSHA256 string            `json:"conformance_sha256"`
 	Models            []LockModel       `json:"models"`
 	Seed              int64             `json:"seed"`
@@ -64,6 +65,7 @@ type Environment struct {
 	CatalogSHA256     string            `json:"catalog_sha256"`
 	SkillsSHA256      string            `json:"skills_sha256"`
 	InstructionSHA256 string            `json:"instruction_sha256"`
+	APIIndexSHA256    string            `json:"api_index_sha256"`
 	ImagesPi          []string          `json:"images_pi"`
 	ImagesExec        []string          `json:"images_exec"`
 	Slots             []EnvironmentSlot `json:"slots"`
@@ -148,6 +150,7 @@ func CompareEnvironment(l *Lock, env Environment) []Problem {
 	compare("catalog_sha256", l.CatalogSHA256, env.CatalogSHA256)
 	compare("skills_sha256", l.SkillsSHA256, env.SkillsSHA256)
 	compare("instruction_sha256", l.InstructionSHA256, env.InstructionSHA256)
+	compare("api_index_sha256", l.APIIndexSHA256, env.APIIndexSHA256)
 	compareImages := func(field, want string, got []string) {
 		if want == "" {
 			out = append(out, Problem{"plan.lock", fmt.Sprintf("%s is empty; the material was not frozen with an environment", field)})

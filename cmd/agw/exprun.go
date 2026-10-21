@@ -375,7 +375,7 @@ func expEnvironment(e agwclient.ExpEnvironment) exp.Environment {
 	out := exp.Environment{
 		GatewayVersion: e.GatewayVersion, GatewayCommit: e.GatewayCommit, GatewayDescribe: e.GatewayDescribe,
 		CatalogSHA256: e.CatalogSHA256, SkillsSHA256: e.SkillsSHA256, InstructionSHA256: e.InstructionSHA256,
-		ImagesPi: e.ImagesPi, ImagesExec: e.ImagesExec,
+		APIIndexSHA256: e.APIIndexSHA256, ImagesPi: e.ImagesPi, ImagesExec: e.ImagesExec,
 	}
 	for _, s := range e.Slots {
 		out.Slots = append(out.Slots, exp.EnvironmentSlot{
