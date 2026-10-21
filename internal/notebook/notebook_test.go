@@ -62,6 +62,8 @@ type fakeHub struct {
 	// startCode/startBody answer the start (0: 201).
 	startCode int
 	startBody string
+	// startRaces: the refused start (startCode) leaves a ready server behind, as if another start won the race.
+	startRaces bool
 	// reachable false: every call fails as if the hub were down.
 	reachable bool
 	stopped   int
@@ -70,6 +72,9 @@ type fakeHub struct {
 	// (-1: never).
 	pending      string
 	pendingPosts int
+	// pendingReads: that many reads of the user model still report pending "stop"; after the last one
+	// the hub has stopped the server (no entry, not pending).
+	pendingReads int
 	// gate, when set, holds every read of the user model until it is closed.
 	gate chan struct{}
 }
@@ -108,8 +113,19 @@ func (h *fakeHub) handler() http.Handler {
 				}
 				h.pending = ""
 			}
+			if startCode == 0 && h.server != "" && h.server == lastSegment(r.URL.Path) && h.ready {
+				h.mu.Unlock()
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = w.Write([]byte(`{"status":400,"message":"agent-test:` + h.server + ` is already running"}`))
+				return
+			}
 			h.mu.Unlock()
 			if startCode != 0 {
+				if h.startRaces {
+					h.mu.Lock()
+					h.server, h.ready = lastSegment(r.URL.Path), true
+					h.mu.Unlock()
+				}
 				w.WriteHeader(startCode)
 				_, _ = w.Write([]byte(startBody))
 				return
@@ -135,6 +151,16 @@ func (h *fakeHub) handler() http.Handler {
 			}
 			h.mu.Lock()
 			pending := h.pending
+			if h.pendingReads > 0 {
+				h.pendingReads--
+				if h.pendingReads == 0 {
+					defer func() {
+						h.mu.Lock()
+						h.server, h.pending, h.ready = "", "", false
+						h.mu.Unlock()
+					}()
+				}
+			}
 			h.mu.Unlock()
 			if !known {
 				w.WriteHeader(http.StatusNotFound)
