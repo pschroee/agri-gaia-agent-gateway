@@ -442,10 +442,10 @@ func TestRunScriptQuoting(t *testing.T) {
 		t.Errorf("unbalanced quotes in the script:\n%s", script)
 	}
 	nb := runScript("r20260101120000-abcd", "notebook.ipynb", nil, 30)
-	if !strings.Contains(nb, "jupyter nbconvert --to notebook --execute --ExecutePreprocessor.timeout=-1 --output 'executed-notebook.ipynb' 'notebook.ipynb'") {
+	if !strings.Contains(nb, "python -u .agw/agw_run_notebook.py 'notebook.ipynb' --out 'executed-notebook.ipynb' --markers .agw") {
 		t.Errorf("notebook script:\n%s", nb)
 	}
-	if !strings.Contains(nb, "30m") || strings.Contains(nb, "python -u") {
+	if !strings.Contains(nb, "30m") || strings.Contains(nb, "nbconvert") || strings.Contains(nb, "python -u 'notebook.ipynb'") {
 		t.Errorf("notebook script runs the wrong command:\n%s", nb)
 	}
 }

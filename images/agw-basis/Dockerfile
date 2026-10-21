@@ -116,6 +116,12 @@ RUN pip3 install --no-cache-dir --break-system-packages numpy pandas matplotlib 
  && MPLBACKEND=Agg python3 -c "import numpy, pandas, matplotlib.pyplot" \
  && python3 -c "import onnxruntime, PIL; print('onnxruntime', onnxruntime.__version__)"
 ENV MPLBACKEND=Agg
+# Notebook runs (issue #193): the same versions as the notebook server image, so that a notebook tested here runs the
+# same there. agw-run-notebook is the starter the notebook server uses, too (one file, embedded in the gateway).
+RUN pip3 install --no-cache-dir --break-system-packages nbformat==5.10.4 nbclient==0.10.4 ipykernel==7.2.0 \
+ && python3 -c "import nbformat, nbclient, ipykernel; print('nbclient', nbclient.__version__)"
+COPY internal/notebook/launcher/agw_run_notebook.py /usr/local/bin/agw-run-notebook
+RUN chmod 0755 /usr/local/bin/agw-run-notebook
 # Typst (pinned version) and a fixed selection of packages. The packages are
 # loaded at build time into a cache that is read-only at runtime: exactly these
 # work in the sandbox, others cannot be fetched.

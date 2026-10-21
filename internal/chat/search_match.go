@@ -138,9 +138,9 @@ func codeMatches(code store.SearchCode, body platform.RunBody, files []platform.
 		body.TimeoutMinutes > code.TimeoutMinutes {
 		return nil, false, errors.New("entry, args, dataset_ids or timeout differ from the approved search")
 	}
-	bound := map[string]string{}
+	bound := map[string]store.SearchFile{}
 	for _, f := range code.Files {
-		bound[f.Name] = f.SHA256
+		bound[f.Name] = f
 	}
 	seen := map[string]bool{}
 	for _, f := range files {
@@ -150,8 +150,7 @@ func codeMatches(code store.SearchCode, body platform.RunBody, files []platform.
 			paramsOK = err1 == nil && err2 == nil && search.SameJSON(want, got)
 			continue
 		}
-		sum := sha256.Sum256(f.Data)
-		if hex.EncodeToString(sum[:]) != bound[f.Name] {
+		if !sameFile(bound[f.Name], f) {
 			changed = append(changed, f.Name)
 		}
 		seen[f.Name] = true
@@ -163,6 +162,18 @@ func codeMatches(code store.SearchCode, body platform.RunBody, files []platform.
 	}
 	sort.Strings(changed)
 	return changed, paramsOK, nil
+}
+
+// sameFile says whether an uploaded file is the approved one. A notebook with a code digest is compared by its code
+// cells (issue #193: the launcher runs nothing else); every other file, and a search stored before the digest
+// existed, by the SHA-256 of the bytes.
+func sameFile(approved store.SearchFile, f platform.Upload) bool {
+	if approved.CodeSHA256 != "" {
+		sum, ok := platform.NotebookCodeSHA256(f.Data)
+		return ok && sum == approved.CodeSHA256
+	}
+	sum := sha256.Sum256(f.Data)
+	return hex.EncodeToString(sum[:]) == approved.SHA256
 }
 
 // matchNotebook covers a run of the approved code with exactly the declared params; other code is a claim that is

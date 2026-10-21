@@ -182,6 +182,19 @@ func canonicalParams(raw []byte) json.RawMessage {
 // runMessage is the one line the watcher shows for a run (at most 200 runes).
 func runMessage(info RunInfo) string {
 	switch {
+	case info.ExitCode != nil && *info.ExitCode != 0 && info.FailedCell != nil:
+		what := ""
+		if info.CellError != "" {
+			what = " (" + info.CellError + ")"
+		}
+		after := ""
+		if info.DurationSeconds > 0 {
+			after = " after " + durationText(info.DurationSeconds)
+		}
+		if info.CellError == "time limit" {
+			return fmt.Sprintf("cell %d was running at the time limit%s", *info.FailedCell, after)
+		}
+		return fmt.Sprintf("cell %d failed%s%s", *info.FailedCell, what, after)
 	case info.ExitCode != nil && info.DurationSeconds > 0:
 		return fmt.Sprintf("exit %d after %s", *info.ExitCode, durationText(info.DurationSeconds))
 	case info.ExitCode != nil:

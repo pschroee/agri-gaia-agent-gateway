@@ -62,6 +62,14 @@ func (m *Manager) searchMaxHours() int {
 // searchFileOf binds one uploaded file: the SHA-256 is computed here, and the text is kept when it can be shown.
 func searchFileOf(u platform.Upload) store.SearchFile {
 	f := store.SearchFile{Name: u.Name, SHA256: sha256Hex(u.Data), Size: int64(len(u.Data))}
+	if strings.HasSuffix(strings.ToLower(u.Name), ".ipynb") {
+		if sum, ok := platform.NotebookCodeSHA256(u.Data); ok {
+			// The diff of a notebook shows its code cells, not the JSON.
+			f.CodeSHA256 = sum
+			f.Text, _ = platform.NotebookCodeText(u.Data)
+			return f
+		}
+	}
 	if utf8.Valid(u.Data) && len(u.Data) <= platform.NotebookTextMax {
 		f.Text = string(u.Data)
 	}
@@ -365,6 +373,9 @@ func (m *Manager) readNotebookCode(ctx context.Context, chatID string, read plat
 		code.Files = append(code.Files, searchFileOf(u))
 	}
 	if err := platform.ValidateRunFiles(p.Run, names, sizes); err != nil {
+		return store.SearchCode{}, nil, 0, err.Error()
+	}
+	if err := platform.CheckNotebookRun(p.Run, req.Uploads); err != nil {
 		return store.SearchCode{}, nil, 0, err.Error()
 	}
 	var trainDS int64

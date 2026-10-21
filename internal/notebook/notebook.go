@@ -102,13 +102,18 @@ func (n *Notebooks) Server(chatID string) string {
 	return prefix + "-" + hex
 }
 
-// Link is the address the user opens for a run (the JupyterLab tree of its run directory).
-func (n *Notebooks) Link(user, server, runID string) string {
+// Link is the address the user opens for a run: the executed notebook for a .ipynb entry (it exists from the
+// start of the run and grows with every cell), the JupyterLab tree of the run directory otherwise.
+func (n *Notebooks) Link(user, server, runID, entry string) string {
 	base := strings.TrimRight(n.cfg.PublicURL, "/")
 	if base == "" || user == "" {
 		return ""
 	}
-	return base + "/user/" + user + "/" + server + "/lab/tree/work/runs/" + runID
+	link := base + "/user/" + user + "/" + server + "/lab/tree/work/runs/" + runID
+	if strings.HasSuffix(entry, ".ipynb") {
+		link += "/" + executedName(entry)
+	}
+	return link
 }
 
 // withoutNotebook is what the agent should do when the capability is missing (G1.13).

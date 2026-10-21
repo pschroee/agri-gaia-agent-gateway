@@ -63,6 +63,14 @@ type RunInfo struct {
 	Files           []store.NotebookFile `json:"files,omitempty"`
 	Results         []RunFile            `json:"results,omitempty"`
 	Link            string               `json:"link,omitempty"`
+	// Notebook is the executed notebook of a .ipynb run in the run directory (it exists from the start and
+	// grows with every cell); NotebookCopy its copy in the user's notebooks directory, once the run has ended.
+	Notebook     string `json:"notebook,omitempty"`
+	NotebookCopy string `json:"notebook_copy,omitempty"`
+	// FailedCell is the number of the cell that failed or was running at the time limit (the "# cell n" of the
+	// approval), CellError what went wrong there. Written by the run's own uid, so it only informs.
+	FailedCell *int   `json:"failed_cell,omitempty"`
+	CellError  string `json:"cell_error,omitempty"`
 	// GPU is the device the run saw (nvidia-smi -L in the run), "none" when there was none; empty
 	// for runs that did not record it. Written by the run's own uid, so it only informs.
 	GPU string `json:"gpu,omitempty"`
@@ -82,12 +90,15 @@ type markers struct {
 	Finished string
 	ExitCode *int
 	GPU      *string // nil: the run recorded nothing
+	// FailedCell and CellError: the launcher's note on the cell of a notebook run that failed (0: none).
+	FailedCell int
+	CellError  string
 }
 
 // statusScript reports the markers of a run and the files in its directory. It always ends with 0,
 // so that a missing marker file is no failure of the command.
 const statusScript = `cd "$1" || exit 9
-for f in started finished exit_code gpu; do
+for f in started finished exit_code gpu failed_cell; do
   if [ -f ".agw/$f" ]; then printf '%s\t%s\n' "$f" "$(cat ".agw/$f")"; fi
 done
 find . -maxdepth 3 -type f -printf 'file\t%P\t%s\n' 2>/dev/null | head -n 200
@@ -138,6 +149,15 @@ func gpuName(line string) string {
 const gpuMismatchNote = "this instance assigns a GPU to notebook servers, but this run saw none (it ran on the CPU); " +
 	"the server may have started before the GPU was assigned - stop it with notebook-stop and run again"
 
+// cellErrorText makes the error name of a cell visible and bounds it (120 runes): it comes from the run.
+func cellErrorText(s string) string {
+	s = platform.VisibleControls(strings.TrimSpace(s))
+	if r := []rune(s); len(r) > 120 {
+		s = string(r[:120])
+	}
+	return s
+}
+
 // parseStatus reads the lines of statusScript.
 func parseStatus(out string) (markers, []RunFile, error) {
 	var m markers
@@ -152,6 +172,12 @@ func parseStatus(out string) (markers, []RunFile, error) {
 		case len(f) == 2 && f[0] == "gpu":
 			g := gpuName(f[1])
 			m.GPU = &g
+		case len(f) >= 2 && f[0] == "failed_cell":
+			// The note is "<n><TAB>text".
+			if n, err := strconv.Atoi(strings.TrimSpace(f[1])); err == nil && n > 0 {
+				m.FailedCell = n
+				m.CellError = cellErrorText(strings.Join(f[2:], "\t"))
+			}
 		case len(f) == 2 && f[0] == "exit_code":
 			code, err := strconv.Atoi(strings.TrimSpace(f[1]))
 			if err != nil {
@@ -178,7 +204,7 @@ func (n *Notebooks) Status(ctx context.Context, chatID, runID string) (RunInfo, 
 		return RunInfo{}, err
 	}
 	info := RunInfo{RunID: row.ID, Entry: row.Entry, State: StateRunning, TimeoutMinutes: row.TimeoutMin,
-		Datasets: row.DatasetIDs, Files: row.Files, Link: n.Link(row.HubUser, row.Server, row.ID)}
+		Datasets: row.DatasetIDs, Files: row.Files, Link: n.Link(row.HubUser, row.Server, row.ID, row.Entry)}
 	applyRun(&info, row)
 	containerID, err := n.container(ctx, row.HubUser, row.Server)
 	if err != nil {
@@ -277,6 +303,16 @@ func applyMarkers(info *RunInfo, m markers) {
 	if m.GPU != nil {
 		info.GPU = *m.GPU
 	}
+	if strings.HasSuffix(info.Entry, ".ipynb") {
+		info.Notebook = executedName(info.Entry)
+		if m.ExitCode != nil {
+			info.NotebookCopy = "work/" + workspaceCopy(info.RunID, info.Entry)
+		}
+		if m.FailedCell > 0 {
+			c := m.FailedCell
+			info.FailedCell, info.CellError = &c, m.CellError
+		}
+	}
 	if info.StartedAt != "" && info.FinishedAt != "" {
 		if from, err := time.Parse(time.RFC3339, info.StartedAt); err == nil {
 			if to, err := time.Parse(time.RFC3339, info.FinishedAt); err == nil {
@@ -359,7 +395,7 @@ func (n *Notebooks) runsResult(ctx context.Context, chatID string) (platform.Res
 		}
 		v := rowView{RunID: row.ID, Entry: row.Entry, State: stateOf(row.ExitCode, row.FinishedAt != nil), ExitCode: row.ExitCode,
 			StartedAt: row.StartedAt.UTC().Format(time.RFC3339), TimeoutMinutes: row.TimeoutMin,
-			Link: n.Link(row.HubUser, row.Server, row.ID)}
+			Link: n.Link(row.HubUser, row.Server, row.ID, row.Entry)}
 		if row.FinishedAt != nil {
 			v.FinishedAt = row.FinishedAt.UTC().Format(time.RFC3339)
 			v.DurationSeconds = int64(row.FinishedAt.Sub(row.StartedAt).Seconds())

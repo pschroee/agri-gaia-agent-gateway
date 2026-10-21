@@ -1,6 +1,6 @@
 ---
 name: notebook
-description: Own Python code on the platform - use it when the platform's training templates do not fit (other architectures, tabular data) or the user asks for own code. First check capabilities - with notebook available run the code in the chat's notebook server in JupyterHub (2 CPUs, 8 GB, a shared GPU where the instance has one, no internet, no platform access, torch with CUDA, onnx) with agw-platform notebook-run; without it say so and either train small models in the sandbox or use a training template. Rules - test the code in the sandbox first on a small sample; pass platform datasets with dataset_ids, they appear under /home/jovyan/work/datasets/<id>/; the user approves every run and sees all code, so keep it short; pick the device with torch.cuda.is_available() and keep a CPU fallback, export ONNX from the CPU; follow the run with notebook-run-status and notebook-log; fetch results with notebook-fetch and upload a model with upload-model, as ONNX for an inference container; give the user the link of the run.
+description: Own Python code - use it when the training templates do not fit or the user asks for own code. First check capabilities - with notebook available run it in the chat's notebook server (2 CPUs, 8 GB, a shared GPU where the instance has one, no internet, no platform access) with agw-platform notebook-run; without it say so and offer the sandbox or a template. Rules - write the run as a Jupyter notebook (.ipynb via nbformat), a markdown cell per step and one step per code cell, print and plot results, the executed notebook keeps all outputs in JupyterHub; .py only for helper modules; test the code in the sandbox first with agw-run-notebook; a notebook takes no args, it reads params.json; datasets via dataset_ids; the user approves every run; torch.cuda.is_available() with CPU fallback; follow with notebook-run-status and notebook-log (a failed run names its cell); notebook-fetch, then upload-model as ONNX for an inference container; give the user the link of the run, it opens the executed notebook.
 ---
 
 # Own code in the notebook server
@@ -28,18 +28,43 @@ reachable, or the user never opened JupyterHub), say so plainly and take one of 
 
 Never promise a notebook run you cannot start, and never retry a call that answered `unavailable`.
 
-## 2. Write and test the code in the sandbox first
+## 2. Write the run as a notebook
 
-Create the script (or notebook) under `/workspace`, then run it there on a **small sample** - a handful of
-images, a few rows - so that syntax errors and shape mistakes show up before the user is asked:
+Write the run as a **Jupyter notebook** (`.ipynb`): the user can then follow every step with its outputs, tables and
+charts in JupyterHub. Use `.py` only for helper modules that the notebook imports.
 
-```bash
-python -c "import ast,sys; ast.parse(open('train.py').read())"     # quick syntax check
-python train.py --epochs 1 --limit 8                                # small sample
+```python
+import nbformat
+from nbformat.v4 import new_notebook, new_markdown_cell, new_code_cell
+
+nb = new_notebook(cells=[
+    new_markdown_cell("## Settings\nRead from params.json when it exists."),
+    new_code_cell("import json, os\nparams = {'epochs': 5, 'lr': 0.001}\n"
+                  "if os.path.exists('params.json'):\n    params.update(json.load(open('params.json')))\nprint(params)"),
+    new_markdown_cell("## Train"),
+    new_code_cell("..."),
+])
+nbformat.write(nb, "train.ipynb")
 ```
 
-Only files with the endings `.py .ipynb .txt .json .yaml .yml .csv .md .cfg .toml` can go into a run, at
-most 50 files, 1 MB each and 4 MB together: code and configuration, not data.
+- One step per code cell, and a markdown cell above each step that says what it does.
+- Settings in a `params` dict in the first code cell, read from `params.json` when that file exists. A notebook
+  takes **no** `--args`.
+- Print results and plot with matplotlib and `plt.show()` - the outputs are saved in the notebook.
+- Only the source of the code cells runs. Tags and other cell metadata, stored outputs and the kernel name in the
+  file are replaced by the starter. The user approves the code cells; changing markdown does not change the code.
+
+Then test it in the sandbox on a **small sample** (a handful of images, a few rows), so that syntax errors and
+shape mistakes show up before the user is asked:
+
+```bash
+agw-run-notebook train.ipynb      # writes executed-train.ipynb, prints the outputs of every cell
+```
+
+It is the starter the notebook server uses, so a notebook that runs here runs there the same way (the sandbox has
+no torch and no GPU, so test with numpy/pandas or a tiny stand-in). Only files with the endings
+`.py .ipynb .txt .json .yaml .yml .csv .md .cfg .toml` can go into a run, at most 50 files, 1 MB each and 4 MB
+together: code and configuration, not data.
 
 ## GPU or CPU
 
@@ -58,13 +83,14 @@ saw (`"gpu"`); tell the user which device trained the model. Before the ONNX exp
 ## 3. Start the run
 
 ```bash
-agw-platform notebook-run /workspace/train.py --entry train.py \
-  --dataset_ids 17 --args --epochs --args 30 --timeout_minutes 240
+agw-platform notebook-run /workspace/train.ipynb --entry train.ipynb \
+  --dataset_ids 17 --timeout_minutes 240
 ```
 
 - `--entry` is the file name of the script or notebook that starts the run; it must be one of the files.
-- A `.py` entry runs with `python -u <entry> <args>`, a `.ipynb` entry is executed with `jupyter nbconvert`
-  and saved next to itself as `executed-<entry>`.
+- A `.py` entry runs with `python -u <entry> <args>`. A `.ipynb` entry runs cell by cell with `agw-run-notebook`
+  (the same as in the sandbox) and is saved with all outputs as `executed-<entry>` in the run directory after every
+  cell, and when it ends as `notebooks/<name>_<date>.ipynb`. A notebook takes no `--args`.
 - `--dataset_ids` (at most 3) unpacks each dataset to `/home/jovyan/work/datasets/<id>/` before the run;
   the unpacking is reused by later runs. Reading a dataset costs the delegation `update dataset` on it.
 - `--timeout_minutes` defaults to 120 and is capped by this instance.
@@ -79,11 +105,14 @@ agw-platform notebook-run-status <run_id>    # state, exit code, duration, files
 agw-platform notebook-log <run_id> --tail 100
 ```
 
-One run at a time per chat. `notebook_status` can report the state `stopping` (the server is shutting down); a run then waits up to 60 s for the stop to finish and starts on a fresh server. Write the results into the run directory (the working directory of the run):
-`model.onnx`, `metrics.json`, `predictions.csv`. The link in the answer opens the run directory for the user
-in JupyterLab; give it to them.
+`notebook-log` shows the outputs of every cell; a failed run names the cell (`failed_cell`, `cell_error`). The link
+opens the executed notebook.
 
-Inside a training search (skill `training-search`) the script reads its parameters from `params.json` in the run
+One run at a time per chat. `notebook_status` can report the state `stopping` (the server is shutting down); a run then waits up to 60 s for the stop to finish and starts on a fresh server. Write the results into the run directory (the working directory of the run):
+`model.onnx`, `metrics.json`, `predictions.csv`. The link in the answer opens the executed notebook (for a `.py`
+entry the run directory) for the user in JupyterLab; give it to them.
+
+Inside a training search (skill `training-search`) the notebook reads its parameters from `params.json` in the run
 directory and writes one JSON line per epoch to `outputs/metrics.jsonl` (`epoch`, `epochs`, `train_loss`, `val_loss`,
 `train_acc`, `val_acc`); the search skill has the snippet.
 

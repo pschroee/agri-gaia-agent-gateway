@@ -48,12 +48,22 @@ cd "$d" && python -m zipfile -e .dataset.zip . && rm .dataset.zip && touch .agw-
 func runScript(runID, entry string, args []string, timeoutMin int) string {
 	q := func(s string) string { return "'" + s + "'" } // the patterns exclude the single quote
 	cmd := "python -u " + q(entry)
-	if strings.HasSuffix(entry, ".ipynb") {
-		cmd = "jupyter nbconvert --to notebook --execute --ExecutePreprocessor.timeout=-1 --output " +
-			q("executed-"+entry) + " " + q(entry)
+	isNotebook := strings.HasSuffix(entry, ".ipynb")
+	if isNotebook {
+		// A notebook runs cell by cell with the launcher (issue #193): it saves the executed notebook after every
+		// cell, also when a cell fails, and takes no arguments (the parameters come from params.json).
+		cmd = "python -u .agw/agw_run_notebook.py " + q(entry) + " --out " + q(executedName(entry)) + " --markers .agw"
+	} else {
+		for _, a := range args {
+			cmd += " " + q(a)
+		}
 	}
-	for _, a := range args {
-		cmd += " " + q(a)
+	// After the end the executed notebook is copied under a speaking name into the user's notebooks directory.
+	keep := ""
+	if isNotebook {
+		keep = "mkdir -p " + q(workDir+"/notebooks") + "\n" +
+			"[ -f " + q(executedName(entry)) + " ] && cp -n -- " + q(executedName(entry)) + " " +
+			q(workDir+"/"+workspaceCopy(runID, entry)) + " 2>/dev/null\n"
 	}
 	return "#!/bin/bash\n# written by the agent gateway\n" +
 		"cd " + q(runsDir+"/"+runID) + " || exit 99\n" +
@@ -65,9 +75,31 @@ func runScript(runID, entry string, args []string, timeoutMin int) string {
 		"  SMI=$!\n" +
 		"fi\n" +
 		fmt.Sprintf("timeout --signal=TERM --kill-after=30s %dm %s > run.log 2>&1\n", timeoutMin, cmd) +
-		"echo $? > .agw/exit_code\n" +
+		"rc=$?\n" +
+		keep +
+		"echo $rc > .agw/exit_code\n" +
 		"[ -n \"$SMI\" ] && kill \"$SMI\" 2>/dev/null\n" +
 		"date -u +%FT%TZ > .agw/finished\n"
+}
+
+// executedName is the name of the executed notebook in the run directory.
+func executedName(entry string) string { return "executed-" + entry }
+
+// workspaceCopy is where the executed notebook of a run is kept for the user, relative to the work directory:
+// notebooks/<name>_<date>_<time>.ipynb, the time (UTC) taken from the run id (rYYYYMMDDHHMMSS-xxxx).
+func workspaceCopy(runID, entry string) string {
+	stem := strings.TrimSuffix(entry, ".ipynb")
+	stamp := ""
+	if len(runID) >= 15 && runID[0] == 'r' {
+		d := runID[1:15]
+		if _, err := strconv.ParseUint(d, 10, 64); err == nil {
+			stamp = d[0:4] + "-" + d[4:6] + "-" + d[6:8] + "_" + d[8:10] + "-" + d[10:12] + "-" + d[12:14]
+		}
+	}
+	if stamp == "" {
+		stamp = runID
+	}
+	return "notebooks/" + stem + "_" + stamp + ".ipynb"
 }
 
 // newRunID names a run: the time it starts and four random hex digits, so that two runs of the same
@@ -97,6 +129,9 @@ func (n *Notebooks) Run(ctx context.Context, chatID, user string, body platform.
 		approved = append(approved, store.NotebookFile{Name: f.Name, Size: int64(len(f.Data)), SHA256: f.SHA256})
 	}
 	if err := platform.ValidateRunFiles(body, names, sizes); err != nil {
+		return store.NotebookRun{}, err
+	}
+	if err := platform.CheckNotebookRun(body, files); err != nil {
 		return store.NotebookRun{}, err
 	}
 	server := n.Server(chatID)
@@ -215,7 +250,7 @@ func (n *Notebooks) runResult(ctx context.Context, chatID, user, server string, 
 	}
 	info := RunInfo{RunID: run.ID, Entry: run.Entry, State: StateRunning, TimeoutMinutes: run.TimeoutMin,
 		Datasets: run.DatasetIDs, Files: run.Files, StartedAt: run.StartedAt.UTC().Format(time.RFC3339),
-		Link: n.Link(user, server, run.ID)}
+		Link: n.Link(user, server, run.ID, run.Entry)}
 	return jsonResult(info)
 }
 
@@ -322,6 +357,9 @@ func runTar(runID, entry string, args []string, timeoutMin int, files []platform
 		}
 	}
 	if err := file(runID+"/.agw/run.sh", 0o755, []byte(runScript(runID, entry, args, timeoutMin))); err != nil {
+		return nil, err
+	}
+	if err := file(runID+"/.agw/agw_run_notebook.py", 0o644, launcherPy); err != nil {
 		return nil, err
 	}
 	for _, f := range files {

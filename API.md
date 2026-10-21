@@ -1963,8 +1963,12 @@ the platform trainings (`notebook_status` answers `"gpu": true`, `notebook_run_s
   without an exit code: the notebook server of this chat was stopped while it went` — so the run neither blocks the
   chat's next run nor keeps its card "running".
 - **Files in the container.** The code runs in a fresh directory `/home/jovyan/work/runs/<run-id>/` (`r<YYYYMMDDhhmmss>`
-  plus four hex digits), a `.py` entry with `python -u <entry> [args]`, an `.ipynb` with `jupyter nbconvert --execute`
-  (its result is `executed-<entry>`). A run's output goes to `run.log` in that directory, the exit code to
+  plus four hex digits), a `.py` entry with `python -u <entry> [args]`, an `.ipynb` cell by cell with the launcher `agw-run-notebook`
+  (`.agw/agw_run_notebook.py`; only the source of the code cells runs, no arguments). The executed notebook
+  `executed-<entry>` exists from the start and is saved after every cell, also after an error or the time limit;
+  when the run ends it is copied to `/home/jovyan/work/notebooks/<name>_<date>_<time>.ipynb`. `notebook_run_status`
+  names `notebook`, `notebook_copy` and, after a failure, `failed_cell` and `cell_error`; the run's `link` opens the
+  executed notebook. A run's output goes to `run.log` in that directory, the exit code to
   `.agw/exit_code`. Datasets are unpacked to `/home/jovyan/work/datasets/<id>/` once and reused (marker
   `.agw-complete`).
 - **`notebook_fetch`** copies a result file (at most 64 MiB) into the sandbox under

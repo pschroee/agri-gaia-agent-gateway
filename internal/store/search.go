@@ -64,6 +64,10 @@ type SearchFile struct {
 	// Text is the text of the approved file (UTF-8 and not too large), kept so that a later change can be shown as a
 	// diff in the question to the user; empty for a binary or large file.
 	Text string `json:"text,omitempty"`
+	// CodeSHA256 is set for a notebook (.ipynb): the digest over its code cells (platform.NotebookCodeSHA256). A
+	// notebook is bound by the code it runs, not by its bytes: markdown, metadata and outputs change nothing the
+	// launcher runs. Searches stored before #193 have none and stay bound by the SHA-256 of the bytes.
+	CodeSHA256 string `json:"code_sha256,omitempty"`
 }
 
 // SearchCode is the code a notebook search was approved with: the files with their hashes, the entry, the
