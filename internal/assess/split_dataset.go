@@ -203,7 +203,7 @@ func FilterCVATImages(data []byte, keep map[string]bool) ([]byte, error) {
 		if !ok || se.Name.Local != "image" {
 			continue
 		}
-		kept := keep[attrOf(se, "name")]
+		kept := keep[path.Base(attrOf(se, "name"))] // CVAT exports may carry a path prefix ("bucket/17/a.png")
 		if err := dec.Skip(); err != nil {
 			return nil, fmt.Errorf("the annotation is not readable XML: %w", err)
 		}
