@@ -297,6 +297,25 @@ func StepRequest(spec StepSpec) (platform.Request, []int, error) {
 		return platform.Request{}, nil, err
 	}
 	refs = append(refs, brefs...)
+	// A raw step on a gateway path (#199) is built like the tool of that path: the REST binding runs the
+	// call that way, so the step has to be the same request or the later call would not match it.
+	if lp := strings.ToLower(path); lp == "/_agw" || strings.HasPrefix(lp, "/_agw/") {
+		tool, args, why := platform.GatewayCall(spec.Method, path, query, []byte(body))
+		if why != "" {
+			return platform.Request{}, nil, errors.New(why)
+		}
+		switch tool.Name {
+		case "propose_plan", "rights", "api_paths", "capabilities":
+			return platform.Request{}, nil, fmt.Errorf("tool %s cannot be a plan step", tool.Name)
+		}
+		if args != nil {
+			req, err := tool.Build(args)
+			if err != nil {
+				return platform.Request{}, nil, err
+			}
+			return req, refs, nil
+		}
+	}
 	req, err := platform.Normalize(platform.Request{Method: spec.Method, Path: path, Query: query, Body: json.RawMessage(body)})
 	if err != nil {
 		return platform.Request{}, nil, err
