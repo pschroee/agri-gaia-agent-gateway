@@ -25,7 +25,7 @@ var createModelFromTraining = Tool{
 		"once per training and only when the user wants it. Needs approval. Before the call it checks that the training is " +
 		"exited and reads the training (from the list of training containers) and its dataset. The answer has id, name, format, tensor_metadata and warnings; a " +
 		"model without tensor metadata cannot be built into an inference container.",
-	Params: []Param{{Name: "train_container_id", Type: "integer", Desc: "id of the finished training container (platform_list_trainings)", Required: true}},
+	Params: []Param{{Name: "train_container_id", Type: "integer", Desc: "id of the finished training container ({{tool:list_trainings}})", Required: true}},
 	Write:  true,
 	build:  byID(http.MethodGet, "/train/containers", "train_container_id", "/model"),
 	steps:  modelFromTrainingSteps,
@@ -50,7 +50,7 @@ func modelFromTrainingSteps(ctx context.Context, a Args, final Request, do Doer)
 		return res, "", err
 	}
 	if st.Status != "exited" {
-		return Refuse("training container %d is %q, not finished; take the model over once platform_training_status shows exited", id, st.Status)
+		return Refuse("training container %d is %q, not finished; take the model over once {{tool:training_status}} shows exited", id, st.Status)
 	}
 
 	entry, res, refused, stop, err := trainingEntry(ctx, do, id)
@@ -109,12 +109,12 @@ func modelSummary(res Result) Result {
 
 	warnings := []string{}
 	if format != "onnx" {
-		warnings = append(warnings, fmt.Sprintf("saved without ONNX export (format %s): no tensor metadata, so no inference container can be built from it; train again with export_config in platform_create_training", format))
+		warnings = append(warnings, fmt.Sprintf("saved without ONNX export (format %s): no tensor metadata, so no inference container can be built from it; train again with export_config in {{tool:create_training}}", format))
 	} else if !tensorOK {
-		warnings = append(warnings, "ONNX model without complete tensor metadata; set them with platform_update_model before a container build")
+		warnings = append(warnings, "ONNX model without complete tensor metadata; set them with {{tool:update_model}} before a container build")
 	}
 	if strings.Contains(name, "None ") {
-		warnings = append(warnings, "the platform did not recognise the score (None in the name); check the model with platform_assess_model: the gateway reads the platform figure from the training log and measures the model on held-out images")
+		warnings = append(warnings, "the platform did not recognise the score (None in the name); check the model with {{tool:assess_model}}: the gateway reads the platform figure from the training log and measures the model on held-out images")
 	}
 
 	out, err := json.Marshal(map[string]any{

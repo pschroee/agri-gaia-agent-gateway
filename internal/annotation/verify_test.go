@@ -180,7 +180,7 @@ func TestFinalVerifyOnce(t *testing.T) {
 	if res.Status != "error" || !strings.Contains(res.Message, "already used in this chat") {
 		t.Fatalf("second final verdict: %+v", res)
 	}
-	if !strings.Contains(res.Message, "annotation-job") && !strings.Contains(res.Message, "result stands") {
+	if !strings.Contains(res.Message, "{{tool:annotation_job}}") && !strings.Contains(res.Message, "result stands") {
 		t.Errorf("the refusal does not say that the result stands: %q", res.Message)
 	}
 	// An interim verdict stays possible: it measures the validation set.

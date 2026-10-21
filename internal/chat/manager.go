@@ -2569,7 +2569,7 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 				slog.Error("compute call not given back", "chat", chatID, "error", rerr)
 			}
 		}
-		return platform.Result{Status: "error", Message: platform.RefusedPrefix + "this trial of the training search was already used or is no longer declared; declare a new one with search_next",
+		return platform.Result{Status: "error", Message: platform.RefusedPrefix + "this trial of the training search was already used or is no longer declared; declare a new one with {{tool:search_next}}",
 			Decision: platform.DecisionDeniedFixed, Reason: "trial_unavailable", Rule: rule, WithinDelegation: within,
 			ApprovalID: approvalID, ApprovalDecision: approvalBy, PlanStep: planStep(step)}, nil
 	}
@@ -2978,6 +2978,35 @@ func (m *Manager) Shutdown(ctx context.Context) {
 // Messages, Approvals and SocketCalls for the chat view.
 func (m *Manager) Messages(ctx context.Context, chatID string) ([]store.Message, error) {
 	return m.st.Messages(ctx, chatID)
+}
+
+// ChatBindings are the bindings the chat has (its variant, without the experiment prefix); empty if the chat
+// or its variant cannot be read. The references to tools in the texts for the agent are rendered with them (#200).
+func (m *Manager) ChatBindings(ctx context.Context, chatID string) toolset.Set {
+	c, err := m.st.GetChat(ctx, chatID)
+	if err != nil {
+		return toolset.Set{}
+	}
+	base, _ := toolset.SplitExperiment(c.Variant)
+	ts, err := toolset.FromVariant(base)
+	if err != nil {
+		return toolset.Set{}
+	}
+	return ts
+}
+
+// RenderNote renders the tool references in a note the gateway wrote itself, for all bindings of the chat
+// (a note answers no call, so it names the forms of every binding with "or"). Text from the sandbox is not
+// rendered.
+func (m *Manager) RenderNote(ctx context.Context, chatID, s string) string {
+	if !strings.Contains(s, "{{tool:") {
+		return s
+	}
+	set := m.ChatBindings(ctx, chatID)
+	if set.Empty() {
+		set = toolset.Of(toolset.Order...)
+	}
+	return platform.Render(s, "", set)
 }
 
 // ChatOwner returns a chat's owner (empty: without owner, token mode).

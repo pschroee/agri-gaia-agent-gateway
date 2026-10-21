@@ -105,7 +105,7 @@ func searchTrialEnded(ctx context.Context, m *Manager, j store.WatchJob, p watch
 	if st.bestIdx != nil && st.best != nil {
 		head += fmt.Sprintf(" Best so far: trial %d (%s %s).", *st.bestIdx, st.obj.Metric, strconv.FormatFloat(*st.best, 'g', 6, 64))
 	}
-	head += " " + usedText(st) + " Read search_status, then declare the next trial with search_next, or end the search with end_search."
+	head += " " + usedText(st) + " Read {{tool:search_status}}, then declare the next trial with {{tool:search_next}}, or end the search with {{tool:end_search}}."
 	body := ""
 	if errText != "" {
 		body = errText
@@ -141,7 +141,7 @@ func usedText(st searchStats) string {
 
 // searchNote queues a note about a search for the agent and wakes it (within the wake limit of the search).
 func (m *Manager) searchNote(ctx context.Context, s store.Search, summary, body string) {
-	n := systemNote{Type: store.NoteSearch, Refs: []string{s.ID}, Summary: summary, Body: body}
+	n := systemNote{Type: store.NoteSearch, Refs: []string{s.ID}, Summary: m.RenderNote(ctx, s.ChatID, summary), Body: m.RenderNote(ctx, s.ChatID, body)}
 	if _, err := m.st.EnqueueSystem(ctx, s.ChatID, n.Type, n.Refs, n.Text()); err != nil {
 		slog.Error("note about a search not queued", "search", s.ID, "error", err)
 		return
@@ -229,9 +229,9 @@ func (m *Manager) endText(s store.Search, obj search.Objective, reason string, w
 		eval = " eval_dataset_id=" + strconv.FormatInt(ho.EvalDataset.ID, 10)
 	}
 	if s.Path == store.SearchPathTemplate {
-		fmt.Fprintf(&b, " Now run the final test once: create_model_from_training for training container %s, then assess_model with that model_id and final=true,%s.", wt.Ref, eval)
+		fmt.Fprintf(&b, " Now run the final test once: {{tool:create_model_from_training}} for training container %s, then {{tool:assess_model}} with that model_id and final=true,%s.", wt.Ref, eval)
 	} else {
-		fmt.Fprintf(&b, " Now run the final test once: notebook_fetch the model file of run %s, then assess_model with its path and final=true,%s.", wt.Ref, eval)
+		fmt.Fprintf(&b, " Now run the final test once: {{tool:notebook_fetch}} the model file of run %s, then {{tool:assess_model}} with its path and final=true,%s.", wt.Ref, eval)
 	}
 	if s.Path != store.SearchPathTemplate {
 		b.WriteString(" The check takes class names and preprocessing from outputs/model.json of that run.")

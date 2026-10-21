@@ -30,11 +30,11 @@ var assessDeployment = Tool{
 	Name: "deployment_check", CLI: "deployment-check",
 	Desc: "Sends six fixed test requests to a deployment started in this chat on a simulated edge device and " +
 		"compares the answers with what the model file computes for the same inputs (reads; a few seconds). " +
-		"Use it after platform_deployment_status shows deployed. The report says whether the device serves " +
-		"exactly this model; accuracy comes from assess_model.",
+		"Use it after {{tool:deployment_status}} shows deployed. The report says whether the device serves " +
+		"exactly this model; accuracy comes from {{tool:assess_model}}.",
 	Params: []Param{
-		{Name: "deployment_id", Type: "integer", Desc: "id of the deployment (platform_list_deployments)", Required: true},
-		{Name: "model_id", Type: "integer", Desc: "id of the model the deployment serves (platform_list_models)", Required: true},
+		{Name: "deployment_id", Type: "integer", Desc: "id of the deployment ({{tool:list_deployments}})", Required: true},
+		{Name: "model_id", Type: "integer", Desc: "id of the model the deployment serves ({{tool:list_models}})", Required: true},
 	},
 	build: func(a Args) (Request, error) {
 		id, ok, err := a.int("deployment_id")

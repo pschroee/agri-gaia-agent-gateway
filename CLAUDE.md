@@ -105,6 +105,14 @@ refer to this repository.
   former `both` (`TestOldVariantsUnchanged` holds the old arguments literally); a change to a binding's tools goes into
   `bindingTools` and that test. Old chats of any combination resume through slots started on demand
   (`pool.SetKnown`). Rules in `API.md`, *Bindings of new chats*.
+- **Texts for the agent never carry a bare tool name** (#200): the same tool is `agw-platform <command>` on the
+  command line, `mcp_platform_<name>` in MCP and `METHOD /path` in the REST binding. Write `{{tool:<Name>}}`
+  (`Tool.Name`); `platform.Render` replaces it where the binding is known: `sock` (results, notes, log, MCP tool list,
+  REST refusals), `agw-platform` (help and output), the system note and `chat.Manager.RenderNote` (notes without a call
+  and the cards of the UI). The REST form of the gateway's tools comes from `Tool.RESTCall`, that of the platform's from
+  `apiRefs` in `internal/platform/refs.go` (checked against `Build` and the OpenAPI fixture); a tool without one
+  (notebook, uploads, `request`) renders as `<name> (not offered in this setup)`. `TestAgentTextsUseToolRefs` scans the
+  sources and lists its exceptions; the step syntax of a plan keeps the bare name.
 
 ## Internet grants of the agent
 

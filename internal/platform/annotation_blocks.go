@@ -31,9 +31,9 @@ func init() {
 		case p == "/cvat" || strings.HasPrefix(p, "/cvat/"):
 			return "CVAT is reached only through the annotation_ tools"
 		case r.Method == http.MethodPost && rawAnnotateRe.MatchString(p):
-			return "use annotation_task"
+			return "use {{tool:annotation_task}}"
 		case r.Method == http.MethodPost && rawAutoAnnotateRe.MatchString(p):
-			return "use annotation_function"
+			return "use {{tool:annotation_function}}"
 		}
 		return ""
 	})

@@ -92,8 +92,12 @@ func TestSystemNoteGatewayPaths(t *testing.T) {
 	for _, index := range []string{apiIndexTest, ""} { // with and without the platform's index
 		api := SystemNoteFor("api", 4, nil, index)
 		if !strings.Contains(api, "- Gateway paths: the gateway answers these paths itself") ||
-			!strings.Contains(api, "tool search_next") || !strings.Contains(api, "  (") {
+			!strings.Contains(api, "POST /_agw/search/{search_id}/trials") || !strings.Contains(api, "  (") {
 			t.Errorf("api (index %v): gateway paths missing", index != "")
+		}
+		// #200: the descriptions name tools by their REST forms; no marker and no tool name is left in the note.
+		if strings.Contains(api, "{{tool:") || strings.Contains(api, " · tool ") || strings.Contains(api, "tool name the gateway's notes use") {
+			t.Errorf("api (index %v): tool references left in the note", index != "")
 		}
 		if !strings.Contains(api, "The gateway's own paths follow under Gateway paths.") {
 			t.Errorf("api (index %v): pointer sentence missing", index != "")
@@ -103,7 +107,7 @@ func TestSystemNoteGatewayPaths(t *testing.T) {
 		}
 	}
 	for _, v := range []string{"cli", "mcp", "cli,mcp"} {
-		if n := SystemNoteFor(v, 4, nil, apiIndexTest); strings.Contains(n, "- Gateway paths:") || strings.Contains(n, "tool search_next") {
+		if n := SystemNoteFor(v, 4, nil, apiIndexTest); strings.Contains(n, "- Gateway paths:") || strings.Contains(n, "/_agw/search/{search_id}/trials") {
 			t.Errorf("%s: carries the gateway paths", v)
 		}
 	}

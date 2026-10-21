@@ -142,7 +142,7 @@ func (s *Service) Do(ctx context.Context, chatID string, req platform.Request) (
 	case req.Method == http.MethodPost && path == platform.AnnotationPrefix+"/runs":
 		return s.preAnnotate(ctx, chatID, req)
 	case req.Method == http.MethodGet && path == platform.AnnotationPrefix+"/runs":
-		return platform.Result{Status: "error", Message: "annotation_run needs a run id"}, nil
+		return platform.Result{Status: "error", Message: "{{tool:annotation_run}} needs a run id"}, nil
 	// V3: a check (calibrate | uncertain) and a fill are background jobs of the gateway; their state is
 	// what annotation_job answers.
 	case req.Method == http.MethodPost && path == platform.AnnotationPrefix+"/checks":
@@ -603,7 +603,7 @@ func (s *Service) ownDataset(ctx context.Context, chatID string, r *recorder, id
 
 // noTaskYet is the refusal of an operation that needs a CVAT task of the dataset.
 func noTaskYet(id int64) error {
-	return fmt.Errorf("dataset %d has no CVAT task yet; run annotation_task first", id)
+	return fmt.Errorf("dataset %d has no CVAT task yet; run {{tool:annotation_task}} first", id)
 }
 
 // taskIDOf is the task recorded on a dataset, with the refusal above when there is none.
@@ -716,10 +716,10 @@ type runAnswer struct {
 }
 
 // runFollowNote says how to follow a run; the loop is the agent's (E11).
-const runFollowNote = "Follow it with annotation-run <run_id> in a background loop (30 s or more between queries)."
+const runFollowNote = "Follow it with {{tool:annotation_run}} with run_id=<run_id> in a background loop (30 s or more between queries)."
 
 // runFinishedNote points at the two steps that follow a finished run.
-const runFinishedNote = "The annotations are in CVAT. annotation-summary counts them; annotation-sync writes them into the dataset."
+const runFinishedNote = "The annotations are in CVAT. {{tool:annotation_summary}} counts them; {{tool:annotation_sync}} writes them into the dataset."
 
 // preAnnotate starts a run of a function over all images of the dataset's CVAT task.
 func (s *Service) preAnnotate(ctx context.Context, chatID string, req platform.Request) (platform.Result, error) {
@@ -792,7 +792,7 @@ func (s *Service) preAnnotate(ctx context.Context, chatID string, req platform.R
 			return failed(err)
 		}
 		if n := annotationCount(ann); n > 0 {
-			return failed(fmt.Errorf("the CVAT task already has %d annotations; existing=keep would add duplicates on every image. Use annotation_fill (only images without annotations) or existing=replace (deletes all, irreversible)", n))
+			return failed(fmt.Errorf("the CVAT task already has %d annotations; existing=keep would add duplicates on every image. Use {{tool:annotation_fill}} (only images without annotations) or existing=replace (deletes all, irreversible)", n))
 		}
 	}
 	run, err := s.C.CreateRequest(ctx, ses, RunRequest{

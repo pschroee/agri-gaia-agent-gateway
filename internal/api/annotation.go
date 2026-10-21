@@ -126,7 +126,13 @@ func (s *Server) annotationResults(w http.ResponseWriter, r *http.Request) {
 		out.Runs = append(out.Runs, annotationRunLine(row, byRef[annotation.WatchKindName+"/"+row.ID], base))
 	}
 	for _, row := range jobs {
-		out.Jobs = append(out.Jobs, annotationJobLine(row, byRef[annotation.JobKindName+"/"+row.ID], base))
+		line := annotationJobLine(row, byRef[annotation.JobKindName+"/"+row.ID], base)
+		// The stored result carries references to tools (suggestions); the card shows them in the forms of the
+		// chat's bindings, never as markers (#200).
+		if len(line.Result) > 0 {
+			line.Result = json.RawMessage(s.M.RenderNote(r.Context(), id, string(line.Result)))
+		}
+		out.Jobs = append(out.Jobs, line)
 	}
 	writeJSON(w, 200, out)
 }

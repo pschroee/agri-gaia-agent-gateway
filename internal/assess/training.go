@@ -458,7 +458,7 @@ func suggestions(in JudgeInput, verdict Verdict) []Suggestion {
 // The suggestions of a training check (R1.11); the identifiers are fixed, the texts belong to them.
 var (
 	suggestionSplitDataset = Suggestion{ID: "split_dataset",
-		Text: "split the dataset before the next training (platform_split_dataset) so that the result can be checked on held-out images"}
+		Text: "split the dataset before the next training ({{tool:split_dataset}}) so that the result can be checked on held-out images"}
 	suggestionMoreData = Suggestion{ID: "more_data",
 		Text: "the check needs at least 20 held-out and 5 validation images: provide more annotated images and split again"}
 	suggestionMoreEpochs = Suggestion{ID: "more_epochs",
@@ -578,7 +578,7 @@ func (s *Service) assessModel(ctx context.Context, chatID string, req platform.R
 		return errResult(err.Error()), nil
 	}
 	return jsonResult(assessAnswer{CheckID: id, State: store.AssessQueued,
-		Note: "follow it with assess-status; the gateway also wakes you when it is done"})
+		Note: "follow it with {{tool:assess_status}}; the gateway also wakes you when it is done"})
 }
 
 // modelSubject is the subject of a check on a platform model (R0: subject "model:<id>").
@@ -683,7 +683,7 @@ func (s *Service) runTrainingCheck(ctx context.Context, chatID, checkID string, 
 	if model.Format != "onnx" {
 		rep := notMeasuredReport(in, ReasonNotONNX+" (format "+model.Format+")")
 		rep.Suggestions = []Suggestion{{ID: "export_onnx",
-			Text: "train again with export_config in platform_create_training so that the platform saves model.onnx"}}
+			Text: "train again with export_config in {{tool:create_training}} so that the platform saves model.onnx"}}
 		return rep, nil
 	}
 

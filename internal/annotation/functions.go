@@ -239,9 +239,9 @@ func (s *Service) createFunction(ctx context.Context, chatID string, req platfor
 	if err != nil {
 		return platform.Result{}, err
 	}
-	note := "Building the function takes several minutes. It is usable when annotation-functions shows state ready."
+	note := "Building the function takes several minutes. It is usable when {{tool:annotation_functions}} shows state ready."
 	if task != "" {
-		note = fmt.Sprintf("Building the function takes several minutes. Follow it with task %s; it is usable when annotation-functions shows state ready.", task)
+		note = fmt.Sprintf("Building the function takes several minutes. Follow it with {{tool:task_status}} with task_id=%s; it is usable when {{tool:annotation_functions}} shows state ready.", task)
 	}
 	return okAnswer(functionAnswer{stepList: r.steps(), Function: row.Name, State: row.State,
 		PlatformTask: task, Reused: false, Note: note})

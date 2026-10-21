@@ -67,7 +67,7 @@ const (
 	msgNotReady          = "not ready yet"
 	hintNotReady         = "the container is still starting or still pulling the image; check again in about a minute"
 	hintRoundtrip        = "the round trip is measured in the gateway and includes the docker exec into the container of the device"
-	noteDeployment       = "No real images; whether the model is good comes from the model check (assess_model)."
+	noteDeployment       = "No real images; whether the model is good comes from the model check ({{tool:assess_model}})."
 
 	// deviceUser: the user of the docker:dind-rootless container of a simulated device.
 	deviceUser = "rootless"
@@ -772,7 +772,7 @@ func (in *deploymentRun) report(verdict Verdict, reasons []string) Report {
 	rep.Figures = in.figures()
 	if verdict == Usable || in.Ready {
 		rep.Suggestions = append(rep.Suggestions, Suggestion{ID: "assess_model",
-			Text: "check the model itself with assess_model: the deployment check says whether the device serves it, not whether it is good"})
+			Text: "check the model itself with {{tool:assess_model}}: the deployment check says whether the device serves it, not whether it is good"})
 	}
 	return rep
 }
@@ -887,7 +887,7 @@ func roundtripOf(list []time.Duration) RoundtripFigures {
 // write and asks the user (or runs inside a plan), so the gateway proposes it instead of doing it.
 var (
 	suggestionUndeploy = Suggestion{ID: "undeploy",
-		Text: "take the deployment back (platform_undeploy) and deploy the right image again"}
+		Text: "take the deployment back ({{tool:undeploy}}) and deploy the right image again"}
 	suggestionRebuild = Suggestion{ID: "rebuild_image",
 		Text: "build the inference image again from this model and deploy the new one"}
 )

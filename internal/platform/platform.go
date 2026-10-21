@@ -318,7 +318,7 @@ func (r Result) Text() string {
 		fmt.Fprintf(&b, "unavailable: %s", r.Message)
 		return b.String()
 	case "denied":
-		fmt.Fprintf(&b, "denied by the authorization service: %s (platform_rights or agw-platform rights shows which rights apply)", r.Message)
+		fmt.Fprintf(&b, "denied by the authorization service: %s ({{tool:rights}} shows which rights apply)", r.Message)
 		return b.String()
 	case StatusPendingUser:
 		// The call waits for the user's decision and the agent may end its turn (A-E2, D2.8); without this

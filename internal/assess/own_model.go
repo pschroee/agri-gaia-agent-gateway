@@ -223,7 +223,7 @@ type fileInput struct {
 // gets another subject.
 func (s *Service) assessOwnFile(ctx context.Context, chatID string, body assessRequest, req platform.Request) (platform.Result, error) {
 	if len(req.Uploads) != 1 {
-		return errResult("the call carries no model file; give the path of a file that notebook_fetch wrote into the sandbox"), nil
+		return errResult("the call carries no model file; give the path of a file that {{tool:notebook_fetch}} wrote into the sandbox"), nil
 	}
 	file := fileInput{Name: req.Uploads[0].Name, SHA256: strings.ToLower(req.Uploads[0].SHA256), Data: req.Uploads[0].Data}
 	if !shaRe.MatchString(file.SHA256) {
@@ -260,7 +260,7 @@ func (s *Service) assessOwnFile(ctx context.Context, chatID string, body assessR
 		return errResult(err.Error()), nil
 	}
 	return jsonResult(assessAnswer{CheckID: id, State: store.AssessQueued,
-		Note: "follow it with assess-status; the gateway also wakes you when it is done"})
+		Note: "follow it with {{tool:assess_status}}; the gateway also wakes you when it is done"})
 }
 
 // defaultEvalDatasetForSeen names the dataset a check measures on when the agent names none (R1.5, R2.2):

@@ -44,7 +44,7 @@ func init() {
 func SearchCallRefusal(r Request) string {
 	p := strings.ToLower(r.Path)
 	if p == SearchPrefix || strings.HasPrefix(p, SearchPrefix+"/") {
-		return "training search calls go through the search tools (propose_search, search_next, search_status, end_search)"
+		return "training search calls go through the search tools ({{tool:propose_search}}, {{tool:search_next}}, {{tool:search_status}}, {{tool:end_search}})"
 	}
 	return ""
 }
@@ -78,7 +78,7 @@ var proposeSearch = Tool{
 		`everything else stays as in the base. budget = {"max_runs","max_compute_minutes","target","patience"}, each optional, the first one reached ends the search; ` +
 		`every trial uses one compute call. path "template": base_container_id is a built training container of this chat, each trial is a copy of it with other train_config values. ` +
 		`path "notebook": the files are fixed for the whole search (SHA-256); a trial may only change params.json, any code change asks the user again. ` +
-		`The winner is chosen by the validation metric only; when the search ends you run the final test once for the winner (assess_model final=true). Call capabilities first.`,
+		`The winner is chosen by the validation metric only; when the search ends you run the final test once for the winner ({{tool:assess_model}} final=true). Call {{tool:capabilities}} first.`,
 	Params: []Param{
 		{Name: "title", Type: "string", Required: true, Desc: "short title of the search (at most 120 characters)"},
 		{Name: "path", Type: "string", Required: true, Desc: `"template" (copies of a built training container) or "notebook" (your code in the notebook server)`},
@@ -89,7 +89,7 @@ var proposeSearch = Tool{
 		{Name: "files", Type: "array", Path: true, Desc: `path "notebook": files from the sandbox that stay fixed for the whole search (code and small config files; params.json is not one of them)`},
 		{Name: "entry", Type: "string", Desc: `path "notebook": file name of the script to run, one of files; it reads params.json and writes outputs/metrics.jsonl`},
 		{Name: "args", Type: "array", Desc: `path "notebook": command line arguments for a .py entry`},
-		{Name: "dataset_ids", Type: "array", Desc: `path "notebook": ids of platform datasets to unpack before each run, at most 3; never the source of a split_dataset`},
+		{Name: "dataset_ids", Type: "array", Desc: `path "notebook": ids of platform datasets to unpack before each run, at most 3; never the source of a {{tool:split_dataset}}`},
 		{Name: "timeout_minutes", Type: "integer", Desc: `path "notebook": at most this many minutes per run (default 120)`},
 		{Name: "note", Type: "string", Desc: "your own short note to the user about the search (at most 500 characters); shown as your note, marked as not verified"},
 	},
@@ -187,7 +187,7 @@ var proposeSearch = Tool{
 			for _, p := range paths {
 				n := baseName(p)
 				if n == "params.json" {
-					return Request{}, errors.New("params.json is not one of the fixed files: you write it for every trial, with the params you declare with search_next")
+					return Request{}, errors.New("params.json is not one of the fixed files: you write it for every trial, with the params you declare with {{tool:search_next}}")
 				}
 				names = append(names, n)
 				req.Files = append(req.Files, File{Field: "file", Path: p})
@@ -212,7 +212,7 @@ var searchNext = Tool{
 		"note says in one or two sentences why this trial (the user sees it as your note). " +
 		"Then make exactly the calls the answer names; they need no approval.",
 	Params: []Param{
-		{Name: "search_id", Type: "string", Required: true, Desc: "id of the search, from propose_search"},
+		{Name: "search_id", Type: "string", Required: true, Desc: "id of the search, from {{tool:propose_search}}"},
 		{Name: "params", Type: "object", Required: true, Desc: "a value for every parameter of the search space"},
 		{Name: "note", Type: "string", Desc: "one or two sentences: why this trial (at most 500 characters)"},
 	},
@@ -248,7 +248,7 @@ var searchStatus = Tool{
 	Name: "search_status", CLI: "search-status",
 	Desc: "Shows a training search: budget used and left, every trial with its parameters, validation value and state, " +
 		"the best trial and the user's hints. Read it before you choose the next trial; never repeat a trial.",
-	Params: []Param{{Name: "search_id", Type: "string", Required: true, Desc: "id of the search, from propose_search"}},
+	Params: []Param{{Name: "search_id", Type: "string", Required: true, Desc: "id of the search, from {{tool:propose_search}}"}},
 	build: func(a Args) (Request, error) {
 		id, err := searchID(a)
 		if err != nil {
@@ -288,7 +288,7 @@ var endSearch = Tool{
 var cloneTraining = Tool{
 	Name: "clone_training", CLI: "clone-training",
 	Desc: "Creates a copy of a built training container with other train_config values, without building a new image (effect write). " +
-		"Inside a training search use the values search_next names.",
+		"Inside a training search use the values {{tool:search_next}} names.",
 	Params: []Param{
 		{Name: "container_id", Type: "integer", Required: true, Desc: "id of the built training container to copy"},
 		{Name: "train_config", Type: "object", Required: true, Desc: "the configuration of the copy: the values of the base with the changes"},

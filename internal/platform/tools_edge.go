@@ -213,20 +213,20 @@ func listDeploymentsSteps(ctx context.Context, _ Args, final Request, do Doer) (
 // (edge D2.4). Nothing runs yet; start_deployment starts it.
 var createDeploymentTool = Tool{
 	Name: "create_deployment", CLI: "create-deployment",
-	Desc: "Creates a deployment of an inference image on an edge device; nothing runs yet (start it with platform_start_deployment). " +
+	Desc: "Creates a deployment of an inference image on an edge device; nothing runs yet (start it with {{tool:start_deployment}}). " +
 		"Checks first: device registered and online, image in the registry with the device's architecture and not a training image, host ports 18100-18199 not used by another deployment on the device. " +
 		"The container is named agw-<name> and exposes Triton's HTTP port 8000 on host_port (grpc 8001 and metrics 8002 optional). " +
 		"Only images built in this chat or from the user's own repository can be deployed. Writes; the user must approve.",
 	Write: true,
 	Params: []Param{
-		{Name: "device_id", Type: "integer", Desc: "id of the edge device (platform_list_edge_devices)", Required: true},
+		{Name: "device_id", Type: "integer", Desc: "id of the edge device ({{tool:list_edge_devices}})", Required: true},
 		{Name: "repository", Type: "string", Desc: "repository of the image, <owner>/<name>, e.g. agent-test/mnist-triton", Required: true},
 		{Name: "tag", Type: "string", Desc: "tag of the image, e.g. v1", Required: true},
 		{Name: "name", Type: "string", Desc: "name of the deployment without the agw- prefix; lowercase letters, digits and . _ -, e.g. mnist", Required: true},
 		{Name: "host_port", Type: "integer", Desc: "host port on the device for Triton's HTTP port 8000 (18100-18199)", Required: true},
 		{Name: "grpc_host_port", Type: "integer", Desc: "host port for Triton's gRPC port 8001 (18100-18199, optional)"},
 		{Name: "metrics_host_port", Type: "integer", Desc: "host port for Triton's metrics port 8002 (18100-18199, optional)"},
-		{Name: "image_id", Type: "integer", Desc: "identifier of the image as platform_container_image_status shows it; optional, only to make a plan step identical to the later call"},
+		{Name: "image_id", Type: "integer", Desc: "identifier of the image as {{tool:container_image_status}} shows it; optional, only to make a plan step identical to the later call"},
 	},
 	build: func(a Args) (Request, error) {
 		deviceID, err := requiredInt(a, "device_id")
@@ -384,7 +384,7 @@ func createDeploymentSteps(ctx context.Context, a Args, _ Request, do Doer) (Res
 	}
 	switch {
 	case device == nil:
-		return Refuse("%s is not in the platform's device list; platform_list_edge_devices lists the devices", "device "+strconv.FormatInt(deviceID, 10))
+		return Refuse("%s is not in the platform's device list; {{tool:list_edge_devices}} lists the devices", "device "+strconv.FormatInt(deviceID, 10))
 	case !device.Registered:
 		return Refuse("%s is not registered with the platform (registered=false); a deployment on it would fail", deviceText(*device))
 	case !DeviceOnline(device.LastHeartbeat, now):
@@ -399,7 +399,7 @@ func createDeploymentSteps(ctx context.Context, a Args, _ Request, do Doer) (Res
 			return res, "", err
 		}
 		if res.Status == "error" && res.HTTPStatus == http.StatusNotFound {
-			return Refuse("image %s is not in the platform's registry; build it with platform_build_inference_image or check platform_container_image_status", image)
+			return Refuse("image %s is not in the platform's registry; build it with {{tool:build_inference_image}} or check {{tool:container_image_status}}", image)
 		}
 		if res.Status != "ok" || res.HTTPStatus < 200 || res.HTTPStatus >= 300 {
 			return res, "", nil
@@ -458,7 +458,7 @@ func createDeploymentSteps(ctx context.Context, a Args, _ Request, do Doer) (Res
 	dec := json.NewDecoder(strings.NewReader(res.Body))
 	dec.UseNumber()
 	if dec.Decode(&created) == nil && created != nil {
-		created["next"] = "start it with platform_start_deployment (approval; compute)"
+		created["next"] = "start it with {{tool:start_deployment}} (approval; compute)"
 		res.Body = jsonBody(created)
 	}
 	return res, "", nil
@@ -540,9 +540,9 @@ var startDeploymentTool = Tool{
 	Name: "start_deployment", CLI: "start-deployment",
 	Desc: "Starts a deployment created in this chat: the edge device pulls the image (several GB the first time) and starts the container with network access. " +
 		"Effect compute: the user approves every start, also inside a plan, and it counts against the compute calls of the chat. " +
-		"Response: the task (/tasks/<id>); follow it with platform_deployment_status.",
+		"Response: the task (/tasks/<id>); follow it with {{tool:deployment_status}}.",
 	Write:  true,
-	Params: []Param{{Name: "deployment_id", Type: "integer", Desc: "id of the deployment (platform_list_deployments or the answer of platform_create_deployment)", Required: true}},
+	Params: []Param{{Name: "deployment_id", Type: "integer", Desc: "id of the deployment ({{tool:list_deployments}} or the answer of {{tool:create_deployment}})", Required: true}},
 	build:  byID(http.MethodPut, "/container-deployments", "deployment_id", "/deploy"),
 	steps:  startDeploymentSteps,
 }
@@ -556,7 +556,7 @@ func startDeploymentSteps(ctx context.Context, a Args, final Request, do Doer) (
 			return res, "", err
 		}
 		if res.Status == "error" && res.HTTPStatus == http.StatusNotFound {
-			return Refuse("deployment %d is not in the platform; platform_list_deployments lists them", id)
+			return Refuse("deployment %d is not in the platform; {{tool:list_deployments}} lists them", id)
 		}
 		if res.Status != "ok" || res.HTTPStatus < 200 || res.HTTPStatus >= 300 {
 			return res, "", nil
@@ -589,7 +589,7 @@ func startDeploymentSteps(ctx context.Context, a Args, final Request, do Doer) (
 	res.Body = jsonBody(map[string]any{
 		"deployment_id": id,
 		"task":          res.Location,
-		"note":          "the platform starts the container in the background; the first start pulls the image (several GB). Follow the task with platform_deployment_status",
+		"note":          "the platform starts the container in the background; the first start pulls the image (several GB). Follow the task with {{tool:deployment_status}}",
 	})
 	return res, "", nil
 }

@@ -181,7 +181,7 @@ var splitDataset = Tool{
 	Name: "split_dataset", CLI: "split-dataset",
 	Desc: "Splits an annotated classification dataset into a training dataset and images that are kept back for a check " +
 		"(70 % of the images per class go into a new dataset, by default named <dataset>-train; the rest is kept back and " +
-		"the gateway alone decides which). Train on the training dataset afterwards: only then can assess_model measure " +
+		"the gateway alone decides which). Train on the training dataset afterwards: only then can {{tool:assess_model}} measure " +
 		"the model on images it did not see. Needs approval: it creates a dataset and downloads the source, which also " +
 		"syncs its CVAT annotations. The answer names both counts.",
 	Write: true,
@@ -227,19 +227,19 @@ var assessModel = Tool{
 	Name: "assess_model", CLI: "assess-model",
 	Desc: "Starts a check of a result: the gateway runs the model in a container of its own on images the model " +
 		"did not see and reports accuracy, the figures per class, the majority baseline and a verdict " +
-		"(usable, questionable, not measured). It answers at once with a check_id; follow it with assess_status, whose " +
+		"(usable, questionable, not measured). It answers at once with a check_id; follow it with {{tool:assess_status}}, whose " +
 		"report starts with the header to begin your reply with (the gateway also wakes you when it is done). " +
 		"final=true measures the hold-out set and works once per dataset and chat: use it only when the model will not " +
 		"change any more; compare a retrained model with final=false. Needs approval; it downloads the model, the " +
 		"training log and the datasets (which syncs their CVAT annotations) and reads the model's own figures. " +
-		"Give the model either as model_id (a platform model of this chat) or as path (a file the notebook_fetch of " +
+		"Give the model either as model_id (a platform model of this chat) or as path (a file the {{tool:notebook_fetch}} of " +
 		"this chat wrote into the sandbox, e.g. /workspace/notebook/<run>/model.onnx): the gateway checks the file " +
-		"itself, before upload_model, and answers not measured with an unknown origin for a file that no run of this " +
+		"itself, before {{tool:upload_model}}, and answers not measured with an unknown origin for a file that no run of this " +
 		"chat handed over.",
 	Write: true,
 	Params: []Param{
 		{Name: "model_id", Type: "integer", Desc: "id of the platform model to check (either this or path)"},
-		{Name: "path", Type: "string", Desc: "model file in the sandbox that notebook_fetch brought out of a run of this chat (either this or model_id)", Path: true},
+		{Name: "path", Type: "string", Desc: "model file in the sandbox that {{tool:notebook_fetch}} brought out of a run of this chat (either this or model_id)", Path: true},
 		{Name: "eval_dataset_id", Type: "integer", Desc: "dataset to measure on (default: the dataset the seen training dataset was split from)"},
 		{Name: "final", Type: "boolean", Desc: "true: measure the hold-out set (once per dataset and chat), default false"},
 		{Name: "class_names", Type: "array", Desc: "for path: the class names in the order the outputs of your model mean them, e.g. [\"0\",\"1\"] (taken from outputs/model.json of the run when it wrote one); the gateway compares this order with the order it derives from images the model saw"},

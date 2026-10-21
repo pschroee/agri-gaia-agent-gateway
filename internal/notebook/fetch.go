@@ -67,7 +67,7 @@ func (n *Notebooks) fetch(ctx context.Context, chatID, runID, path string) (stri
 	if code != 0 {
 		switch code {
 		case 3:
-			return "", nil, "", fmt.Errorf("%s is not in run %s; notebook_run_status lists the files of the run", path, runID)
+			return "", nil, "", fmt.Errorf("%s is not in run %s; {{tool:notebook_run_status}} lists the files of the run", path, runID)
 		case 4:
 			return "", nil, "", fmt.Errorf("%s does not lie in the run directory (a symbolic link out of it is refused)", path)
 		case 5:
@@ -120,7 +120,7 @@ func (n *Notebooks) fetchResult(ctx context.Context, chatID, runID string, req p
 	}
 	name, data, note, err := n.fetch(ctx, chatID, runID, path)
 	if errors.Is(err, store.ErrNotFound) {
-		return errorResult("%s is not a run of this chat; notebook_runs lists them", runID)
+		return errorResult("%s is not a run of this chat; {{tool:notebook_runs}} lists them", runID)
 	}
 	if err != nil {
 		return errorResult("%v", err)

@@ -430,7 +430,7 @@ func TestNotebookNotConfigured(t *testing.T) {
 	if res.Status != platform.StatusUnavailable || !strings.Contains(res.Message, "not configured on this instance") {
 		t.Fatalf("status: %+v", res)
 	}
-	if !strings.Contains(res.Message, "capabilities shows what this setup offers") {
+	if !strings.Contains(res.Message, "{{tool:capabilities}} shows what this setup offers") {
 		t.Errorf("the answer does not point at the overview: %q", res.Message)
 	}
 	// A run without the capability costs neither a compute call nor an approval.

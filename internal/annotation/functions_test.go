@@ -184,7 +184,7 @@ func TestFunctionBuild(t *testing.T) {
 		answer.PlatformTask != "7" || answer.Reused {
 		t.Fatalf("build: %+v", answer)
 	}
-	if !strings.Contains(answer.Note, "task 7") || !strings.Contains(answer.Note, "annotation-functions shows state ready") {
+	if !strings.Contains(answer.Note, "task_id=7") || !strings.Contains(answer.Note, "{{tool:annotation_functions}} shows state ready") {
 		t.Errorf("the note does not say how to follow the build: %q", answer.Note)
 	}
 	if builds, sizes := e.pf.buildsOf(); builds != 1 || sizes[0] == 0 {
@@ -562,7 +562,7 @@ func TestRunNotReadyFunction(t *testing.T) {
 	// CVAT does not list it yet (it is building), so the run has nothing to start.
 	res := e.do(t, chatID, http.MethodPost, platform.AnnotationPrefix+"/runs",
 		`{"dataset_id":5,"function":"`+name+`","min_confidence":50,"mapping":{"class_0":"0"},"existing":"keep"}`)
-	if res.Status != "denied" || !strings.Contains(res.Message, "is deploying; annotation_functions follows the build") {
+	if res.Status != "denied" || !strings.Contains(res.Message, "is deploying; {{tool:annotation_functions}} follows the build") {
 		t.Fatalf("a function that is building: %+v", res)
 	}
 	if len(e.fc.bodies()) != 0 {

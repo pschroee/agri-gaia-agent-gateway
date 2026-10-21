@@ -312,8 +312,8 @@ func pathExt(name string) string {
 func NotebookCallRefusal(r Request) string {
 	p := strings.ToLower(r.Path)
 	if p == NotebookPrefix || strings.HasPrefix(p, NotebookPrefix+"/") {
-		return "notebook calls go through the notebook tools (notebook_status, notebook_run, notebook_runs, " +
-			"notebook_run_status, notebook_log, notebook_fetch, notebook_stop); files of a run are read from the sandbox"
+		return "notebook calls go through the notebook tools ({{tool:notebook_status}}, {{tool:notebook_run}}, {{tool:notebook_runs}}, " +
+			"{{tool:notebook_run_status}}, {{tool:notebook_log}}, {{tool:notebook_fetch}}, {{tool:notebook_stop}}); files of a run are read from the sandbox"
 	}
 	return ""
 }
@@ -329,7 +329,7 @@ var notebookStatus = Tool{
 
 var notebookRun = Tool{
 	Name: "notebook_run", CLI: "notebook-run",
-	Desc: "Runs your own code in this chat's notebook server in JupyterHub (2 CPUs, 8 GB, a shared GPU if this instance has one - notebook_status says, no internet, no platform access). " +
+	Desc: "Runs your own code in this chat's notebook server in JupyterHub (2 CPUs, 8 GB, a shared GPU if this instance has one - {{tool:notebook_status}} says, no internet, no platform access). " +
 		"Effect compute: the user approves every run and sees all code; a plan never covers it. Platform datasets in dataset_ids are unpacked to " +
 		"/home/jovyan/work/datasets/<id>/ before the run. Test the code in the sandbox on a small sample first. " +
 		"One run at a time; returns the run id and a link for the user. A note of yours (optional) is shown to the user " +
@@ -417,7 +417,7 @@ var notebookRunStatus = Tool{
 	Name: "notebook_run_status", CLI: "notebook-run-status",
 	Desc: "State, exit code, duration and the files of a run.",
 	Params: []Param{
-		{Name: "run_id", Type: "string", Required: true, Desc: "id of the run (r<date>-<hex>, from notebook_run)"},
+		{Name: "run_id", Type: "string", Required: true, Desc: "id of the run (r<date>-<hex>, from {{tool:notebook_run}})"},
 	},
 	build: func(a Args) (Request, error) {
 		id, err := notebookRunID(a)
@@ -432,7 +432,7 @@ var notebookLog = Tool{
 	Name: "notebook_log", CLI: "notebook-log",
 	Desc: "End of the output (stdout and stderr) of a run, by default the last 200 lines.",
 	Params: []Param{
-		{Name: "run_id", Type: "string", Required: true, Desc: "id of the run (r<date>-<hex>, from notebook_run)"},
+		{Name: "run_id", Type: "string", Required: true, Desc: "id of the run (r<date>-<hex>, from {{tool:notebook_run}})"},
 		{Name: "tail", Type: "integer", Desc: "the last N lines (default 200, at most 2000)"},
 	},
 	build: func(a Args) (Request, error) {
@@ -458,9 +458,9 @@ var notebookLog = Tool{
 var notebookFetch = Tool{
 	Name: "notebook_fetch", CLI: "notebook-fetch",
 	Desc: "Copies a result file of a run (at most 64 MB) into the sandbox under /workspace/notebook/<run_id>/; " +
-		"upload a model from there with upload_model.",
+		"upload a model from there with {{tool:upload_model}}.",
 	Params: []Param{
-		{Name: "run_id", Type: "string", Required: true, Desc: "id of the run (r<date>-<hex>, from notebook_run)"},
+		{Name: "run_id", Type: "string", Required: true, Desc: "id of the run (r<date>-<hex>, from {{tool:notebook_run}})"},
 		{Name: "path", Type: "string", Required: true, Desc: "path of the file inside the run directory, e.g. model.onnx or out/model.onnx"},
 	},
 	build: func(a Args) (Request, error) {
@@ -510,7 +510,7 @@ func notebookRunID(a Args) (string, error) {
 		return "", err
 	}
 	if !NotebookRunIDRe.MatchString(id) {
-		return "", fmt.Errorf("run_id %q invalid: notebook_runs lists the runs of this chat", id)
+		return "", fmt.Errorf("run_id %q invalid: {{tool:notebook_runs}} lists the runs of this chat", id)
 	}
 	return id, nil
 }

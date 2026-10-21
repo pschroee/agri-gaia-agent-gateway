@@ -244,7 +244,7 @@ func TestUnregisteredVirtualPrefix(t *testing.T) {
 	for _, want := range []string{
 		"notebook is not available in this setup:",
 		"/_agw/notebook is not configured on this instance",
-		"capabilities shows what this setup offers.",
+		"{{tool:capabilities}} shows what this setup offers.",
 	} {
 		if !strings.Contains(res.Message, want) {
 			t.Errorf("message without %q: %s", want, res.Message)

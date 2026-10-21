@@ -824,7 +824,7 @@ func (s *Service) verifySource(ctx context.Context, chatID, sourceID string) (so
 	}
 	row, err := s.St.AnnotationJob(ctx, chatID, sourceID)
 	if errors.Is(err, store.ErrNotFound) {
-		return sourceSpec{}, fmt.Errorf("unknown run or job %q in this chat; a verification judges a run (annotation-run) or a fill (annotation-job)", sourceID)
+		return sourceSpec{}, fmt.Errorf("unknown run or job %q in this chat; a verification judges a run ({{tool:annotation_run}}) or a fill ({{tool:annotation_job}})", sourceID)
 	}
 	if err != nil {
 		return sourceSpec{}, err

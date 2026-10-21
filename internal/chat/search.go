@@ -102,7 +102,7 @@ func (m *Manager) ProposeSearch(ctx context.Context, chatID, slotID, via string,
 		return searchErr(err.Error())
 	}
 	if running, err := m.st.RunningSearch(ctx, chatID); err == nil {
-		return searchErr(fmt.Sprintf("training search %s is still running in this chat; end it first (end_search)", running.ID))
+		return searchErr(fmt.Sprintf("training search %s is still running in this chat; end it first ({{tool:end_search}})", running.ID))
 	} else if !errors.Is(err, store.ErrNotFound) {
 		return platform.Result{}, err
 	}
@@ -256,9 +256,9 @@ func (m *Manager) ProposeSearch(ctx context.Context, chatID, slotID, via string,
 func approvedSearchText(id string, p search.Proposal, d SearchApprovalData) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Search %s approved: %q, %s, objective %s (%s). ", id, d.Title, budgetText(d.Budget), p.Objective.Metric, p.Objective.Mode)
-	b.WriteString("Declare the first trial with search_next (search_id, params naming every parameter of the space, note: why this trial); ")
+	b.WriteString("Declare the first trial with {{tool:search_next}} (search_id, params naming every parameter of the space, note: why this trial); ")
 	b.WriteString("then make exactly the calls its answer names. They need no approval. After every trial the gateway tells you the result and you declare the next, ")
-	b.WriteString("until the search ends. Never repeat a trial; read search_status before you choose.")
+	b.WriteString("until the search ends. Never repeat a trial; read {{tool:search_status}} before you choose.")
 	return b.String()
 }
 
@@ -287,7 +287,7 @@ func (m *Manager) readTemplateBase(ctx context.Context, chatID string, read plat
 		return templateBase{}, 0, "", err
 	}
 	if !own {
-		return templateBase{}, 0, fmt.Sprintf("training container %s is not one this chat made; build one with create_training first", id), nil
+		return templateBase{}, 0, fmt.Sprintf("training container %s is not one this chat made; build one with {{tool:create_training}} first", id), nil
 	}
 	if read == nil {
 		return templateBase{}, 0, "the platform is not configured", nil
