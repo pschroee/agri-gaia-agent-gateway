@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"agw/internal/netgrant"
 	"agw/internal/store"
 )
 
@@ -90,7 +91,7 @@ func TestTrashedChatRefusesWork(t *testing.T) {
 	if err != nil || res.Status != "rejected" || !strings.Contains(res.Message, "chat is in the trash") {
 		t.Fatalf("Upload of a trashed chat: %+v %v", res, err)
 	}
-	inet, err := e.m.RequestInternet(ctx, id, "", "cli", "why")
+	inet, err := e.m.RequestInternet(ctx, id, "", "cli", netgrant.Spec{Kind: netgrant.Search, Reason: "why"})
 	if err != nil || inet.Status != "rejected" {
 		t.Fatalf("RequestInternet of a trashed chat: %+v %v", inet, err)
 	}

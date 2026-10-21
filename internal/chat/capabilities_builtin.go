@@ -7,6 +7,7 @@ package chat
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"agw/internal/config"
 	"agw/internal/toolset"
@@ -102,8 +103,9 @@ func setupVision(s Setup) Capability {
 	return c
 }
 
-// capabilityInternet: is internet switched on in this chat right now? Off is the default, and the agent
-// can request it for a task (the user decides).
+// capabilityInternet: does an internet grant cover this chat right now? Off is the default, and the agent
+// can request a kind of access for a task (the user decides). With grants the detail names each one
+// (kind, list, end and data left; issue #175).
 func capabilityInternet(ctx context.Context, m *Manager, chatID string) Capability {
 	c := Capability{
 		Available: m.InternetOn(ctx, chatID),
@@ -111,8 +113,23 @@ func capabilityInternet(ctx context.Context, m *Manager, chatID string) Capabili
 	}
 	if c.Available {
 		c.Detail = "internet is on in this chat"
+		var parts []string
+		for _, g := range m.ActiveGrantViews(chatID) {
+			left := max(g.MaxBytes-g.Bytes, 0) >> 20
+			what := g.Kind
+			if len(g.Domains) > 0 {
+				what += " " + strings.Join(g.Domains, ", ")
+			}
+			if g.ExpiresAt != nil {
+				what += " until " + g.ExpiresAt.UTC().Format("15:04")
+			}
+			parts = append(parts, fmt.Sprintf("%s, %d MB left (grant %d)", what, left, g.ID))
+		}
+		if len(parts) > 0 {
+			c.Detail += ": " + strings.Join(parts, "; ")
+		}
 	} else {
-		c.Detail = "internet is off in this chat; you can request it for a task and the user decides"
+		c.Detail = "internet is off in this chat; you can request a kind of access (search, domains, packages or full) for a task and the user decides"
 	}
 	return c
 }

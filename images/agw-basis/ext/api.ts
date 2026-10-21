@@ -6,7 +6,8 @@
 //
 // Since issue #34 also request_internet (POST /internet, waits for the user's approval) and
 // disable_internet (POST /internet/off, no approval): the binding has no shell, so without them
-// it could neither ask for internet nor give it back.
+// it could neither ask for internet nor give it back. Since issue #175 a request names a kind (search or
+// domains here; packages and full need the command line) and may list host names.
 //
 // The extension is not a control point: it passes on method, path, query and body and shows
 // status and response. Checking happens only in the orchestrator.
@@ -107,29 +108,45 @@ export default function (pi: ExtensionAPI) {
 		name: "request_internet",
 		label: "Request internet",
 		description:
-			"Asks the user for internet access for this sandbox (off by default), e.g. for web research. Give a short, concrete reason; the call waits for the user's decision. Switch it off again with disable_internet once you are done.",
-		promptSnippet: "request_internet: ask the user for internet access (with a reason; waits for the decision)",
+			"Asks the user for internet access, only as much as the task needs. kind: search (web_search and web_extract only), domains (https downloads from the listed host names, no wildcards). Give a short, concrete reason; the call waits for the user's decision. Access ends by itself after a time or data limit; switch it off earlier with disable_internet.",
+		promptSnippet: "request_internet: ask the user for internet access of one kind (search or domains), with a reason; waits for the decision",
 		parameters: {
 			type: "object",
-			properties: { reason: { type: "string", description: "Reason for the user: what is internet needed for?" } },
-			required: ["reason"],
+			properties: {
+				kind: { type: "string", enum: ["search", "domains"], description: "search: web_search and web_extract only. domains: https to the listed host names." },
+				reason: { type: "string", description: "Short, concrete reason for the user: what is the access needed for?" },
+				domains: { type: "array", items: { type: "string" }, description: "kind domains: exact host names, no wildcards, at most 10" },
+				minutes: { type: "integer", description: "Proposed duration in minutes; the gateway limits it." },
+				megabytes: { type: "integer", description: "Proposed data limit in MB; the gateway limits it." },
+			},
+			required: ["kind", "reason"],
 		},
 		async execute(_toolCallId: string, params: any, signal: AbortSignal) {
-			const reason = typeof params?.reason === "string" ? params.reason : "";
-			const r = await postSocket("/internet", { reason }, signal);
-			const text = r?.status === "approved" ? `approved: ${r.message ?? ""}` : `rejected: ${r?.message ?? ""}`;
-			return { content: [{ type: "text", text }], details: { status: r?.status } };
+			const body: Record<string, unknown> = {
+				kind: typeof params?.kind === "string" ? params.kind : "",
+				reason: typeof params?.reason === "string" ? params.reason : "",
+			};
+			if (Array.isArray(params?.domains)) body.domains = params.domains.filter((d: unknown) => typeof d === "string");
+			if (Number.isInteger(params?.minutes)) body.minutes = params.minutes;
+			if (Number.isInteger(params?.megabytes)) body.megabytes = params.megabytes;
+			const r = await postSocket("/internet", body, signal);
+			const word = r?.status === "approved" || r?.status === "refused" ? r.status : "rejected";
+			return { content: [{ type: "text", text: `${word}: ${r?.message ?? ""}` }], details: { status: r?.status } };
 		},
 	});
 	pi.registerTool({
 		name: "disable_internet",
 		label: "Switch internet off",
 		description:
-			"Switches internet access for this sandbox off again, once downloads or web research are done. Needs no approval; if internet is already off, nothing changes.",
-		promptSnippet: "disable_internet: switch internet access off again (no approval needed)",
-		parameters: { type: "object", properties: {} },
-		async execute(_toolCallId: string, _params: any, signal: AbortSignal) {
-			const r = await postSocket("/internet/off", undefined, signal);
+			"Ends internet access for this chat again (all grants, or the one named by grant_id), once downloads or web research are done. Needs no approval; if nothing is active, nothing changes.",
+		promptSnippet: "disable_internet: end internet access again (no approval needed)",
+		parameters: {
+			type: "object",
+			properties: { grant_id: { type: "integer", description: "The grant to end; omit to end all." } },
+		},
+		async execute(_toolCallId: string, params: any, signal: AbortSignal) {
+			const body = Number.isInteger(params?.grant_id) ? { grant_id: params.grant_id } : undefined;
+			const r = await postSocket("/internet/off", body, signal);
 			return { content: [{ type: "text", text: `${r?.status}: ${r?.message ?? ""}` }], details: { status: r?.status } };
 		},
 	});

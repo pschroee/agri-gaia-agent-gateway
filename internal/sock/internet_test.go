@@ -10,6 +10,9 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"agw/internal/netgrant"
+	"agw/internal/store"
 )
 
 func postInternetOff(t *testing.T, c *http.Client) (int, UploadResult) {
@@ -100,7 +103,7 @@ func TestInternetOffUnassigned(t *testing.T) {
 func TestInternetRequestViaRESTBinding(t *testing.T) {
 	b := &fakeBackend{chat: "chat-8", decide: "approved"}
 	pi := listenHandler(t, NewPiHandler("p-test", b, 1<<20, &fakeRunner{}, &fakeRecorder{}))
-	resp, err := pi.Post("http://agw/internet", "application/json", strings.NewReader(`{"reason":"pip install torch"}`))
+	resp, err := pi.Post("http://agw/internet", "application/json", strings.NewReader(`{"kind":"search","reason":"pip install torch"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,5 +129,87 @@ func TestMCPListsDisableInternet(t *testing.T) {
 	}
 	if !names["disable_internet"] || !names["request_internet"] {
 		t.Fatalf("tools: %v", names)
+	}
+}
+
+// Issue #175: a request needs a valid kind. Without one (the old form) the socket answers 400 and nothing reaches the
+// backend; the refusal is logged. With one, kind, list and proposed limits arrive as the spec.
+func TestInternetRequestKinds(t *testing.T) {
+	b := &fakeBackend{chat: "chat-9", decide: "approved"}
+	exec := listenHandler(t, NewHandlerRun("p-test", b, 1<<20, nil))
+	post := func(body string) (int, string) {
+		resp, err := exec.Post("http://agw/internet", "application/json", strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var m map[string]any
+		_ = json.NewDecoder(resp.Body).Decode(&m)
+		s, _ := m["error"].(string)
+		return resp.StatusCode, s
+	}
+	for _, body := range []string{`{"reason":"pip install x"}`, `{"kind":"","reason":"x"}`, `{"kind":"everything","reason":"x"}`} {
+		code, msg := post(body)
+		if code != http.StatusBadRequest || !strings.Contains(msg, "search, domains, packages, full") {
+			t.Fatalf("%s: %d %q", body, code, msg)
+		}
+	}
+	if _, ups := b.snapshot(); len(ups) != 0 {
+		t.Fatalf("passed on: %v", ups)
+	}
+	if code, _ := post(`{"kind":"domains","reason":"flowers","domains":["download.tensorflow.org"],"minutes":45,"megabytes":800}`); code != 200 {
+		t.Fatalf("domains: %d", code)
+	}
+	if len(b.specs) != 1 {
+		t.Fatalf("specs: %+v", b.specs)
+	}
+	if sp := b.specs[0]; sp.Kind != netgrant.Domains || sp.Reason != "flowers" || len(sp.Domains) != 1 || sp.Domains[0] != "download.tensorflow.org" || sp.Minutes != 45 || sp.MB != 800 {
+		t.Fatalf("spec: %+v", sp)
+	}
+}
+
+// GET /internet lists the active grants; POST /internet/off passes an optional grant id on.
+func TestInternetStatusAndOffByGrant(t *testing.T) {
+	b := &fakeBackend{chat: "chat-10", internetOn: true, grants: []store.Grant{{ID: 7, Kind: "domains", Domains: []string{"a.example.org"}}}}
+	exec := listenHandler(t, NewHandlerRun("p-test", b, 1<<20, nil))
+	resp, err := exec.Get("http://agw/internet")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out struct {
+		Grants []store.Grant `json:"grants"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&out)
+	resp.Body.Close()
+	if resp.StatusCode != 200 || len(out.Grants) != 1 || out.Grants[0].ID != 7 {
+		t.Fatalf("status: %d %+v", resp.StatusCode, out)
+	}
+	resp, err = exec.Post("http://agw/internet/off", "application/json", strings.NewReader(`{"grant_id":7}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if len(b.offGrants) != 1 || b.offGrants[0] != 7 {
+		t.Fatalf("off grants: %v", b.offGrants)
+	}
+	calls, _ := b.snapshot()
+	if !slices.Contains(calls, "cli:internet_off:off") || !slices.Contains(b.details, "grant 7") {
+		t.Fatalf("log: %v %v", calls, b.details)
+	}
+}
+
+// The MCP tool request_internet carries kind, reason and list; a missing kind is refused before the backend.
+func TestMCPRequestInternetKind(t *testing.T) {
+	b := &fakeBackend{chat: "chat-11", decide: "approved"}
+	pi := listenHandler(t, NewPiHandler("p-test", b, 1<<20, &fakeRunner{}, &fakeRecorder{}))
+	res := mcpCall(t, pi, "tools/call", map[string]any{"name": "request_internet", "arguments": map[string]any{"reason": "x"}})
+	txt := res["content"].([]any)[0].(map[string]any)["text"].(string)
+	if res["isError"] != true || !strings.HasPrefix(txt, "refused:") {
+		t.Fatalf("no kind: %v", res)
+	}
+	res = mcpCall(t, pi, "tools/call", map[string]any{"name": "request_internet", "arguments": map[string]any{"kind": "domains", "reason": "x", "domains": []string{"a.example.org"}}})
+	txt = res["content"].([]any)[0].(map[string]any)["text"].(string)
+	if res["isError"] == true || !strings.HasPrefix(txt, "approved:") || len(b.specs) != 1 || b.specs[0].Domains[0] != "a.example.org" {
+		t.Fatalf("domains: %v %+v", res, b.specs)
 	}
 }

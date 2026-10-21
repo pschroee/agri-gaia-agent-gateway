@@ -18,6 +18,7 @@ import (
 	"agw/internal/artifacts"
 	"agw/internal/config"
 	"agw/internal/llmproxy"
+	"agw/internal/netgrant"
 	"agw/internal/pool"
 	"agw/internal/rpc"
 	"agw/internal/sock"
@@ -35,6 +36,7 @@ type fakeAgent struct {
 	files    map[string][]byte
 	internet bool
 	netCalls int    // SetInternet calls
+	netBytes int64  // what NetBytes reports
 	traces   []bool // SetExecTrace calls (X7.6/#152)
 	closed   bool
 	reason   string // teardown reason passed by the pool (issue #55)
@@ -313,6 +315,13 @@ func (a *fakeAgent) SetInternet(_ context.Context, on bool) error {
 	a.netCalls++
 	a.mu.Unlock()
 	return nil
+}
+
+// NetBytes: the byte counters of the sandbox's interfaces (full internet grants, issue #175); a test sets netBytes.
+func (a *fakeAgent) NetBytes(context.Context) (int64, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.netBytes, nil
 }
 
 // SetExecTrace records the per-run syscall trace setting (X7.6/#152).
@@ -963,7 +972,7 @@ func TestInternetRequest(t *testing.T) {
 	defer cancel()
 	done := make(chan string, 1)
 	go func() {
-		r, _ := e.m.RequestInternet(ctx, c.ID, slot, "cli", "I need to install a Python library.")
+		r, _ := e.m.RequestInternet(ctx, c.ID, slot, "cli", netgrant.Spec{Kind: netgrant.Full, Reason: "I need to install a Python library."})
 		done <- r.Status
 	}()
 	ev := waitEvent(t, events, "approval", "")
@@ -981,11 +990,11 @@ func TestInternetRequest(t *testing.T) {
 		t.Fatalf("status: %s", s)
 	}
 	v, _ := e.m.View(ctx, c.ID)
-	if !e.agent(0).internet || !v.Internet {
-		t.Fatal("internet not on after approval")
+	if !e.agent(0).internet || !v.Internet || len(v.InternetGrants) != 1 || v.InternetGrants[0].Kind != "full" {
+		t.Fatalf("internet not on after approval: %+v", v.InternetGrants)
 	}
-	// Already on: approved immediately, without a new request.
-	r, _ := e.m.RequestInternet(ctx, c.ID, slot, "cli", "again")
+	// The same kind again: approved immediately, without a new request.
+	r, _ := e.m.RequestInternet(ctx, c.ID, slot, "cli", netgrant.Spec{Kind: netgrant.Full, Reason: "again"})
 	aps, _ := e.st.ListApprovals(ctx, "", c.ID)
 	if r.Status != "approved" || len(aps) != 1 {
 		t.Fatalf("second request: %+v, %d approvals", r, len(aps))
@@ -1002,7 +1011,7 @@ func TestInternetRequestRejected(t *testing.T) {
 	defer cancel()
 	done := make(chan string, 1)
 	go func() {
-		r, _ := e.m.RequestInternet(ctx, c.ID, slot, "mcp", "Fetching a web page")
+		r, _ := e.m.RequestInternet(ctx, c.ID, slot, "mcp", netgrant.Spec{Kind: netgrant.Search, Reason: "Fetching a web page"})
 		done <- r.Status
 	}()
 	ap := waitEvent(t, events, "approval", "").Data.(store.Approval)
@@ -1012,6 +1021,9 @@ func TestInternetRequestRejected(t *testing.T) {
 	}
 	if e.agent(0).internet {
 		t.Fatal("internet on despite rejection")
+	}
+	if gs, _ := e.st.Grants(ctx, c.ID); len(gs) != 1 || gs[0].State != store.GrantRejected {
+		t.Fatalf("grants: %+v", gs)
 	}
 }
 
@@ -1028,7 +1040,7 @@ func TestDisableInternet(t *testing.T) {
 	}
 	events, cancel := e.m.Subscribe(c.ID)
 	defer cancel()
-	r, err := e.m.DisableInternet(ctx, c.ID, slot, "cli")
+	r, err := e.m.DisableInternet(ctx, c.ID, slot, "cli", 0)
 	if err != nil || r.Status != sock.InternetOff {
 		t.Fatalf("off: %+v %v", r, err)
 	}
@@ -1044,7 +1056,7 @@ func TestDisableInternet(t *testing.T) {
 	calls := e.agent(0).netCalls
 	e.agent(0).mu.Unlock()
 	// Already off: success, no network change, no approval.
-	r, err = e.m.DisableInternet(ctx, c.ID, slot, "mcp")
+	r, err = e.m.DisableInternet(ctx, c.ID, slot, "mcp", 0)
 	if err != nil || r.Status != sock.InternetAlreadyOff {
 		t.Fatalf("already off: %+v %v", r, err)
 	}

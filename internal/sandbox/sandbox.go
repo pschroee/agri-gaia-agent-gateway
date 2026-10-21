@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -499,6 +500,30 @@ func (r *Runtime) SetInternet(ctx context.Context, id string, on bool) error {
 		return err
 	}
 	return r.detachCaches(ctx, id)
+}
+
+// NetBytes returns the bytes the container's network interfaces have received and sent together (Docker's counters;
+// the count of a full internet grant, issue #175). A container that restarts begins at zero again.
+func (r *Runtime) NetBytes(ctx context.Context, id string) (int64, error) {
+	res, err := r.cli.ContainerStats(ctx, id, client.ContainerStatsOptions{})
+	if err != nil {
+		return 0, err
+	}
+	defer res.Body.Close()
+	var st struct {
+		Networks map[string]struct {
+			RxBytes uint64 `json:"rx_bytes"`
+			TxBytes uint64 `json:"tx_bytes"`
+		} `json:"networks"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&st); err != nil {
+		return 0, err
+	}
+	var total uint64
+	for _, n := range st.Networks {
+		total += n.RxBytes + n.TxBytes
+	}
+	return int64(total), nil
 }
 
 func notConnected(err error) bool {

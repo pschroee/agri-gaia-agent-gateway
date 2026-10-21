@@ -478,3 +478,42 @@ func TestInternetStateUnassignedQuiet(t *testing.T) {
 		t.Fatalf("logged: %v", b.calls)
 	}
 }
+
+// toolStateBackend answers InternetState (issue #175): which of the web tools the chat's grants cover.
+type toolStateBackend struct {
+	fakeBackend
+	on, search, extract bool
+}
+
+func (b *toolStateBackend) InternetState(string) (bool, bool, bool) { return b.on, b.search, b.extract }
+
+// GET /tool/internet tells web-gate.ts per tool: a domains grant offers web_extract only, a search grant both;
+// a backend that only knows the switch (InternetOn) keeps offering both.
+func TestInternetStatePerTool(t *testing.T) {
+	get := func(b Backend) map[string]bool {
+		pi := listenHandler(t, NewPiHandler("p-test", b, 1<<20, &fakeRunner{}, &fakeRecorder{}))
+		resp, err := pi.Get("http://agw/tool/internet")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var r map[string]bool
+		_ = json.NewDecoder(resp.Body).Decode(&r)
+		if resp.StatusCode != 200 {
+			t.Fatalf("status %d", resp.StatusCode)
+		}
+		return r
+	}
+	for name, tc := range map[string]struct {
+		b    *toolStateBackend
+		want map[string]bool
+	}{
+		"domains": {&toolStateBackend{fakeBackend: fakeBackend{chat: "c"}, on: true, extract: true}, map[string]bool{"enabled": true, "search": false, "extract": true}},
+		"search":  {&toolStateBackend{fakeBackend: fakeBackend{chat: "c"}, on: true, search: true, extract: true}, map[string]bool{"enabled": true, "search": true, "extract": true}},
+		"none":    {&toolStateBackend{fakeBackend: fakeBackend{chat: "c"}}, map[string]bool{"enabled": false, "search": false, "extract": false}},
+	} {
+		if got := get(tc.b); got["enabled"] != tc.want["enabled"] || got["search"] != tc.want["search"] || got["extract"] != tc.want["extract"] {
+			t.Errorf("%s: %v, want %v", name, got, tc.want)
+		}
+	}
+}

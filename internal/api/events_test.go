@@ -15,6 +15,7 @@ import (
 
 	"agw/internal/chat"
 	"agw/internal/delegation"
+	"agw/internal/netgrant"
 	"agw/internal/oidc/oidctest"
 	"agw/internal/store"
 )
@@ -148,7 +149,7 @@ func TestEventsAcrossChats(t *testing.T) {
 
 	// The agent asks in Anna's second chat (not the one with the old approval). Without a waiting time
 	// the request expires at once: created, then resolved.
-	if _, err := m.RequestInternet(ctx, chatA2.ID, "", "cli", "pip install"); err != nil {
+	if _, err := m.RequestInternet(ctx, chatA2.ID, "", "cli", netgrant.Spec{Kind: netgrant.Search, Reason: "pip install"}); err != nil {
 		t.Fatal(err)
 	}
 	created := approvalOf(t, nextEvent(t, evA, "created"))
@@ -161,7 +162,7 @@ func TestEventsAcrossChats(t *testing.T) {
 
 	// Bert's own request reaches Bert; Anna's decision reaches Anna. Bert never sees Anna's events and
 	// Anna never Bert's: the next event on each stream is the user's own.
-	if _, err := m.RequestInternet(ctx, chatB.ID, "", "cli", "curl"); err != nil {
+	if _, err := m.RequestInternet(ctx, chatB.ID, "", "cli", netgrant.Spec{Kind: netgrant.Search, Reason: "curl"}); err != nil {
 		t.Fatal(err)
 	}
 	if code, body := call(t, a, "POST", srv.URL+"/api/approvals/"+old.ID, `{"approve":true}`); code != 200 {
@@ -185,7 +186,7 @@ func TestEventsAcrossChats(t *testing.T) {
 	// Disconnect: the subscription goes away, publishing goes on. After reconnecting the snapshot is
 	// the state now (the old approval decided, nothing pending).
 	stopA()
-	if _, err := m.RequestInternet(ctx, chatA1.ID, "", "cli", "while away"); err != nil {
+	if _, err := m.RequestInternet(ctx, chatA1.ID, "", "cli", netgrant.Spec{Kind: netgrant.Search, Reason: "while away"}); err != nil {
 		t.Fatal(err)
 	}
 	evA2, _, _ := openEvents(t, a, srv.URL)

@@ -128,6 +128,12 @@ func TestBridgeParity(t *testing.T) {
 	} else {
 		t.Logf("guard: %s", strings.ReplaceAll(strings.TrimSpace(tail(string(out), 220)), "\n", " | "))
 	}
+	// Unit tests of web-gate.ts (which web tools the internet grants put on offer, issue #175).
+	if out, _, err := rt.Exec(ctx, inst.ID, []string{"node", "--test", "/opt/pi/test/web-gate.test.mjs"}, nil); err != nil {
+		t.Errorf("web-gate: %v\n%s", err, tail(string(out), 3000))
+	} else {
+		t.Logf("web-gate: %s", strings.ReplaceAll(strings.TrimSpace(tail(string(out), 220)), "\n", " | "))
+	}
 	t.Logf("%d cases, %d differing, %d operations logged, files with full output in /tmp: %s", len(res.Results), bad, n, res.Leftovers)
 	if len(res.Results) < 40 && os.Getenv("PARITY_ONLY") == "" {
 		t.Fatalf("only %d cases ran", len(res.Results))

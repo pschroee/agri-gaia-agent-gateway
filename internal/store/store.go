@@ -311,6 +311,10 @@ type Approval struct {
 	// Search: the structured data of the approval of a training search, or of a changed code inside a running
 	// search (issue #168), built by the chat package and written as it is; empty for every other kind.
 	Search json.RawMessage `json:"search,omitempty"`
+	// Internet: the structured data of an internet_access approval (issue #175), built by the gateway from the
+	// normalised request — grant id, kind, host list, limits — and written as it is; the card shows it instead
+	// of the agent's reason, which is only a note. Empty for every other kind of approval.
+	Internet json.RawMessage `json:"internet,omitempty"`
 }
 
 type SocketCall struct {
@@ -714,7 +718,9 @@ VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
 	return err
 }
 
-// WebRequest is a request through the web proxy (web_requests).
+// WebRequest is a request through the web proxy (web_requests). Since issue #175 a row belongs to the grant that
+// decided it (GrantID, 0: none), names where it came from (Origin pi, exec or pkg), and may stand for several
+// connections (Count; Method "*" marks such a collapsed row, written once a grant has MaxRows single rows).
 type WebRequest struct {
 	ID         int64     `json:"id"`
 	ChatID     string    `json:"chat_id"`
@@ -730,27 +736,27 @@ type WebRequest struct {
 	Denied     string    `json:"denied,omitempty"`
 	StartedAt  time.Time `json:"started_at"`
 	DurationMs int64     `json:"duration_ms"`
+	GrantID    int64     `json:"grant_id,omitempty"`
+	Origin     string    `json:"origin"`
+	Package    string    `json:"package,omitempty"`
+	Version    string    `json:"version,omitempty"`
+	Parent     string    `json:"parent,omitempty"`
+	ToolCallID string    `json:"tool_call_id,omitempty"`
+	Count      int       `json:"count"`
 }
 
-func (s *Store) AddWebRequest(ctx context.Context, r WebRequest) (int64, error) {
-	var id int64
-	err := s.pool.QueryRow(ctx, `
-INSERT INTO web_requests (chat_id, slot_id, source_ip, method, host, port, path, status, bytes_up, bytes_down, denied, started_at, duration_ms)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id`,
-		r.ChatID, r.SlotID, r.SourceIP, r.Method, noNUL(r.Host), r.Port, noNUL(r.Path), r.Status, r.BytesUp, r.BytesDown, noNUL(r.Denied), r.StartedAt, r.DurationMs).Scan(&id)
-	return id, err
+// CollapsedMethod is the Method of a collapsed row of web_requests.
+const CollapsedMethod = "*"
+
+// webCols lists the columns of a WebRequest in scan order, with the table alias.
+func webCols(a string) string {
+	return fmt.Sprintf(`%[1]s.id, %[1]s.chat_id::text, %[1]s.slot_id, %[1]s.source_ip, %[1]s.method, %[1]s.host, %[1]s.port, %[1]s.path, %[1]s.status,
+	%[1]s.bytes_up, %[1]s.bytes_down, %[1]s.denied, %[1]s.started_at, %[1]s.duration_ms, COALESCE(%[1]s.grant_id,0), %[1]s.origin, %[1]s.package,
+	%[1]s.version, %[1]s.parent, %[1]s.tool_call_id, %[1]s.count`, a)
 }
 
-// FinishWebRequest completes a tunnel when it closes.
-func (s *Store) FinishWebRequest(ctx context.Context, id, up, down, durationMs int64, denied string) error {
-	return s.exec1(ctx, `UPDATE web_requests SET bytes_up=$2, bytes_down=$3, duration_ms=$4, denied=$5 WHERE id=$1`, id, up, down, durationMs, noNUL(denied))
-}
-
-// WebRequests returns a chat's requests through the web proxy.
-func (s *Store) WebRequests(ctx context.Context, chatID string) ([]WebRequest, error) {
-	rows, err := s.pool.Query(ctx, `
-SELECT id, chat_id::text, slot_id, source_ip, method, host, port, path, status, bytes_up, bytes_down, denied, started_at, duration_ms
-FROM web_requests WHERE chat_id = $1 ORDER BY id`, chatID)
+func (s *Store) queryWeb(ctx context.Context, q string, args ...any) ([]WebRequest, error) {
+	rows, err := s.pool.Query(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -758,12 +764,82 @@ FROM web_requests WHERE chat_id = $1 ORDER BY id`, chatID)
 	out := []WebRequest{}
 	for rows.Next() {
 		var r WebRequest
-		if err := rows.Scan(&r.ID, &r.ChatID, &r.SlotID, &r.SourceIP, &r.Method, &r.Host, &r.Port, &r.Path, &r.Status, &r.BytesUp, &r.BytesDown, &r.Denied, &r.StartedAt, &r.DurationMs); err != nil {
+		if err := rows.Scan(&r.ID, &r.ChatID, &r.SlotID, &r.SourceIP, &r.Method, &r.Host, &r.Port, &r.Path, &r.Status, &r.BytesUp, &r.BytesDown, &r.Denied,
+			&r.StartedAt, &r.DurationMs, &r.GrantID, &r.Origin, &r.Package, &r.Version, &r.Parent, &r.ToolCallID, &r.Count); err != nil {
 			return nil, err
 		}
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+// AddWebRequest inserts a request without a cap on the rows of its grant.
+func (s *Store) AddWebRequest(ctx context.Context, r WebRequest) (int64, error) {
+	return s.AddWebRequestCapped(ctx, r, 0)
+}
+
+// AddWebRequestCapped inserts a request. With maxRows > 0 and a grant, a grant that already has maxRows single rows
+// gets no further single row: the request is added to the collapsed row of its origin, host and outcome
+// (allowed or refused), which is created on first use (issue #175). The returned id is that of the row written.
+func (s *Store) AddWebRequestCapped(ctx context.Context, r WebRequest, maxRows int) (int64, error) {
+	if r.Origin == "" {
+		r.Origin = "pi"
+	}
+	if r.Count < 1 {
+		r.Count = 1
+	}
+	if maxRows > 0 && r.GrantID > 0 && r.Method != CollapsedMethod {
+		var n int
+		if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM web_requests WHERE grant_id=$1 AND method <> $2`, r.GrantID, CollapsedMethod).Scan(&n); err != nil {
+			return 0, err
+		}
+		if n >= maxRows {
+			var id int64
+			err := s.pool.QueryRow(ctx, `UPDATE web_requests SET count=count+1, bytes_up=bytes_up+$5, bytes_down=bytes_down+$6, duration_ms=duration_ms+$7
+				WHERE id = (SELECT id FROM web_requests WHERE grant_id=$1 AND method=$8 AND origin=$2 AND host=$3 AND (denied <> '') = $4 ORDER BY id LIMIT 1)
+				RETURNING id`, r.GrantID, r.Origin, noNUL(r.Host), r.Denied != "", r.BytesUp, r.BytesDown, r.DurationMs, CollapsedMethod).Scan(&id)
+			if err == nil {
+				return id, nil
+			}
+			if !errors.Is(err, pgx.ErrNoRows) {
+				return 0, err
+			}
+			r.Method, r.Path, r.Package, r.Version, r.Parent = CollapsedMethod, "", "", "", ""
+		}
+	}
+	var id int64
+	var grant *int64
+	if r.GrantID > 0 {
+		grant = &r.GrantID
+	}
+	err := s.pool.QueryRow(ctx, `
+INSERT INTO web_requests (chat_id, slot_id, source_ip, method, host, port, path, status, bytes_up, bytes_down, denied, started_at, duration_ms,
+	grant_id, origin, package, version, parent, tool_call_id, count)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20) RETURNING id`,
+		r.ChatID, r.SlotID, r.SourceIP, r.Method, noNUL(r.Host), r.Port, noNUL(r.Path), r.Status, r.BytesUp, r.BytesDown, noNUL(r.Denied), r.StartedAt, r.DurationMs,
+		grant, r.Origin, noNUL(r.Package), noNUL(r.Version), noNUL(r.Parent), r.ToolCallID, r.Count).Scan(&id)
+	return id, err
+}
+
+// FinishWebRequest completes a tunnel when it closes. A collapsed row adds the bytes to its total and keeps its
+// outcome; a single row takes the final values.
+func (s *Store) FinishWebRequest(ctx context.Context, id, up, down, durationMs int64, denied string) error {
+	return s.exec1(ctx, `UPDATE web_requests SET
+		bytes_up = CASE WHEN method = $6 THEN bytes_up + $2 ELSE $2 END,
+		bytes_down = CASE WHEN method = $6 THEN bytes_down + $3 ELSE $3 END,
+		duration_ms = CASE WHEN method = $6 THEN duration_ms + $4 ELSE $4 END,
+		denied = CASE WHEN method = $6 THEN denied ELSE $5 END
+		WHERE id=$1`, id, up, down, durationMs, noNUL(denied), CollapsedMethod)
+}
+
+// WebRequests returns a chat's requests through the web proxy.
+func (s *Store) WebRequests(ctx context.Context, chatID string) ([]WebRequest, error) {
+	return s.queryWeb(ctx, `SELECT `+webCols("w")+` FROM web_requests w WHERE w.chat_id = $1 ORDER BY w.id`, chatID)
+}
+
+// GrantWebRequests returns the requests of one grant of a chat.
+func (s *Store) GrantWebRequests(ctx context.Context, chatID string, grantID int64) ([]WebRequest, error) {
+	return s.queryWeb(ctx, `SELECT `+webCols("w")+` FROM web_requests w WHERE w.chat_id = $1 AND w.grant_id = $2 ORDER BY w.id`, chatID, grantID)
 }
 
 // AuxCalls returns the orchestrator's model calls for a chat.
@@ -979,12 +1055,12 @@ func (s *Store) DeleteUnsentInput(ctx context.Context, chatID, name string) (Art
 	return Artifact{}, ErrNotFound
 }
 
-const approvalCols = `id::text, chat_id::text, kind, via, name, size, sha256, content_type, pending_key, COALESCE(preview,''), state, created_at, decided_at, decided_by, session, tool_call_id, COALESCE(effect,''), COALESCE(summary,''), COALESCE(summary_proposed,''), summary_changed_at, COALESCE(notebook::text,''), COALESCE(uploads::text,''), COALESCE(search::text,'')`
+const approvalCols = `id::text, chat_id::text, kind, via, name, size, sha256, content_type, pending_key, COALESCE(preview,''), state, created_at, decided_at, decided_by, session, tool_call_id, COALESCE(effect,''), COALESCE(summary,''), COALESCE(summary_proposed,''), summary_changed_at, COALESCE(notebook::text,''), COALESCE(uploads::text,''), COALESCE(search::text,''), COALESCE(internet::text,'')`
 
 func scanApproval(row pgx.Row) (Approval, error) {
 	var a Approval
-	var notebook, uploads, search string
-	err := row.Scan(&a.ID, &a.ChatID, &a.Kind, &a.Via, &a.Name, &a.Size, &a.SHA256, &a.ContentType, &a.PendingKey, &a.Preview, &a.State, &a.CreatedAt, &a.DecidedAt, &a.DecidedBy, &a.Session, &a.ToolCallID, &a.Effect, &a.Summary, &a.SummaryProposed, &a.SummaryChangedAt, &notebook, &uploads, &search)
+	var notebook, uploads, search, internet string
+	err := row.Scan(&a.ID, &a.ChatID, &a.Kind, &a.Via, &a.Name, &a.Size, &a.SHA256, &a.ContentType, &a.PendingKey, &a.Preview, &a.State, &a.CreatedAt, &a.DecidedAt, &a.DecidedBy, &a.Session, &a.ToolCallID, &a.Effect, &a.Summary, &a.SummaryProposed, &a.SummaryChangedAt, &notebook, &uploads, &search, &internet)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return a, ErrNotFound
 	}
@@ -1000,6 +1076,9 @@ func scanApproval(row pgx.Row) (Approval, error) {
 	if search != "" {
 		a.Search = json.RawMessage(search)
 	}
+	if internet != "" {
+		a.Internet = json.RawMessage(internet)
+	}
 	return a, nil
 }
 
@@ -1008,9 +1087,9 @@ func scanApproval(row pgx.Row) (Approval, error) {
 // assigns one.
 func (s *Store) CreateApproval(ctx context.Context, a Approval) (Approval, error) {
 	return scanApproval(s.pool.QueryRow(ctx, `
-INSERT INTO approvals (id, chat_id, kind, via, name, size, sha256, content_type, pending_key, preview, session, tool_call_id, effect, summary, notebook, uploads, upload_entries, search)
-VALUES (COALESCE(NULLIF($1,'')::uuid, gen_random_uuid()),$2,$3,$4,$5,$6,$7,$8,$9,NULLIF($10,''),$11,$12,NULLIF($13,''),NULLIF($14,''),NULLIF($15,'')::jsonb,NULLIF($16,'')::jsonb,NULLIF($17,'')::jsonb,NULLIF($18,'')::jsonb) RETURNING `+approvalCols,
-		a.ID, a.ChatID, a.Kind, a.Via, a.Name, a.Size, a.SHA256, a.ContentType, a.PendingKey, a.Preview, a.Session, a.ToolCallID, a.Effect, a.Summary, string(a.Notebook), string(a.Uploads), string(a.UploadEntries), string(a.Search)))
+INSERT INTO approvals (id, chat_id, kind, via, name, size, sha256, content_type, pending_key, preview, session, tool_call_id, effect, summary, notebook, uploads, upload_entries, search, internet)
+VALUES (COALESCE(NULLIF($1,'')::uuid, gen_random_uuid()),$2,$3,$4,$5,$6,$7,$8,$9,NULLIF($10,''),$11,$12,NULLIF($13,''),NULLIF($14,''),NULLIF($15,'')::jsonb,NULLIF($16,'')::jsonb,NULLIF($17,'')::jsonb,NULLIF($18,'')::jsonb,NULLIF($19,'')::jsonb) RETURNING `+approvalCols,
+		a.ID, a.ChatID, a.Kind, a.Via, a.Name, a.Size, a.SHA256, a.ContentType, a.PendingKey, a.Preview, a.Session, a.ToolCallID, a.Effect, a.Summary, string(a.Notebook), string(a.Uploads), string(a.UploadEntries), string(a.Search), string(a.Internet)))
 }
 
 func (s *Store) GetApproval(ctx context.Context, id string) (Approval, error) {

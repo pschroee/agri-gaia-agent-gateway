@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"agw/internal/config"
+	"agw/internal/netgrant"
 	"agw/internal/sandbox"
 	"agw/internal/store"
 	"agw/internal/webproxy"
@@ -35,9 +36,17 @@ type webBackend struct {
 }
 
 func (b *webBackend) InternetOn(context.Context, string) bool { return b.internet.Load() }
-func (b *webBackend) WebAccess(string) (string, string, bool) {
-	return "chat-e9", "p", b.internet.Load()
+func (b *webBackend) Attribute(string) (string, string)       { return "chat-e9", "p" }
+
+// Decide: internet on is a full grant (issue #175), off is no grant.
+func (b *webBackend) Decide(_ string, o netgrant.Origin, host string, port int) netgrant.Decision {
+	if !b.internet.Load() {
+		return netgrant.Decide(nil, o, host, port)
+	}
+	return netgrant.Decide([]netgrant.Active{{ID: 1, Kind: netgrant.Full}}, o, host, port)
 }
+func (b *webBackend) Still(string, int64) (bool, string) { return b.internet.Load(), "switched off" }
+func (b *webBackend) Count(int64, int64)                 {}
 func (b *webBackend) RecordWeb(r webproxy.Request) int64 {
 	b.wmu.Lock()
 	defer b.wmu.Unlock()

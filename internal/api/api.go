@@ -295,6 +295,8 @@ func (s *Server) Handler() http.Handler {
 	writes("POST /api/chats/{id}/model", s.setModel)
 	chat("GET /api/chats/{id}/tools/running", s.runningTools)
 	chat("GET /api/chats/{id}/web_requests", s.webRequests)
+	chat("GET /api/chats/{id}/internet/grants", s.internetGrants)
+	writes("POST /api/chats/{id}/internet/grants/{gid}/end", s.endInternetGrant)
 	writes("POST /api/chats/{id}/tools/{call}/stop", s.stopTool)
 	writes("POST /api/chats/{id}/tools/{call}/background", s.backgroundTool)
 	writes("POST /api/chats/{id}/effort", s.setEffort)
@@ -351,6 +353,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/approvals", s.approvals)
 	mux.HandleFunc("GET /api/events", s.allEvents)
 	mux.HandleFunc("GET /api/activity", s.activity)
+	mux.HandleFunc("GET /api/activity/connections", s.activityConnections)
 	mux.Handle("POST /api/approvals/{id}", s.ownApproval(s.approvalWritable(s.decide)))
 	s.registerExp(mux) // X1: the experiment runner, only with the experiment key
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
@@ -546,7 +549,7 @@ func errCode(err error) int {
 		return http.StatusConflict
 	case errors.Is(err, chat.ErrNoSlot):
 		return http.StatusServiceUnavailable
-	case errors.Is(err, chat.ErrPendingApproval), errors.Is(err, chat.ErrRunning),
+	case errors.Is(err, chat.ErrPendingApproval), errors.Is(err, chat.ErrRunning), errors.Is(err, chat.ErrGrantNotActive),
 		errors.Is(err, chat.ErrQueueDelivered), errors.Is(err, chat.ErrNotRunning):
 		return http.StatusConflict
 	case errors.Is(err, chat.ErrTooManyPending):
@@ -1031,13 +1034,139 @@ func (s *Server) internet(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, c)
 }
 
+// webRequests lists the chat's connections through the web proxy; ?grant=<id> limits them to one internet grant.
 func (s *Server) webRequests(w http.ResponseWriter, r *http.Request) {
+	if v := r.URL.Query().Get("grant"); v != "" {
+		gid, err := strconv.ParseInt(v, 10, 64)
+		if err != nil || gid < 1 {
+			writeErr(w, 400, "grant: a positive grant id")
+			return
+		}
+		list, err := s.M.GrantWebRequests(r.Context(), r.PathValue("id"), gid)
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		writeJSON(w, 200, list)
+		return
+	}
 	list, err := s.M.WebRequests(r.Context(), r.PathValue("id"))
 	if err != nil {
 		fail(w, err)
 		return
 	}
 	writeJSON(w, 200, list)
+}
+
+// internetGrants lists all internet grants of a chat, newest first (issue #175).
+func (s *Server) internetGrants(w http.ResponseWriter, r *http.Request) {
+	list, err := s.M.InternetGrants(r.Context(), r.PathValue("id"))
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, 200, list)
+}
+
+// endInternetGrant ends one active grant on the user's request: 200 with the grant, 409 if it is not active.
+func (s *Server) endInternetGrant(w http.ResponseWriter, r *http.Request) {
+	gid, err := strconv.ParseInt(r.PathValue("gid"), 10, 64)
+	if err != nil || gid < 1 {
+		writeErr(w, 400, "gid: a positive grant id")
+		return
+	}
+	g, err := s.M.EndGrantByUser(r.Context(), r.PathValue("id"), gid)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, 200, g)
+}
+
+// activityConnections lists the connections through the web proxy across the user's chats, newest first (issue
+// #175): ?chat=&grant=&result=allowed|blocked&origin=pi|exec|pkg&since=&until=&before=&limit=. The answer carries the
+// chats the rows belong to, as the platform activity does.
+func (s *Server) activityConnections(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	f := store.WebConnectionFilter{ChatID: q.Get("chat"), Result: q.Get("result"), Origin: q.Get("origin"), Limit: activityDefaultLimit}
+	if f.Result != "" && f.Result != "allowed" && f.Result != "blocked" {
+		writeErr(w, http.StatusBadRequest, "result: allowed or blocked")
+		return
+	}
+	if f.Origin != "" && f.Origin != "pi" && f.Origin != "exec" && f.Origin != "pkg" {
+		writeErr(w, http.StatusBadRequest, "origin: pi, exec or pkg")
+		return
+	}
+	if v := q.Get("grant"); v != "" {
+		n, err := strconv.ParseInt(v, 10, 64)
+		if err != nil || n < 1 {
+			writeErr(w, http.StatusBadRequest, "grant: a positive grant id")
+			return
+		}
+		f.GrantID = n
+	}
+	for name, dst := range map[string]*time.Time{"since": &f.Since, "until": &f.Until} {
+		if v := q.Get(name); v != "" {
+			t, err := time.Parse(time.RFC3339, v)
+			if err != nil {
+				writeErr(w, http.StatusBadRequest, name+": expected an RFC 3339 time such as 2026-10-06T00:00:00Z")
+				return
+			}
+			*dst = t
+		}
+	}
+	if v := q.Get("limit"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 {
+			writeErr(w, http.StatusBadRequest, "limit: a positive number")
+			return
+		}
+		f.Limit = min(n, activityMaxLimit)
+	}
+	if v := q.Get("before"); v != "" {
+		n, err := strconv.ParseInt(v, 10, 64)
+		if err != nil || n < 1 {
+			writeErr(w, http.StatusBadRequest, "before: a positive connection id (next_before of the previous page)")
+			return
+		}
+		f.Before = n
+	}
+	if s.OIDC != nil {
+		u, ok := UserFrom(r.Context())
+		if !ok || u.Sub == "" {
+			writeErr(w, http.StatusUnauthorized, "not logged in")
+			return
+		}
+		f.Owner = &u.Sub
+	}
+	rows, err := s.M.WebConnections(r.Context(), f)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	var next int64
+	if len(rows) > f.Limit {
+		rows = rows[:f.Limit]
+		next = rows[f.Limit-1].ID
+	}
+	chats, err := s.M.ActivityChats(r.Context(), connectionChats(rows))
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"connections": rows, "chats": chats, "next_before": next})
+}
+
+func connectionChats(rows []store.WebRequest) []string {
+	seen := map[string]bool{}
+	var ids []string
+	for _, r := range rows {
+		if !seen[r.ChatID] {
+			seen[r.ChatID] = true
+			ids = append(ids, r.ChatID)
+		}
+	}
+	return ids
 }
 
 func (s *Server) runningTools(w http.ResponseWriter, r *http.Request) {

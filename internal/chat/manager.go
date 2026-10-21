@@ -26,6 +26,7 @@ import (
 	"agw/internal/artifacts"
 	"agw/internal/config"
 	"agw/internal/delegation"
+	"agw/internal/netgrant"
 	"agw/internal/plan"
 	"agw/internal/platform"
 	"agw/internal/pool"
@@ -51,6 +52,9 @@ type Agent interface {
 	// agw-exec and coreutils): sessions, configuration, subagents.
 	ExecPi(ctx context.Context, cmd []string, stdin io.Reader) ([]byte, error)
 	SetInternet(ctx context.Context, on bool) error
+	// NetBytes is the sum of the bytes the execution sandbox's network interfaces have sent and received (Docker's
+	// counters; the byte count of a full internet grant).
+	NetBytes(ctx context.Context) (int64, error)
 	// SetExecTrace switches the syscall trace of the execution sandbox for this run (X7.6/#152).
 	// A running supervisor is restarted; the slot's default stays the fallback.
 	SetExecTrace(ctx context.Context, on bool) error
@@ -130,6 +134,8 @@ type ChatView struct {
 	PendingModel string `json:"pending_model,omitempty"`
 	// SubagentsRunning: subagents running right now according to the monitoring (0 while idle).
 	SubagentsRunning int `json:"subagents_running"`
+	// InternetGrants: the chat's active internet grants with their counters (issue #175); Internet stays true while any is active.
+	InternetGrants []store.Grant `json:"internet_grants"`
 }
 
 type live struct {
@@ -140,8 +146,10 @@ type live struct {
 	stop    chan struct{}
 	stopped sync.Once
 
-	ip     string // address in the slot network
-	maxSub int    // at most this many subagents at the same time (Options.MaxSubagents)
+	ip string // address in the slot network
+	// egress: the execution sandbox is attached to the egress network (an active full grant; under m.mu).
+	egress bool
+	maxSub int // at most this many subagents at the same time (Options.MaxSubagents)
 	// subRuns: what the monitoring knows about the subagent runs of this sandbox (under pollMu);
 	// subRunning: how many of them run right now (under m.mu, for the view).
 	pollMu     sync.Mutex
@@ -217,6 +225,10 @@ type Options struct {
 	ArtifactMaxBytes int64
 	AcquireTimeout   time.Duration
 	InternetDefault  bool
+	// InternetLimits: defaults and bounds of the time and data of an internet grant (AGW_INTERNET_*, issue #175);
+	// zero values take netgrant.DefaultLimits. InternetLogRows: single rows per grant in web_requests (0: 500).
+	InternetLimits  netgrant.Limits
+	InternetLogRows int
 
 	AutoCompactDefault   bool
 	CompactReserveTokens int
@@ -353,6 +365,8 @@ type Manager struct {
 	// planAlertMarks: the state each autonomous plan was last published in, so that its alert goes out
 	// once per state change (A-E4, D4.3); by plan id.
 	planAlertMarks map[string]string
+	// grants: the active internet grants of all chats with their counters (issue #175).
+	grants *grantBook
 }
 
 func NewManager(st *store.Store, p *pool.Pool[Agent], cat *config.Catalog, blobs Blobs, broker *artifacts.Broker, opt Options) *Manager {
@@ -392,7 +406,7 @@ func NewManager(st *store.Store, p *pool.Pool[Agent], cat *config.Catalog, blobs
 		imgMu: map[string]*sync.Mutex{}, wsMu: map[string]*sync.Mutex{}, qMu: map[string]*sync.Mutex{},
 		sending: map[string]bool{}, delivering: map[string][]*turnMeta{}, resuming: map[string]bool{}, starting: map[string]bool{}, pendingModel: map[string]string{}, levels: map[string][]string{}, userAt: map[string]time.Time{}, aborts: map[string]uint64{},
 		rechecks: map[string]recheck{}, apMu: map[string]*sync.Mutex{}, planCache: map[string]planCacheEntry{},
-		expCache: map[string]expGateEntry{}}
+		expCache: map[string]expGateEntry{}, grants: newGrantBook()}
 }
 
 // userActive records an action of the user (postponement by background tasks, M1).
@@ -503,6 +517,7 @@ func (m *Manager) view(c store.Chat) ChatView {
 	v := ChatView{Chat: c}
 	// The limit is the service's, also for chats that stored another value before issue #24.
 	v.MaxSubagents = m.opt.MaxSubagents
+	v.InternetGrants = m.ActiveGrantViews(c.ID)
 	m.mu.Lock()
 	l, ok := m.live[c.ID]
 	if ok {
@@ -722,6 +737,17 @@ func (m *Manager) Create(ctx context.Context, req NewChat) (ChatView, error) {
 		return ChatView{}, err
 	}
 	unlock := m.lock(c.ID)
+	if internet {
+		// The old switch at creation is a full grant now (issue #175), with the default limits.
+		origin := store.GrantByUser
+		if req.Internet == nil {
+			origin = store.GrantByDefault
+		}
+		if err := m.startUserFull(ctx, c.ID, origin, ViaUser); err != nil {
+			unlock()
+			return ChatView{}, err
+		}
+	}
 	if req.Async && strings.TrimSpace(req.Message) == "" {
 		slot, err := m.pool.Acquire(c.Variant, c.ID)
 		switch {
@@ -878,7 +904,8 @@ func (m *Manager) attachSlot(ctx context.Context, c store.Chat, session []byte, 
 	p.run(PhaseSettings)
 	// A slot is assigned only once and starts without the egress network (worker.Create), so only
 	// switching internet on does anything here; off would cost several Docker calls for nothing.
-	if c.Internet {
+	egress := m.egressWanted(c.ID)
+	if egress {
 		if err := a.SetInternet(ctx, true); err != nil {
 			return fail(fmt.Errorf("set internet: %w", err))
 		}
@@ -886,8 +913,13 @@ func (m *Manager) attachSlot(ctx context.Context, c store.Chat, session []byte, 
 	if _, err := a.Call(ctx, map[string]any{"type": "set_auto_compaction", "enabled": c.AutoCompact}); err != nil {
 		return fail(fmt.Errorf("set auto-compaction: %w", err))
 	}
-	p.done(ResumeStep{Detail: "Internet " + onOff(c.Internet)})
-	l := &live{slot: slot, stop: make(chan struct{}), ip: a.IP(), maxSub: m.opt.MaxSubagents, subRuns: map[string]*subTrack{}}
+	p.done(ResumeStep{Detail: "Internet " + onOff(len(m.grants.active(c.ID)) > 0)})
+	l := &live{slot: slot, stop: make(chan struct{}), ip: a.IP(), maxSub: m.opt.MaxSubagents, subRuns: map[string]*subTrack{}, egress: egress}
+	if egress {
+		for _, g := range m.grants.active(c.ID) {
+			g.resetSample()
+		}
+	}
 	m.userActive(c.ID) // creating and resuming come from the user
 	// Restore the workspace before the inputs and before the first request
 	// (the archive contains no inputs/, the two do not get in each other's way).
@@ -1096,57 +1128,6 @@ func (m *Manager) Suspend(ctx context.Context, chatID string) (ChatView, error) 
 		m.detach(ctx, chatID, l, true, true, pool.ReasonSuspended)
 	}
 	_ = m.st.SetState(ctx, chatID, store.StateDormant)
-	m.publishChat(ctx, chatID)
-	return m.View(ctx, chatID)
-}
-
-// SetInternet runs under the chat lock: a concurrent resume (attach)
-// could otherwise connect a new sandbox with a stale value
-// (Review H3).
-func (m *Manager) SetInternet(ctx context.Context, chatID string, on bool) (ChatView, error) {
-	return m.setInternet(ctx, chatID, on, false)
-}
-
-// SetInternetByUser is the user's switch (POST /api/chats/{id}/internet). Unlike the switches that follow an
-// approval or the agent's own "off", it is logged as a socket_calls entry with via "user" and op "internet_set"
-// (result "on", "off", "already on" or "already off"), so the activity shows who switched (issue #37).
-func (m *Manager) SetInternetByUser(ctx context.Context, chatID string, on bool) (ChatView, error) {
-	return m.setInternet(ctx, chatID, on, true)
-}
-
-// ViaUser marks the user's internet switch in the socket log (op store.OpInternetUser).
-const ViaUser = "user"
-
-func (m *Manager) setInternet(ctx context.Context, chatID string, on, byUser bool) (ChatView, error) {
-	unlock := m.lock(chatID)
-	defer unlock()
-	c, err := m.st.GetChat(ctx, chatID)
-	if err != nil {
-		return ChatView{}, err
-	}
-	m.mu.Lock()
-	l := m.live[chatID]
-	m.mu.Unlock()
-	if l != nil {
-		if err := l.slot.Worker.SetInternet(ctx, on); err != nil {
-			return ChatView{}, err
-		}
-	}
-	if err := m.st.SetInternet(ctx, chatID, on); err != nil {
-		return ChatView{}, err
-	}
-	slog.Info("internet toggled", "chat", chatID, "on", on, "immediate", l != nil, "by_user", byUser)
-	if byUser {
-		result := map[bool]string{true: "on", false: "off"}[on]
-		if c.Internet == on {
-			result = "already " + result
-		}
-		slot := ""
-		if l != nil {
-			slot = l.slot.ID
-		}
-		m.LogCallBy(ctx, slot, chatID, ViaUser, store.OpInternetUser, "", result)
-	}
 	m.publishChat(ctx, chatID)
 	return m.View(ctx, chatID)
 }
@@ -2138,80 +2119,6 @@ func (m *Manager) Upload(ctx context.Context, chatID, slotID, via, name string, 
 	slog.Info("artifact sent to the user", "chat", chatID, "name", name, "bytes", len(data), "via", via)
 	res.Status = sock.UploadStored
 	return res, nil
-}
-
-// RequestInternet: the agent asks for internet access. The call waits for
-// the user's decision; only on approval is the sandbox connected to the
-// egress network.
-func (m *Manager) RequestInternet(ctx context.Context, chatID, slotID, via, reason string) (sock.UploadResult, error) {
-	c, err := m.st.GetChat(ctx, chatID)
-	if err != nil {
-		return sock.UploadResult{}, err
-	}
-	if c.TrashedAt != nil {
-		return sock.UploadResult{Status: "rejected", Name: "internet", Message: platform.RefusedPrefix + trashRefusal, Log: "rejected: " + trashRefusal}, nil
-	}
-	if c.Internet {
-		return sock.UploadResult{Status: "approved", Name: "internet", Message: "internet access is already granted", Log: "already on"}, nil
-	}
-	if err := m.checkPendingLimit(ctx, chatID); err != nil {
-		return sock.UploadResult{}, err
-	}
-	reason = strings.TrimSpace(strings.ToValidUTF8(reason, ""))
-	if r := []rune(reason); len(r) > 500 {
-		reason = string(r[:500]) + " …"
-	}
-	if reason == "" {
-		reason = "(no reason given)"
-	}
-	ap, err := m.st.CreateApproval(ctx, store.Approval{ChatID: chatID, Kind: "internet_access", Via: via, Name: reason, ContentType: "text/plain", PendingKey: "-", Preview: reason,
-		Session: store.SessionFrom(ctx), ToolCallID: store.ToolCallFrom(ctx)})
-	if err != nil {
-		return sock.UploadResult{}, err
-	}
-	w := m.broker.Register(ap.ID)
-	if s, ok := m.pool.Get(slotID); ok {
-		s.SetActivity("waiting_approval", "")
-	}
-	m.publish(chatID, Event{Kind: "approval", Data: ap})
-	m.publishChat(ctx, chatID)
-	slog.Info("internet access requested", "chat", chatID, "approval", ap.ID, "via", via)
-	approved, werr := w.Wait(ctx, m.opt.ApprovalTimeout)
-	bg := context.WithoutCancel(ctx)
-	final := m.settle(bg, chatID, ap.ID, approved, werr)
-	if s, ok := m.pool.Get(slotID); ok {
-		s.SetActivity("tool", "")
-	}
-	if final == store.ApprovalExpired {
-		m.publishChat(bg, chatID)
-		return sock.UploadResult{Status: "rejected", Name: "internet", Message: "no decision within the waiting time", Log: "expired"}, nil
-	}
-	if final != store.ApprovalApproved {
-		m.publishChat(bg, chatID)
-		return sock.UploadResult{Status: "rejected", Name: "internet", Message: "rejected by the user"}, nil
-	}
-	if _, err := m.SetInternet(bg, chatID, true); err != nil {
-		return sock.UploadResult{}, err
-	}
-	return sock.UploadResult{Status: "approved", Name: "internet", Message: "internet access granted"}, nil
-}
-
-// DisableInternet: the agent switches its sandbox's internet off. It only removes a right, so it needs no
-// approval. Idempotent: if the chat has no internet, nothing changes and the result says so (status
-// "already_off"). Runs under the chat lock like SetInternet.
-func (m *Manager) DisableInternet(ctx context.Context, chatID, slotID, via string) (sock.UploadResult, error) {
-	c, err := m.st.GetChat(ctx, chatID)
-	if err != nil {
-		return sock.UploadResult{}, err
-	}
-	if !c.Internet {
-		return sock.UploadResult{Status: sock.InternetAlreadyOff, Name: "internet", Message: "internet access was already off"}, nil
-	}
-	if _, err := m.SetInternet(context.WithoutCancel(ctx), chatID, false); err != nil {
-		return sock.UploadResult{}, err
-	}
-	slog.Info("internet switched off by the agent", "chat", chatID, "slot", slotID, "via", via)
-	return sock.UploadResult{Status: sock.InternetOff, Name: "internet", Message: "internet access switched off"}, nil
 }
 
 // maxPlatformPreview limits method, path and indented body of a writing platform call.
