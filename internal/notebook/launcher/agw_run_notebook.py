@@ -13,6 +13,7 @@ the file are replaced, so that what runs is what the approval showed.
 Exit codes: 0 done, 1 a cell failed, 124 stopped by the time limit (SIGTERM), 98 notebook refused.
 """
 import argparse
+import asyncio
 import json
 import os
 import re
@@ -130,8 +131,16 @@ def main():
     def on_done(cell, cell_index, execute_reply):
         save()
 
+    def on_nb_start(**kwargs):
+        # nbclient installs its own SIGTERM handler on the event loop while it sets up the kernel; it would
+        # shut the kernel down but also turn the stop into an error. Ours replaces it once the kernel runs.
+        try:
+            asyncio.get_running_loop().add_signal_handler(signal.SIGTERM, on_term, signal.SIGTERM, None)
+        except (RuntimeError, NotImplementedError):
+            pass
+
     client = Client(nb, timeout=None, kernel_name="python3", resources={"metadata": {"path": os.getcwd()}},
-                    on_cell_start=on_start, on_cell_executed=on_done)
+                    on_cell_start=on_start, on_cell_executed=on_done, on_notebook_start=on_nb_start)
 
     def on_term(signum, frame):
         try:
