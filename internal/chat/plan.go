@@ -256,7 +256,11 @@ func (m *Manager) planNext(ctx context.Context, chatID string, req platform.Requ
 			break
 		}
 	}
-	if cur == nil || cur.State != plan.StepOpen {
+	if cur == nil {
+		return nil, 0, ""
+	}
+	if cur.State != plan.StepOpen {
+		slog.Info("call while the plan's next step is not open", "chat", chatID, "plan", p.ID, "step", cur.Idx, "state", cur.State)
 		return nil, 0, ""
 	}
 	resolve := m.stepResolve(ctx, chatID, p.Steps)

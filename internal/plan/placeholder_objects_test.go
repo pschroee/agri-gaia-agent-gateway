@@ -56,9 +56,31 @@ func TestSameShape(t *testing.T) {
 	if SameShape(run, "", platform.Request{Method: "GET", Path: "/train/containers/63/run"}) {
 		t.Error("another method matched")
 	}
-	tool := store.PlanStep{Tool: "start_training"}
+	tool := store.PlanStep{Tool: "start_training", Args: []byte(`{"a":1}`)}
 	if !SameShape(tool, "start_training", platform.Request{}) || SameShape(tool, "create_training", platform.Request{}) {
-		t.Error("a tool step compares the tool")
+		t.Error("a tool step with arguments compares the tool")
+	}
+}
+
+// #180: a tool with one request has no arguments in the step and its call carries no invocation; it is
+// compared on method and path.
+func TestSameShapeToolWithoutArgs(t *testing.T) {
+	st := store.PlanStep{Tool: "start_training", Method: "POST", Path: "/train/containers/{{step1.id}}/run"}
+	if !SameShape(st, "", platform.Request{Method: "POST", Path: "/train/containers/63/run"}) {
+		t.Error("the call of a single-request tool step must have the shape")
+	}
+	if SameShape(st, "", platform.Request{Method: "POST", Path: "/train/containers/63/stop"}) {
+		t.Error("another path matched")
+	}
+}
+
+func TestSameShapeToolWithArgs(t *testing.T) {
+	st := store.PlanStep{Tool: "rename_dataset", Args: []byte(`{"dataset_id":1}`), Method: "PATCH", Path: "/datasets/1"}
+	if !SameShape(st, "rename_dataset", platform.Request{Method: "GET", Path: "/x"}) {
+		t.Error("with an invocation the tool decides")
+	}
+	if SameShape(st, "other_tool", platform.Request{Method: "PATCH", Path: "/datasets/1"}) {
+		t.Error("another tool matched")
 	}
 }
 
