@@ -25,6 +25,7 @@ type platformBackend struct {
 	// toolCalls: the tool call of the session that arrived with every platform call (store.ToolCallFrom), so a test
 	// can check that a binding passes it on (F28, issue L2/#119).
 	toolCalls []string
+	note      string // Result.Note of every successful call (#198)
 }
 
 func (p *platformBackend) PlatformCall(ctx context.Context, chatID, slotID, via string, req platform.Request) (platform.Result, error) {
@@ -35,7 +36,7 @@ func (p *platformBackend) PlatformCall(ctx context.Context, chatID, slotID, via 
 	if req.Writes() && p.decide != "approved" {
 		return platform.Result{Status: "rejected", Message: "rejected by the user"}, nil
 	}
-	return platform.Result{Status: "ok", HTTPStatus: 200, Body: `[{"id":1}]`}, nil
+	return platform.Result{Status: "ok", HTTPStatus: 200, Body: `[{"id":1}]`, Note: p.note}, nil
 }
 
 func cliPlatform(t *testing.T, c *http.Client, tool, args string) (int, platform.Result) {
