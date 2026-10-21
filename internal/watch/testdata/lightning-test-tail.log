@@ -1,0 +1,20 @@
+Creating index...
+index created!
+Loading annotations into memory...
+Done (t=0.00s)
+Creating index...
+index created!
+Testing: |          | 0/? [00:00<?, ?it/s]Testing:   0%|          | 0/17 [00:00<?, ?it/s]Testing DataLoader 0:   0%|          | 0/17 [00:00<?, ?it/s]Testing DataLoader 0:   6%|▌         | 1/17 [00:00<00:06,  2.52it/s]Testing DataLoader 0:  12%|█▏        | 2/17 [00:00<00:06,  2.46it/s]Testing DataLoader 0:  18%|█▊        | 3/17 [00:01<00:06,  2.08it/s]Testing DataLoader 0:  24%|██▎       | 4/17 [00:02<00:06,  1.95it/s]Testing DataLoader 0:  29%|██▉       | 5/17 [00:02<00:05,  2.07it/s]Testing DataLoader 0:  35%|███▌      | 6/17 [00:02<00:04,  2.36it/s]Testing DataLoader 0:  41%|████      | 7/17 [00:02<00:03,  2.70it/s]Testing DataLoader 0:  47%|████▋     | 8/17 [00:02<00:02,  3.04it/s]Testing DataLoader 0:  53%|█████▎    | 9/17 [00:02<00:02,  3.32it/s]Testing DataLoader 0:  59%|█████▉    | 10/17 [00:02<00:01,  3.65it/s]Testing DataLoader 0:  65%|██████▍   | 11/17 [00:02<00:01,  3.84it/s]Testing DataLoader 0:  71%|███████   | 12/17 [00:03<00:01,  3.85it/s]Testing DataLoader 0:  76%|███████▋  | 13/17 [00:03<00:01,  3.72it/s]Testing DataLoader 0:  82%|████████▏ | 14/17 [00:03<00:00,  3.85it/s]Testing DataLoader 0:  88%|████████▊ | 15/17 [00:03<00:00,  4.10it/s]Testing DataLoader 0:  94%|█████████▍| 16/17 [00:03<00:00,  4.35it/s]Testing DataLoader 0: 100%|██████████| 17/17 [00:03<00:00,  4.57it/s]Testing DataLoader 0: 100%|██████████| 17/17 [00:03<00:00,  4.56it/s]
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃        Test metric        ┃       DataLoader 0        ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
+│    MulticlassAccuracy     │    0.23529411852359772    │
+│     MulticlassF1Score     │    0.23529411852359772    │
+│    MulticlassPrecision    │    0.23529411852359772    │
+│     MulticlassRecall      │    0.23529411852359772    │
+└───────────────────────────┴───────────────────────────┘
+
+real	0m18.620s
+user	0m25.695s
+sys	0m2.126s
+Training ended: 2026-10-17T19:09:27
