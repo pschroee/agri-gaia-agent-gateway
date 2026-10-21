@@ -27,6 +27,7 @@ func TestNotebookSkillDescription(t *testing.T) {
 		"capabilities", "without it", "notebook-run", "2 CPUs, 8 GB, a shared GPU where the instance has one, no internet, no platform access", "torch.cuda.is_available()",
 		"test the code in the sandbox first", "dataset_ids", "approves every run", "notebook-run-status",
 		"notebook-log", "notebook-fetch", "upload-model", "inference container", "link of the run",
+		"Jupyter notebook", "agw-run-notebook", "params.json", "executed notebook",
 	} {
 		if !strings.Contains(d, w) {
 			t.Errorf("description without %q", w)
@@ -42,7 +43,7 @@ func TestNotebookSkillBody(t *testing.T) {
 		"agw-platform capabilities", "agw-platform notebook-run", "agw-platform notebook-run-status",
 		"agw-platform notebook-log", "agw-platform notebook-fetch", "agw-platform upload-model",
 		"/home/jovyan/work/datasets/<id>/", "/workspace/notebook/<run_id>/", "dynamo=False", "opset_version=18",
-		"124", "exit_code", "small sample", "outputs/model.json", "no mean or std unless the script subtracts them", "The server belongs to the user", "no internet",
+		"124", "exit_code", "small sample", "outputs/model.json", "no mean or std unless the script subtracts them", "agw-run-notebook", "executed-<entry>", "new_code_cell", "The server belongs to the user", "no internet",
 	} {
 		if !strings.Contains(s, w) {
 			t.Errorf("skill text without %q", w)

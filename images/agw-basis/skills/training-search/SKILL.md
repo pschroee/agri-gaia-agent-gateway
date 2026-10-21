@@ -1,6 +1,6 @@
 ---
 name: training-search
-description: Training search - use it when a task needs several training rounds (tuning hyperparameters, trying architectures or augmentation) - propose ONE search with propose_search instead of single trainings. Rules - split the dataset first (split_dataset) so that a held-back test set exists; keep the search space small and say why; before every trial read search_status and never repeat a trial; declare each trial with search_next and a one-sentence reason, then make exactly the calls it names; in the notebook way write outputs/metrics.jsonl (one JSON line per epoch with epoch, epochs, train_loss, val_loss, train_acc, val_acc) and read params.json; choose by the validation value only; when the search ends run the final test once for the winner.
+description: Training search - use it when a task needs several training rounds (tuning hyperparameters, trying architectures or augmentation) - propose ONE search with propose_search instead of single trainings. Rules - split the dataset first (split_dataset) so that a held-back test set exists; keep the search space small and say why; before every trial read search_status and never repeat a trial; declare each trial with search_next and a one-sentence reason, then make exactly the calls it names; in the notebook way the code is one notebook (.ipynb) that reads params.json and writes outputs/metrics.jsonl (one JSON line per epoch with epoch, epochs, train_loss, val_loss, train_acc, val_acc), and only params.json changes between trials; choose by the validation value only; when the search ends run the final test once for the winner.
 ---
 
 # Training search with a budget
@@ -45,7 +45,7 @@ change `params.json`, any change of the code asks the user again.
 
 ```bash
 agw-platform propose-search --title "own CNN: width and dropout" --path notebook \
-  --files /workspace/train.py --entry train.py --dataset_ids 17 --timeout_minutes 30 \
+  --files /workspace/train.ipynb --entry train.ipynb --dataset_ids 17 --timeout_minutes 30 \
   --space '{"width":{"type":"choice","values":[16,32,64]},"dropout":{"type":"float","min":0,"max":0.5,"scale":"linear"}}' \
   --budget '{"max_runs":5}'
 ```
@@ -82,7 +82,7 @@ The answer of `search-status` names the reason (budget, target, patience, you, t
 
 ## Convention for the notebook way
 
-The entry script reads its parameters from `params.json` in the run directory and writes **one JSON line per
+The entry notebook reads its parameters from `params.json` in the run directory and writes **one JSON line per
 epoch** to `outputs/metrics.jsonl`. The gateway reads the file while the run goes on (progress, stopping a
 hopeless trial) and after it. No line, no figure: a trial without `val_acc` or `val_loss` cannot win.
 
@@ -113,3 +113,5 @@ json.dump({"class_names": classes, "preprocess": {"color": "gray", "size": [IMG,
 ```
 
 Write exactly what the script does to an image; no mean or std unless the script subtracts them.
+
+Changing markdown cells does not change the code; changing a code cell asks the user again.

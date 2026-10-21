@@ -32,7 +32,7 @@ func TestTrainingSearchSkillDescription(t *testing.T) {
 		"propose_search", "split_dataset", "held-back test set", "search_status", "never repeat a trial",
 		"search_next", "one-sentence reason", "exactly the calls it names", "outputs/metrics.jsonl",
 		"epoch, epochs, train_loss, val_loss, train_acc, val_acc", "params.json", "validation value only",
-		"final test once for the winner",
+		"final test once for the winner", "one notebook (.ipynb)", "only params.json changes between trials",
 	} {
 		if !strings.Contains(d, w) {
 			t.Errorf("description without %q", w)
