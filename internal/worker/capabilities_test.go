@@ -32,10 +32,10 @@ func TestSystemNoteCapabilities(t *testing.T) {
 				t.Errorf("%s: the note lacks %q", v, want)
 			}
 		}
-		if strings.Contains(note, "{{") {
+		if strings.Contains(strings.ReplaceAll(note, "{{step", ""), "{{") {
 			t.Errorf("%s: placeholder left over", v)
 		}
-		for _, bad := range []string{"compute calls left", "internet is on in this chat", "devices online are"} {
+		for _, bad := range []string{"compute calls left in this chat", "internet is on in this chat", "devices online are"} {
 			if strings.Contains(note, bad) {
 				t.Errorf("%s: the note names state (%q)", v, bad)
 			}

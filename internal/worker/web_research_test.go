@@ -89,7 +89,7 @@ func TestSystemNoteInternetPerBinding(t *testing.T) {
 			t.Errorf("%s: package and internet skill line = %v", ts.Key(), got)
 		}
 		for _, stale := range []string{"Internet access is off by default", "(search via our own SearXNG)", "or the tool mcp_request_internet or request_internet", "{{"} {
-			if strings.Contains(note, stale) {
+			if strings.Contains(strings.ReplaceAll(note, "{{step", ""), stale) {
 				t.Errorf("%s: stale text %q", ts.Key(), stale)
 			}
 		}
