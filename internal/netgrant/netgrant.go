@@ -164,10 +164,80 @@ func clampInt(v, def, hi int) int {
 
 var deniedSuffixes = []string{".local", ".internal", ".lan", ".home.arpa", ".localhost"}
 
+// gatedHosts are package indexes that have a package gate (kind packages); they are never asked for as domains
+// (issue #205). The value is the ecosystem.
+var gatedHosts = map[string]string{
+	"pypi.org":                    "pip",
+	"files.pythonhosted.org":      "pip",
+	"pypi.python.org":             "pip",
+	"test.pypi.org":               "pip",
+	"test-files.pythonhosted.org": "pip",
+	"registry.npmjs.org":          "npm",
+	"registry.npmjs.com":          "npm",
+	"registry.yarnpkg.com":        "npm",
+	"npm.pkg.github.com":          "npm",
+}
+
+// ungatedHosts are package archives without a gate: this sandbox has no root, so installing from them by hand
+// would go around the package gate. The value is the ecosystem.
+var ungatedHosts = map[string]string{
+	"archive.ubuntu.com":       "apt",
+	"security.ubuntu.com":      "apt",
+	"ports.ubuntu.com":         "apt",
+	"ppa.launchpad.net":        "apt",
+	"ppa.launchpadcontent.net": "apt",
+	"repo.anaconda.com":        "conda",
+	"conda.anaconda.org":       "conda",
+	"dl-cdn.alpinelinux.org":   "apk",
+}
+
+var debianFirstLabels = map[string]bool{"deb": true, "ftp": true, "security": true, "snapshot": true, "archive": true, "httpredir": true}
+
+func isCountryLabel(l string) bool {
+	return len(l) == 2 && l[0] >= 'a' && l[0] <= 'z' && l[1] >= 'a' && l[1] <= 'z'
+}
+
+// packageSource tells whether a normalised host is the host of a package source: eco is pip, npm, apt, conda or
+// apk; gated is true when the package gate (kind packages) serves that ecosystem.
+func packageSource(h string) (eco string, gated bool, ok bool) {
+	if e, found := gatedHosts[h]; found {
+		return e, true, true
+	}
+	if e, found := ungatedHosts[h]; found {
+		return e, false, true
+	}
+	labels := strings.Split(h, ".")
+	n := len(labels)
+	// <first>[.<cc>].debian.org
+	if (n == 3 || n == 4) && labels[n-2] == "debian" && labels[n-1] == "org" && debianFirstLabels[labels[0]] &&
+		(n == 3 || isCountryLabel(labels[1])) {
+		return "apt", false, true
+	}
+	// <cc>.archive.ubuntu.com
+	if n == 4 && isCountryLabel(labels[0]) && labels[1] == "archive" && labels[2] == "ubuntu" && labels[3] == "com" {
+		return "apt", false, true
+	}
+	return "", false, false
+}
+
+// packageSourceError is the refusal for a package source host. It names kinds and ecosystems only, no command or
+// tool, so it fits every binding.
+func packageSourceError(eco string, gated bool) error {
+	if gated {
+		eg := "pip:scikit-learn"
+		if eco == "npm" {
+			eg = "npm:left-pad"
+		}
+		return fmt.Errorf("a %s package index: packages come only through the package gate; ask for kind packages with the packages you install (e.g. %s), not for the site", eco, eg)
+	}
+	return fmt.Errorf("serves system packages (%s), which this sandbox does not install (no root, no package gate for them); use a pip or npm package with kind packages, or ask for kind full and say why", eco)
+}
+
 // ParseDomains normalises a list of exact host names: lower case, no trailing dot, no duplicates. Entries may
 // contain commas (the command line passes "a.org,b.org"). Rejected: wildcards, schemes, paths and ports, IP
 // literals, names without a dot, localhost and the local suffixes, anything outside ASCII (give the punycode name),
 // and more than MaxDomains entries.
+// Rejected also: the hosts of package sources (issue #205).
 func ParseDomains(raw []string) ([]string, error) {
 	var out []string
 	seen := map[string]bool{}
@@ -236,6 +306,9 @@ func normalizeHost(h string) (string, error) {
 	}
 	if allDigits(labels[len(labels)-1]) {
 		return "", fmt.Errorf("IP addresses are not allowed, use the host name")
+	}
+	if eco, gated, ok := packageSource(h); ok {
+		return "", packageSourceError(eco, gated)
 	}
 	return h, nil
 }
