@@ -215,3 +215,16 @@ func TestMessages(t *testing.T) {
 		t.Error(got)
 	}
 }
+
+func TestMsgTooLarge(t *testing.T) {
+	m := MsgTooLarge("pip", "torch", "torch-2.5.1-cp312-cp312-manylinux_2_28_x86_64.whl", 555<<20, 256<<20, 512, 1024, 8)
+	for _, want := range []string{"blocked: pip package torch is too large for this sandbox", "has 555 MB", "at most 256 MB",
+		"/tmp holds 512 MB", "home directory 1 GB", "skill notebook", "agw-internet off 8"} {
+		if !strings.Contains(m, want) {
+			t.Errorf("%q misses %q", m, want)
+		}
+	}
+	if m := MsgTooLarge("npm", "x", "x-1.tgz", -1, 256<<20, 512, 1024, 0); !strings.Contains(m, "x-1.tgz has more than 256 MB") || strings.Contains(m, "agw-internet off") {
+		t.Errorf("without length or grant: %q", m)
+	}
+}

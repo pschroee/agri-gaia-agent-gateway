@@ -14,6 +14,7 @@ import (
 	"io"
 	"net/netip"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -101,6 +102,33 @@ var ExecTmpfs = map[string]string{
 	"/home/agent": tmpfsExec + ",size=1g",
 	"/tmp":        "mode=1777,exec,size=512m",
 	TraceDir:      "mode=0700,uid=0,gid=0,size=64m",
+}
+
+// PackageFileMax: largest single package file (wheel, sdist, npm tarball) the package gate hands to
+// the execution sandbox. pip keeps its HTTP cache and the unpacked package in the home directory
+// (1 GB), so a file may take at most a quarter of it; the download itself lands in /tmp (512 MB).
+const PackageFileMax int64 = 256 << 20
+
+// TmpfsMB returns the size in MB of the tmpfs mounted at path in m (options like "mode=1777,size=512m"),
+// or 0 when the path or its size is missing.
+func TmpfsMB(m map[string]string, path string) int64 {
+	for _, o := range strings.Split(m[path], ",") {
+		v, ok := strings.CutPrefix(o, "size=")
+		if !ok || len(v) < 2 {
+			continue
+		}
+		n, err := strconv.ParseInt(v[:len(v)-1], 10, 64)
+		if err != nil {
+			return 0
+		}
+		switch v[len(v)-1] {
+		case 'm':
+			return n
+		case 'g':
+			return n << 10
+		}
+	}
+	return 0
 }
 
 type Instance struct {

@@ -300,7 +300,8 @@ func run() error {
 	// The sandbox's internet goes through its socket (issue #175): the web proxy for CONNECT and absolute URLs,
 	// the package gate for pip and npm. The proxy of one slot knows its chat by the slot, not by an address.
 	{
-		pkgGate := &pkggate.Gate{Source: m.PackageSource(), PublicBase: "http://" + sandbox.RelayAddr}
+		pkgGate := &pkggate.Gate{Source: m.PackageSource(), PublicBase: "http://" + sandbox.RelayAddr,
+			MaxFile: sandbox.PackageFileMax, TmpMB: sandbox.TmpfsMB(sandbox.ExecTmpfs, "/tmp"), HomeMB: sandbox.TmpfsMB(sandbox.ExecTmpfs, "/home/agent")}
 		if u, err := url.Parse(env.PipCacheURL); err == nil && env.PipCacheURL != "" && u.Host != "" {
 			pkgGate.Pip = u
 		}

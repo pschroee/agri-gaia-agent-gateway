@@ -110,6 +110,12 @@ type InternetStatusBackend interface {
 	ActiveGrantViews(chatID string) []store.Grant
 }
 
+// InternetRefusalsBackend lists the last refusals of a chat with their text: pip and npm print only "HTTP error 403",
+// so agw-internet status is where the agent reads why (issue #183).
+type InternetRefusalsBackend interface {
+	RecentRefusals(chatID string) []store.WebRequest
+}
+
 // Statuses of DisableInternet.
 const (
 	InternetOff        = "off"
@@ -473,7 +479,24 @@ func (h *handler) internetStatus(w http.ResponseWriter, r *http.Request) {
 			grants = g
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"grants": grants})
+	out := map[string]any{"grants": grants}
+	if rb, ok := h.b.(InternetRefusalsBackend); ok {
+		if rs := rb.RecentRefusals(chat); len(rs) > 0 {
+			type refusal struct {
+				Host    string    `json:"host"`
+				Package string    `json:"package,omitempty"`
+				Reason  string    `json:"reason,omitempty"`
+				Denied  string    `json:"denied,omitempty"`
+				At      time.Time `json:"at"`
+			}
+			list := make([]refusal, 0, len(rs))
+			for _, x := range rs {
+				list = append(list, refusal{Host: x.Host, Package: x.Package, Reason: x.Reason, Denied: x.Denied, At: x.StartedAt})
+			}
+			out["blocked"] = list
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // internetOff: POST /internet/off ends one grant ({"grant_id": n}) or all (no body). No approval.

@@ -949,6 +949,29 @@ const blockedWindow = 15 * time.Minute
 
 // blockedView reads the counter; nil if nothing was refused in the window.
 func (m *Manager) blockedView(ctx context.Context, chatID string) *BlockedView {
+	since := m.blockedSince(chatID)
+	n, last, err := m.st.ChatBlocked(ctx, chatID, since, 3)
+	if err != nil || n == 0 {
+		return nil
+	}
+	v := &BlockedView{Count: n, Since: since, Last: []BlockedConnection{}}
+	for _, r := range last {
+		v.Last = append(v.Last, BlockedConnection{Host: r.Host, Origin: r.Origin, Reason: r.Reason, Denied: r.Denied, Package: r.Package, Service: r.Service, At: r.StartedAt})
+	}
+	return v
+}
+
+// RecentRefusals: the last three refusals of the chat that the refusal counter counts (agw-internet status).
+func (m *Manager) RecentRefusals(chatID string) []store.WebRequest {
+	_, last, err := m.st.ChatBlocked(context.Background(), chatID, m.blockedSince(chatID), 3)
+	if err != nil {
+		return nil
+	}
+	return last
+}
+
+// blockedSince: where the refusal counter of a chat starts: the oldest active grant, else the default window.
+func (m *Manager) blockedSince(chatID string) time.Time {
 	since := time.Now().Add(-blockedWindow)
 	if act := m.grants.active(chatID); len(act) > 0 {
 		since = act[0].g.CreatedAt
@@ -962,15 +985,7 @@ func (m *Manager) blockedView(ctx context.Context, chatID string) *BlockedView {
 			}
 		}
 	}
-	n, last, err := m.st.ChatBlocked(ctx, chatID, since, 3)
-	if err != nil || n == 0 {
-		return nil
-	}
-	v := &BlockedView{Count: n, Since: since, Last: []BlockedConnection{}}
-	for _, r := range last {
-		v.Last = append(v.Last, BlockedConnection{Host: r.Host, Origin: r.Origin, Reason: r.Reason, Denied: r.Denied, Package: r.Package, Service: r.Service, At: r.StartedAt})
-	}
-	return v
+	return since
 }
 
 // publishBlocked tells the UI the new state of the refusal counter.

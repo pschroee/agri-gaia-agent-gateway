@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestParseInternetArgs(t *testing.T) {
@@ -148,5 +149,27 @@ func TestInternetCommandOverSocket(t *testing.T) {
 	}
 	if strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Fatalf("requests: %q", got)
+	}
+}
+
+func TestInternetStatusPrintsRefusals(t *testing.T) {
+	at := time.Date(2026, 10, 21, 15, 42, 0, 0, time.Local)
+	var b strings.Builder
+	printRefusals(&b, []refusalEntry{
+		{Host: "pypi.org", Package: "torch", Reason: "too_large", Denied: "blocked: pip package torch is too large", At: at},
+		{Host: "registry.npmjs.org", Package: "left-pad", Reason: "too_large", Denied: "blocked: x", At: at},
+		{Host: "github.com", Reason: "not_listed", Denied: "blocked: github.com is not listed", At: at},
+	})
+	want := "recent refusals:\n" +
+		"  15:42 pip:torch (too_large) blocked: pip package torch is too large\n" +
+		"  15:42 npm:left-pad (too_large) blocked: x\n" +
+		"  15:42 github.com (not_listed) blocked: github.com is not listed\n"
+	if b.String() != want {
+		t.Fatalf("got %q, want %q", b.String(), want)
+	}
+	b.Reset()
+	printRefusals(&b, nil)
+	if b.Len() != 0 {
+		t.Fatalf("no refusals, no output: %q", b.String())
 	}
 }

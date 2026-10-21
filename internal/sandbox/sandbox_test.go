@@ -169,3 +169,22 @@ plt.close(fig)`
 		t.Fatal("pi in the execution sandbox")
 	}
 }
+
+func TestPackageFileMaxFitsTmpfs(t *testing.T) {
+	tmp, home := TmpfsMB(ExecTmpfs, "/tmp"), TmpfsMB(ExecTmpfs, "/home/agent")
+	if tmp == 0 || home == 0 {
+		t.Fatalf("sizes: %d %d", tmp, home)
+	}
+	if PackageFileMax > tmp<<20/2 || PackageFileMax > home<<20/4 {
+		t.Fatalf("PackageFileMax %d MB does not fit /tmp %d MB and home %d MB", PackageFileMax>>20, tmp, home)
+	}
+}
+
+func TestTmpfsMB(t *testing.T) {
+	m := map[string]string{"/a": "mode=1777,exec,size=512m", "/b": "size=1g", "/c": "mode=0700", "/d": "size=x"}
+	for path, want := range map[string]int64{"/a": 512, "/b": 1024, "/c": 0, "/d": 0, "/none": 0} {
+		if got := TmpfsMB(m, path); got != want {
+			t.Errorf("%s: %d, want %d", path, got, want)
+		}
+	}
+}

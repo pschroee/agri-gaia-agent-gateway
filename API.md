@@ -1052,7 +1052,7 @@ closed when its grant ends or its data limit is reached.
   CONNECT host.
 - **Socket endpoints** (both sockets; the channel follows from the socket: `cli` at the sandbox's socket, `api` at pi's):
   `POST /internet {kind, reason, domains?, packages?, minutes?, megabytes?}` → `{status: "approved"|"rejected"|"refused",
-  name: "internet", message}` (a missing or unknown `kind` is 400), `GET /internet` → `{grants: Grant[]}` (active),
+  name: "internet", message}` (a missing or unknown `kind` is 400), `GET /internet` → `{grants: Grant[], blocked?: [{host, package?, reason, denied, at}]}` (active grants; the last three refusals with their text),
   `POST /internet/off {grant_id?}` → `{status: "off"|"already_off", …}`. A slot without a chat gets 409.
   `GET /tool/internet` → `{enabled, search, extract}` steers `web-gate.ts`: `web_search` is on offer with a `search` or
   `full` grant, `web_extract` with `search`, `domains` or `full`.
@@ -1075,7 +1075,7 @@ closed when its grant ends or its data limit is reached.
   "show N more"), `grants` = `{<id>: {kind, domains[], packages[]}}` for the grants the rows refer to, `unlisted` =
   `[{grant_id, chat_id, bytes}]`: data a `full` grant moved that no listed connection accounts for.
 - **Rows and refusal codes (stage 2):** a `WebRequest` carries `reason` (code of a refusal: `not_listed`, `https_only`,
-  `sni_mismatch`, `ip_literal`, `search_only`, `access_ended`, `internet_off`, `package_not_listed`, `version_mismatch`,
+  `sni_mismatch`, `ip_literal`, `search_only`, `access_ended`, `internet_off`, `package_not_listed`, `version_mismatch`, `too_large` (a package file over 256 MB, HTTP 413),
   plus `not_public`, `port_not_allowed`, `upstream`, `unassigned`, `cache_redirect`, `bad_request`) next to the text
   `denied`, and `service` (`search` for the gateway's SearXNG, `index` for the collapsed index/metadata row of the
   package gate; pip rows show host `pypi.org`, npm rows `registry.npmjs.org`). A refusal that no grant covers (not listed,

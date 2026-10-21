@@ -482,3 +482,23 @@ func TestLoadGrants(t *testing.T) {
 		t.Fatalf("decide after the load: %+v", d)
 	}
 }
+
+// agw-internet status lists the refusals the counter counts, newest first, at most three.
+func TestRecentRefusalsWindow(t *testing.T) {
+	e := setup(t)
+	chatID, _ := newChatNoNet(t, e)
+	for i := 0; i < 4; i++ {
+		e.m.RecordWeb(webproxy.Request{ChatID: chatID, Method: "GET", Host: "pypi.org", Port: 443, Status: 413, Denied: "blocked: too large", Reason: "too_large",
+			Package: "torch", StartedAt: time.Now(), Origin: "pkg"})
+	}
+	rs := e.m.RecentRefusals(chatID)
+	v := e.m.blockedView(context.Background(), chatID)
+	if len(rs) != 3 || rs[0].Reason != "too_large" || v == nil || v.Count != 4 || len(v.Last) != 3 {
+		t.Fatalf("refusals %+v, view %+v", rs, v)
+	}
+	// a chat without refusals
+	other, _ := newChatNoNet(t, e)
+	if rs := e.m.RecentRefusals(other); len(rs) != 0 {
+		t.Fatalf("other chat: %+v", rs)
+	}
+}
