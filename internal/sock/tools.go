@@ -418,6 +418,13 @@ func (th *toolHandler) record(chat string, tr toolRequest, op string, args json.
 	if f.Code != "" && f.Code != e.Error {
 		e.Error = strings.TrimSpace(f.Code + ": " + e.Error)
 	}
+	if len(f.CLIExits) > 0 && e.Error == "" {
+		parts := make([]string, len(f.CLIExits))
+		for i, x := range f.CLIExits {
+			parts[i] = fmt.Sprintf("%s %d", x.CLI, x.Exit)
+		}
+		e.Error = "cli_failed: " + strings.Join(parts, ", ")
+	}
 	e.Error = noNUL(e.Error)
 	th.rec.RecordToolExecution(e)
 }
@@ -551,9 +558,10 @@ func (th *toolHandler) bash(w http.ResponseWriter, r *http.Request) {
 				f = execproto.Frame{Done: true, Error: "timeout", Code: "timeout", FullOutputPath: f.FullOutputPath, SpillError: f.SpillError}
 				err = nil
 			}
+			f.CLIExits = op.cliExits()
 			th.record(chat, tr, execproto.OpBash, args, f, err, d, start, meta)
 			if err != nil && f.Error == "" {
-				f = execproto.Frame{Done: true, Error: err.Error(), Code: "EIO"}
+				f = execproto.Frame{Done: true, Error: err.Error(), Code: "EIO", CLIExits: f.CLIExits}
 				if errors.Is(err, context.Canceled) {
 					f.Error, f.Code = "aborted", "aborted"
 				}

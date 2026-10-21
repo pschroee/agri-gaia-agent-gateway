@@ -173,6 +173,16 @@ type Frame struct {
 	// only in the final frame and only when the slot traces (AGW_EXEC_TRACE=failed).
 	Trace          []byte `json:"trace,omitempty"`
 	TraceTruncated bool   `json:"traceTruncated,omitempty"`
+	// bash only, final frame (#202): gateway CLIs (agw-internet, agw-platform, agw-artifact) that ended
+	// with a code other than 0 inside this command, as reported by the CLI itself. The shell exit code
+	// can hide this (`agw-internet … | tail`).
+	CLIExits []CLIExit `json:"cliExits,omitempty"`
+}
+
+// CLIExit is one failed run of a gateway CLI inside a bash command.
+type CLIExit struct {
+	CLI  string `json:"cli"`
+	Exit int    `json:"exit"`
 }
 
 type ReadResult struct {

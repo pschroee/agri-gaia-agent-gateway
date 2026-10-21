@@ -10,6 +10,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"agw/internal/execproto"
 	"agw/internal/store"
 )
 
@@ -33,6 +34,32 @@ type fgOp struct {
 	stopped atomic.Bool
 	detach  chan detachReq
 	done    chan struct{} // the handler no longer accepts a conversion (command ended or converted)
+	mu      sync.Mutex
+	exits   []execproto.CLIExit // failed gateway CLI runs inside the command (#202)
+}
+
+// maxCLIExits bounds the reports kept per command.
+const maxCLIExits = 8
+
+// NoteCLIExit attaches the failed exit of a gateway CLI to the running command with this toolCallId of the
+// chat. It reports false if no such command runs (then the report is dropped).
+func (f *Foreground) NoteCLIExit(chat, toolCallID string, e execproto.CLIExit) bool {
+	op, err := f.get(chat, toolCallID)
+	if err != nil {
+		return false
+	}
+	op.mu.Lock()
+	if len(op.exits) < maxCLIExits {
+		op.exits = append(op.exits, e)
+	}
+	op.mu.Unlock()
+	return true
+}
+
+func (op *fgOp) cliExits() []execproto.CLIExit {
+	op.mu.Lock()
+	defer op.mu.Unlock()
+	return append([]execproto.CLIExit(nil), op.exits...)
 }
 
 type detachReq struct {
