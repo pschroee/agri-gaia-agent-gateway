@@ -747,7 +747,8 @@ func (m *Manager) SetInternet(ctx context.Context, chatID string, on bool) (Chat
 
 // SetInternetByUser is the user's switch (POST /api/chats/{id}/internet). Off ends all active grants; on starts a
 // full grant of the user's with the default limits. Logged as a socket_calls entry with via "user" and op
-// "internet_set" (result "on", "off", "already on" or "already off", issue #37).
+// "internet_set" (result "on", "off", "already on" or "already off", issue #37). "already on" means a full grant
+// was already active, not just some grant (issue #186).
 func (m *Manager) SetInternetByUser(ctx context.Context, chatID string, on bool) (ChatView, error) {
 	return m.setInternet(ctx, chatID, on, true)
 }
@@ -759,18 +760,21 @@ func (m *Manager) setInternet(ctx context.Context, chatID string, on, byUser boo
 	if _, err := m.st.GetChat(ctx, chatID); err != nil {
 		return ChatView{}, err
 	}
-	had := len(m.grants.active(chatID)) > 0
 	var switchedOn int64
 	var ended []int64
 	switch {
-	case on && !m.hasFull(chatID):
+	case on:
+		// hasFull and the grant creation share one lock, so a double click cannot start two full grants.
 		unlock := m.lock(chatID)
-		g, err := m.startUserFullGrant(ctx, chatID, store.GrantByUser, ViaUser)
-		unlock()
-		if err != nil {
-			return ChatView{}, err
+		if !m.hasFull(chatID) {
+			g, err := m.startUserFullGrant(ctx, chatID, store.GrantByUser, ViaUser)
+			if err != nil {
+				unlock()
+				return ChatView{}, err
+			}
+			switchedOn = g.ID
 		}
-		switchedOn = g.ID
+		unlock()
 	case !on:
 		reason := store.EndAgent
 		if byUser {
@@ -778,11 +782,18 @@ func (m *Manager) setInternet(ctx context.Context, chatID string, on, byUser boo
 		}
 		ended = m.EndAllGrants(ctx, chatID, reason)
 	}
-	slog.Info("internet toggled", "chat", chatID, "on", on, "by_user", byUser)
+	slog.Info("internet toggled", "chat", chatID, "on", on, "by_user", byUser,
+		"grant", switchedOn, "ended", len(ended))
 	if byUser {
-		result := map[bool]string{true: "on", false: "off"}[on]
-		if had == on {
-			result = "already " + result
+		// The result describes the effect: "on" only if this call started a full grant, "off" only if it ended one.
+		result := "already on"
+		if on && switchedOn > 0 {
+			result = "on"
+		} else if !on {
+			result = "already off"
+			if len(ended) > 0 {
+				result = "off"
+			}
 		}
 		slot := ""
 		m.mu.Lock()
