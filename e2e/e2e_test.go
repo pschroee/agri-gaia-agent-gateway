@@ -395,7 +395,7 @@ func TestSubagentLimitEnforced(t *testing.T) {
 	id := newChatWith(t, map[string]any{"variant": "cli", "internet": false})
 	s := subscribe(t, id)
 	ask(t, s, id, "Without asking back: use the subagent tool six times in the background (async: true), each with the agent scout, "+
-		"which runs 'sleep 30; echo done' with bash. Start all six right away, then wait for the results with bg_wait.", nil)
+		"which runs 'sleep 30; echo done' with bash. Start all six right away, then end your reply; you will be notified when they are done.", nil)
 	deadline := time.Now().Add(90 * time.Second)
 	peak := 0
 	for time.Now().Before(deadline) {

@@ -417,7 +417,7 @@ the token, and no agent code runs in pi's container.
   `git` is not installed and the shells are removed at build time. This is intended: anything that
   starts a program there would run next to pi and outside the log. The features of pi-subagents that
   rely on it are therefore not available; the guard additionally blocks `watchdog_diff`, so an image
-  with `git` would change nothing about it. The other tools of pi-subagents (`bg_wait`,
+  with `git` would change nothing about it. The other tools of pi-subagents (`bg_wait`, hidden from the main agent since #201,
   `contact_supervisor`, `subagent_supervisor`, `structured_output`, `subagents_enable`) start no
   processes. The absence of the shell is checked by `TestPiContainerWithoutShell`; the absence of
   `git` follows from the image (`node:24-bookworm-slim` without further installation) and is not
