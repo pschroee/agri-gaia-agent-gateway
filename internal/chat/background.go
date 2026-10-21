@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 
@@ -151,6 +152,13 @@ func (m *Manager) attachExecTrace(ctx context.Context, t store.BackgroundTask) {
 func (m *Manager) notifyBackground(ctx context.Context, t store.BackgroundTask) *live {
 	n := BackgroundNote(t)
 	unlock := m.queueLock(t.ChatID)
+	if m.takeEndSeen(t.ChatID, t.Seq) {
+		// The agent already read the end with bg_output: no note, no wake-up (issue #197).
+		_ = m.st.MarkBackgroundNotified(ctx, t.ChatID, t.Seq, false)
+		unlock()
+		slog.Info("background note dropped, agent read the end", "chat", t.ChatID, "task", t.ID)
+		return nil
+	}
 	m.mu.Lock()
 	l := m.live[t.ChatID]
 	busy := m.sending[t.ChatID] || (l != nil && (l.running || l.compacting))
@@ -169,6 +177,63 @@ func (m *Manager) notifyBackground(ctx context.Context, t store.BackgroundTask) 
 		return nil
 	}
 	return l
+}
+
+func (m *Manager) takeEndSeen(chatID string, seq int) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.endSeen[chatID][seq] {
+		return false
+	}
+	delete(m.endSeen[chatID], seq)
+	return true
+}
+
+// BackgroundEndSeen: the main agent read the end of a task with bg_output (bgtask.Notifier). The
+// note about the end tells it nothing new and would only wake it a second time (issue #197): an
+// open note is removed from the queue, a note not yet created is not created.
+func (m *Manager) BackgroundEndSeen(chatID string, seq int) {
+	ctx := context.Background()
+	id := store.BgID(seq)
+	unlock := m.queueLock(chatID)
+	open, err := m.st.ListQueue(ctx, chatID)
+	if err != nil {
+		unlock()
+		slog.Warn("queue not read for a seen background end", "chat", chatID, "task", id, "err", err)
+		return
+	}
+	var entry *store.QueueEntry
+	for i := range open {
+		e := &open[i]
+		if e.Kind == store.QueueSystem && e.Note == store.NoteBackground && slices.Contains(e.Refs, id) {
+			entry = e
+			break
+		}
+	}
+	if entry != nil {
+		err := m.st.RemoveQueued(ctx, chatID, entry.ID)
+		if err == nil {
+			_ = m.st.MarkBackgroundNotified(ctx, chatID, seq, false)
+		}
+		unlock()
+		if err != nil {
+			slog.Warn("background note not removed", "chat", chatID, "task", id, "err", err)
+			return
+		}
+		slog.Info("background note dropped, agent read the end", "chat", chatID, "task", id)
+		m.publishQueue(ctx, chatID, "removed", []string{entry.ID}, "")
+		return
+	}
+	// No open note. Not yet notified: the end is about to be reported; remember the reading.
+	if row, err := m.st.GetBackgroundTask(ctx, chatID, seq); err == nil && row.NotifiedAt == nil {
+		m.mu.Lock()
+		if m.endSeen[chatID] == nil {
+			m.endSeen[chatID] = map[int]bool{}
+		}
+		m.endSeen[chatID][seq] = true
+		m.mu.Unlock()
+	}
+	unlock()
 }
 
 // BackgroundNote is the note to the agent at the end of a task. The orchestrator builds the summary

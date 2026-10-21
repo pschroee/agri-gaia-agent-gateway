@@ -346,6 +346,9 @@ type Manager struct {
 	pendingModel map[string]string
 	// levels: thinking levels per model, as pi last reported them (get_available_thinking_levels).
 	levels map[string][]string
+	// endSeen: background tasks (chat -> seq) whose end the main agent read with bg_output before the
+	// note about it was enqueued; the note is then dropped (issue #197, under m.mu).
+	endSeen map[string]map[int]bool
 	// userAt: the user's last action per chat (send, abort, remove, stop, resume);
 	// decisive for the postponement by background tasks (Review 3, M1).
 	userAt map[string]time.Time
@@ -413,7 +416,7 @@ func NewManager(st *store.Store, p *pool.Pool[Agent], cat *config.Catalog, blobs
 	return &Manager{st: st, pool: p, cat: cat, blobs: blobs, broker: broker, opt: opt,
 		live: map[string]*live{}, subs: map[string]map[chan Event]struct{}{}, allSubs: map[chan ChatEvent]struct{}{}, chatMu: map[string]*sync.Mutex{},
 		imgMu: map[string]*sync.Mutex{}, wsMu: map[string]*sync.Mutex{}, qMu: map[string]*sync.Mutex{},
-		sending: map[string]bool{}, delivering: map[string][]*turnMeta{}, resuming: map[string]bool{}, starting: map[string]bool{}, pendingModel: map[string]string{}, levels: map[string][]string{}, userAt: map[string]time.Time{}, aborts: map[string]uint64{},
+		sending: map[string]bool{}, delivering: map[string][]*turnMeta{}, resuming: map[string]bool{}, starting: map[string]bool{}, pendingModel: map[string]string{}, levels: map[string][]string{}, userAt: map[string]time.Time{}, endSeen: map[string]map[int]bool{}, aborts: map[string]uint64{},
 		rechecks: map[string]recheck{}, apMu: map[string]*sync.Mutex{}, planCache: map[string]planCacheEntry{},
 		expCache: map[string]expGateEntry{}, grants: newGrantBook()}
 }
@@ -1168,6 +1171,7 @@ func (m *Manager) detach(ctx context.Context, chatID string, l *live, save, work
 	m.mu.Lock()
 	if m.live[chatID] == l {
 		delete(m.live, chatID)
+		delete(m.endSeen, chatID)
 	}
 	if l.idle != nil {
 		l.idle.Stop()

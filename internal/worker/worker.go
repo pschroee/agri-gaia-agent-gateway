@@ -900,6 +900,7 @@ func (nopNotifier) BackgroundCreate(_ context.Context, t store.BackgroundTask) (
 }
 func (nopNotifier) BackgroundProgress(store.BackgroundTask)    {}
 func (nopNotifier) BackgroundEnded(store.BackgroundTask, bool) {}
+func (nopNotifier) BackgroundEndSeen(string, int)              {}
 func (nopNotifier) BackgroundLookup(context.Context, string, int) (store.BackgroundTask, error) {
 	return store.BackgroundTask{}, store.ErrNotFound
 }

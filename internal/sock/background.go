@@ -138,6 +138,9 @@ func (th *toolHandler) bgOutput(w http.ResponseWriter, r *http.Request) {
 		res.Task = &bt
 	}
 	th.recordBg(chat, br, OpBgOutput, map[string]any{"id": br.ID, "tail_lines": br.TailLines}, out, res.Task, res.Error, start, commandMeta{})
+	if err == nil {
+		th.bg.EndSeen(chat, br.ID, SessionKey(br.SessionFile))
+	}
 	writeJSON(w, http.StatusOK, res)
 }
 
