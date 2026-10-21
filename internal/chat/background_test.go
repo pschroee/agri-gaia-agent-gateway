@@ -327,3 +327,110 @@ func TestBackgroundEndedAttachesTrace(t *testing.T) {
 		t.Fatalf("late Done frame: %+v %v", tbl.Rows, err)
 	}
 }
+
+// Issue #197: the agent read the end with bg_output while the note was still queued: the note goes
+// away, nobody is woken, and the row is marked as notified without a wake-up.
+func TestEndSeenDropsQueuedNote(t *testing.T) {
+	e := setup(t)
+	id, a, release := busyChat(t, e)
+	events, cancel := e.m.Subscribe(id)
+	defer cancel()
+	bt := startBg(t, e, id, "make")
+	endBg(e, bt, 2, "error\n")
+	if q, _ := e.m.Queue(context.Background(), id); len(q) != 1 {
+		t.Fatalf("note not queued: %+v", q)
+	}
+	e.m.BackgroundEndSeen(id, bt.Seq)
+	if q, _ := e.m.Queue(context.Background(), id); len(q) != 0 {
+		t.Fatalf("note still queued: %+v", q)
+	}
+	for removed := false; !removed; {
+		select {
+		case ev := <-events:
+			if q, ok := ev.Data.(QueueEvent); ev.Kind == "queue" && ok && q.Change == "removed" {
+				removed = true
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatal("no queue event \"removed\"")
+		}
+	}
+	release()
+	waitSettled(t, e, id)
+	if len(a.prompts()) != 1 {
+		t.Fatalf("woken for a note the agent already knew: %q", a.prompts())
+	}
+	row, _ := e.st.GetBackgroundTask(context.Background(), id, bt.Seq)
+	if row.NotifiedAt == nil || row.Woke {
+		t.Fatalf("row: %+v", row)
+	}
+}
+
+// The reading comes before the end is reported: no note is created, no wake-up.
+func TestEndSeenBeforeNotify(t *testing.T) {
+	e := setup(t)
+	id, a := settledChat(t, e)
+	bt := startBg(t, e, id, "echo x")
+	e.m.BackgroundEndSeen(id, bt.Seq)
+	endBg(e, bt, 0, "x\n")
+	time.Sleep(100 * time.Millisecond)
+	if q, _ := e.m.Queue(context.Background(), id); len(q) != 0 {
+		t.Fatalf("enqueued: %+v", q)
+	}
+	if len(a.prompts()) != 1 {
+		t.Fatalf("woken: %q", a.prompts())
+	}
+	row, _ := e.st.GetBackgroundTask(context.Background(), id, bt.Seq)
+	if row.NotifiedAt == nil || row.Woke {
+		t.Fatalf("row: %+v", row)
+	}
+	e.m.mu.Lock()
+	left := len(e.m.endSeen[id])
+	e.m.mu.Unlock()
+	if left != 0 {
+		t.Fatalf("mark not consumed: %d", left)
+	}
+}
+
+// A note that has already been delivered stays untouched, and no mark is left behind.
+func TestEndSeenKeepsDelivered(t *testing.T) {
+	e := setup(t)
+	id, a := settledChat(t, e)
+	bt := startBg(t, e, id, "echo x")
+	endBg(e, bt, 0, "x\n")
+	waitUntil(t, "wake-up", func() bool { return len(a.prompts()) == 2 })
+	waitSettled(t, e, id)
+	e.m.BackgroundEndSeen(id, bt.Seq)
+	row, _ := e.st.GetBackgroundTask(context.Background(), id, bt.Seq)
+	if !row.Woke || row.NotifiedAt == nil {
+		t.Fatalf("row changed: %+v", row)
+	}
+	e.m.mu.Lock()
+	left := len(e.m.endSeen[id])
+	e.m.mu.Unlock()
+	if left != 0 {
+		t.Fatalf("mark left behind: %d", left)
+	}
+}
+
+// The mark does not outlive the sandbox.
+func TestEndSeenClearedOnClose(t *testing.T) {
+	e := setup(t)
+	id, _ := settledChat(t, e)
+	bt := startBg(t, e, id, "sleep 300")
+	e.m.BackgroundEndSeen(id, bt.Seq)
+	e.m.mu.Lock()
+	set := e.m.endSeen[id][bt.Seq]
+	e.m.mu.Unlock()
+	if !set {
+		t.Fatal("mark not set")
+	}
+	if _, err := e.m.Suspend(context.Background(), id); err != nil {
+		t.Fatal(err)
+	}
+	e.m.mu.Lock()
+	_, left := e.m.endSeen[id]
+	e.m.mu.Unlock()
+	if left {
+		t.Fatal("mark survived the sandbox")
+	}
+}

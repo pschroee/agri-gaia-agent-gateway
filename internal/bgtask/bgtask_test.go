@@ -65,6 +65,7 @@ type fakeNotifier struct {
 	progress []store.BackgroundTask
 	ended    []store.BackgroundTask
 	notify   []bool
+	seen     []int
 	endedCh  chan store.BackgroundTask
 }
 
@@ -93,6 +94,11 @@ func (n *fakeNotifier) BackgroundEnded(t store.BackgroundTask, notify bool) {
 	if n.endedCh != nil {
 		n.endedCh <- t
 	}
+}
+func (n *fakeNotifier) BackgroundEndSeen(_ string, seq int) {
+	n.mu.Lock()
+	n.seen = append(n.seen, seq)
+	n.mu.Unlock()
 }
 func (n *fakeNotifier) BackgroundLookup(_ context.Context, chatID string, seq int) (store.BackgroundTask, error) {
 	n.mu.Lock()
@@ -343,5 +349,47 @@ func TestEndCarriesTrace(t *testing.T) {
 	}
 	if e.ToolCallID != "call_trace" || e.ID != "bg-1" {
 		t.Fatalf("assignment fields: %+v", e)
+	}
+}
+
+func TestEndSeenOnlyWhenEnded(t *testing.T) {
+	r, run, n := newReg(t, 2)
+	bt, err := r.Start(context.Background(), StartParams{ChatID: "c1", Session: "main", ToolCallID: "call_1", Command: "sleep seen", Cwd: "/workspace"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.EndSeen("c1", bt.ID, "main")
+	if len(n.seen) != 0 {
+		t.Fatalf("running task reported as seen: %v", n.seen)
+	}
+	code := 0
+	run.end("sleep seen", execproto.Frame{Done: true, Exit: &code})
+	waitEnded(t, n)
+	r.EndSeen("c1", bt.ID, "main")
+	if len(n.seen) != 1 || n.seen[0] != bt.Seq {
+		t.Fatalf("ended task not reported: %v", n.seen)
+	}
+	r.EndSeen("c1", "bg-77", "main") // unknown to the registry: nothing
+	r.EndSeen("other", bt.ID, "main")
+	if len(n.seen) != 1 {
+		t.Fatalf("unknown task reported: %v", n.seen)
+	}
+}
+
+func TestEndSeenOnlyMain(t *testing.T) {
+	r, run, n := newReg(t, 2)
+	// Read by a subagent session: the main agent does not know the end.
+	bt, _ := r.Start(context.Background(), StartParams{ChatID: "c1", Session: "main", ToolCallID: "call_1", Command: "echo a", Cwd: "/workspace"})
+	// Started by a subagent: the note goes to the main session, which has not read anything.
+	sub, _ := r.Start(context.Background(), StartParams{ChatID: "c1", Session: "9017da63-d08d-43ab-b978-e86cb7afc45b", ToolCallID: "call_2", Command: "echo b", Cwd: "/workspace"})
+	code := 0
+	run.end("echo a", execproto.Frame{Done: true, Exit: &code})
+	run.end("echo b", execproto.Frame{Done: true, Exit: &code})
+	waitEnded(t, n)
+	waitEnded(t, n)
+	r.EndSeen("c1", bt.ID, "9017da63-d08d-43ab-b978-e86cb7afc45b")
+	r.EndSeen("c1", sub.ID, "main")
+	if len(n.seen) != 0 {
+		t.Fatalf("reported although not the main session: %v", n.seen)
 	}
 }

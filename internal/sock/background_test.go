@@ -20,6 +20,7 @@ import (
 type fakeBg struct {
 	starts []bgtask.StartParams
 	stops  []string
+	seen   []string
 
 	mu          sync.Mutex
 	adoptedOut  []byte
@@ -47,6 +48,11 @@ func (f *fakeBg) Stop(_ context.Context, chatID, id, by string) (store.Backgroun
 	return store.BackgroundTask{ID: id, Seq: 1, ChatID: chatID, State: store.BgStopped, StoppedBy: by}, nil
 }
 func (f *fakeBg) Max() int { return 5 }
+func (f *fakeBg) EndSeen(chatID, id, session string) {
+	f.mu.Lock()
+	f.seen = append(f.seen, chatID+":"+id+":"+session)
+	f.mu.Unlock()
+}
 
 func (f *fakeBg) Adopt(_ context.Context, p bgtask.StartParams, logPath string, soFar []byte, cancel context.CancelFunc) (*bgtask.Adopted, error) {
 	f.mu.Lock()
@@ -120,9 +126,16 @@ func TestBackgroundEndpoints(t *testing.T) {
 	if !strings.Contains(body, "done-bg") || !strings.Contains(body, `"state":"exited"`) {
 		t.Fatalf("Output: %s", body)
 	}
+	// Issue #197: a successful read reports itself to the registry; a failed one does not.
+	if len(bg.seen) != 1 || bg.seen[0] != "chat-1:bg-1:main" {
+		t.Fatalf("EndSeen after a successful bg_output: %v", bg.seen)
+	}
 	_, body = postJSON(t, c, "/tool/bg/output", map[string]any{"toolCallId": "call_03", "tool": "bg_output", "id": "bg-9"})
 	if !strings.Contains(body, "unknown background task") {
 		t.Fatalf("unknown: %s", body)
+	}
+	if len(bg.seen) != 1 {
+		t.Fatalf("EndSeen after a failed bg_output: %v", bg.seen)
 	}
 	_, body = postJSON(t, c, "/tool/bg/stop", map[string]any{"toolCallId": "call_04", "tool": "bg_stop", "id": "bg-1"})
 	if !strings.Contains(body, `"stopped_by":"agent"`) || bg.stops[0] != "bg-1:agent" {
