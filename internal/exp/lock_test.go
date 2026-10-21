@@ -74,14 +74,14 @@ func testLock() *Lock {
 	return &Lock{
 		GatewayCommit: "abc123", GatewayDescribe: "abc123",
 		ImagePi: "sha256:pi", ImageExec: "sha256:exec",
-		CatalogSHA256: "cat", SkillsSHA256: "skills", InstructionSHA256: "instr",
+		CatalogSHA256: "cat", SkillsSHA256: "skills", InstructionSHA256: "instr", APIIndexSHA256: "api",
 	}
 }
 
 func TestCompareEnvironmentMatches(t *testing.T) {
 	env := Environment{
 		GatewayCommit: "abc123", GatewayDescribe: "abc123",
-		CatalogSHA256: "cat", SkillsSHA256: "skills", InstructionSHA256: "instr",
+		CatalogSHA256: "cat", SkillsSHA256: "skills", InstructionSHA256: "instr", APIIndexSHA256: "api",
 		ImagesPi: []string{"sha256:pi"}, ImagesExec: []string{"sha256:exec"},
 	}
 	if problems := CompareEnvironment(testLock(), env); len(problems) != 0 {
@@ -112,7 +112,7 @@ func TestCompareEnvironmentReportsEachDeviation(t *testing.T) {
 
 func TestCompareEnvironmentNeedsWarmSlots(t *testing.T) {
 	env := Environment{GatewayCommit: "abc123", GatewayDescribe: "abc123", CatalogSHA256: "cat",
-		SkillsSHA256: "skills", InstructionSHA256: "instr"}
+		SkillsSHA256: "skills", InstructionSHA256: "instr", APIIndexSHA256: "api"}
 	problems := CompareEnvironment(testLock(), env)
 	if len(problems) != 2 {
 		t.Fatalf("problems: %v", problems)
@@ -161,5 +161,30 @@ func TestTreeSHA256IsStableAndSensitive(t *testing.T) {
 	}
 	if missing, err := TreeSHA256(filepath.Join(dir, "nope")); err != nil || missing != "" {
 		t.Fatalf("missing directory: %q %v", missing, err)
+	}
+}
+
+// #198: the REST operation index is part of the frozen material; an empty or other value is reported.
+func TestCompareEnvironmentAPIIndex(t *testing.T) {
+	env := Environment{
+		GatewayCommit: "abc123", GatewayDescribe: "abc123",
+		CatalogSHA256: "cat", SkillsSHA256: "skills", InstructionSHA256: "instr", APIIndexSHA256: "other",
+		ImagesPi: []string{"sha256:pi"}, ImagesExec: []string{"sha256:exec"},
+	}
+	problems := CompareEnvironment(testLock(), env)
+	if len(problems) != 1 || !strings.Contains(problems[0].String(), "api_index_sha256") {
+		t.Fatalf("deviating index: %v", problems)
+	}
+	env.APIIndexSHA256 = ""
+	problems = CompareEnvironment(testLock(), env)
+	if len(problems) != 1 || !strings.Contains(problems[0].String(), "api_index_sha256") {
+		t.Fatalf("empty index: %v", problems)
+	}
+	lock := testLock()
+	lock.APIIndexSHA256 = ""
+	env.APIIndexSHA256 = "api"
+	problems = CompareEnvironment(lock, env)
+	if len(problems) != 1 || !strings.Contains(problems[0].String(), "not frozen") {
+		t.Fatalf("lock without index: %v", problems)
 	}
 }

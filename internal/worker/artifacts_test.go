@@ -47,7 +47,7 @@ func TestArtifactsSkillSendsWithoutApproval(t *testing.T) {
 // The system note names the way to send a file of the chat's bindings, without approval; the REST binding has none.
 func TestSystemNoteSendFiles(t *testing.T) {
 	for _, ts := range toolset.All() {
-		note := SystemNoteFor(ts.Key(), 4, nil)
+		note := SystemNoteFor(ts.Key(), 4, nil, "")
 		if strings.Contains(note, "approved by the user, and you wait") || strings.Contains(note, "{{send}}") {
 			t.Errorf("%s: old upload line or placeholder left", ts.Key())
 		}

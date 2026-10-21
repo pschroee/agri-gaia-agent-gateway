@@ -1,6 +1,6 @@
 ---
 name: platform
-description: Work with the Agri-Gaia platform (datasets, models, training, background tasks, edge devices, container images) via agw-platform. Use when the user asks about data or models on the platform or wants to create, start or follow a training there, and to deploy inference images to edge devices when capabilities shows an edge device online, otherwise build the image and tell the user that no device is available. For a task with several writing calls (e.g. split, train, take over the model) propose one plan with all known steps.
+description: Work with the Agri-Gaia platform (datasets, models, training, background tasks, edge devices, container images) via agw-platform. The system note lists every agw-platform command with its arguments, so a single action (list, show, rename, update) needs neither this file nor --help; read this file for flows with several steps. Use it when the user wants to create, start or follow a training, upload datasets or models or build inference images, and to deploy inference images to edge devices when capabilities shows an edge device online, otherwise build the image and tell the user that no device is available. For a task with several writing calls (e.g. split, train, take over the model) propose one plan with all known steps.
 ---
 
 # Agri-Gaia platform
@@ -13,8 +13,9 @@ annotations), training from installed templates, model management, inference con
 edge devices. You reach it **only** via `agw-platform`; the orchestrator logs in there, there is no
 token in the sandbox, and `curl` against the platform gets you nowhere.
 
+The system note lists every command with its arguments; `agw-platform <command> --help` shows the description and options of one command.
+
 ```bash
-agw-platform --help                 # all commands
 agw-platform datasets               # datasets (all users)
 agw-platform dataset 3              # one dataset
 agw-platform models                 # models

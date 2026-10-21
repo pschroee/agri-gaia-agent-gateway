@@ -21,7 +21,7 @@ const MAX_SHOWN = 64 * 1024;
 
 const description = `Calls the REST API of the Agri-Gaia platform (datasets, models, training, tasks, edge devices, container images). You do not log in; the orchestrator takes care of login, checking against your delegated rights and the user's approval of writing calls.
 - Paths as in the platform's OpenAPI description, e.g. GET /datasets, GET /datasets/3, GET /train/providers, POST /train/config, GET /tasks/12.
-- Which paths exist: GET /_agw/paths (one line per operation, narrow down with query prefix=/train). Which rights you have: GET /_agw/rights. What this setup offers (vision, internet, notebook, edge, pre-annotation, compute calls left, bindings): GET /_agw/capabilities.
+- Which paths exist: the system note lists the platform's operations and the gateway's own paths (/_agw/…). Which rights you have: GET /_agw/rights. What this setup offers (vision, internet, notebook, edge, pre-annotation, compute calls left, bindings): GET /_agw/capabilities.
 - Body only as JSON; files cannot be uploaded this way.
 - Response 403 with "denied by the authorization service" means the call was refused. 403 with "rejected by the user": the user rejected the writing call.
 - Every call has an effect class: read runs directly; write, compute (building or starting a training; a chat has a limited number) and irreversible (deleting, publishing) wait until the user decides, irreversible ones always.
@@ -173,7 +173,17 @@ export default function (pi: ExtensionAPI) {
 			let text = r.text;
 			if (text.length > MAX_SHOWN) text = text.slice(0, MAX_SHOWN) + "\n[… truncated; ask again with skip/limit or a narrower call]";
 			const loc = r.headers?.location ? ` · Location: ${r.headers.location}` : "";
-			return { content: [{ type: "text", text: `HTTP ${r.status}${loc}\n${text}` }], details: { status: r.status } };
+			// The gateway's note to the agent (X-Agw-Note, URL-encoded) comes last, as in the other bindings.
+			let note = "";
+			const rawNote = r.headers?.["x-agw-note"];
+			if (typeof rawNote === "string" && rawNote !== "") {
+				try {
+					note = "\n" + decodeURIComponent(rawNote);
+				} catch {
+					note = "\n" + rawNote;
+				}
+			}
+			return { content: [{ type: "text", text: `HTTP ${r.status}${loc}\n${text}${note}` }], details: { status: r.status } };
 		},
 	});
 }

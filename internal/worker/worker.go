@@ -137,7 +137,7 @@ const hiddenSubagentTools = "subagents_enable,bg_wait"
 
 // SystemNote is appended to pi's system prompt (combinations with bash, default number of background
 // tasks; a slot uses SystemNoteFor with the configured limit).
-var SystemNote = SystemNoteFor("cli", execproto.DefaultBgMax, nil)
+var SystemNote = SystemNoteFor("cli", execproto.DefaultBgMax, nil, "")
 
 // bgNote (#201: foreground or background depending on whether the next step needs the result): the paragraph on background tasks, only for variants with bash. The last sentence explains
 // what orchestrator notes are (Review 3, H1).
@@ -180,8 +180,9 @@ const (
 // bgMax at the same time). caps are the capability lines of this setup (chat.SetupLines, G1.9): what
 // the setup offers and what does not change during a chat. It is fixed per slot (no per-turn content),
 // so the prefix cache is preserved — state such as internet or the compute calls left belongs in the
-// tool capabilities, not here.
-func SystemNoteFor(variant string, bgMax int, caps []string) string {
+// tool capabilities, not here. apiIndex is the REST operation index of the platform (platform.APIIndex)
+// for variants with the REST binding; "" says it was not available.
+func SystemNoteFor(variant string, bgMax int, caps []string, apiIndex string) string {
 	base, experiment := SplitExperiment(variant)
 	bg, mmdc, inputs := "", "", inputsAPI
 	ts, err := toolset.FromVariant(base)
@@ -206,7 +207,8 @@ func SystemNoteFor(variant string, bgMax int, caps []string) string {
 		template = systemNoteExperiment
 	}
 	return strings.NewReplacer("{{bg}}", bg, "{{mmdc}}", mmdc, "{{inputs}}", inputs, "{{internet}}", internet,
-		"{{send}}", sendNote(ts), "{{capabilities}}", capabilityNote(ts, caps)).Replace(template)
+		"{{send}}", sendNote(ts), "{{capabilities}}", capabilityNote(ts, caps),
+		"{{platform}}", platformNote(ts, apiIndex)).Replace(template)
 }
 
 // systemNoteExperiment is the system note of an experiment slot: systemNote without the paragraph on
@@ -249,6 +251,43 @@ func capabilityNote(ts toolset.Set, caps []string) string {
 	n := "- This setup offers " + strings.Join(caps, "; ") + ". This is fixed for this chat; the current state (internet, compute calls, devices online) you ask with the capabilities (" +
 		strings.Join(how, " or ") + ") before you plan work that needs one of them; every entry says what to do without that capability.\n"
 	return n
+}
+
+// platformNote is the paragraph of the system note that gives every binding the full directory of its
+// interface (#198, rule of equal information): the commands of agw-platform for the command line, the
+// operations of the REST API for the REST binding. MCP carries its directory in the tool list. Like
+// capabilityNote it ends with a newline, or is empty.
+func platformNote(ts toolset.Set, apiIndex string) string {
+	var b strings.Builder
+	if ts.Has(toolset.CLI) {
+		b.WriteString("- Platform commands: every agw-platform command and its arguments is listed below; (approval) marks the ones that wait for the user's decision. For a single platform action (list, show, rename, update, start) call the command directly with these arguments; do not read the skill platform or run --help first. agw-platform <command> --help shows the description of one command when an argument is unclear; the skill platform explains flows with several steps (training, plans, uploads, inference images, edge devices).\n")
+		b.WriteString(indent(platform.CLIIndex()))
+	}
+	if ts.Has(toolset.API) {
+		if apiIndex != "" {
+			b.WriteString("- Platform API: every operation of the platform's REST API is listed below (method, path, purpose, query parameters with * = required, kind of body); blocked paths are left out. For a single platform action call the path directly with platform_http; do not call GET /_agw/paths first, it returns the same list. The gateway's own paths follow under Gateway paths.\n")
+			b.WriteString(indent(apiIndex))
+		} else {
+			b.WriteString("- Platform API: GET /_agw/paths lists every operation of the platform's REST API, one per line; read it once before your first platform call. The gateway's own paths follow under Gateway paths.\n")
+		}
+		b.WriteString("- Gateway paths: the gateway answers these paths itself; call them with platform_http like the platform's paths. Each line gives method, path ({name} is a path argument), what the call does, query and JSON body fields (* = required) and the tool name the gateway's notes use for it. Arguments that need files of the sandbox are not available here. When an argument is unclear, GET /_agw/paths with query prefix=/_agw/<area> (e.g. /_agw/search) describes each argument; do not call it before a call whose arguments are listed here.\n")
+		b.WriteString(platform.GatewayIndex())
+	}
+	return b.String()
+}
+
+// indent puts two spaces before every line of s.
+func indent(s string) string {
+	var b strings.Builder
+	for _, l := range strings.SplitAfter(s, "\n") {
+		if l != "" {
+			b.WriteString("  " + l)
+		}
+	}
+	if !strings.HasSuffix(b.String(), "\n") {
+		b.WriteString("\n")
+	}
+	return b.String()
 }
 
 // sendFile names, per binding, how the agent sends a file to the user (issue #62); the REST binding has no file tools.
@@ -321,7 +360,7 @@ const systemNote = `You work in an isolated sandbox (Debian, Python 3, curl, jq,
   - Files you will still need later (scripts, intermediate results, charts) therefore go under /workspace, not under /tmp.
 {{send}}
 {{internet}}
-{{capabilities}}- Your tools for commands and files run in this sandbox; the orchestrator executes and logs every call. pi itself runs separately from it.
+{{capabilities}}{{platform}}- Your tools for commands and files run in this sandbox; the orchestrator executes and logs every call. pi itself runs separately from it.
 - For self-contained subtasks you can start subagents with the tool subagent: individually with agent and task, in the foreground or in the background, or with workflowScript (chains with runs.run, parallel runs with runs.all; the script runs in the sandbox). Subagents have the same tools as you, including web search once internet is on. Anything that takes longer than about a minute (research, several subagents) you start in the background with async: true: you are then free again immediately, the user can keep talking to you, and you are notified as soon as the subagents are done; do not wait for them actively, there is no tool for waiting; if your next step needs a subagent's result, run that subagent in the foreground. Subagents can ask you questions while they work with contact_supervisor; you answer with subagent_supervisor (action reply, replyTo from the request). You give a running background subagent further hints with subagent (action steer, id of the run). With the tool intercom you and the subagents talk to each other directly (action list shows the sessions, send sends a message, ask waits for a reply, reply answers); subagents can also write to each other this way. workflowScriptPath, named workflows, runs.host, gate/acceptance, cwd, output and creating or changing agents are blocked. Give every subagent a short, descriptive name (for runs.run/runs.all the key, e.g. "reid" or "datasets"); the user sees it in the UI. You read the results of subagents from their reply or from files they write under /workspace; paths under /agent/sessions from notes about subagents are not in your sandbox.
 - Task list: for work with several steps, create a task list with the tool todo at the start; the user sees it live. Set a task to in_progress before you start on it, and to completed immediately once it is done, not all at once at the end; in_progress marks exactly what you are working on right now. If the plan changes, add or delete tasks. Before your final reply, no task is in_progress anymore.
 - You show images in your reply with ![description](/workspace/file.png): PNG, JPEG, GIF or WebP under /workspace, /tmp or /home/agent. URLs from the internet and SVG are not displayed. Save matplotlib charts as PNG (plt.savefig), not plt.show().
@@ -424,7 +463,7 @@ type VariantInfo struct {
 // command line pi keeps its default tools and adds those of the extensions (MCP, REST). All
 // combinations get the task list (todo).
 func PiArgs(variant, provider, model string) ([]string, error) {
-	return piArgs(variant, provider, model, SystemNoteFor(variant, execproto.DefaultBgMax, nil))
+	return piArgs(variant, provider, model, SystemNoteFor(variant, execproto.DefaultBgMax, nil, ""))
 }
 
 func piArgs(variant, provider, model, note string) ([]string, error) {
@@ -525,6 +564,8 @@ type Factory struct {
 	Cat     *config.Catalog
 	Env     config.Env
 	Backend Backend // set after the manager has been created
+	// APIIndex is the REST operation index of the platform for the system note (#198); nil: none.
+	APIIndex *platform.APIIndex
 	// Relay builds, for one slot, the handlers the execution sandbox's socket hands internet traffic to (the web
 	// proxy and the package gate); nil: the socket carries no internet traffic.
 	Relay     func(slotID string, fg *sock.Foreground) sock.Relay
@@ -735,7 +776,7 @@ func (w *Worker) SetExecTrace(ctx context.Context, on bool) error {
 func (f *Factory) Create(ctx context.Context, slotID, variant string) (chat.Agent, error) {
 	began := time.Now()
 	prov, model, _ := f.Cat.Lookup(f.Cat.Default)
-	args, err := piArgs(variant, prov.ID, model.ID, SystemNoteFor(variant, f.bgMax(), f.capabilities(variant)))
+	args, err := piArgs(variant, prov.ID, model.ID, SystemNoteFor(variant, f.bgMax(), f.capabilities(variant), f.APIIndex.Get(ctx)))
 	if err != nil {
 		return nil, err
 	}

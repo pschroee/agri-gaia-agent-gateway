@@ -94,7 +94,7 @@ func TestMermaidCheckSettings(t *testing.T) {
 // mermaid-check only where there is bash.
 func TestSystemNoteMermaidRules(t *testing.T) {
 	for _, ts := range toolset.All() {
-		note := SystemNoteFor(ts.Key(), 4, nil)
+		note := SystemNoteFor(ts.Key(), 4, nil, "")
 		if !strings.Contains(note, "language mermaid; the web UI renders it (skill mermaid)."+mermaidRules) {
 			t.Errorf("%s: mermaid rules missing", ts.Key())
 		}

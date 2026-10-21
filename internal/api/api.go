@@ -74,6 +74,8 @@ type Server struct {
 	// (BuildEnvironment); zero in tests, where environment() supplies the identity of the binary and
 	// the instruction checksum.
 	Environment exp.Environment
+	// APIIndex is the REST operation index of the system note (#198); its checksum is part of the environment.
+	APIIndex *platform.APIIndex
 	// OwnerSource answers who owns chats and approvals; nil means M (replaceable for tests).
 	OwnerSource Owners
 }

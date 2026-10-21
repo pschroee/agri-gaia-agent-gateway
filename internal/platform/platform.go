@@ -504,11 +504,8 @@ func normalize(r Request, agent bool) (Request, error) {
 			}
 		}
 	}
-	lp := strings.ToLower(r.Path)
-	for _, b := range blocked {
-		if lp == b || strings.HasPrefix(lp, b+"/") {
-			return r, fmt.Errorf("path %q is blocked for the agent: %w", r.Path, ErrBlocked)
-		}
+	if PathBlocked(r.Path) {
+		return r, fmt.Errorf("path %q is blocked for the agent: %w", r.Path, ErrBlocked)
 	}
 	if why := blockedCall(r); why != "" { // inference container templates, issue #67
 		return r, errors.New(why)
@@ -1095,4 +1092,15 @@ func fileCount(n int) string {
 		return "1 file"
 	}
 	return fmt.Sprintf("%d files", n)
+}
+
+// PathBlocked reports whether the platform path is one the agent must not reach at all.
+func PathBlocked(p string) bool {
+	lp := strings.ToLower(p)
+	for _, b := range blocked {
+		if lp == b || strings.HasPrefix(lp, b+"/") {
+			return true
+		}
+	}
+	return false
 }

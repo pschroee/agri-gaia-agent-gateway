@@ -169,6 +169,12 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	// #198: the REST binding's system note lists the platform's operations. Fetched once without a token;
+	// an unreachable platform leaves it empty (the note then says to read GET /_agw/paths) and the next
+	// slot tries again.
+	apiIndex := platform.NewAPIIndex(env.PlatformAPIURL, nil)
+	fac.APIIndex = apiIndex
+	apiIndex.Get(ctx)
 	pcfg := platform.Config{APIURL: env.PlatformAPIURL, TokenURL: env.PlatformTokenURL,
 		ClientID: env.PlatformClientID, ClientSecret: env.PlatformClientSecret, User: env.PlatformUser, Password: env.PlatformPassword,
 		Exchange: env.PlatformExchange, Audiences: env.PlatformAudiences,
@@ -469,7 +475,7 @@ func run() error {
 	environment := api.BuildEnvironment(env)
 	apiSrv := &http.Server{Addr: env.HTTPAddr, Handler: (&api.Server{M: m, Pool: p, Cat: cat, Env: env, Web: webFS, Blocked: blocked, Token: env.APIToken, AllowedHosts: env.AllowedHosts,
 		OIDC: auth, FrameAncestors: env.FrameAncestors, Platform: plat, ExpFixtures: expFixtures,
-		ExpAPIToken: env.ExpAPIToken, ExpAccount: expAccount, Environment: environment}).Handler(),
+		ExpAPIToken: env.ExpAPIToken, ExpAccount: expAccount, Environment: environment, APIIndex: apiIndex}).Handler(),
 		ReadHeaderTimeout: 10 * time.Second, MaxHeaderBytes: 64 << 10, BaseContext: func(net.Listener) context.Context { return baseCtx }}
 	proxy := llmproxy.New(cat)
 	proxy.SetRecorder(m) // assignment per slot, billing, hard limit of concurrent agents

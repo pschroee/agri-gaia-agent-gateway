@@ -61,3 +61,15 @@ func TestParseToolArgs(t *testing.T) {
 		}
 	}
 }
+
+// #198: the command index of the system note is the help text, line by line.
+func TestCLIIndexMatchesHelp(t *testing.T) {
+	var help strings.Builder
+	platformUsage(&help)
+	for _, line := range strings.Split(strings.TrimRight(platform.CLIIndex(), "\n"), "\n") {
+		line = strings.TrimSuffix(line, " (approval)")
+		if !strings.Contains(help.String(), "  "+line+"\n") {
+			t.Errorf("index line %q is not a line of agw-platform --help", line)
+		}
+	}
+}

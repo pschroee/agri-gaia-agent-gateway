@@ -52,6 +52,9 @@ func (s *Server) environment() exp.Environment {
 	if out.InstructionSHA256 == "" {
 		out.InstructionSHA256 = chat.RightsInstructionSHA256()
 	}
+	if out.APIIndexSHA256 == "" {
+		out.APIIndexSHA256 = s.APIIndex.SHA256()
+	}
 	out.Slots = nil
 	out.ImagesPi, out.ImagesExec = nil, nil
 	piImages, execImages := map[string]bool{}, map[string]bool{}
