@@ -27,8 +27,8 @@ const (
 
 // The two notes a status answer carries when the chat's notebook server is not running (own code C-E4).
 const (
-	// serverGoneNote: the run ended before the server went away, only its directory is gone.
-	serverGoneNote = "the notebook server of this chat is not running; its directory is gone, a new run starts it again"
+	// serverGoneNote: the run ended before the server was stopped, its files stay.
+	serverGoneNote = "the notebook server of this chat is not running; its files stay, a new run starts it again"
 	// stoppedRunNote: the server went away while the run was going — it was stopped, and the run ended
 	// without an exit code. The card shows the run as failed with this line (a stop is no exit code of
 	// the code itself, and the gateway states no code it did not read).
@@ -265,7 +265,7 @@ func (n *Notebooks) Log(ctx context.Context, chatID, runID string, tail int) (st
 	containerID, err := n.container(ctx, row.HubUser, row.Server)
 	if err != nil {
 		if errors.Is(err, errNoContainer) {
-			return "", fmt.Errorf("the notebook server of this chat is not running; its directory with the log is gone")
+			return "", fmt.Errorf("the notebook server of this chat is not running; the log stays in its files and can be read after the next run starts the server")
 		}
 		return "", err
 	}

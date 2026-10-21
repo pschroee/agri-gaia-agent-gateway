@@ -57,7 +57,7 @@ func (n *Notebooks) fetch(ctx context.Context, chatID, runID, path string) (stri
 	containerID, err := n.container(ctx, row.HubUser, row.Server)
 	if err != nil {
 		if errors.Is(err, errNoContainer) {
-			return "", nil, "", fmt.Errorf("the notebook server of this chat is not running; its directory with the files is gone")
+			return "", nil, "", fmt.Errorf("the notebook server of this chat is not running; its files stay and can be read after the next run starts the server")
 		}
 		return "", nil, "", err
 	}
