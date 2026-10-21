@@ -161,7 +161,7 @@ func (n *Notebooks) Run(ctx context.Context, chatID, user string, body platform.
 		if again, still, err := n.store.ActiveNotebookRun(ctx, chatID); err != nil {
 			return store.NotebookRun{}, err
 		} else if still {
-			return store.NotebookRun{}, fmt.Errorf("run %s is still going (notebook_run_status shows it); one run at a time per chat", again.ID)
+			return store.NotebookRun{}, fmt.Errorf("run %s is still going ({{tool:notebook_run_status}} shows it); one run at a time per chat", again.ID)
 		}
 	}
 	for _, dsID := range body.DatasetIDs {

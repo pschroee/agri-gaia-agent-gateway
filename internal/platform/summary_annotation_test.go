@@ -26,7 +26,7 @@ func TestSummaryAnnotationFunction(t *testing.T) {
 		"Input: 320x320 pixels (input_size of the call)",
 		"The model file must be ONNX",
 		"The function is visible to and usable by every CVAT user of the platform, and the agent cannot remove it (ask the operator).",
-		`annotation_functions shows its state, "ready" means it can be run.`)
+		`the function list shows its state, "ready" means it can be run.`)
 	if strings.Contains(got, "Also sends") {
 		t.Errorf("the summary hides a field:\n%s", got)
 	}

@@ -90,7 +90,7 @@ func (m *Manager) searchNext(ctx context.Context, chatID, id string, body []byte
 		err = strictJSON(canon, &nb)
 	}
 	if err != nil || len(nb.Params) == 0 {
-		return searchErr("search_next takes params (an object) and note")
+		return searchErr("{{tool:search_next}} takes params (an object) and note")
 	}
 	note := strings.TrimSpace(nb.Note)
 	if !utf8.ValidString(note) || utf8.RuneCountInString(note) > search.NoteMaxRunes {
@@ -163,11 +163,11 @@ func (m *Manager) nextAnswer(s store.Search, t store.Trial) (platform.Result, er
 			return searchErr(err.Error())
 		}
 		return platform.Result{Status: "ok", HTTPStatus: 200, Body: fmt.Sprintf(
-			"trial %d declared. Now call clone_training with container_id=%d and train_config=%s, then start_training with the new container id. Both run without approval.",
+			"trial %d declared. Now call {{tool:clone_training}} with container_id=%d and train_config=%s, then {{tool:start_training}} with the new container id. Both run without approval.",
 			t.Idx, b.ContainerID, merged)}, nil
 	default:
 		return platform.Result{Status: "ok", HTTPStatus: 200, Body: fmt.Sprintf(
-			"trial %d declared. Now write params.json with exactly %s next to %s and call notebook_run with the same files, entry, dataset_ids and args as approved; it runs without approval. Changed code asks the user again.",
+			"trial %d declared. Now write params.json with exactly %s next to %s and call {{tool:notebook_run}} with the same files, entry, dataset_ids and args as approved; it runs without approval. Changed code asks the user again.",
 			t.Idx, string(t.Params), s.Code.Entry)}, nil
 	}
 }
@@ -252,7 +252,7 @@ func (m *Manager) searchEndByAgent(ctx context.Context, chatID, id string, body 
 	}
 	if len(body) > 0 {
 		if canon, cerr := plan.Canonical(body); cerr != nil || strictJSON(canon, &nb) != nil {
-			return searchErr("end_search takes note")
+			return searchErr("{{tool:end_search}} takes note")
 		}
 	}
 	if utf8.RuneCountInString(nb.Note) > search.NoteMaxRunes {

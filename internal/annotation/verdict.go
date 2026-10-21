@@ -312,13 +312,13 @@ func suggestRemap(mapping map[string]string) assess.Suggestion {
 // suggestRollback names taking the automatic annotations back (V3b).
 func suggestRollback(sourceID, scope string) assess.Suggestion {
 	return assess.Suggestion{ID: SuggestionRollback, Text: fmt.Sprintf(
-		"take the automatic annotations back (annotation-rollback --source-id %s --scope %s) and fill again with the corrected setting; what the user annotated by hand stays",
+		"take the automatic annotations back ({{tool:annotation_rollback}} with source_id=%s and scope=%s) and fill again with the corrected setting; what the user annotated by hand stays",
 		sourceID, scope)}
 }
 
 // suggestRetrain names the way back through a better model (V3b).
 func suggestRetrain() assess.Suggestion {
-	return assess.Suggestion{ID: SuggestionRetrain, Text: "train a model on the corrected images, build a function from it (annotation-function) and check it again before the next fill"}
+	return assess.Suggestion{ID: SuggestionRetrain, Text: "train a model on the corrected images, build a function from it ({{tool:annotation_function}}) and check it again before the next fill"}
 }
 
 // mappingText writes a mapping as one sorted line, so that two reports of the same mapping read alike.

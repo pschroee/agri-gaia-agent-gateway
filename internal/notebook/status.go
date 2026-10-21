@@ -149,7 +149,7 @@ func gpuName(line string) string {
 
 // gpuMismatchNote is what the status says when the instance assigns a GPU but the run saw none.
 const gpuMismatchNote = "this instance assigns a GPU to notebook servers, but this run saw none (it ran on the CPU); " +
-	"the server may have started before the GPU was assigned - stop it with notebook-stop and run again"
+	"the server may have started before the GPU was assigned - stop it with {{tool:notebook_stop}} and run again"
 
 // cellErrorText makes the error name of a cell visible and bounds it (120 runes): it comes from the run.
 func cellErrorText(s string) string {
@@ -413,7 +413,7 @@ func (n *Notebooks) runsResult(ctx context.Context, chatID string) (platform.Res
 func (n *Notebooks) statusResult(ctx context.Context, chatID, runID string) (platform.Result, error) {
 	info, err := n.Status(ctx, chatID, runID)
 	if errors.Is(err, store.ErrNotFound) {
-		return errorResult("%s is not a run of this chat; notebook_runs lists them", runID)
+		return errorResult("%s is not a run of this chat; {{tool:notebook_runs}} lists them", runID)
 	}
 	if err != nil {
 		return errorResult("the state of %s is not readable: %v", runID, err)
@@ -433,7 +433,7 @@ func (n *Notebooks) logResult(ctx context.Context, chatID, runID string, req pla
 	}
 	log, err := n.Log(ctx, chatID, runID, tail)
 	if errors.Is(err, store.ErrNotFound) {
-		return errorResult("%s is not a run of this chat; notebook_runs lists them", runID)
+		return errorResult("%s is not a run of this chat; {{tool:notebook_runs}} lists them", runID)
 	}
 	if err != nil {
 		return errorResult("the log of %s is not readable: %v", runID, err)

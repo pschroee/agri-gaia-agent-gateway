@@ -780,7 +780,7 @@ func ApprovedText(p store.Plan) string {
 	}
 	auto := p.Mode == ModeAutonomous
 	mode := ""
-	note := "Run the steps in this order with exactly these parameters; each covered step then runs without a new approval until expires_at. Steps with covered=false still ask the user. {{stepN.id}} stands for the object step N created. For a step that starts a platform job (create_training, build_inference_image) it is known only when the job ends; the gateway's note names it. Never use a task id for it. Any other call needs its own approval."
+	note := "Run the steps in this order with exactly these parameters; each covered step then runs without a new approval until expires_at. Steps with covered=false still ask the user. {{stepN.id}} stands for the object step N created. For a step that starts a platform job ({{tool:create_training}}, {{tool:build_inference_image}}) it is known only when the job ends; the gateway's note names it. Never use a task id for it. Any other call needs its own approval."
 	grant := ""
 	var budget *Budget
 	if auto {

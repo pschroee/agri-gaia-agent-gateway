@@ -2569,7 +2569,7 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 				slog.Error("compute call not given back", "chat", chatID, "error", rerr)
 			}
 		}
-		return platform.Result{Status: "error", Message: platform.RefusedPrefix + "this trial of the training search was already used or is no longer declared; declare a new one with search_next",
+		return platform.Result{Status: "error", Message: platform.RefusedPrefix + "this trial of the training search was already used or is no longer declared; declare a new one with {{tool:search_next}}",
 			Decision: platform.DecisionDeniedFixed, Reason: "trial_unavailable", Rule: rule, WithinDelegation: within,
 			ApprovalID: approvalID, ApprovalDecision: approvalBy, PlanStep: planStep(step)}, nil
 	}

@@ -73,7 +73,7 @@ func (m *Manager) StopSearch(ctx context.Context, chatID, searchID, scope string
 	if scope == "search" {
 		m.finishSearch(ctx, s, endStopped, nil, "")
 	} else {
-		m.searchNote(ctx, s, fmt.Sprintf("The user stopped trial %d of the training search %q (%s). Read search_status, then declare the next trial or end the search.", idx, s.Title, s.ID), "")
+		m.searchNote(ctx, s, fmt.Sprintf("The user stopped trial %d of the training search %q (%s). Read {{tool:search_status}}, then declare the next trial or end the search.", idx, s.Title, s.ID), "")
 	}
 	m.publishSearch(ctx, chatID, searchID)
 	return m.viewOf(ctx, chatID, searchID)

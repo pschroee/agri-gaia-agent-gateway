@@ -58,7 +58,7 @@ func (s *Service) rollback(ctx context.Context, chatID string, req platform.Requ
 		return failed(errors.New("the body of the rollback is not readable"))
 	}
 	if body.SourceID == "" {
-		return failed(errors.New("source_id missing; the rollback names the run (annotation-run) or the fill (annotation-job) it takes back"))
+		return failed(errors.New("source_id missing; the rollback names the run ({{tool:annotation_run}}) or the fill ({{tool:annotation_job}}) it takes back"))
 	}
 	if body.Scope == "" {
 		body.Scope = ScopeAll
@@ -181,7 +181,7 @@ func (s *Service) rollback(ctx context.Context, chatID string, req platform.Requ
 func (s *Service) suspiciousFrames(ctx context.Context, chatID, sourceID string) (map[int]bool, error) {
 	raw, err := s.St.LastVerifyResult(ctx, chatID, sourceID)
 	if errors.Is(err, store.ErrNotFound) {
-		return nil, fmt.Errorf("no verification of %q stands in this chat; run annotation-check mode=verify first, or take everything back with scope %s", sourceID, ScopeAll)
+		return nil, fmt.Errorf("no verification of %q stands in this chat; run {{tool:annotation_check}} with mode=verify first, or take everything back with scope %s", sourceID, ScopeAll)
 	}
 	if err != nil {
 		return nil, err

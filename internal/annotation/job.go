@@ -175,11 +175,11 @@ type jobAnswer struct {
 
 // checkFollowNote says how to follow a job: the agent starts a background loop or lets the observer
 // kind report it.
-const checkFollowNote = "Follow it with annotation-job <job_id> in a background loop (30 s or more between queries); a job runs in the gateway and keeps running while the chat is idle."
+const checkFollowNote = "Follow it with {{tool:annotation_job}} with job_id=<job_id> in a background loop (30 s or more between queries); a job runs in the gateway and keeps running while the chat is idle."
 
 // verifyFollowNote says how to follow a verification (V3b). The report is the answer of the job, and the
 // agent reports it as it stands.
-const verifyFollowNote = "Follow it with annotation-job <job_id> in a background loop (30 s or more between queries), then report the verdict of the result with the figures and the sample size. The task has no held-out images left for a second final verdict."
+const verifyFollowNote = "Follow it with {{tool:annotation_job}} with job_id=<job_id> in a background loop (30 s or more between queries), then report the verdict of the result with the figures and the sample size. The task has no held-out images left for a second final verdict."
 
 // startCheck answers POST /_agw/annotation/checks: it checks the call, lays the job down and starts it
 // in the background.
@@ -241,7 +241,7 @@ func (s *Service) startCheck(ctx context.Context, chatID string, req platform.Re
 func (s *Service) startVerify(ctx context.Context, chatID string, r *recorder, sourceID string, final bool,
 	datasetID int64, function string, mapping map[string]string) (platform.Result, error) {
 	if sourceID == "" {
-		return failed(errors.New("source_id missing; mode verify judges a run (annotation-run) or a fill (annotation-job)"))
+		return failed(errors.New("source_id missing; mode verify judges a run ({{tool:annotation_run}}) or a fill ({{tool:annotation_job}})"))
 	}
 	if function != "" {
 		return failed(errors.New("mode verify does not take function; it measures with the function of the run or fill it judges"))
@@ -467,9 +467,9 @@ func pageOf(row store.AnnotationJob, want int) (json.RawMessage, int, int) {
 func jobFinishedNote(kind string) string {
 	switch kind {
 	case JobFill:
-		return "The images without annotations carry the proposals of the function now; annotation-summary counts them, annotation-sync writes them into the dataset. Correct them in CVAT before a training. Report the result with annotation-check mode=verify."
+		return "The images without annotations carry the proposals of the function now; {{tool:annotation_summary}} counts them, {{tool:annotation_sync}} writes them into the dataset. Correct them in CVAT before a training. Report the result with {{tool:annotation_check}} with mode=verify."
 	case JobUncertain:
-		return "The list names the images with the weakest answers; the user corrects them in CVAT, then annotation-sync and a new training follow."
+		return "The list names the images with the weakest answers; the user corrects them in CVAT, then {{tool:annotation_sync}} and a new training follow."
 	case JobVerify:
 		return "The verdict stands. Report it with its header line, the figures per class and the size of the set they rest on; if it is questionable, name the reasons and the suggestions of the gateway. Do not call the pre-annotation done without a usable verdict of a final measurement."
 	}

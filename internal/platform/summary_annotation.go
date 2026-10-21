@@ -57,7 +57,7 @@ func describeAnnotationFunction(c SummaryCall, s *summarizer) (string, []string,
 	details = append(details,
 		"The model file must be ONNX. The gateway reads it after this approval, gives the function the name agw-<user>-m<model id>-<the first eight hex digits of that file> and sends a fixed template of the gateway with it: the agent writes no code here.",
 		"The function is visible to and usable by every CVAT user of the platform, and the agent cannot remove it (ask the operator).",
-		"The build runs on the platform and takes several minutes; {{tool:annotation_functions}} shows its state, \"ready\" means it can be run.")
+		"The build runs on the platform and takes several minutes; the function list shows its state, \"ready\" means it can be run.")
 	return head, details, true
 }
 

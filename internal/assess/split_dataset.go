@@ -48,7 +48,7 @@ const (
 // MsgSplitNotClassification is the refusal of a dataset that is annotated with boxes or polygons: the
 // check measures classification (one tag per image, P8), and a split of a detection dataset would put
 // whole pictures into a training set whose template reads them differently.
-const MsgSplitNotClassification = "split_dataset supports classification datasets (one tag per image); this dataset has boxes or polygons"
+const MsgSplitNotClassification = "{{tool:split_dataset}} supports classification datasets (one tag per image); this dataset has boxes or polygons"
 
 // MsgTrainShare is the refusal of a share that is not in the accepted steps.
 const MsgTrainShare = "train_share must be 50, 60, 70, 80 or 90"
@@ -410,7 +410,7 @@ func (s *Service) splitDataset(ctx context.Context, chatID string, req platform.
 	answer := splitAnswer{
 		TrainDatasetID: trainID, Name: body.Name, TrainImages: len(train), KeptImages: len(kept),
 		SkippedImages: stats.Skipped, Classes: source.Classes,
-		Note: fmt.Sprintf("Training dataset %d is ready; %d images of dataset %d are kept back for checks, and the gateway decides which. Train on the training dataset and check the model afterwards with assess_model.",
+		Note: fmt.Sprintf("Training dataset %d is ready; %d images of dataset %d are kept back for checks, and the gateway decides which. Train on the training dataset and check the model afterwards with {{tool:assess_model}}.",
 			trainID, len(kept), body.DatasetID),
 	}
 	return jsonResult(answer)

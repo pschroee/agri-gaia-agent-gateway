@@ -668,7 +668,7 @@ func (s *Service) measure(ctx context.Context, r *recorder, ses session, taskID 
 			return obs, fmt.Errorf("frame %d: %w", frame, err)
 		}
 		if requireRaw && call.needRaw && !hasRawLabel(objs) {
-			return obs, errors.New("this function answers no raw_label and no mapping was given; give mapping, so that the calibration has something to hold on (annotation-functions shows its labels)")
+			return obs, errors.New("this function answers no raw_label and no mapping was given; give mapping, so that the calibration has something to hold on ({{tool:annotation_functions}} shows its labels)")
 		}
 		obs = append(obs, Observation{Frame: frame, Answers: answersOf(objs), Manual: manual[frame]})
 		if progress != nil && ((i+1)%progressEvery == 0 || i+1 == len(frames)) {
@@ -692,7 +692,7 @@ func noImagesText(spec jobSpec) string {
 	if spec.Kind == JobUncertain {
 		return "the CVAT task of this dataset has no images"
 	}
-	return "no image of the calibration set of this task carries a manual annotation; annotate some images in CVAT first, or check the task (annotation-summary counts them)"
+	return "no image of the calibration set of this task carries a manual annotation; annotate some images in CVAT first, or check the task ({{tool:annotation_summary}} counts them)"
 }
 
 // linkImages adds the file name and the CVAT link of an uncertain image: the job of the frame and the
@@ -999,11 +999,11 @@ func (s *Service) usableFunction(ctx context.Context, r *recorder, ses session, 
 		break
 	}
 	if mine && row.State != store.AnnotationFunctionReady && fn == nil {
-		return Function{}, deny("function %q is %s; annotation_functions follows the build, a run needs state %s",
+		return Function{}, deny("function %q is %s; {{tool:annotation_functions}} follows the build, a run needs state %s",
 			id, row.State, store.AnnotationFunctionReady)
 	}
 	if fn == nil {
-		return Function{}, deny("function %q is not usable: only your own functions (annotation_function) and functions installed by the operator; a function receives every image of the run", id)
+		return Function{}, deny("function %q is not usable: only your own functions ({{tool:annotation_function}}) and functions installed by the operator; a function receives every image of the run", id)
 	}
 	if fn.Kind != "detector" {
 		return Function{}, fmt.Errorf("function %q has kind %q; only a detector runs over all images of a task", fn.ID, fn.Kind)
