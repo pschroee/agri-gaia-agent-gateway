@@ -171,7 +171,7 @@ func (s *Store) LastFinishedCheck(ctx context.Context, chatID, subject string) (
 WHERE chat_id=$1 AND subject=$2 AND state=$3 ORDER BY created_at DESC, id DESC LIMIT 1`,
 		chatID, subject, AssessFinished).
 		Scan(&a.ID, &a.ChatID, &a.Kind, &a.Subject, &a.EvalDatasetID, &a.Final, &a.State, &a.Progress, &a.Report,
-			&a.Error, &a.ToolCallID, &a.CreatedAt, &a.StartedAt, &a.EndedAt)
+			&a.Error, &a.ToolCallID, &a.CreatedAt, &a.StartedAt, &a.EndedAt, &a.HoldoutMeasured)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Assessment{}, false, nil
 	}
@@ -194,7 +194,7 @@ func (s *Store) LastFinishedFinalCheck(ctx context.Context, chatID, subject stri
 WHERE chat_id=$1 AND subject=$2 AND state=$3 AND final ORDER BY created_at DESC, id DESC LIMIT 1`,
 		chatID, subject, AssessFinished).
 		Scan(&a.ID, &a.ChatID, &a.Kind, &a.Subject, &a.EvalDatasetID, &a.Final, &a.State, &a.Progress, &a.Report,
-			&a.Error, &a.ToolCallID, &a.CreatedAt, &a.StartedAt, &a.EndedAt)
+			&a.Error, &a.ToolCallID, &a.CreatedAt, &a.StartedAt, &a.EndedAt, &a.HoldoutMeasured)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Assessment{}, false, nil
 	}
@@ -215,7 +215,7 @@ func (s *Store) PreviousInterimCheck(ctx context.Context, chatID string, evalDat
 WHERE chat_id=$1 AND eval_dataset_id=$2 AND final=false AND state=$3 AND subject<>$4
 ORDER BY created_at DESC, id DESC LIMIT 1`, chatID, evalDatasetID, AssessFinished, excludeSubject).
 		Scan(&a.ID, &a.ChatID, &a.Kind, &a.Subject, &a.EvalDatasetID, &a.Final, &a.State, &a.Progress, &a.Report,
-			&a.Error, &a.ToolCallID, &a.CreatedAt, &a.StartedAt, &a.EndedAt)
+			&a.Error, &a.ToolCallID, &a.CreatedAt, &a.StartedAt, &a.EndedAt, &a.HoldoutMeasured)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Assessment{}, false, nil
 	}

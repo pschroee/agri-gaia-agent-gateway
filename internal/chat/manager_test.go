@@ -1100,7 +1100,9 @@ func TestDisableInternetThroughSocket(t *testing.T) {
 		t.Fatal("unassigned slot switched another chat off")
 	}
 	calls, _ := e.st.ListSocketCalls(ctx, a.ID)
-	if len(calls) != 1 || calls[0].Op != "internet_off" || calls[0].Result != "off" || calls[0].Via != "cli" {
+	// Since #175 the end of the (full) grant is logged by the gateway next to the CLI call.
+	if len(calls) != 2 || calls[0].Op != "internet_end" || calls[0].Via != "gateway" ||
+		calls[1].Op != "internet_off" || calls[1].Result != "off" || calls[1].Via != "cli" {
 		t.Fatalf("log of A: %+v", calls)
 	}
 	if calls, _ = e.st.ListSocketCalls(ctx, b.ID); len(calls) != 0 {

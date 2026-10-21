@@ -81,7 +81,9 @@ func TestFileChangesDiff(t *testing.T) {
 	next.Version = 2
 	next.Files[0] = searchFileOf(up("train.py", "print(2)\n"))
 	got := fileChanges(old, next, []string{"train.py"})
-	if len(got) != 1 || got[0].OldSHA256 == got[0].NewSHA256 || !strings.Contains(got[0].Diff, "+print(2)") || !strings.Contains(got[0].Diff, "-print(1)") {
+	// The unchanged file of the new version follows the changed one, without a diff (#182).
+	if len(got) != 2 || got[1].Name != "util.py" || got[1].Diff != "" || got[1].OldSHA256 != got[1].NewSHA256 ||
+		got[0].OldSHA256 == got[0].NewSHA256 || !strings.Contains(got[0].Diff, "+print(2)") || !strings.Contains(got[0].Diff, "-print(1)") {
 		t.Fatalf("changes: %+v", got)
 	}
 	var long strings.Builder

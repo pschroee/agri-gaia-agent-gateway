@@ -323,7 +323,7 @@ func TestMCPCallUnassigned(t *testing.T) {
 func TestInternetRequestViaCLIAndMCP(t *testing.T) {
 	b := &fakeBackend{chat: "chat-5", decide: "approved"}
 	c := start(t, b)
-	resp, err := c.Post("http://agw/internet", "application/json", strings.NewReader(`{"reason":"pip install"}`))
+	resp, err := c.Post("http://agw/internet", "application/json", strings.NewReader(`{"kind":"search","reason":"pip install"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -332,7 +332,7 @@ func TestInternetRequestViaCLIAndMCP(t *testing.T) {
 	if r.Status != "approved" {
 		t.Fatalf("CLI: %+v", r)
 	}
-	res := mcpCall(t, c, "tools/call", map[string]any{"name": "request_internet", "arguments": map[string]any{"reason": "website"}})
+	res := mcpCall(t, c, "tools/call", map[string]any{"name": "request_internet", "arguments": map[string]any{"kind": "search", "reason": "website"}})
 	if txt := res["content"].([]any)[0].(map[string]any)["text"].(string); !strings.HasPrefix(txt, "approved") {
 		t.Fatalf("MCP: %s", txt)
 	}
@@ -341,7 +341,7 @@ func TestInternetRequestViaCLIAndMCP(t *testing.T) {
 	}
 	// Unassigned: refused, not passed on.
 	b.chat = ""
-	resp, _ = c.Post("http://agw/internet", "application/json", strings.NewReader(`{"reason":"x"}`))
+	resp, _ = c.Post("http://agw/internet", "application/json", strings.NewReader(`{"kind":"search","reason":"x"}`))
 	if resp.StatusCode != http.StatusConflict || len(b.uploads) != 2 {
 		t.Fatalf("unassigned: %d %v", resp.StatusCode, b.uploads)
 	}
@@ -367,7 +367,7 @@ func TestInternetReasonTruncated(t *testing.T) {
 	b := &fakeBackend{chat: "c", decide: "approved"}
 	c := start(t, b)
 	long := strings.Repeat("ä", 2000)
-	resp, _ := c.Post("http://agw/internet", "application/json", strings.NewReader(`{"reason":"`+long+`"}`))
+	resp, _ := c.Post("http://agw/internet", "application/json", strings.NewReader(`{"kind":"search","reason":"`+long+`"}`))
 	resp.Body.Close()
 	if len(b.uploads) != 1 || len([]rune(b.uploads[0])) > 600 {
 		t.Fatalf("reason not truncated: %d characters", len([]rune(b.uploads[0])))
@@ -407,7 +407,7 @@ func TestCallerSessionHeader(t *testing.T) {
 		}
 		resp.Body.Close()
 	}
-	req, _ := http.NewRequest(http.MethodPost, "http://agw/internet", strings.NewReader(`{"reason":"pip"}`))
+	req, _ := http.NewRequest(http.MethodPost, "http://agw/internet", strings.NewReader(`{"kind":"search","reason":"pip"}`))
 	req.Header.Set("X-Agw-Session", "0a1b2c3d-4e5f-6789-abcd-ef0123456789")
 	resp, err := c.Do(req)
 	if err != nil {
