@@ -76,7 +76,7 @@ The gateway measures the file you fetched out of the notebook server, so what it
    know which output means which class. The gateway loads the file, reads its input and output shapes and
    measures it on images no run of this chat received; it derives the class order itself and only compares it
    with `class_names` — a declared order that differs from the one the model shows is a reason of its own.
-   A run that wrote `outputs/model.json` needs no `--preprocess`. `Not measured – class order unclear` on a
+   A run that wrote `outputs/model.json` needs no `--preprocess`. On a final check a `--preprocess` that differs from it is refused before anything runs; the final test stays available. `Not measured – class order unclear` on a
    final check: the hold-out set was not used; fix the preprocessing and run the final check again.
 5. Interim result usable: measure once with `--final true` when the model will not change any more, and
    report as under *After a training*.

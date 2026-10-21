@@ -2271,7 +2271,7 @@ names what is R2's own.
   templates' preprocessing applies (rgb, the model's image size, 1/255, NCHW, no mean/std) and
   `figures.preprocess.declared` is false. `figures.preprocess.source` is `run` (the preprocessing and class names
   come from `outputs/model.json` of the notebook run, read when the `.onnx` file was fetched; it goes before the
-  call, a different declaration in the call adds a hint), `declared` or `default` (#181). A **final** check first
+  call, a different declaration in the call adds a hint; on a **final** check it is refused before anything runs, with reason `preprocess_differs_from_run`, and the final test stays available), `declared` or `default` (#181). A **final** check first
   runs the model on the sample of seen images only; when the class order cannot be derived the report is
   `not_measured`, carries `holdout_not_run: true`, and the hold-out images never ran through the model, so the
   final test is not used up (`assessments.holdout_measured` false). `class_names` is the order of the model's outputs **as the agent

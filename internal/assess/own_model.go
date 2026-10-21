@@ -229,6 +229,21 @@ func (s *Service) assessOwnFile(ctx context.Context, chatID string, body assessR
 	if !shaRe.MatchString(file.SHA256) {
 		return errResult("the file could not be read (no SHA-256)"), nil
 	}
+	// #184: a final check that names other preprocessing than outputs/model.json of the run is refused before
+	// anything starts, so that no assessment row, no container run and no hold-out image is used up.
+	if body.Final && body.Preprocess != nil {
+		fetch, found, err := s.St.NotebookFetchOf(ctx, chatID, file.SHA256)
+		if err != nil {
+			return platform.Result{}, err
+		}
+		if found {
+			if runPre := runPreprocess(fetch.ModelMeta); runPre != nil {
+				if d := preprocessDiffs(body.Preprocess, runPre); len(d) > 0 {
+					return refusedPreprocess(fetch.RunID, d), nil
+				}
+			}
+		}
+	}
 	seen, err := s.St.NotebookSeenDatasetIDs(ctx, chatID)
 	if err != nil {
 		return platform.Result{}, err
@@ -411,12 +426,12 @@ func withRunMeta(body assessRequest, meta json.RawMessage, runID string) (assess
 	hint := ""
 	var pre *PreprocessInput
 	if len(m.Preprocess) > 0 {
-		pre = &PreprocessInput{}
-		if json.Unmarshal(m.Preprocess, pre) != nil {
+		pre = runPreprocess(meta)
+		if pre == nil {
 			return body, ""
 		}
 	}
-	if (body.Preprocess != nil && !samePreprocess(body.Preprocess, pre)) ||
+	if len(preprocessDiffs(body.Preprocess, pre)) > 0 ||
 		(body.ClassNames != nil && m.ClassNames != nil && strings.Join(body.ClassNames, "\x00") != strings.Join(m.ClassNames, "\x00")) {
 		hint = fmt.Sprintf("the call declared other preprocessing than outputs/model.json of run %s; the check used the run's file", runID)
 	}
@@ -435,11 +450,29 @@ func runHasPreprocess(meta json.RawMessage) bool {
 	return len(meta) > 0 && json.Unmarshal(meta, &m) == nil && len(m.Preprocess) > 0
 }
 
-// samePreprocess compares two declarations in canonical form (defaults filled in).
-func samePreprocess(a, b *PreprocessInput) bool {
-	ja, _ := json.Marshal(preprocessFigures(a))
-	jb, _ := json.Marshal(preprocessFigures(b))
-	return string(ja) == string(jb)
+// runPreprocess reads the preprocessing out of outputs/model.json of the run; nil without one.
+func runPreprocess(meta json.RawMessage) *PreprocessInput {
+	var m platform.ModelMeta
+	if len(meta) == 0 || json.Unmarshal(meta, &m) != nil || len(m.Preprocess) == 0 {
+		return nil
+	}
+	pre := &PreprocessInput{}
+	if json.Unmarshal(m.Preprocess, pre) != nil {
+		return nil
+	}
+	return pre
+}
+
+// ReasonPreprocessDiffersFromRun is the reason code of a final check refused for its preprocessing (#184).
+const ReasonPreprocessDiffersFromRun = "preprocess_differs_from_run"
+
+// refusedPreprocess is the answer of a final check whose preprocessing differs from outputs/model.json of
+// the run: nothing was started or measured, the final test stays available (#184).
+func refusedPreprocess(runID string, diffs []string) platform.Result {
+	return platform.Result{Status: "error", Decision: platform.DecisionError, Reason: ReasonPreprocessDiffersFromRun,
+		Message: platform.RefusedPrefix + fmt.Sprintf("the preprocessing of this final check differs from outputs/model.json of run %s: %s. "+
+			"Nothing was measured and the final test is still available. Leave out preprocess (the gateway then uses outputs/model.json) "+
+			"or write a corrected outputs/model.json in a new run.", runID, strings.Join(diffs, "; "))}
 }
 
 // ProbeImages is how many images of the validation set ask whether the model answers differently (R2.5).
