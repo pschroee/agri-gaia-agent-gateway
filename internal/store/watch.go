@@ -65,6 +65,10 @@ type WatchJob struct {
 	StartedAt time.Time  `json:"started_at"`
 	CheckedAt *time.Time `json:"checked_at,omitempty"`
 	EndedAt   *time.Time `json:"ended_at,omitempty"`
+	// RunStartedAt and RunEndedAt are the run's own start and end (issue #203), nil for the kinds that do
+	// not know them. The duration of a run is counted from these, not from StartedAt/EndedAt.
+	RunStartedAt *time.Time `json:"run_started_at,omitempty"`
+	RunEndedAt   *time.Time `json:"run_ended_at,omitempty"`
 }
 
 // WatchOutput is an object a job produced ({Resource, ID, Label, Size} of watch.Output). Size is the
@@ -79,23 +83,26 @@ type WatchOutput struct {
 
 // WatchProgress is what one poll found; every field is written to the job's row.
 type WatchProgress struct {
-	State    string
-	Percent  *float64
-	Message  string
-	LogTail  string
-	Outputs  []WatchOutput
-	Link     string
-	ETA      *time.Time
-	ReadFail bool // the reading call failed: the row keeps its state and counts the failure
+	State   string
+	Percent *float64
+	Message string
+	LogTail string
+	Outputs []WatchOutput
+	Link    string
+	ETA     *time.Time
+	// RunStartedAt and RunEndedAt are kept once set: a poll without them leaves the stored values alone.
+	RunStartedAt *time.Time
+	RunEndedAt   *time.Time
+	ReadFail     bool // the reading call failed: the row keeps its state and counts the failure
 }
 
-const watchJobCols = `id, chat_id::text, plan_id, step_idx, tool_call_id, kind, ref, state, progress, message, eta, log_tail, outputs, link, stopped_by, fail_reads, started_at, checked_at, ended_at`
+const watchJobCols = `id, chat_id::text, plan_id, step_idx, tool_call_id, kind, ref, state, progress, message, eta, log_tail, outputs, link, stopped_by, fail_reads, started_at, checked_at, ended_at, run_started_at, run_ended_at`
 
 func scanWatchJob(row interface{ Scan(...any) error }) (WatchJob, error) {
 	var j WatchJob
 	var outputs string
 	err := row.Scan(&j.ID, &j.ChatID, &j.PlanID, &j.StepIdx, &j.ToolCallID, &j.Kind, &j.Ref, &j.State,
-		&j.Progress, &j.Message, &j.ETA, &j.LogTail, &outputs, &j.Link, &j.StoppedBy, &j.FailReads, &j.StartedAt, &j.CheckedAt, &j.EndedAt)
+		&j.Progress, &j.Message, &j.ETA, &j.LogTail, &outputs, &j.Link, &j.StoppedBy, &j.FailReads, &j.StartedAt, &j.CheckedAt, &j.EndedAt, &j.RunStartedAt, &j.RunEndedAt)
 	if err != nil {
 		return j, err
 	}
@@ -220,8 +227,9 @@ func (s *Store) UpdateJobProgress(ctx context.Context, jobID string, p WatchProg
 		ended = time.Now()
 	}
 	tag, err := s.pool.Exec(ctx, `UPDATE watch_jobs SET state=$2, progress=$3, message=$4, eta=$5, log_tail=$6, outputs=$7,
-fail_reads=0, checked_at=now(), ended_at=$8, link=$9 WHERE id=$1 AND state='running'`,
-		jobID, state, p.Percent, p.Message, p.ETA, p.LogTail, outputs, ended, p.Link)
+fail_reads=0, checked_at=now(), ended_at=$8, link=$9, run_started_at=COALESCE($10, run_started_at),
+run_ended_at=COALESCE($11, run_ended_at) WHERE id=$1 AND state='running'`,
+		jobID, state, p.Percent, p.Message, p.ETA, p.LogTail, outputs, ended, p.Link, p.RunStartedAt, p.RunEndedAt)
 	return err == nil && tag.RowsAffected() > 0, err
 }
 
