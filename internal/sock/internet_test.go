@@ -214,3 +214,41 @@ func TestMCPRequestInternetKind(t *testing.T) {
 		t.Fatalf("domains: %v %+v", res, b.specs)
 	}
 }
+
+// refusalBackend adds the refusals of the chat to the fake backend (issue #183).
+type refusalBackend struct {
+	*fakeBackend
+	rs []store.WebRequest
+}
+
+func (r refusalBackend) RecentRefusals(string) []store.WebRequest { return r.rs }
+
+func getInternet(t *testing.T, c *http.Client) map[string]any {
+	t.Helper()
+	resp, err := c.Get("http://agw/internet")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var out map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+func TestInternetStatusListsRefusals(t *testing.T) {
+	base := &fakeBackend{chat: "chat-7"}
+	with := refusalBackend{base, []store.WebRequest{{Host: "pypi.org", Package: "torch", Reason: netgrant.CodeTooLarge, Denied: "blocked: pip package torch is too large for this sandbox"}}}
+	out := getInternet(t, listenHandler(t, NewHandlerRun("p-test", with, 1<<20, nil)))
+	bl, _ := out["blocked"].([]any)
+	if len(bl) != 1 || bl[0].(map[string]any)["reason"] != "too_large" || !strings.Contains(bl[0].(map[string]any)["denied"].(string), "too large") {
+		t.Fatalf("blocked: %v", out)
+	}
+	// no refusals (or a backend without the interface): the field is missing
+	for _, b := range []Backend{refusalBackend{base, nil}, base} {
+		if out := getInternet(t, listenHandler(t, NewHandlerRun("p-test", b, 1<<20, nil))); out["blocked"] != nil {
+			t.Fatalf("blocked without refusals: %v", out)
+		}
+	}
+}

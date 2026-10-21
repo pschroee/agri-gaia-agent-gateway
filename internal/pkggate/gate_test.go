@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -304,5 +305,121 @@ func TestRewritePackumentKeepsOtherFields(t *testing.T) {
 	out, err := RewritePackument([]byte(`{"name":"@s/x","readme":"hi","versions":{"1.0.0":{"name":"@s/x","dist":{"tarball":"http://h:1/@s/x/-/x-1.0.0.tgz","integrity":"sha512-a"}}}}`), "@s/x", "http://127.0.0.1:3128/")
 	if err != nil || !strings.Contains(string(out), `"http://127.0.0.1:3128/npm/@s/x/-/x-1.0.0.tgz"`) || !strings.Contains(string(out), `"integrity":"sha512-a"`) || !strings.Contains(string(out), `"readme":"hi"`) {
 		t.Fatalf("%s %v", out, err)
+	}
+}
+
+// --- Issue #183: package files that do not fit into the sandbox ---
+
+// bigWheel serves a file of n bytes with a Content-Length.
+func bigCache(n int, chunked bool) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !chunked {
+			w.Header().Set("Content-Length", strconv.Itoa(n))
+		}
+		if r.Method == http.MethodHead {
+			return
+		}
+		buf := bytes.Repeat([]byte("x"), 1024)
+		for sent := 0; sent < n; sent += len(buf) {
+			w.Write(buf[:min(len(buf), n-sent)])
+			if chunked {
+				w.(http.Flusher).Flush()
+			}
+		}
+	})
+}
+
+func limitedGate(t *testing.T, src *fakeSource, cache http.Handler) *Gate {
+	g, _ := newGate(t, src, cache)
+	g.MaxFile, g.TmpMB, g.HomeMB = 1024, 512, 1024
+	return g
+}
+
+func TestPkgGateRefusesTooLargeByLength(t *testing.T) {
+	src := newSource()
+	src.allow["pip:torch"] = Verdict{Allow: true, GrantID: 8, Grants: []int64{8}}
+	g := limitedGate(t, src, bigCache(2048, false))
+	res, body := get(t, g, "/index/torch/torch-2.5.1-py3-none-any.whl")
+	if res.StatusCode != http.StatusRequestEntityTooLarge || !strings.Contains(string(body), "torch-2.5.1-py3-none-any.whl") || !strings.Contains(string(body), "notebook") {
+		t.Fatalf("answer: %d %q", res.StatusCode, body)
+	}
+	if r := src.last(); r.Reason != netgrant.CodeTooLarge || r.Denied == "" || r.BytesDown != 0 || r.Package != "torch" {
+		t.Fatalf("log: %+v", r)
+	}
+	if len(src.downloaded) != 0 || len(src.deps) != 0 {
+		t.Fatalf("downloaded %v, deps %v", src.downloaded, src.deps)
+	}
+}
+
+func TestPkgGateTooLargeWithoutLength(t *testing.T) {
+	src := newSource()
+	src.allow["pip:torch"] = Verdict{Allow: true, GrantID: 8, Grants: []int64{8}}
+	g := limitedGate(t, src, bigCache(4096, true))
+	res, body := get(t, g, "/index/torch/torch-2.5.1-py3-none-any.whl")
+	if res.StatusCode != http.StatusOK || len(body) >= 4096 {
+		t.Fatalf("the answer must be cut off: %d, %d bytes", res.StatusCode, len(body))
+	}
+	if r := src.last(); r.Reason != netgrant.CodeTooLarge || !strings.Contains(r.Denied, "more than") {
+		t.Fatalf("log: %+v", r)
+	}
+	if len(src.downloaded) != 0 {
+		t.Fatalf("downloaded: %v", src.downloaded)
+	}
+}
+
+// A file of exactly MaxFile bytes goes through.
+func TestPkgGateAllowsAtLimit(t *testing.T) {
+	src := newSource()
+	src.allow["pip:small"] = Verdict{Allow: true, GrantID: 8, Grants: []int64{8}}
+	g := limitedGate(t, src, bigCache(1024, false))
+	res, body := get(t, g, "/index/small/small-1.0-py3-none-any.whl")
+	if res.StatusCode != 200 || len(body) != 1024 || src.last().Reason != "" {
+		t.Fatalf("answer: %d, %d bytes, %+v", res.StatusCode, len(body), src.last())
+	}
+	// the same without a length
+	g = limitedGate(t, src, bigCache(1024, true))
+	if res, body := get(t, g, "/index/small/small-1.0-py3-none-any.whl"); res.StatusCode != 200 || len(body) != 1024 || src.last().Reason != "" {
+		t.Fatalf("chunked: %d, %d bytes, %+v", res.StatusCode, len(body), src.last())
+	}
+}
+
+func TestPkgGateTooLargeNpmTarball(t *testing.T) {
+	src := newSource()
+	src.allow["npm:left-pad"] = Verdict{Allow: true, GrantID: 5, Grants: []int64{5}}
+	g := limitedGate(t, src, bigCache(2048, false))
+	res, body := get(t, g, "/npm/left-pad/-/left-pad-1.3.0.tgz")
+	if res.StatusCode != http.StatusRequestEntityTooLarge || !strings.Contains(string(body), "npm package left-pad") || src.last().Reason != netgrant.CodeTooLarge {
+		t.Fatalf("answer: %d %q %+v", res.StatusCode, body, src.last())
+	}
+}
+
+func TestPkgGateTooLargeFullGrant(t *testing.T) {
+	src := newSource()
+	src.allow["pip:torch"] = Verdict{Allow: true, GrantID: 9, Grants: []int64{9}, Full: true}
+	g := limitedGate(t, src, bigCache(2048, false))
+	if res, _ := get(t, g, "/index/torch/torch-2.5.1-py3-none-any.whl"); res.StatusCode != http.StatusRequestEntityTooLarge || src.last().Reason != netgrant.CodeTooLarge {
+		t.Fatalf("answer: %d %+v", res.StatusCode, src.last())
+	}
+}
+
+// Index pages and metadata are not package files: they stay allowed above the limit.
+func TestPkgGateIndexNotLimited(t *testing.T) {
+	src := newSource()
+	src.allow["pip:torch"] = Verdict{Allow: true, GrantID: 8, Grants: []int64{8}}
+	g := limitedGate(t, src, bigCache(4096, false))
+	res, body := get(t, g, "/index/torch/")
+	if res.StatusCode != 200 || len(body) != 4096 {
+		t.Fatalf("index: %d, %d bytes", res.StatusCode, len(body))
+	}
+}
+
+func TestPkgGateHeadTooLarge(t *testing.T) {
+	src := newSource()
+	src.allow["pip:torch"] = Verdict{Allow: true, GrantID: 8, Grants: []int64{8}}
+	g := limitedGate(t, src, bigCache(2048, false))
+	rec := httptest.NewRecorder()
+	g.Handler(func() string { return "chat-1" }, nil).ServeHTTP(rec, httptest.NewRequest(http.MethodHead, "/index/torch/torch-2.5.1-py3-none-any.whl", nil))
+	if rec.Code != http.StatusRequestEntityTooLarge || src.last().Reason != netgrant.CodeTooLarge {
+		t.Fatalf("head: %d %+v", rec.Code, src.last())
 	}
 }
