@@ -57,7 +57,16 @@ func describeSplitDataset(c SummaryCall, s *summarizer) (string, []string, bool)
 	}
 	sourceName, images, classes, readErr := s.datasetForSplit(id)
 	if name == "" {
-		name = sourceName + "-train"
+		switch {
+		case sourceName != "":
+			name = sourceName + "-train"
+		default:
+			if n, isPh := placeholder(id); isPh {
+				name = fmt.Sprintf("<name of the dataset from step %d>-train", n)
+			} else {
+				name = "<source name>-train"
+			}
+		}
 	}
 	head := fmt.Sprintf("Create dataset %q from %s for held-out checks", name, s.datasetText(id, sourceName, readErr))
 	details := []string{fmt.Sprintf("Training share: %d %%", share)}
@@ -67,11 +76,14 @@ func describeSplitDataset(c SummaryCall, s *summarizer) (string, []string, bool)
 			fmt.Sprintf("About %d of %d images go into %q; about %d are kept back", train, images, name, images-train),
 			"The split is counted per class, by the SHA-256 of the images; the exact numbers stand in the answer of the tool.")
 	}
-	kept := "the rest"
 	if images > 0 {
-		kept = strconv.Itoa(images - int(float64(images)*float64(share)/100+0.5))
+		kept := strconv.Itoa(images - int(float64(images)*float64(share)/100+0.5))
+		details = append(details, kept+" images are kept back; the agent never sees which.")
+	} else {
+		details = append(details,
+			"The images are split when the step runs; the exact numbers stand in the answer of the tool.",
+			"The other images are kept back; the agent never sees which.")
 	}
-	details = append(details, kept+" images are kept back; the agent never sees which.")
 	if len(classes) > 0 {
 		details = append(details, "Classes: "+quoteAll(classes))
 	}
@@ -123,6 +135,9 @@ func describeAssessModel(c SummaryCall, s *summarizer) (string, []string, bool) 
 
 // datasetText names a dataset for a summary: its name when it could be read, otherwise its id.
 func (s *summarizer) datasetText(id, name, readErr string) string {
+	if _, isPh := placeholder(id); isPh {
+		return s.idText("dataset", id)
+	}
 	if name != "" {
 		return "dataset " + id + " " + strconv.Quote(name)
 	}
@@ -134,7 +149,10 @@ func (s *summarizer) datasetText(id, name, readErr string) string {
 
 // datasetForSplit reads the name, the number of files and the classes of a dataset for a summary.
 func (s *summarizer) datasetForSplit(id string) (name string, images int, classes []string, readErr string) {
-	if _, isPh := placeholder(id); !plainID(id) || isPh {
+	if _, isPh := placeholder(id); isPh {
+		return "", 0, nil, ""
+	}
+	if !plainID(id) {
 		return "", 0, nil, "not a dataset id"
 	}
 	m, err := s.object("/datasets/" + id)
@@ -355,6 +373,9 @@ func describeBuildImageWithCheck(c SummaryCall, s *summarizer) (string, []string
 // and renders it in one line. ok is false when the answer cannot be read: then the approval carries no
 // such line instead of a wrong one.
 func (s *summarizer) modelCheckLine(modelID string) (string, bool) {
+	if p, isPh := placeholder(modelID); isPh {
+		return fmt.Sprintf("Model check: none yet (the model is created by step %d)", p), true
+	}
 	if modelID == "" || !plainID(modelID) {
 		return "Model check: none in this chat", true
 	}
