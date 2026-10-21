@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"unicode"
 )
 
 // Packages grants (issue #175, stage 2): the agent names root packages (pip:name[==ver], npm:name[@ver]); the
@@ -135,7 +136,26 @@ func ParsePackages(raw []string) ([]PkgRoot, error) {
 	return out, nil
 }
 
+// spaceOutsideBrackets reports white space in e that is not inside [...] (pip extras may say [a, b]).
+func spaceOutsideBrackets(e string) bool {
+	depth := 0
+	for _, r := range e {
+		switch {
+		case r == '[':
+			depth++
+		case r == ']' && depth > 0:
+			depth--
+		case unicode.IsSpace(r) && depth == 0:
+			return true
+		}
+	}
+	return false
+}
+
 func parsePackage(e string) (PkgRoot, error) {
+	if spaceOutsideBrackets(e) {
+		return PkgRoot{}, fmt.Errorf("write one package as ecosystem:name without spaces, e.g. pip:scikit-learn")
+	}
 	eco, rest, ok := strings.Cut(e, ":")
 	if !ok {
 		return PkgRoot{}, fmt.Errorf("start with the ecosystem: pip:%s or npm:%s", e, e)
