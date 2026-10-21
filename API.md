@@ -2355,7 +2355,7 @@ without it every path answers `unavailable: training search is not available in 
   as for any summary): a changed base configuration gives a new summary and replaces `approval.search`.
 - **Code change** (an ordinary `platform_write` approval of a notebook run of the search whose code differs):
   `approval.search = {kind:"code_change", search_id, title, trial, code_version_from, code_version_to, changed_files,
-  files:[{name, old_sha256, new_sha256, added, removed, diff | diff_too_long + new_text}]}`; a diff over 400 lines is not
+  files:[{name, old_sha256, new_sha256, added, removed, diff | diff_too_long + new_text}]}` (`files` lists every file of the new version except `params.json`: changed ones first, then unchanged ones with equal hashes and no diff); a diff over 400 lines is not
   shown. After the user approves, the new files become version `code_version_to` (event `code_approved`).
 - **Coverage:** a trial of a running search is covered only when the call is exactly the announced one: the copy
   (`POST /train/containers/{base}/clone`, `train_config` equal by value to the base with the declared params), the start of
