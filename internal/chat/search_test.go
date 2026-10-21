@@ -560,3 +560,32 @@ func TestSearchViewCarriesFinalResultAndEndNote(t *testing.T) {
 		t.Errorf("end note: %q", n)
 	}
 }
+
+// Issue #193: a notebook is bound by its code cells; markdown and outputs may change, a code cell may not, and a
+// search stored before the digest existed stays bound by the bytes.
+func TestCodeMatchesNotebookCells(t *testing.T) {
+	const nb = `{"nbformat":4,"cells":[{"cell_type":"markdown","source":"# a"},{"cell_type":"code","source":"x = 1","outputs":[]}]}`
+	code := store.SearchCode{Version: 1, Entry: "t.ipynb", TimeoutMinutes: 60, Files: []store.SearchFile{searchFileOf(up("t.ipynb", nb))}}
+	if code.Files[0].CodeSHA256 == "" || !strings.Contains(code.Files[0].Text, "# cell 1") {
+		t.Fatalf("notebook file without digest or code text: %+v", code.Files[0])
+	}
+	run := platform.RunBody{Entry: "t.ipynb", TimeoutMinutes: 60}
+	params := json.RawMessage(`{"lr":0.01}`)
+	pj := up("params.json", `{"lr":0.01}`)
+	md := strings.Replace(nb, "# a", "# better words", 1)
+	if changed, ok, err := codeMatches(code, run, []platform.Upload{up("t.ipynb", md), pj}, params); err != nil || !ok || len(changed) != 0 {
+		t.Errorf("markdown change: %v %v %v", changed, ok, err)
+	}
+	cc := strings.Replace(nb, "x = 1", "x = 2", 1)
+	if changed, _, _ := codeMatches(code, run, []platform.Upload{up("t.ipynb", cc), pj}, params); len(changed) != 1 || changed[0] != "t.ipynb" {
+		t.Errorf("code cell change: %v", changed)
+	}
+	old := store.SearchCode{Version: 1, Entry: "t.ipynb", TimeoutMinutes: 60,
+		Files: []store.SearchFile{{Name: "t.ipynb", SHA256: sha256Hex([]byte(nb)), Size: int64(len(nb))}}}
+	if changed, _, _ := codeMatches(old, run, []platform.Upload{up("t.ipynb", md), pj}, params); len(changed) != 1 {
+		t.Errorf("an old search is bound by the bytes: %v", changed)
+	}
+	if changed, _, _ := codeMatches(old, run, []platform.Upload{up("t.ipynb", nb), pj}, params); len(changed) != 0 {
+		t.Errorf("an old search with the same bytes: %v", changed)
+	}
+}
