@@ -6,13 +6,53 @@ package store
 
 import (
 	"context"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 )
+
+//go:embed activity_schema.sql
+var activitySchemaSQL string
+
+func init() { registerSchema(activitySchemaSQL) }
+
+// EndedGrantsPrefix starts the detail of the user's switch-off (op internet_set, result off): the IDs of the grants
+// it ended ("ended grants 7,8"), issue #185.
+const EndedGrantsPrefix = "ended grants "
+
+// EndedGrantsDetail formats the detail of the user's switch-off; empty if no grant ended.
+func EndedGrantsDetail(ids []int64) string {
+	if len(ids) == 0 {
+		return ""
+	}
+	sorted := append([]int64(nil), ids...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
+	parts := make([]string, len(sorted))
+	for i, id := range sorted {
+		parts[i] = strconv.FormatInt(id, 10)
+	}
+	return EndedGrantsPrefix + strings.Join(parts, ",")
+}
+
+// endedGrantIDs reads the IDs back from a detail written by EndedGrantsDetail (nil for any other detail).
+func endedGrantIDs(detail string) []int64 {
+	rest, ok := strings.CutPrefix(detail, EndedGrantsPrefix)
+	if !ok {
+		return nil
+	}
+	var ids []int64
+	for _, p := range strings.Split(rest, ",") {
+		if n, err := strconv.ParseInt(strings.TrimSpace(p), 10, 64); err == nil {
+			ids = append(ids, n)
+		}
+	}
+	return ids
+}
 
 // Outcomes of a platform call, derived from the result text of its socket_calls entry.
 const (
@@ -124,6 +164,8 @@ type ActivityCall struct {
 	// Grant: the internet grant an entry of kind internet belongs to (a request through its approval, an end and
 	// the user's switch through the grant ID in the detail); nil for a refused request or an old entry.
 	Grant *ActivityGrant `json:"grant,omitempty"`
+	// Ended: the grants the user's switch-off ended (issue #185); their single end entries are left out of the list.
+	Ended []ActivityGrant `json:"ended,omitempty"`
 }
 
 // ActivityChat is what the activity view needs of a chat.
@@ -224,6 +266,16 @@ func (s *Store) ListActivity(ctx context.Context, f ActivityFilter) (ActivityPag
 		// Outcomes belong to platform calls: the filter leaves out internet entries.
 		args = append(args, f.Outcome)
 		where = append(where, fmt.Sprintf("sc.op = 'platform' AND (%s) = $%d", outcomeSQL, len(args)))
+	}
+	if f.Kind == KindInternet || f.Kind == KindAll {
+		// The user's switch-off summarises the ends it caused (issue #185): those end entries are not listed on
+		// their own. The link is the ID list in the detail of the switch entry; ends by time, bytes or the agent, a
+		// single end by the user and ends of other chats stay.
+		where = append(where, `NOT (sc.op = 'internet_end' AND sc.result = 'user' AND EXISTS (
+			SELECT 1 FROM socket_calls p WHERE p.op = 'internet_set' AND p.id > sc.id
+				AND COALESCE(p.chat_id, p.deleted_chat) = COALESCE(sc.chat_id, sc.deleted_chat)
+				AND p.detail LIKE 'ended grants %'
+				AND ',' || substr(p.detail, 14) || ',' LIKE '%,' || substring(sc.detail from '^grant ([0-9]+)') || ',%'))`)
 	}
 	if f.Before > 0 {
 		args = append(args, f.Before)
@@ -409,6 +461,7 @@ func (s *Store) attachGrants(ctx context.Context, calls []ActivityCall) error {
 		if c.Kind != KindInternet {
 			continue
 		}
+		ids = append(ids, endedGrantIDs(c.Detail)...)
 		if m := grantDetailRe.FindStringSubmatch(c.Detail); m != nil {
 			if n, err := strconv.ParseInt(m[1], 10, 64); err == nil {
 				ids = append(ids, n)
@@ -431,6 +484,11 @@ func (s *Store) attachGrants(ctx context.Context, calls []ActivityCall) error {
 		c := &calls[i]
 		if c.Kind != KindInternet {
 			continue
+		}
+		for _, id := range endedGrantIDs(c.Detail) {
+			if g, ok := byID[id]; ok {
+				c.Ended = append(c.Ended, *activityGrantOf(g))
+			}
 		}
 		if m := grantDetailRe.FindStringSubmatch(c.Detail); m != nil {
 			if n, err := strconv.ParseInt(m[1], 10, 64); err == nil {

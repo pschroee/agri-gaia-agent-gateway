@@ -708,15 +708,15 @@ func (m *Manager) EndGrantByUser(ctx context.Context, chatID string, id int64) (
 // ErrGrantNotActive: the grant is not active (any more).
 var ErrGrantNotActive = errors.New("the internet grant is not active")
 
-// EndAllGrants ends every active grant of the chat for the reason and returns how many ended.
-func (m *Manager) EndAllGrants(ctx context.Context, chatID, reason string) int {
-	n := 0
+// EndAllGrants ends every active grant of the chat for the reason and returns the IDs of those that ended.
+func (m *Manager) EndAllGrants(ctx context.Context, chatID, reason string) []int64 {
+	var ended []int64
 	for _, l := range m.grants.active(chatID) {
 		if m.EndGrant(ctx, chatID, l.g.ID, reason) {
-			n++
+			ended = append(ended, l.g.ID)
 		}
 	}
-	return n
+	return ended
 }
 
 // startUserFull starts a full grant for the user's switch or the default of a new chat, with the default limits.
@@ -761,6 +761,7 @@ func (m *Manager) setInternet(ctx context.Context, chatID string, on, byUser boo
 	}
 	had := len(m.grants.active(chatID)) > 0
 	var switchedOn int64
+	var ended []int64
 	switch {
 	case on && !m.hasFull(chatID):
 		unlock := m.lock(chatID)
@@ -775,7 +776,7 @@ func (m *Manager) setInternet(ctx context.Context, chatID string, on, byUser boo
 		if byUser {
 			reason = store.EndUser
 		}
-		m.EndAllGrants(ctx, chatID, reason)
+		ended = m.EndAllGrants(ctx, chatID, reason)
 	}
 	slog.Info("internet toggled", "chat", chatID, "on", on, "by_user", byUser)
 	if byUser {
@@ -792,6 +793,9 @@ func (m *Manager) setInternet(ctx context.Context, chatID string, on, byUser boo
 		detail := ""
 		if switchedOn > 0 {
 			detail = fmt.Sprintf("grant %d full", switchedOn)
+		} else if !on {
+			// The activity list summarises these ends under this entry (issue #185).
+			detail = store.EndedGrantsDetail(ended)
 		}
 		m.LogCallBy(ctx, slot, chatID, ViaUser, store.OpInternetUser, detail, result)
 	}
@@ -825,7 +829,7 @@ func (m *Manager) DisableInternet(ctx context.Context, chatID, slotID, via strin
 		slog.Info("internet grant switched off by the agent", "chat", chatID, "slot", slotID, "via", via, "grant", grantID)
 		return sock.UploadResult{Status: sock.InternetOff, Name: "internet", Message: fmt.Sprintf("grant %d switched off", grantID)}, nil
 	}
-	n := m.EndAllGrants(bg, chatID, store.EndAgent)
+	n := len(m.EndAllGrants(bg, chatID, store.EndAgent))
 	if n == 0 {
 		return sock.UploadResult{Status: sock.InternetAlreadyOff, Name: "internet", Message: "internet access was already off"}, nil
 	}
