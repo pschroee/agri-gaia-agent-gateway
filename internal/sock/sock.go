@@ -191,6 +191,7 @@ func NewHandlerRunFg(slotID string, b Backend, maxBytes int64, run ToolRunner, f
 	mux.HandleFunc("GET /internet", h.internetStatus)
 	mux.HandleFunc("POST /internet/off", h.internetOff)
 	mux.HandleFunc("POST /platform/{tool}", h.platform)
+	mux.HandleFunc("POST /cli/exit", h.cliExit) // only here, not at pi's socket (#202)
 	mux.Handle("/mcp", h.mcp)
 	return h.withPlatformAPI(mux)
 }

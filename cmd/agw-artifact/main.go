@@ -53,22 +53,22 @@ func main() {
 		code, err := platformCmd(hc, os.Args[1:])
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "error:", err)
-			os.Exit(1)
+			exit(hc, "agw-platform", 1)
 		}
-		os.Exit(code)
+		exit(hc, "agw-platform", code)
 	}
 	// Called as agw-internet (symlink in the image): request internet access or switch it off.
 	if filepath.Base(os.Args[0]) == "agw-internet" {
 		code, err := internet(hc, os.Args[1:])
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "error:", err)
-			os.Exit(1)
+			exit(hc, "agw-internet", 1)
 		}
-		os.Exit(code)
+		exit(hc, "agw-internet", code)
 	}
 	if len(os.Args) < 2 {
 		usage()
-		os.Exit(1)
+		exit(hc, "agw-artifact", 1)
 	}
 	var err error
 	code := 0
@@ -87,13 +87,13 @@ func main() {
 		usage()
 	default:
 		usage()
-		os.Exit(1)
+		exit(hc, "agw-artifact", 1)
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
-		os.Exit(1)
+		exit(hc, "agw-artifact", 1)
 	}
-	os.Exit(code)
+	exit(hc, "agw-artifact", code)
 }
 
 func usage() {
@@ -654,6 +654,35 @@ func get(hc *http.Client, args []string) error {
 
 // setCaller tells the orchestrator the tool call and session in which this command runs (the
 // orchestrator puts them into the environment); only for showing who asked.
+// reportExit tells the gateway that a CLI ends with a code other than 0, so that the failure stays visible when a
+// pipe (`| tail`) replaces the exit code of the shell command (#202). It waits at most 2 s and ignores every error:
+// a dead socket must not hold the CLI back.
+func reportExit(hc *http.Client, cli string, code int) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	body, _ := json.Marshal(map[string]any{"cli": cli, "exit": code})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://agw/cli/exit", bytes.NewReader(body))
+	if err != nil {
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	setCaller(req)
+	resp, err := hc.Do(req)
+	if err != nil {
+		return
+	}
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<10))
+	resp.Body.Close()
+}
+
+// exit reports a failed run, then ends the process.
+func exit(hc *http.Client, cli string, code int) {
+	if code != 0 {
+		reportExit(hc, cli, code)
+	}
+	os.Exit(code)
+}
+
 func setCaller(req *http.Request) {
 	if id := os.Getenv("PI_AGW_TOOL_CALL_ID"); id != "" {
 		req.Header.Set("X-Agw-Tool-Call", id)

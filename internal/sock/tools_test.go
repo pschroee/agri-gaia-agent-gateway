@@ -517,3 +517,30 @@ func TestInternetStatePerTool(t *testing.T) {
 		}
 	}
 }
+
+func bashBody(id string) map[string]any {
+	return map[string]any{"toolCallId": id, "tool": "bash", "req": map[string]any{"op": "bash", "command": "agw-internet x | tail", "cwd": "/workspace"}}
+}
+
+func TestBashFrameCarriesCLIExits(t *testing.T) {
+	fg := NewForeground()
+	run := &cliReporter{fg: fg, exits: []execproto.CLIExit{{CLI: "agw-internet", Exit: 3}}}
+	c, rec := startFg(t, run, &fakeBg{}, fg)
+	resp, body := postJSON(t, c, "/tool/bash", bashBody("call_cli"))
+	if resp.StatusCode != 200 || !strings.Contains(body, `"cliExits":[{"cli":"agw-internet","exit":3}]`) {
+		t.Fatalf("frame: %d %q", resp.StatusCode, body)
+	}
+	r := rec.all()
+	if len(r) != 1 || r[0].Error != "cli_failed: agw-internet 3" {
+		t.Fatalf("entry: %+v", r)
+	}
+}
+
+func TestBashFrameWithoutCLIExits(t *testing.T) {
+	fg := NewForeground()
+	c, rec := startFg(t, &cliReporter{fg: fg}, &fakeBg{}, fg)
+	_, body := postJSON(t, c, "/tool/bash", bashBody("call_cli"))
+	if strings.Contains(body, "cliExits") || rec.all()[0].Error != "" {
+		t.Fatalf("frame %q, entry %+v", body, rec.all()[0])
+	}
+}

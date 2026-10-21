@@ -7,7 +7,7 @@ import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { bgChildNote, bgMainNote, bgStatus, bgTailLines, checkSubagentCall, checkWorkflowMessage, formatDuration, REMOTE_WORKER, relayCommand, relayCall, relayRef, relayRequest, workflowRuntimeRedirected } from "../ext/exec-bridge.ts";
+import { bgChildNote, cliExitNote, bgMainNote, bgStatus, bgTailLines, checkSubagentCall, checkWorkflowMessage, formatDuration, REMOTE_WORKER, relayCommand, relayCall, relayRef, relayRequest, workflowRuntimeRedirected } from "../ext/exec-bridge.ts";
 
 test("single subagents and read-only actions pass", () => {
 	for (const input of [
@@ -257,4 +257,17 @@ test("start notes of background tasks (#201)", () => {
 	assert.match(bgMainNote, /end your reply/);
 	assert.match(bgChildNote, /main agent is notified/);
 	assert.match(`Background task bg-1 started. ${bgMainNote}.`, /\bBackground task (bg-\d+) started\b/);
+});
+
+test("cliExitNote names failed gateway CLIs (#202)", () => {
+	assert.equal(cliExitNote(0, []), "");
+	const rejected = cliExitNote(0, [{ cli: "agw-internet", exit: 3 }]);
+	assert.match(rejected, /^agw-internet exited with code 3 \(rejected by the user\) inside this command\.\n/);
+	assert.match(rejected, /The command itself exited with 0/);
+	const shellFailed = cliExitNote(2, [{ cli: "agw-internet", exit: 2 }]);
+	assert.match(shellFailed, /refused or wrong usage/);
+	assert.doesNotMatch(shellFailed, /The command itself exited with 0/);
+	const two = cliExitNote(0, [{ cli: "agw-internet", exit: 1 }, { cli: "agw-platform", exit: 77 }]);
+	assert.match(two, /agw-internet exited with code 1 \(error\)/);
+	assert.match(two, /agw-platform exited with code 77 \(failed\)/);
 });
