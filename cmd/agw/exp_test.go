@@ -959,6 +959,7 @@ func writePlanLock(t *testing.T, dir string, lock exp.Lock) *exp.Lock {
 	}
 	if lock.CatalogSHA256 == "" {
 		lock.CatalogSHA256, lock.SkillsSHA256, lock.InstructionSHA256 = "cat", "skills", "instr"
+		lock.APIIndexSHA256 = "api"
 	}
 	raw, err := json.MarshalIndent(lock, "", "  ")
 	if err != nil {
@@ -975,7 +976,7 @@ func matchingEnv() *fakeExpAPI {
 	api := newFakeExpAPI()
 	api.env = agwclient.ExpEnvironment{
 		GatewayVersion: "abc123", GatewayCommit: "abc123", GatewayDescribe: "abc123",
-		CatalogSHA256: "cat", SkillsSHA256: "skills", InstructionSHA256: "instr",
+		CatalogSHA256: "cat", SkillsSHA256: "skills", InstructionSHA256: "instr", APIIndexSHA256: "api",
 		ImagesPi: []string{"sha256:pi"}, ImagesExec: []string{"sha256:exec"},
 	}
 	api.envSlot = agwclient.ExpEnvironmentSlot{ID: "exp-1", Variant: "exp:cli", ImagePi: "sha256:pi", ImageExec: "sha256:exec"}
@@ -1009,6 +1010,7 @@ func TestMainPlanRefusedOnLockMismatch(t *testing.T) {
 		{"catalog", func(a *fakeExpAPI) { a.env.CatalogSHA256 = "other" }, "catalog_sha256"},
 		{"skills", func(a *fakeExpAPI) { a.env.SkillsSHA256 = "other" }, "skills_sha256"},
 		{"instruction", func(a *fakeExpAPI) { a.env.InstructionSHA256 = "other" }, "instruction_sha256"},
+		{"api index", func(a *fakeExpAPI) { a.env.APIIndexSHA256 = "other" }, "api_index_sha256"},
 		{"image pi", func(a *fakeExpAPI) { a.env.ImagesPi = []string{"sha256:old"} }, "image_pi"},
 		{"image exec", func(a *fakeExpAPI) { a.env.ImagesExec = []string{"sha256:old"} }, "image_exec"},
 	}
