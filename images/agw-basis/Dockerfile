@@ -13,6 +13,7 @@ COPY cmd/agw-artifact ./cmd/agw-artifact
 COPY cmd/agw-exec ./cmd/agw-exec
 COPY internal/execproto ./internal/execproto
 COPY internal/platform ./internal/platform
+COPY internal/toolset ./internal/toolset
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/agw-artifact ./cmd/agw-artifact \
  && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/agw-exec ./cmd/agw-exec
 
