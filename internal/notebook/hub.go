@@ -128,42 +128,62 @@ func (h *Hub) Ready(ctx context.Context, user, server string) (bool, error) {
 	return doc.Servers[server].Ready, nil
 }
 
+// ServerInfo is what the hub knows about a server: its state (see ServerState) and the time of its
+// last activity (zero when the hub reports none or the value is unreadable).
+type ServerInfo struct {
+	State        string
+	LastActivity time.Time
+}
+
 // ServerState names what the hub knows about a server: "not started" (the user model has no entry),
 // "starting" (an entry that is not ready yet), "stopping" (the hub is stopping it) or "running" (ready). ErrNoHubUser when the hub does
 // not know the user at all.
 func (h *Hub) ServerState(ctx context.Context, user, server string) (string, error) {
+	info, err := h.ServerInfo(ctx, user, server)
+	return info.State, err
+}
+
+// ServerInfo reads the state and the last activity of a server from the user model.
+func (h *Hub) ServerInfo(ctx context.Context, user, server string) (ServerInfo, error) {
 	if err := check(user, server); err != nil {
-		return "", err
+		return ServerInfo{}, err
 	}
 	body, code, err := h.do(ctx, http.MethodGet, "/users/"+url.PathEscape(user), nil)
 	if err != nil {
-		return "", err
+		return ServerInfo{}, err
 	}
 	if code == http.StatusNotFound {
-		return "", ErrNoHubUser
+		return ServerInfo{}, ErrNoHubUser
 	}
 	if code < 200 || code >= 300 {
-		return "", fmt.Errorf("%w: reading the user answers %d", ErrHub, code)
+		return ServerInfo{}, fmt.Errorf("%w: reading the user answers %d", ErrHub, code)
 	}
 	var doc struct {
 		Servers map[string]struct {
-			Ready   bool   `json:"ready"`
-			Pending string `json:"pending"`
+			Ready        bool   `json:"ready"`
+			Pending      string `json:"pending"`
+			LastActivity string `json:"last_activity"`
 		} `json:"servers"`
 	}
 	if err := json.Unmarshal(body, &doc); err != nil {
-		return "", fmt.Errorf("%w: user model unreadable: %v", ErrHub, err)
+		return ServerInfo{}, fmt.Errorf("%w: user model unreadable: %v", ErrHub, err)
 	}
 	s, known := doc.Servers[server]
+	var info ServerInfo
+	if t, err := time.Parse(time.RFC3339Nano, s.LastActivity); err == nil {
+		info.LastActivity = t
+	}
 	switch {
 	case !known:
-		return stateNotStarted, nil
+		info.State = stateNotStarted
 	case s.Pending == "stop":
-		return stateStopping, nil
+		info.State = stateStopping
 	case s.Ready:
-		return stateRunning, nil
+		info.State = stateRunning
+	default:
+		info.State = stateStarting
 	}
-	return stateStarting, nil
+	return info, nil
 }
 
 // HasUser reports whether the hub knows the user (ok false: it does not; the agent then asks the
