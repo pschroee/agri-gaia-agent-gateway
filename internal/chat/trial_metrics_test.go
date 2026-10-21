@@ -278,3 +278,35 @@ func TestTrialViewNameAndLink(t *testing.T) {
 		t.Errorf("template view: name %q link %q", v.Name, v.Link)
 	}
 }
+
+// Issue #203: a trial takes its duration from the run's own start and end, for a single run and for the
+// trial of a search alike, and falls back to the job's times without them.
+func TestTrialDurationFromRunTimes(t *testing.T) {
+	e, c, j := notebookJobSetup(t)
+	ctx := context.Background()
+	rs := time.Now().Add(-time.Minute)
+	re := rs.Add(36 * time.Second)
+	j.StartedAt = rs.Add(-2 * time.Second)
+	ended := re.Add(10 * time.Second) // the watcher saw the end one poll later
+	j.EndedAt, j.RunStartedAt, j.RunEndedAt = &ended, &rs, &re
+	for _, searchID := range []string{"", "s1"} {
+		tr := store.Trial{ChatID: c.ID, Path: store.SearchPathNotebook, Ref: "run1", JobID: j.ID, SearchID: searchID, State: store.TrialDone}
+		v := e.m.trialView(ctx, tr, map[string]store.WatchJob{j.ID: j})
+		if v.DurationS < 35.5 || v.DurationS > 36.5 {
+			t.Errorf("search %q: duration %v, want 36", searchID, v.DurationS)
+		}
+	}
+}
+
+func TestTrialDurationFallsBackToJob(t *testing.T) {
+	e, c, j := notebookJobSetup(t)
+	ctx := context.Background()
+	start := time.Now().Add(-time.Minute)
+	end := start.Add(10 * time.Second)
+	j.StartedAt, j.EndedAt = start, &end
+	tr := store.Trial{ChatID: c.ID, Path: store.SearchPathNotebook, Ref: "run1", JobID: j.ID, State: store.TrialDone}
+	v := e.m.trialView(ctx, tr, map[string]store.WatchJob{j.ID: j})
+	if v.DurationS < 9.5 || v.DurationS > 10.5 {
+		t.Errorf("duration %v, want about 10", v.DurationS)
+	}
+}

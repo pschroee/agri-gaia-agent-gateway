@@ -40,3 +40,9 @@ ALTER TABLE watch_jobs ADD COLUMN IF NOT EXISTS link text NOT NULL DEFAULT '';
 -- "agent" for a stop of the agent's own tools, empty while nobody stopped it. Written once, by the call that
 -- stops; a progress update leaves it alone.
 ALTER TABLE watch_jobs ADD COLUMN IF NOT EXISTS stopped_by text NOT NULL DEFAULT '';
+
+-- The run's own start and end, as the run wrote them (issue #203): the kind notebook_run takes them from the
+-- markers of its starter, every other kind leaves them NULL. started_at/ended_at stay the gateway's clock
+-- (job created, job seen ended).
+ALTER TABLE watch_jobs ADD COLUMN IF NOT EXISTS run_started_at timestamptz;
+ALTER TABLE watch_jobs ADD COLUMN IF NOT EXISTS run_ended_at timestamptz;

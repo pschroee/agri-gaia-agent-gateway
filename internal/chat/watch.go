@@ -211,6 +211,9 @@ func (m *Manager) pollJob(ctx context.Context, j store.WatchJob, kind watch.Kind
 		Outputs: storeOutputs(p.Outputs),
 		Link:    p.Link,
 		ETA:     m.jobETA(j, p, time.Now()),
+
+		RunStartedAt: p.RunStartedAt,
+		RunEndedAt:   p.RunEndedAt,
 	}
 	changed, err := m.st.UpdateJobProgress(ctx, j.ID, prog)
 	if err != nil {
@@ -223,6 +226,12 @@ func (m *Manager) pollJob(ctx context.Context, j store.WatchJob, kind watch.Kind
 	j.Progress, j.Message, j.LogTail, j.ETA = prog.Percent, prog.Message, prog.LogTail, prog.ETA
 	j.Outputs = prog.Outputs
 	j.Link = prog.Link
+	if prog.RunStartedAt != nil {
+		j.RunStartedAt = prog.RunStartedAt
+	}
+	if prog.RunEndedAt != nil {
+		j.RunEndedAt = prog.RunEndedAt
+	}
 	j.CheckedAt = timePtr(time.Now())
 	j.State = prog.State
 	m.runJobProgress(ctx, j, p) // seam of the training search (issue #168)

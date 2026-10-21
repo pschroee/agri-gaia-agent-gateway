@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"regexp"
 	"sync"
+	"time"
 
 	"agw/internal/delegation"
 	"agw/internal/platform"
@@ -52,6 +53,9 @@ type Progress struct {
 	// notebook_run carries the run in the user's JupyterHub). Empty for the kinds without one, and the
 	// card builds no address of its own (own code C-E4).
 	Link string
+	// RunStartedAt and RunEndedAt are the run's own start and end, as the run wrote them; nil when the kind
+	// does not know them (issue #203).
+	RunStartedAt, RunEndedAt *time.Time
 	// Next (A-E2) replaces the kind and the reference of the running job: the observed task only
 	// started another job (a started training container, a built image), and the same row is observed
 	// on as that job. nil for every kind that follows its job to its end.
