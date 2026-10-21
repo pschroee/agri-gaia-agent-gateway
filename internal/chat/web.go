@@ -34,18 +34,23 @@ func (m *Manager) RecordWeb(r webproxy.Request) int64 {
 	wr.ID = id
 	m.publish(r.ChatID, Event{Kind: "web_request", Data: wr})
 	if r.Denied != "" {
-		if r.GrantID > 0 {
-			if l := m.grants.get(r.GrantID); l != nil {
-				l.blocked.Add(1)
-			}
-			if err := m.st.BumpBlocked(context.Background(), r.GrantID); err != nil {
-				slog.Warn("blocked count not stored", "grant", r.GrantID, "err", err)
-			}
-		}
-		// Every refusal counts at the chat, with or without a grant (issue #175, G2).
-		m.publishBlocked(r.ChatID)
+		m.countRefusal(r)
 	}
 	return id
+}
+
+// countRefusal counts a refusal on the grant that governs the chat and tells the UI.
+func (m *Manager) countRefusal(r webproxy.Request) {
+	if r.GrantID > 0 {
+		if l := m.grants.get(r.GrantID); l != nil {
+			l.blocked.Add(1)
+		}
+		if err := m.st.BumpBlocked(context.Background(), r.GrantID); err != nil {
+			slog.Warn("blocked count not stored", "grant", r.GrantID, "err", err)
+		}
+	}
+	// Every refusal counts at the chat, with or without a grant (issue #175, G2).
+	m.publishBlocked(r.ChatID)
 }
 
 // FinishWeb adds bytes and duration to a tunnel when it closes (webproxy.Gate).
@@ -53,8 +58,13 @@ func (m *Manager) FinishWeb(id int64, r webproxy.Request) {
 	if id == 0 {
 		return
 	}
-	if err := m.st.FinishWebRequest(context.Background(), id, r.BytesUp, r.BytesDown, r.DurationMs, r.Denied); err != nil {
+	if err := m.st.FinishWebRequest(context.Background(), id, r.BytesUp, r.BytesDown, r.DurationMs, r.Denied, r.Reason); err != nil {
 		slog.Warn("web request not updated", "chat", r.ChatID, "err", err)
+		return
+	}
+	// A tunnel closed with a refusal (size limit, grant ended) counts like a refused request.
+	if r.Denied != "" {
+		m.countRefusal(r)
 	}
 }
 
