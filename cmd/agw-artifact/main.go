@@ -468,13 +468,13 @@ func internetShowStatus(hc *http.Client) (int, error) {
 			Blocked   int        `json:"blocked"`
 			ExpiresAt *time.Time `json:"expires_at"`
 		} `json:"grants"`
+		Blocked []refusalEntry `json:"blocked"`
 	}
 	if err := json.Unmarshal(raw, &out); err != nil {
 		return 1, fmt.Errorf("unreadable response: %s", raw)
 	}
 	if len(out.Grants) == 0 {
 		fmt.Println("no internet access is active")
-		return 0, nil
 	}
 	for _, g := range out.Grants {
 		what := g.Kind
@@ -487,7 +487,37 @@ func internetShowStatus(hc *http.Client) (int, error) {
 		}
 		fmt.Printf("grant %d: %s %s, %d of %d MB used, %d blocked\n", g.ID, what, left, g.Bytes>>20, g.MaxBytes>>20, g.Blocked)
 	}
+	printRefusals(os.Stdout, out.Blocked)
 	return 0, nil
+}
+
+// refusalEntry is one refusal in the answer of GET /internet.
+type refusalEntry struct {
+	Host    string    `json:"host"`
+	Package string    `json:"package"`
+	Reason  string    `json:"reason"`
+	Denied  string    `json:"denied"`
+	At      time.Time `json:"at"`
+}
+
+// printRefusals lists the last refusals with their full text; pip and npm show only the HTTP status.
+func printRefusals(w io.Writer, rs []refusalEntry) {
+	if len(rs) == 0 {
+		return
+	}
+	fmt.Fprintln(w, "recent refusals:")
+	for _, r := range rs {
+		what := r.Host
+		if r.Package != "" {
+			switch r.Host {
+			case "pypi.org":
+				what = "pip:" + r.Package
+			case "registry.npmjs.org":
+				what = "npm:" + r.Package
+			}
+		}
+		fmt.Fprintf(w, "  %s %s (%s) %s\n", r.At.Local().Format("15:04"), what, r.Reason, r.Denied)
+	}
 }
 
 func list(hc *http.Client) error {
