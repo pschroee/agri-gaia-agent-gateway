@@ -82,13 +82,13 @@ func (n *Notebooks) stopOne(ctx context.Context, s store.NotebookServer, before 
 	state, err := n.hub.ServerState(ctx, s.HubUser, s.Server)
 	switch {
 	case errors.Is(err, ErrNoHubUser):
-		state = "not started"
+		state = stateNotStarted
 	case err != nil:
 		slog.Warn("idle notebook server state unknown", "chat", s.ChatID, "server", s.Server, "error", err)
 		return nil
 	}
 	// "stopping" counts like "running": the stop is asked again (the hub answers 202) and recorded.
-	running := state != "not started"
+	running := state != stateNotStarted
 	if running {
 		if err := n.hub.Stop(ctx, s.HubUser, s.Server); err != nil {
 			slog.Warn("idle notebook server not stopped", "chat", s.ChatID, "server", s.Server, "error", err)

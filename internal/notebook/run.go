@@ -229,14 +229,24 @@ var (
 	serverStopWaitTimeout = 60 * time.Second
 )
 
-// startServer starts the server; while the hub is still stopping it, it tries again every
-// serverReadyEvery, up to serverStopWaitTimeout.
+// startServer starts the server unless the hub already runs or starts it (a start would only add a
+// 400 "already running" or "pending spawn" to the hub's log). While the hub is still stopping the
+// server, it asks again every serverReadyEvery, up to serverStopWaitTimeout.
 func (n *Notebooks) startServer(ctx context.Context, user, server string) error {
 	deadline := time.Now().Add(serverStopWaitTimeout)
 	for {
-		err := n.hub.Start(ctx, user, server)
-		if !errors.Is(err, ErrStopPending) {
+		state, err := n.hub.ServerState(ctx, user, server)
+		if err != nil {
 			return err
+		}
+		switch state {
+		case stateRunning, stateStarting:
+			return nil
+		case stateNotStarted:
+			err := n.hub.Start(ctx, user, server)
+			if !errors.Is(err, ErrStopPending) {
+				return err
+			}
 		}
 		if !time.Now().Before(deadline) {
 			return fmt.Errorf("the notebook server %s is still stopping after %s; try the run again in a minute", server, serverStopWaitTimeout)
