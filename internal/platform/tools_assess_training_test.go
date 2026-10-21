@@ -137,3 +137,77 @@ func TestBuildApprovalShowsModelCheck(t *testing.T) {
 func okBody(body string) Result {
 	return Result{Status: "ok", HTTPStatus: http.StatusOK, Body: body}
 }
+
+// splitCall is a split_dataset approval call with the given body.
+func splitCall(body string) SummaryCall {
+	return SummaryCall{Tool: "split_dataset", Method: http.MethodPost, Path: AssessSplitPath, Body: json.RawMessage(body)}
+}
+
+// A placeholder as the source is a known-but-unborn id: nothing is read and nothing is called unreadable (#177).
+func TestSplitSummaryWithPlaceholder(t *testing.T) {
+	reads := 0
+	read := func(_ context.Context, r Request) (Result, error) {
+		reads++
+		return okBody(`{}`), nil
+	}
+	got := Summarize(context.Background(), read, splitCall(`{"dataset_id":"{{step1.id}}"}`))
+	want := `Create dataset "<name of the dataset from step 1>-train" from the dataset created by step 1 for held-out checks`
+	if !strings.HasPrefix(got, want) {
+		t.Errorf("head:\n%s", got)
+	}
+	if strings.Contains(got, "not readable") || strings.Contains(got, "{{") || strings.Contains(got, "the rest") {
+		t.Errorf("placeholder leaks into the summary:\n%s", got)
+	}
+	if reads != 0 {
+		t.Errorf("%d reads for a placeholder", reads)
+	}
+}
+
+// A real id that cannot be read keeps the read error.
+func TestSplitSummaryKeepsReadError(t *testing.T) {
+	read := func(_ context.Context, r Request) (Result, error) {
+		return Result{Status: "error", HTTPStatus: http.StatusNotFound, Message: "not found"}, nil
+	}
+	got := Summarize(context.Background(), read, splitCall(`{"dataset_id":16}`))
+	if !strings.Contains(got, "name not readable") || !strings.Contains(got, `"<source name>-train"`) {
+		t.Errorf("summary:\n%s", got)
+	}
+}
+
+// An explicit name wins over the placeholder name.
+func TestSplitSummaryNamedPlaceholder(t *testing.T) {
+	read := func(_ context.Context, r Request) (Result, error) { return okBody(`{}`), nil }
+	got := Summarize(context.Background(), read, splitCall(`{"dataset_id":"{{step1.id}}","name":"mine"}`))
+	if !strings.HasPrefix(got, `Create dataset "mine" from the dataset created by step 1`) {
+		t.Errorf("summary:\n%s", got)
+	}
+}
+
+// The check names the model and the dataset of earlier steps, and the build says why there is no check yet.
+func TestAssessSummaryPlaceholders(t *testing.T) {
+	read := func(_ context.Context, r Request) (Result, error) { return okBody(`{}`), nil }
+	call := SummaryCall{Tool: "assess_model", Method: http.MethodPost, Path: AssessCheckPath,
+		Body: json.RawMessage(`{"model_id":"{{step3.id}}","eval_dataset_id":"{{step1.id}}"}`)}
+	got := Summarize(context.Background(), read, call)
+	if !strings.Contains(got, "the model created by step 3") || !strings.Contains(got, "on the dataset created by step 1") ||
+		strings.Contains(got, "not readable") {
+		t.Errorf("check summary:\n%s", got)
+	}
+	build := SummaryCall{Tool: "build_inference_image", Method: http.MethodPost, Path: "/container-images/build",
+		Body: json.RawMessage(`{"container_template_id":1,"model_id":"{{step3.id}}","name":"m","tag":"v1","architecture":"amd64"}`)}
+	if got := Summarize(context.Background(), read, build); !strings.Contains(got, "Model check: none yet (the model is created by step 3)") {
+		t.Errorf("build summary:\n%s", got)
+	}
+}
+
+// Upload then split in one plan: the second step has no read error.
+func TestSummarizePlanUploadSplit(t *testing.T) {
+	f := &fakeReads{answers: map[string]string{}}
+	got := SummarizePlan(context.Background(), f.do, []SummaryCall{
+		{Tool: "rename_dataset", Method: "PATCH", Path: "/datasets/16", Body: json.RawMessage(`{"name":"a"}`)},
+		splitCall(`{"dataset_id":"{{step1.id}}"}`),
+	})
+	if strings.Contains(got[1], "not readable") || !strings.Contains(got[1], "the dataset created by step 1") {
+		t.Errorf("step 2: %q", got[1])
+	}
+}
