@@ -254,3 +254,23 @@ func TestSplitRefusesBadShare(t *testing.T) {
 		t.Error("a refused call created a dataset")
 	}
 }
+
+// A CVAT export of a task made from the object store names its images with a path prefix
+// ("agent-test/30/a.png"); the filter must still match the file names the split picked (live check of #168).
+func TestFilterCVATImagesWithPathPrefix(t *testing.T) {
+	images := []testImage{
+		{Name: "agent-test/30/a.png", Data: "a", Tags: []string{"cow"}},
+		{Name: "agent-test/30/b.png", Data: "b", Tags: []string{"pig"}},
+	}
+	filtered, err := FilterCVATImages(testAnnotation(images), map[string]bool{"a.png": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ann, err := ParseCVAT(filtered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ann.Images) != 1 || ann.Images[0].Name != "agent-test/30/a.png" {
+		t.Fatalf("filtered images: %+v", ann.Images)
+	}
+}
