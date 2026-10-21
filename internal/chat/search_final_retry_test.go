@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	"agw/internal/delegation"
+	"agw/internal/platform"
 	"agw/internal/search"
 	"agw/internal/store"
 )
@@ -80,5 +82,34 @@ func TestEndTextNotebookModelMeta(t *testing.T) {
 	got = m.endText(store.Search{Path: store.SearchPathTemplate}, obj, "budget_runs", w, ho)
 	if strings.Contains(got, "outputs/model.json") {
 		t.Errorf("template end text names model.json: %s", got)
+	}
+}
+
+// A final check the gateway refused before it started (#184) leaves the search pending: no check id, no retry
+// counted, so that the covered final test is still there.
+func TestSearchFinalRefusalKeepsPending(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	c, s := runningSearch(t, e, `{"max_runs":3}`)
+	winner := 1
+	if ended, _ := e.m.finishSearch(ctx, s, endByAgent, &winner, "done"); !ended {
+		t.Fatal("search not ended")
+	}
+	ho, _ := json.Marshal(SearchHoldout{Available: true, FinalState: "pending", EvalDataset: &SearchNamed{ID: 9}})
+	if err := e.st.SetSearchHoldout(ctx, s.ID, ho); err != nil {
+		t.Fatal(err)
+	}
+	claim := &trialClaim{SearchID: s.ID, Kind: claimFinal, Covered: true}
+	res := platform.Result{Status: "error", Message: platform.RefusedPrefix + "the preprocessing of this final check differs",
+		Decision: platform.DecisionError, Reason: "preprocess_differs_from_run"}
+	e.m.searchFinish(ctx, c.ID, claim, delegation.Access{}, platform.Request{}, res, nil, "")
+	list, err := e.m.Searches(ctx, c.ID)
+	if err != nil || len(list) != 1 {
+		t.Fatalf("searches: %v %v", list, err)
+	}
+	var got SearchHoldout
+	_ = json.Unmarshal(list[0].Holdout, &got)
+	if got.FinalState != "pending" || got.CheckID != "" || got.FinalRetries != 0 {
+		t.Fatalf("holdout after a refused final check: %+v", got)
 	}
 }

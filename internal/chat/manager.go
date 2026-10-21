@@ -2612,7 +2612,14 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 	res.Violation = violation
 	res.Duration = took
 	// X5.1: the decision of the executed call. A violation that was only logged is its own value.
+	// A handler that refuses the call itself before doing anything (a refusal with its own reason code, e.g. the
+	// final check of #184) keeps its error decision and reason, so that platform_calls can tell it apart.
+	handlerRefused := res.Status == "error" && res.Decision == platform.DecisionError && res.Reason != ""
+	handlerReason := res.Reason
 	res.Decision, res.Reason, res.Rule, res.WithinDelegation = executedDecision, "", rule, within
+	if handlerRefused {
+		res.Decision, res.Reason = platform.DecisionError, handlerReason
+	}
 	if violation != "" {
 		res.Decision, res.Reason, res.Rule = platform.DecisionAllowedViolation, delDecision.Code, delDecision.Rule
 	}

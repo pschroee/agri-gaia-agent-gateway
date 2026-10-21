@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"agw/internal/platform"
 	"agw/internal/store"
 )
 
@@ -217,4 +218,105 @@ func TestFinalUsedIgnoresNotRun(t *testing.T) {
 		t.Fatal("two measured final checks got through the index")
 	}
 	_ = b
+}
+
+// recordRunMeta gives the fetched file an outputs/model.json (gray, 28x28, 1/255, no mean/std).
+func recordRunMeta(t *testing.T, fx *ownFixture) {
+	t.Helper()
+	meta := `{"class_names":["0","1"],"preprocess":{"color":"gray","size":[28,28],"scale":0.00392156862745098}}`
+	if err := fx.st.RecordNotebookFetch(context.Background(), store.NotebookFetch{ChatID: fx.chat.ID, RunID: fx.runID,
+		Path: "model.onnx", SHA256: ownModelSHA, Size: int64(len(ownModelBytes)), ModelMeta: []byte(meta)}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func finalWithPre(pre string) string {
+	return `{"path":"/workspace/notebook/r20260101120000-abcd/model.onnx","eval_dataset_id":8,"final":true,"preprocess":` + pre + `}`
+}
+
+func okRuntime(t *testing.T, fx *ownFixture) {
+	fx.runtime.reply = func(blob []byte) string {
+		return answerByClass(t, blob, fx.classes, []float64{0.95, 0.05}, []float64{0.05, 0.95})
+	}
+}
+
+// #184: other preprocessing than outputs/model.json on a final check is refused before anything starts.
+func TestFinalRefusedOnPreprocessMismatch(t *testing.T) {
+	fx := newOwnFixture(t, true)
+	recordRunMeta(t, fx)
+	fx.runtime.reply = func([]byte) string {
+		t.Error("a container ran for a refused final check")
+		return noPredictions
+	}
+	res, err := fx.svc.Do(context.Background(), fx.chat.ID, platform.Request{Method: "POST", Path: platform.AssessPrefix + "/checks",
+		Body:    []byte(finalWithPre(`{"mean":[0.5],"std":[0.5]}`)),
+		Uploads: []platform.Upload{{Field: "modelfile", Name: "model.onnx", SHA256: ownModelSHA, Data: ownModelBytes}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Status != "error" || res.Reason != ReasonPreprocessDiffersFromRun || res.Decision != platform.DecisionError {
+		t.Fatalf("result: %+v", res)
+	}
+	for _, want := range []string{platform.RefusedPrefix, "run " + fx.runID, "mean 0.5 (call) vs none (model.json)", "std 0.5 (call) vs none (model.json)"} {
+		if !strings.Contains(res.Message, want) {
+			t.Errorf("message lacks %q: %s", want, res.Message)
+		}
+	}
+	rows, err := fx.st.Assessments(context.Background(), fx.chat.ID)
+	if err != nil || len(rows) != 0 {
+		t.Errorf("assessment rows: %v %v", rows, err)
+	}
+	if fx.runtime.blob != nil {
+		t.Error("the check container got a job")
+	}
+}
+
+// Without preprocess in the call the file of the run is used, as before.
+func TestFinalWithoutPreprocessUsesRunMeta(t *testing.T) {
+	fx := newOwnFixture(t, true)
+	recordRunMeta(t, fx)
+	okRuntime(t, fx)
+	rep, _ := startFinalOwn(t, fx, finalBody)
+	if rep.Figures.Preprocess.Source != "run" || rep.Figures.Preprocess.Color != "gray" {
+		t.Errorf("preprocess: %+v", rep.Figures.Preprocess)
+	}
+}
+
+// The same preprocessing, rounded, is no difference.
+func TestFinalMatchingPreprocessRuns(t *testing.T) {
+	fx := newOwnFixture(t, true)
+	recordRunMeta(t, fx)
+	okRuntime(t, fx)
+	rep, _ := startFinalOwn(t, fx, finalWithPre(`{"color":"gray","size":[28],"scale":0.00392}`))
+	if rep.Figures.Preprocess.Source != "run" {
+		t.Errorf("preprocess: %+v", rep.Figures.Preprocess)
+	}
+}
+
+// An interim check keeps the hint of #181 and is measured.
+func TestInterimMismatchKeepsHint(t *testing.T) {
+	fx := newOwnFixture(t, true)
+	recordRunMeta(t, fx)
+	okRuntime(t, fx)
+	body := `{"path":"/workspace/notebook/r20260101120000-abcd/model.onnx","eval_dataset_id":8,"preprocess":{"mean":[0.5],"std":[0.5]}}`
+	rep := startOwnCheck(t, fx.svc, fx.st, fx.chat.ID, body)
+	hinted := false
+	for _, h := range rep.Hints {
+		if strings.Contains(h, "the call declared other preprocessing than outputs/model.json of run "+fx.runID) {
+			hinted = true
+		}
+	}
+	if !hinted {
+		t.Errorf("no hint: %v", rep.Hints)
+	}
+}
+
+// Without outputs/model.json a final check with preprocess starts as before.
+func TestFinalWithoutModelJSONUnchanged(t *testing.T) {
+	fx := newOwnFixture(t, true)
+	okRuntime(t, fx)
+	rep, _ := startFinalOwn(t, fx, finalWithPre(`{"color":"gray","size":[28,28],"mean":[0.5],"std":[0.5]}`))
+	if rep.Figures.Preprocess.Source != "declared" {
+		t.Errorf("preprocess: %+v", rep.Figures.Preprocess)
+	}
 }
