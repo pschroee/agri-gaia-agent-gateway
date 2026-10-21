@@ -350,8 +350,8 @@ type Env struct {
 	EgressNetwork   string
 	EgressSubnet    string
 	BlockedSubnets  string
-	NpmCache        string // container of the npm package cache, empty = none
-	PipCache        string // container of the pip package cache, empty = none
+	NpmCacheURL     string // npm package cache (Verdaccio) as the gateway reaches it, empty = none
+	PipCacheURL     string // pip package cache (proxpi) as the gateway reaches it, empty = none
 	InternetDefault bool
 	// Internet grants (issue #175): defaults and bounds of the time and data of a grant, and the single rows per
 	// grant in web_requests before the log collapses.
@@ -634,8 +634,8 @@ func FromEnv() Env {
 		EgressNetwork:          str("AGW_EGRESS_NETWORK", "agwpoc_egress"),
 		EgressSubnet:           str("AGW_EGRESS_SUBNET", "10.231.20.0/24"), // never Docker's 172.x (would otherwise hide VPN destinations)
 		BlockedSubnets:         str("AGW_BLOCKED_SUBNETS", ""),
-		NpmCache:               str("AGW_NPM_CACHE", ""),
-		PipCache:               str("AGW_PIP_CACHE", ""),
+		NpmCacheURL:            str("AGW_NPM_CACHE_URL", ""),
+		PipCacheURL:            str("AGW_PIP_CACHE_URL", ""),
 		InternetDefault:        str("AGW_INTERNET_DEFAULT", "false") == "true",
 		InternetMinutesDefault: num("AGW_INTERNET_MINUTES_DEFAULT", 30),
 		InternetMinutesMax:     num("AGW_INTERNET_MINUTES_MAX", 120),

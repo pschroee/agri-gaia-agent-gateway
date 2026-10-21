@@ -45,7 +45,7 @@ cd poc
 | RustFS console | <http://127.0.0.1:18483> (credentials from `.env`) |
 | Postgres | `127.0.0.1:18482`, user and database `agwpoc` |
 | LLM proxy | `orchestrator:18481`, only in the sandbox network |
-| Package caches | `http://npm-cache:4873/` (Verdaccio) and `http://pip-cache:5000/index/` (proxpi), **only from a sandbox with internet**; no ports on the host |
+| Package caches | `http://npm-cache:4873/` (Verdaccio) and `http://pip-cache:5000/` (proxpi), **only from the orchestrator's package gate**; no ports on the host |
 
 **Hot reload.** `./dev.sh start` runs the orchestrator from source: the container
 (`golang:1.26-bookworm`, `compose.hot.yaml`) mounts `poc/` read-only, and
@@ -404,8 +404,8 @@ has internet**; nothing changes about the principle “internet off = no way out
 
 | Service | Image | Volume | in the sandbox |
 |---|---|---|---|
-| `npm-cache` | `verdaccio/verdaccio:6.10.4` (by digest) | `agwpoc_npmcache` | `NPM_CONFIG_REGISTRY=http://npm-cache:4873/` |
-| `pip-cache` | `epicwink/proxpi:1.3.0` (by digest) | `agwpoc_pipcache` | `PIP_INDEX_URL=http://pip-cache:5000/index/`, `PIP_TRUSTED_HOST=pip-cache` |
+| `npm-cache` | `verdaccio/verdaccio:6.10.4` (by digest) | `agwpoc_npmcache` | `NPM_CONFIG_REGISTRY=http://127.0.0.1:3128/npm/` (the relay, see below) |
+| `pip-cache` | `epicwink/proxpi:1.3.0` (by digest) | `agwpoc_pipcache` | `PIP_INDEX_URL=http://127.0.0.1:3128/index/` (the relay, see below) |
 
 **Why these two.** Verdaccio is the usual npm cache and runs with a short
 settings file (`pkgcache/verdaccio.yaml`). There it is **read-only**: login
@@ -419,37 +419,41 @@ would need its own locks for that. By default proxpi redirects pip to
 cache. `PROXPI_DOWNLOAD_TIMEOUT=120` prevents that. Both run with a
 read-only root file system, without capabilities and with `no-new-privileges`.
 
-**Network and coupling to the internet switch.** Both services are attached only to the Compose network
-`agwpoc_pkg` (`10.231.21.0/24`, with internet, without ICC), not to `agwpoc_intern`: Postgres,
-RustFS and the user API cannot reach them through it; `10.231.21.0/24` is additionally listed in
-`AGW_BLOCKED_SUBNETS`. They cannot join the egress network, because **without ICC Docker drops
-all traffic between containers there** (checked: the name resolves, the connection runs into the
-timeout). Therefore `SetInternet` attaches them under the aliases `npm-cache` and
-`pip-cache` to the sandbox's **slot network** when switching on, and detaches them when switching off; if detaching fails,
-the switch reports an error. The coupling thus sits at exactly the place that also connects the
-egress network, and applies equally when resuming in a fresh sandbox. If a slot with
-internet is torn down or the orchestrator restarts, `RemoveSlotNetwork` detaches the
-caches as well. Without internet the name cannot be resolved: pip fails after about 8 s
-(five retries), npm after about 2 s (`NPM_CONFIG_FETCH_RETRIES=1` and short wait times
-instead of about 70 s with the defaults).
+**Network, relay and package gate (issue #175, stage 2).** The caches sit in the Compose network `agwpoc_pkg`
+(`10.231.21.0/24`, with internet) together with the orchestrator, not in `agwpoc_intern`; the subnet stays in
+`AGW_BLOCKED_SUBNETS`. A sandbox **never reaches them**. Its environment (`sandbox.RelayEnv`) points `pip`, `npm` and
+every proxy-aware program (`http_proxy`, `https_proxy` in both spellings, `no_proxy=127.0.0.1,localhost`) at the
+**relay** `127.0.0.1:3128`, a listener of `agw-exec serve` that hands every connection byte for byte to the slot's Unix
+socket. The socket's handler (`sock.WithRelay`) sends `CONNECT` and requests with an absolute URL to the web proxy
+(origin `exec`; the chat is known by the slot, not by an address) and `/index/…` and `/npm/…` to the **package gate**
+(`internal/pkggate`), which asks the caches over `agwpoc_pkg` (`AGW_PIP_CACHE_URL`, `AGW_NPM_CACHE_URL`). Because the
+sandbox has no network route (the egress network is attached for a `full` grant only), a program that ignores the
+proxy variables is simply offline.
 
-Which containers are meant is set by `AGW_NPM_CACHE` and `AGW_PIP_CACHE` in `compose.yaml`
-(Compose container names); empty switches off the respective cache including its environment in
-the sandbox. If a service is missing, internet still stays on, and installations through it
-fail.
+The gate decides on the package **before** it asks the cache, so a refused package reaches neither the cache nor the
+registry behind it: pip by the normalised project name (and, for a root pinned with `==`, the version in the file
+name), npm by the package name from the path. Allowed are the roots of the active `packages` grants, the dependencies
+that allowed packages declare themselves, and for pip a fixed list of build tools (`netgrant.BuildTools`). The
+dependencies come from the metadata the gate passes on anyway: `Requires-Dist` of the PEP 658 `.metadata` file, of the
+`METADATA` of a wheel or the `PKG-INFO` of an sdist (the last 64 KiB of a file are held back until it has been read, so
+the client cannot ask for a dependency before it is allowed), and for npm `dependencies`, `optionalDependencies` and
+`peerDependencies` of all versions in the packument. Entries with an `extra ==` marker count only if a root names the
+extra; platform markers are not evaluated. The `dist.tarball` links of a packument are rewritten to the relay (Verdaccio
+builds them from the `Host` header). A redirect of the cache is followed only to `files.pythonhosted.org`, `pypi.org`
+and `registry.npmjs.org` over https. Index and metadata calls are logged as one collapsed row per grant
+(`service: index`), package files one by one with `package`, `version` and `parent`.
 
-**Trade-off.** A cache is attached to the slot networks of **all** sandboxes that currently
-have internet, and thus also sits next to the orchestrator and its LLM proxy. Sandboxes cannot reach each other
-through it, because a container does not route; but whoever takes over Verdaccio or proxpi would sit
-in several slot networks. A separate network per sandbox just for the caches would avoid
-being neighbours with the orchestrator, but would cost one more network per slot; for stage 1 this is
-not implemented. In addition, all chats share the same stock: whether a package is already in the
-cache is revealed by the response time (a narrow covert channel between chats
-that both have internet and thus have ways out anyway). The caches themselves,
-like every sandbox with internet, also reach the LAN and host services (M3). If Compose recreates one
-of the services (changed setting), it loses the attached slot networks; chats with
-internet then reach it again only after toggling the switch again. A plain `compose up` without
-changes leaves it running (checked).
+Whether a package is *installed* the gateway finds out itself: after every `bash` execution and every end of a
+background task it runs a short Python script in the sandbox (not logged as a tool call) that looks for the packages
+(`importlib.metadata`, `*.dist-info` and `node_modules/<name>/package.json` below `/workspace` and the home directory,
+global npm prefixes). A package is `waiting`, `downloaded` (first file through the gate) or `installed` (with
+`version`); a `packages` grant ends with `installed` when all roots are installed, at the latest after 60 minutes or
+4 000 MB.
+
+**Trade-off.** The caches and the orchestrator share one network, so whoever takes over Verdaccio or proxpi sits next
+to the orchestrator (not to a sandbox). All chats share the same stock: whether a package is already cached shows in
+the response time (a narrow covert channel between chats that both hold a packages grant). The caches themselves, like
+the gateway, reach the LAN and host services.
 
 ### Confirmation by the user
 
@@ -1242,8 +1246,8 @@ items. Fixed and backed by tests (unit tests or `TestSandboxEscapesBlocked` in t
   user API is protected by the token, other services are not. Since issue #175 internet is granted in kinds
   (*Internet grants* below): for pi's web tools (`search`, `domains`) the web proxy is the only way out and enforces
   the list; the execution sandbox still has the egress network with `full`, so M3 stays open for that kind (the
-  grant carries a time and data limit and the card says so). Closing it for commands of the sandbox (a relay
-  through the socket instead of the egress network, for `domains` and `packages`) is stage 2 of issue #175.
+  grant carries a time and data limit and the card says so). **Closed for `search`, `domains` and `packages`
+  (stage 2):** commands of the sandbox leave only through the relay, the socket and the gateway.
 - **M4 – E9: closed** (2026-09-29). `bash` and the file tools no longer run next to pi but in the
   execution sandbox; pi runs without a shell, and the agent reaches neither pi's `/proc/<pid>/fd`
   nor session files or configuration (`TestE9BashRunsOutsidePi`). The orchestrator logs every

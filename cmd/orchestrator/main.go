@@ -28,9 +28,11 @@ import (
 	"agw/internal/netgrant"
 	"agw/internal/notebook"
 	"agw/internal/oidc"
+	"agw/internal/pkggate"
 	"agw/internal/platform"
 	"agw/internal/pool"
 	"agw/internal/sandbox"
+	"agw/internal/sock"
 	"agw/internal/store"
 	"agw/internal/titler"
 	"agw/internal/toolset"
@@ -157,7 +159,6 @@ func run() error {
 		self, _ = os.Hostname() // in a container: the short container ID
 	}
 	rt.SetSelf(self)
-	rt.SetPkgCaches(env.NpmCache, env.PipCache)
 	if n, err := rt.RemoveManaged(ctx); err == nil && n > 0 {
 		slog.Info("removed sandboxes of an earlier run", "count", n)
 	}
@@ -296,6 +297,26 @@ func run() error {
 		Checks:          checks, // R0: answers the capability "checks"
 	})
 	fac.Backend = m
+	// The sandbox's internet goes through its socket (issue #175): the web proxy for CONNECT and absolute URLs,
+	// the package gate for pip and npm. The proxy of one slot knows its chat by the slot, not by an address.
+	{
+		pkgGate := &pkggate.Gate{Source: m.PackageSource(), PublicBase: "http://" + sandbox.RelayAddr}
+		if u, err := url.Parse(env.PipCacheURL); err == nil && env.PipCacheURL != "" && u.Host != "" {
+			pkgGate.Pip = u
+		}
+		if u, err := url.Parse(env.NpmCacheURL); err == nil && env.NpmCacheURL != "" && u.Host != "" {
+			pkgGate.Npm = u
+		}
+		execBlocked, _ := api.ParseSubnets(env.BlockedSubnets)
+		fac.Relay = func(slotID string, fg *sock.Foreground) sock.Relay {
+			chatOf := func() string { c, _ := m.AttributeSlot(slotID); return c }
+			toolOf := func() string { return fg.Sole(chatOf()) }
+			px := &webproxy.Proxy{Gate: m.WebGate(), Blocked: execBlocked, Origin: netgrant.OriginExec,
+				AttributeReq: func(*http.Request) (string, string) { return m.AttributeSlot(slotID) },
+				ToolCallOf:   func(*http.Request) string { return toolOf() }}
+			return sock.Relay{Proxy: px, Pkg: pkgGate.Handler(chatOf, toolOf)}
+		}
+	}
 	plat.SetOnExchange(m.PlatformExchanged)
 
 	// V1 — pre-annotation with CVAT: the calls of the annotation_ tools are answered by this service

@@ -743,6 +743,13 @@ type WebRequest struct {
 	Parent     string    `json:"parent,omitempty"`
 	ToolCallID string    `json:"tool_call_id,omitempty"`
 	Count      int       `json:"count"`
+	// Reason: code of the refusal (netgrant.Code…); empty for an allowed request.
+	Reason string `json:"reason,omitempty"`
+	// Service: search (our SearXNG) or index (index and metadata calls of the package gate); empty otherwise.
+	Service string `json:"service,omitempty"`
+	// Aggregate: the row joins the one collapsed row of its grant, origin, host and service (index calls of the
+	// package gate are never listed one by one). Not stored.
+	Aggregate bool `json:"-"`
 }
 
 // CollapsedMethod is the Method of a collapsed row of web_requests.
@@ -752,7 +759,7 @@ const CollapsedMethod = "*"
 func webCols(a string) string {
 	return fmt.Sprintf(`%[1]s.id, %[1]s.chat_id::text, %[1]s.slot_id, %[1]s.source_ip, %[1]s.method, %[1]s.host, %[1]s.port, %[1]s.path, %[1]s.status,
 	%[1]s.bytes_up, %[1]s.bytes_down, %[1]s.denied, %[1]s.started_at, %[1]s.duration_ms, COALESCE(%[1]s.grant_id,0), %[1]s.origin, %[1]s.package,
-	%[1]s.version, %[1]s.parent, %[1]s.tool_call_id, %[1]s.count`, a)
+	%[1]s.version, %[1]s.parent, %[1]s.tool_call_id, %[1]s.count, %[1]s.reason, %[1]s.service`, a)
 }
 
 func (s *Store) queryWeb(ctx context.Context, q string, args ...any) ([]WebRequest, error) {
@@ -765,7 +772,7 @@ func (s *Store) queryWeb(ctx context.Context, q string, args ...any) ([]WebReque
 	for rows.Next() {
 		var r WebRequest
 		if err := rows.Scan(&r.ID, &r.ChatID, &r.SlotID, &r.SourceIP, &r.Method, &r.Host, &r.Port, &r.Path, &r.Status, &r.BytesUp, &r.BytesDown, &r.Denied,
-			&r.StartedAt, &r.DurationMs, &r.GrantID, &r.Origin, &r.Package, &r.Version, &r.Parent, &r.ToolCallID, &r.Count); err != nil {
+			&r.StartedAt, &r.DurationMs, &r.GrantID, &r.Origin, &r.Package, &r.Version, &r.Parent, &r.ToolCallID, &r.Count, &r.Reason, &r.Service); err != nil {
 			return nil, err
 		}
 		out = append(out, r)
@@ -788,7 +795,19 @@ func (s *Store) AddWebRequestCapped(ctx context.Context, r WebRequest, maxRows i
 	if r.Count < 1 {
 		r.Count = 1
 	}
-	if maxRows > 0 && r.GrantID > 0 && r.Method != CollapsedMethod {
+	if r.Aggregate && r.Denied == "" {
+		var id int64
+		err := s.pool.QueryRow(ctx, `UPDATE web_requests SET count=count+$6, bytes_up=bytes_up+$7, bytes_down=bytes_down+$8, duration_ms=duration_ms+$9
+			WHERE id = (SELECT id FROM web_requests WHERE chat_id=$1 AND grant_id IS NOT DISTINCT FROM $2 AND method=$10 AND origin=$3 AND host=$4 AND service=$5 AND denied='' ORDER BY id LIMIT 1)
+			RETURNING id`, r.ChatID, nullGrant(r.GrantID), r.Origin, noNUL(r.Host), r.Service, r.Count, r.BytesUp, r.BytesDown, r.DurationMs, CollapsedMethod).Scan(&id)
+		if err == nil {
+			return id, nil
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return 0, err
+		}
+		r.Method, r.Path, r.Package, r.Version, r.Parent = CollapsedMethod, "", "", "", ""
+	} else if maxRows > 0 && r.GrantID > 0 && r.Method != CollapsedMethod {
 		var n int
 		if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM web_requests WHERE grant_id=$1 AND method <> $2`, r.GrantID, CollapsedMethod).Scan(&n); err != nil {
 			return 0, err
@@ -814,11 +833,18 @@ func (s *Store) AddWebRequestCapped(ctx context.Context, r WebRequest, maxRows i
 	}
 	err := s.pool.QueryRow(ctx, `
 INSERT INTO web_requests (chat_id, slot_id, source_ip, method, host, port, path, status, bytes_up, bytes_down, denied, started_at, duration_ms,
-	grant_id, origin, package, version, parent, tool_call_id, count)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20) RETURNING id`,
+	grant_id, origin, package, version, parent, tool_call_id, count, reason, service)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22) RETURNING id`,
 		r.ChatID, r.SlotID, r.SourceIP, r.Method, noNUL(r.Host), r.Port, noNUL(r.Path), r.Status, r.BytesUp, r.BytesDown, noNUL(r.Denied), r.StartedAt, r.DurationMs,
-		grant, r.Origin, noNUL(r.Package), noNUL(r.Version), noNUL(r.Parent), r.ToolCallID, r.Count).Scan(&id)
+		grant, r.Origin, noNUL(r.Package), noNUL(r.Version), noNUL(r.Parent), r.ToolCallID, r.Count, r.Reason, r.Service).Scan(&id)
 	return id, err
+}
+
+func nullGrant(id int64) *int64 {
+	if id > 0 {
+		return &id
+	}
+	return nil
 }
 
 // FinishWebRequest completes a tunnel when it closes. A collapsed row adds the bytes to its total and keeps its
@@ -828,7 +854,8 @@ func (s *Store) FinishWebRequest(ctx context.Context, id, up, down, durationMs i
 		bytes_up = CASE WHEN method = $6 THEN bytes_up + $2 ELSE $2 END,
 		bytes_down = CASE WHEN method = $6 THEN bytes_down + $3 ELSE $3 END,
 		duration_ms = CASE WHEN method = $6 THEN duration_ms + $4 ELSE $4 END,
-		denied = CASE WHEN method = $6 THEN denied ELSE $5 END
+		denied = CASE WHEN method = $6 THEN denied ELSE $5 END,
+		reason = CASE WHEN method <> $6 AND $5::text <> '' AND reason = '' THEN 'access_ended' ELSE reason END
 		WHERE id=$1`, id, up, down, durationMs, noNUL(denied), CollapsedMethod)
 }
 

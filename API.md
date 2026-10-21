@@ -1062,7 +1062,7 @@ closed when its grant ends or its data limit is reached.
   switch: **off ends all grants** (`ended_reason: user`), **on starts a `full` grant** of the user's with the default limits.
   A chat created with `internet: true` (or `AGW_INTERNET_DEFAULT`) starts with such a grant. SSE: `internet_grant` (a
   `Grant`) when a grant starts or ends and while its bytes grow (at most every 2 s).
-  `Grant`: `{id, chat_id, approval_id?, kind, origin: agent|user|default, via, reason, domains[], packages, state:
+  `Grant`: `{id, chat_id, approval_id?, kind, origin: agent|user|default, via, reason, domains[], packages (for `packages`: the package list with the state of each, see below), state:
   pending|active|ended|rejected|expired, max_minutes, max_bytes, bytes, blocked, created_at, started_at, expires_at,
   ended_at, ended_reason: time|bytes|installed|user|agent|error}`.
 - **Log of connections:** every connection of pi through the web proxy is a `web_requests` row with `grant_id`, `origin`
@@ -1070,7 +1070,29 @@ closed when its grant ends or its data limit is reached.
   `AGW_INTERNET_LOG_ROWS` (500) single rows; further connections are added to one collapsed row per (origin, host,
   allowed/refused) with `method: "*"` and `count`. `GET /api/chats/{id}/web_requests?grant=<id>` filters by grant;
   `GET /api/activity/connections?since&until&chat&grant&result=allowed|blocked&origin=pi|exec|pkg&before&limit` lists
-  them across the user's chats → `{connections: WebRequest[], chats, next_before}`.
+  them across the user's chats → `{connections: WebRequest[], chats, next_before, summary, total, grants, unlisted}`;
+  `summary` = `{count, bytes_down, bytes_up, blocked}` over the whole filter, `total` the number of rows of the filter (for
+  "show N more"), `grants` = `{<id>: {kind, domains[], packages[]}}` for the grants the rows refer to, `unlisted` =
+  `[{grant_id, chat_id, bytes}]`: data a `full` grant moved that no listed connection accounts for.
+- **Rows and refusal codes (stage 2):** a `WebRequest` carries `reason` (code of a refusal: `not_listed`, `https_only`,
+  `sni_mismatch`, `ip_literal`, `search_only`, `access_ended`, `internet_off`, `package_not_listed`, `version_mismatch`,
+  plus `not_public`, `port_not_allowed`, `upstream`, `unassigned`, `cache_redirect`, `bad_request`) next to the text
+  `denied`, and `service` (`search` for the gateway's SearXNG, `index` for the collapsed index/metadata row of the
+  package gate; pip rows show host `pypi.org`, npm rows `registry.npmjs.org`). A refusal that no grant covers (not listed,
+  internet off, grant ended) has no `grant_id` and counts at the chat.
+- **Refusal counter:** `Chat.internet_blocked` and SSE `internet_blocked` = `{count, since, last[≤3]}` (`last` entries
+  `{host, origin, reason, denied, package?, service?, at}`): the refused connections of the chat since the oldest active
+  grant began, 15 minutes back when none is active; absent when there are none.
+- **Package states:** for a `packages` grant `Grant.packages` is `[{ecosystem, name, version?, parent?, state:
+  waiting|downloaded|installed, installed_version?, installed_at?}]`, the roots first (`parent` empty), then the
+  dependencies the gate found (`parent` = the declaring package). `waiting`: nothing fetched; `downloaded`: the first
+  file went through the gate; `installed`: found in the sandbox after a command. The grant ends with `installed_at`
+  of all roots set (`ended_reason: installed`). SSE `internet_grant` follows every change.
+- **Approval data:** `approval.internet` also carries `by` (`agent` or `helper`, a subagent) and `expires_at` (when the
+  request lapses undecided).
+- **Activity:** an entry of `kind: internet` carries `grant` = `{id, kind, domains[], packages[], bytes, max_bytes, state,
+  origin, started_at?, expires_at?, ended_at?, ended_reason?}` (a request through its approval, an end and the user's
+  switch through `grant <id>` in the detail); absent for a refused request.
 - **Log of requests:** every call is a `socket_calls` entry: `op: "internet"` with the reason as `detail` and `result`
   `approved`, `already on`, `rejected`, `expired`, `refused: …` or `error: …`; `op: "internet_off"` (detail `grant <id>`
   when one was named) with `off`, `already off`, `refused: not assigned` or `error: …`; the user's switch is

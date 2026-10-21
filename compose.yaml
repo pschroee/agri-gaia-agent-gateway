@@ -46,12 +46,9 @@ services:
       start_period: 5s
     restart: unless-stopped
 
-  # Package caches for npm and pip. They are only attached to the network pkg (with
-  # internet, no route to Postgres, RustFS or the orchestrator). A sandbox
-  # reaches them only while its chat has internet: the orchestrator then attaches
-  # them under the aliases npm-cache and pip-cache to the sandbox's slot network
-  # and detaches them when internet is switched off (AGW_NPM_CACHE, AGW_PIP_CACHE;
-  # container names from Compose). No ports on the host.
+  # Package caches for npm and pip. They sit in the network pkg together with the orchestrator, whose package
+  # gate is their only client (AGW_NPM_CACHE_URL, AGW_PIP_CACHE_URL): a sandbox never reaches them, its pip and
+  # npm talk to the gate through the relay and the socket (issue #175). No ports on the host.
   npm-cache:
     image: verdaccio/verdaccio:6.10.4@sha256:43c4067288b050422265407ea2fe747e511fcd0c407a85ec90ab9a326d9400cd
     volumes:
@@ -143,8 +140,8 @@ services:
       AGW_PROXY_BASE_URL: http://orchestrator:18481
       AGW_BLOCKED_SUBNETS: 10.231.20.0/24,10.231.21.0/24,10.231.22.0/24,10.231.128.0/17
       AGW_SEARXNG_URL: http://searxng:8080
-      AGW_NPM_CACHE: agwpoc-npm-cache-1
-      AGW_PIP_CACHE: agwpoc-pip-cache-1
+      AGW_NPM_CACHE_URL: http://npm-cache:4873
+      AGW_PIP_CACHE_URL: http://pip-cache:5000
       AGW_TOOLSETS: ${AGW_TOOLSETS:-cli}
       AGW_POOL_SIZE: ${AGW_POOL_SIZE:-2} # lower than the default 4 on a development machine
       AGW_COMPACT_RESERVE_TOKENS: ${AGW_COMPACT_RESERVE_TOKENS:-16384}
@@ -156,6 +153,7 @@ services:
     networks:
       intern: {}
       search: {}
+      pkg: {}
     ports:
       - "127.0.0.1:${AGW_HTTP_PORT:-18480}:18480"
     depends_on:
@@ -184,11 +182,10 @@ networks:
   search:
     name: agwpoc_search
     ipam: { config: [{ subnet: 10.231.22.0/24 }] }
-  # Egress of the package caches to the internet. No sandbox is attached;
-  # without ICC the two caches cannot reach each other either.
+  # The package caches (internet access) and the orchestrator's package gate. No sandbox is attached; ICC must
+  # stay on, the gate talks to the caches here.
   pkg:
     name: agwpoc_pkg
-    driver_opts: { com.docker.network.bridge.enable_icc: "false" }
     ipam: { config: [{ subnet: 10.231.21.0/24 }] }
 # The orchestrator creates further networks itself:
 # - agwpoc_slot_<slot> (internal, /28 from 10.231.128.0/17): one network per slot
@@ -196,6 +193,5 @@ networks:
 #   "orchestrator", for the LLM proxy). Sandboxes cannot reach each other.
 # - agwpoc_egress (10.231.20.0/24, without ICC): internet; a sandbox is attached
 #   only when the chat has internet. The orchestrator is not attached.
-#   Without ICC a sandbox there reaches no other containers; that is why the
-#   package caches are not attached here but are attached to the sandbox's
-#   slot network when internet is on (see npm-cache).
+#   Without ICC a sandbox there reaches no other containers. Everything but a full grant goes through the
+#   socket, the relay and the gateway (package gate, web proxy).

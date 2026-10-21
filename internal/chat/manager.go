@@ -136,6 +136,9 @@ type ChatView struct {
 	SubagentsRunning int `json:"subagents_running"`
 	// InternetGrants: the chat's active internet grants with their counters (issue #175); Internet stays true while any is active.
 	InternetGrants []store.Grant `json:"internet_grants"`
+	// InternetBlocked: refused connections of the chat since the oldest active grant began (15 minutes back when
+	// none is active), with the latest three; nil when there is none (issue #175).
+	InternetBlocked *BlockedView `json:"internet_blocked,omitempty"`
 }
 
 type live struct {
@@ -367,6 +370,9 @@ type Manager struct {
 	planAlertMarks map[string]string
 	// grants: the active internet grants of all chats with their counters (issue #175).
 	grants *grantBook
+	// inst: installed checks of packages grants per chat (issue #175).
+	instMu sync.Mutex
+	inst   map[string]*instState
 }
 
 func NewManager(st *store.Store, p *pool.Pool[Agent], cat *config.Catalog, blobs Blobs, broker *artifacts.Broker, opt Options) *Manager {
@@ -510,7 +516,9 @@ func (m *Manager) View(ctx context.Context, chatID string) (ChatView, error) {
 	if err != nil {
 		return ChatView{}, err
 	}
-	return m.view(c), nil
+	v := m.view(c)
+	v.InternetBlocked = m.blockedView(ctx, chatID)
+	return v, nil
 }
 
 func (m *Manager) view(c store.Chat) ChatView {

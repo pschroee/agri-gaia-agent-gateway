@@ -136,6 +136,14 @@ func Clamp(s Spec, l Limits) (Spec, error) {
 		return s, fmt.Errorf("a package list belongs to kind packages, not to %s", s.Kind)
 	}
 	if s.Kind == Packages {
+		roots, err := ParsePackages(s.Packages)
+		if err != nil {
+			return s, err
+		}
+		s.Packages = s.Packages[:0:0]
+		for _, r := range roots {
+			s.Packages = append(s.Packages, r.String())
+		}
 		s.Minutes, s.MB = PackagesMinutes, PackagesMB
 		return s, nil
 	}
@@ -253,13 +261,36 @@ type Active struct {
 	Domains []string
 }
 
-// Decision is the verdict on one connection. GrantID names the grant that allowed it, or, for a refusal, the
-// grant that governs the chat (the first active one; 0 if there is none) so that the refusal is counted there.
+// Codes of refusals (web_requests.reason): short words the UI turns into its own labels; the text for the agent is
+// Decision.Reason. A refusal that no grant covers (not listed, internet off, grant ended) carries no grant ID and is
+// counted at the chat.
+const (
+	CodeNotListed        = "not_listed"
+	CodeHTTPSOnly        = "https_only"
+	CodeSNIMismatch      = "sni_mismatch"
+	CodeIPLiteral        = "ip_literal"
+	CodeSearchOnly       = "search_only"
+	CodeAccessEnded      = "access_ended"
+	CodeInternetOff      = "internet_off"
+	CodePackageNotListed = "package_not_listed"
+	CodeVersionMismatch  = "version_mismatch"
+	CodeNotPublic        = "not_public"
+	CodePortNotAllowed   = "port_not_allowed"
+	CodeUpstream         = "upstream"
+	CodeUnassigned       = "unassigned"
+	CodeCacheRedirect    = "cache_redirect"
+	CodeBadRequest       = "bad_request"
+)
+
+// Decision is the verdict on one connection. GrantID names the grant that allowed it, or, for a refusal that a grant
+// does cover in part (https only, search only), that grant; 0 when no grant is involved (the refusal counts at the
+// chat).
 type Decision struct {
 	GrantID int64
 	Kind    Kind
 	Allow   bool
 	Reason  string // the text of the refusal, starts with "blocked: "
+	Code    string // the code of the refusal (Code…)
 }
 
 // Texts of refusals. They name the reason and the next step, because the agent reads them in the failing
@@ -270,7 +301,18 @@ const (
 	MsgOff          = "blocked: internet access is off for this chat; ask the user with agw-internet"
 	MsgNoChat       = "request not assignable to a chat"
 	MsgNeedsCommand = "needs the command line"
+	MsgIPLiteral    = "blocked: IP addresses are not allowed, use the host name and list it with agw-internet domains"
 )
+
+// MsgPackageNotListed: the package gate refuses a package that no grant covers.
+func MsgPackageNotListed(eco, name string) string {
+	return fmt.Sprintf("blocked: %s package %s is not part of the allowed packages or their dependencies; ask with agw-internet packages %s:%s \"<reason>\"", eco, name, eco, name)
+}
+
+// MsgVersionMismatch: the agent asked for exactly one version of a root package.
+func MsgVersionMismatch(eco, name, want, got string) string {
+	return fmt.Sprintf("blocked: %s package %s is allowed in version %s only, not %s", eco, name, want, got)
+}
 
 // MsgNotListed: the host is not part of any grant.
 func MsgNotListed(host string) string {
@@ -304,10 +346,9 @@ func EndWhy(reason string) string {
 // the host, then search. Commands of the sandbox (OriginExec) are never covered by a search grant.
 func Decide(grants []Active, o Origin, host string, port int) Decision {
 	if len(grants) == 0 {
-		return Decision{Reason: MsgOff}
+		return Decision{Reason: MsgOff, Code: CodeInternetOff}
 	}
 	host = NormalizeHost(host)
-	first := grants[0].ID
 	var search *Active
 	var listed *Active
 	for i := range grants {
@@ -332,17 +373,20 @@ func Decide(grants []Active, o Origin, host string, port int) Decision {
 	}
 	if listed != nil {
 		if port != 443 {
-			return Decision{GrantID: listed.ID, Reason: MsgOnlyHTTPS}
+			return Decision{GrantID: listed.ID, Reason: MsgOnlyHTTPS, Code: CodeHTTPSOnly}
 		}
 		return Decision{GrantID: listed.ID, Kind: Domains, Allow: true}
 	}
 	if search != nil {
 		if o == OriginExec {
-			return Decision{GrantID: search.ID, Reason: MsgSearchOnly}
+			return Decision{GrantID: search.ID, Reason: MsgSearchOnly, Code: CodeSearchOnly}
 		}
 		if o == OriginPi {
 			return Decision{GrantID: search.ID, Kind: Search, Allow: true}
 		}
 	}
-	return Decision{GrantID: first, Reason: MsgNotListed(host)}
+	if net.ParseIP(strings.Trim(host, "[]")) != nil {
+		return Decision{Reason: MsgIPLiteral, Code: CodeIPLiteral}
+	}
+	return Decision{Reason: MsgNotListed(host), Code: CodeNotListed}
 }

@@ -96,6 +96,7 @@ func (m *Manager) BackgroundEnded(t store.BackgroundTask, notify bool) {
 	if err != nil {
 		slog.Error("end of background task not stored", "chat", t.ChatID, "task", t.ID, "err", err)
 	}
+	m.checkInstalled(t.ChatID) // a background command may have installed packages (issue #175)
 	if !updated {
 		// Already marked when idling or closing: distribute the stored state, no note.
 		if row, err := m.st.GetBackgroundTask(ctx, t.ChatID, t.Seq); err == nil {

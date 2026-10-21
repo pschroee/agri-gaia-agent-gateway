@@ -15,10 +15,12 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"agw/internal/execproto"
 )
@@ -51,6 +53,11 @@ func main() {
 			if err := ensureBgDir(filepath.Dir(bgLogFile(execproto.BgLogPath(1)))); err != nil {
 				fmt.Fprintln(os.Stderr, "agw-exec serve: directory of the background tasks:", err)
 			}
+		}
+		if *uid >= 0 {
+			// The relay to the gateway (issue #175); not in tests, which run without root.
+			go startRelay(context.Background(), relayAddr, relaySocket(), 5*time.Second,
+				func(m string) { fmt.Fprintln(os.Stderr, "agw-exec serve:", m) })
 		}
 		srv.run(os.Stdin)
 	case "op":

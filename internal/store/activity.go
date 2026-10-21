@@ -8,6 +8,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -119,6 +121,9 @@ type ActivityCall struct {
 	Internet *ActivityInternet `json:"internet,omitempty"`
 	// Approval: the platform_write approval of a platform call, the internet_access approval of a request.
 	Approval *ActivityApproval `json:"approval,omitempty"`
+	// Grant: the internet grant an entry of kind internet belongs to (a request through its approval, an end and
+	// the user's switch through the grant ID in the detail); nil for a refused request or an old entry.
+	Grant *ActivityGrant `json:"grant,omitempty"`
 }
 
 // ActivityChat is what the activity view needs of a chat.
@@ -282,6 +287,9 @@ func (s *Store) ListActivity(ctx context.Context, f ActivityFilter) (ActivityPag
 		page.Calls = page.Calls[:f.Limit]
 		page.NextBefore = page.Calls[f.Limit-1].ID
 	}
+	if err := s.attachGrants(ctx, page.Calls); err != nil {
+		return page, err
+	}
 
 	if len(chatIDs) > 0 {
 		crow, err := s.pool.Query(ctx, `SELECT id::text, title, model, variant, delegation FROM chats WHERE id::text = ANY($1)`, chatIDs)
@@ -387,4 +395,56 @@ func round1(v *float64) *float64 {
 	}
 	r := float64(int64(*v*10+0.5)) / 10
 	return &r
+}
+
+var grantDetailRe = regexp.MustCompile(`^grant (\d+)`)
+
+// attachGrants adds the grant to the internet entries: by the ID in the detail ("grant 7 domains" of an end,
+// "grant 7 full" of the user's switch) or through the approval a request waited for.
+func (s *Store) attachGrants(ctx context.Context, calls []ActivityCall) error {
+	var ids []int64
+	var aps []string
+	for i := range calls {
+		c := &calls[i]
+		if c.Kind != KindInternet {
+			continue
+		}
+		if m := grantDetailRe.FindStringSubmatch(c.Detail); m != nil {
+			if n, err := strconv.ParseInt(m[1], 10, 64); err == nil {
+				ids = append(ids, n)
+				continue
+			}
+		}
+		if c.Approval != nil {
+			aps = append(aps, c.Approval.ID)
+		}
+	}
+	byID, err := s.GrantsByID(ctx, ids)
+	if err != nil {
+		return err
+	}
+	byAp, err := s.GrantsByApproval(ctx, aps)
+	if err != nil {
+		return err
+	}
+	for i := range calls {
+		c := &calls[i]
+		if c.Kind != KindInternet {
+			continue
+		}
+		if m := grantDetailRe.FindStringSubmatch(c.Detail); m != nil {
+			if n, err := strconv.ParseInt(m[1], 10, 64); err == nil {
+				if g, ok := byID[n]; ok {
+					c.Grant = activityGrantOf(g)
+				}
+				continue
+			}
+		}
+		if c.Approval != nil {
+			if g, ok := byAp[c.Approval.ID]; ok {
+				c.Grant = activityGrantOf(g)
+			}
+		}
+	}
+	return nil
 }

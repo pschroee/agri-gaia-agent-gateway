@@ -440,8 +440,8 @@ func TestProxyDomainsHTTPRefused(t *testing.T) {
 	if !strings.Contains(string(b), `other.test is not in the allowed list of this chat; ask for it with agw-internet domains other.test`) {
 		t.Fatalf("reason: %q", b)
 	}
-	if r := g.last(); r.GrantID != 1 || r.Denied == "" {
-		t.Fatalf("a refusal counts on the governing grant: %+v", r)
+	if r := g.last(); r.GrantID != 0 || r.Denied == "" || r.Reason != netgrant.CodeNotListed {
+		t.Fatalf("a refusal no grant covers has no grant and a code: %+v", r)
 	}
 }
 

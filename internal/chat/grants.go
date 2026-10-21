@@ -38,6 +38,8 @@ type grantLive struct {
 	netSeen bool
 	netLast int64
 	netSum  int64
+	// pkgs: the allowed packages of a packages grant (nil for other kinds).
+	pkgs *pkgSet
 	// persisted/published: the last values written to the database and sent to the UI.
 	persisted, published int64
 }
@@ -84,6 +86,9 @@ func (l *grantLive) resetSample() {
 // view is the grant as the UI and the API show it, with the live counters.
 func (l *grantLive) view() store.Grant {
 	g := l.g
+	if l.pkgs != nil {
+		g.Packages = packageStates(l.pkgs.list())
+	}
 	g.Bytes = max(g.Bytes, l.bytes())
 	g.Blocked = max(g.Blocked, int(l.blocked.Load()))
 	return g
@@ -219,6 +224,10 @@ func (m *Manager) InternetGrants(ctx context.Context, chatID string) ([]store.Gr
 	for i := range gs {
 		if l := m.grants.get(gs[i].ID); l != nil {
 			gs[i] = l.view()
+		} else if gs[i].Kind == string(netgrant.Packages) {
+			if gps, err := m.st.GrantPackages(ctx, gs[i].ID); err == nil {
+				gs[i].Packages = packageStates(gps)
+			}
 		}
 	}
 	return gs, nil
@@ -366,7 +375,7 @@ func (g webGate) Decide(chat string, o netgrant.Origin, host string, port int) n
 	}
 	if len(act) == 0 {
 		if e, ok := m.grants.ended(chat); ok && time.Since(e.at) < 5*time.Minute {
-			return netgrant.Decision{GrantID: e.id, Reason: netgrant.MsgGrantEnded(e.id, netgrant.EndWhy(e.reason))}
+			return netgrant.Decision{Reason: netgrant.MsgGrantEnded(e.id, netgrant.EndWhy(e.reason)), Code: netgrant.CodeAccessEnded}
 		}
 	}
 	return netgrant.Decide(act, o, host, port)
@@ -408,6 +417,9 @@ type internetCard struct {
 	Minutes           int      `json:"minutes"`
 	Megabytes         int      `json:"megabytes"`
 	EndsWhenInstalled bool     `json:"ends_when_installed"`
+	// By: who asks: the main agent or a helper (a subagent). ExpiresAt: when the request lapses undecided.
+	By        string    `json:"by"`
+	ExpiresAt time.Time `json:"expires_at"`
 }
 
 // cardText is the readable form of the grant for clients that do not know the structured data yet: what the
@@ -457,12 +469,9 @@ func (m *Manager) RequestInternet(ctx context.Context, chatID, slotID, via strin
 	if (via == "mcp" || via == "api") && spec.Kind != netgrant.Search && spec.Kind != netgrant.Domains {
 		return refuse(fmt.Sprintf("kind %s %s: this binding has no shell, so only search and domains are useful here", spec.Kind, netgrant.MsgNeedsCommand))
 	}
-	if spec.Kind == netgrant.Packages {
-		return refuse("package access is not available yet; ask for domains (exact hosts) or full instead")
-	}
 	// An equal grant that is active already answers the request.
 	for _, l := range m.grants.active(chatID) {
-		if sameGrant(l.g, spec) {
+		if sameGrant(l, spec) {
 			return sock.UploadResult{Status: "approved", Name: "internet", Message: fmt.Sprintf("%s (grant %d, already active)", describeGrant(l.g), l.g.ID), Log: "already on"}, nil
 		}
 	}
@@ -472,13 +481,22 @@ func (m *Manager) RequestInternet(ctx context.Context, chatID, slotID, via strin
 	if err := m.checkPendingLimit(ctx, chatID); err != nil {
 		return sock.UploadResult{}, err
 	}
+	var rootsJSON json.RawMessage
+	if spec.Kind == netgrant.Packages {
+		roots, err := netgrant.ParsePackages(spec.Packages)
+		if err != nil {
+			return refuse(err.Error())
+		}
+		rootsJSON, _ = json.Marshal(roots)
+	}
 	g, err := m.st.CreateGrant(ctx, store.Grant{ChatID: chatID, Kind: string(spec.Kind), Origin: store.GrantByAgent, Via: via,
-		Session: store.SessionFrom(ctx), ToolCallID: store.ToolCallFrom(ctx), Reason: spec.Reason, Domains: spec.Domains, State: store.GrantPending,
+		Session: store.SessionFrom(ctx), ToolCallID: store.ToolCallFrom(ctx), Reason: spec.Reason, Domains: spec.Domains, Packages: rootsJSON, State: store.GrantPending,
 		MaxMinutes: spec.Minutes, MaxBytes: bytesOf(spec.MB)})
 	if err != nil {
 		return sock.UploadResult{}, err
 	}
-	card := internetCard{GrantID: g.ID, Kind: string(spec.Kind), Domains: spec.Domains, Packages: spec.Packages, Minutes: spec.Minutes, Megabytes: spec.MB}
+	card := internetCard{GrantID: g.ID, Kind: string(spec.Kind), Domains: spec.Domains, Packages: spec.Packages, Minutes: spec.Minutes, Megabytes: spec.MB,
+		EndsWhenInstalled: spec.Kind == netgrant.Packages, By: askerOf(ctx), ExpiresAt: time.Now().Add(m.opt.ApprovalTimeout)}
 	if card.Domains == nil {
 		card.Domains = []string{}
 	}
@@ -524,23 +542,43 @@ func (m *Manager) RequestInternet(ctx context.Context, chatID, slotID, via strin
 	return sock.UploadResult{Status: "approved", Name: "internet", Message: fmt.Sprintf("%s (grant %d)", describeGrant(started), started.ID)}, nil
 }
 
-func sameGrant(g store.Grant, s netgrant.Spec) bool {
+func sameGrant(l *grantLive, s netgrant.Spec) bool {
+	g := l.g
 	if g.Kind != string(s.Kind) {
 		return false
 	}
-	if s.Kind != netgrant.Domains {
-		return true
-	}
-	have := map[string]bool{}
-	for _, d := range g.Domains {
-		have[d] = true
-	}
-	for _, d := range s.Domains {
-		if !have[d] {
+	switch s.Kind {
+	case netgrant.Domains:
+		have := map[string]bool{}
+		for _, d := range g.Domains {
+			have[d] = true
+		}
+		for _, d := range s.Domains {
+			if !have[d] {
+				return false
+			}
+		}
+	case netgrant.Packages:
+		roots, err := netgrant.ParsePackages(s.Packages)
+		if err != nil || l.pkgs == nil {
 			return false
+		}
+		for _, r := range roots {
+			e, ok := l.pkgs.get(r.Ecosystem, r.Name)
+			if !ok || e.Parent != "" || e.Version != r.Version {
+				return false
+			}
 		}
 	}
 	return true
+}
+
+// askerOf tells who asks: the main agent, or a helper (a subagent) when the call comes from a subagent's session.
+func askerOf(ctx context.Context) string {
+	if s := store.SessionFrom(ctx); s != "" && s != "main" {
+		return "helper"
+	}
+	return "agent"
 }
 
 // describeGrant is the line the agent reads: kind, list and end.
@@ -549,11 +587,27 @@ func describeGrant(g store.Grant) string {
 	if netgrant.Kind(g.Kind) == netgrant.Domains {
 		what += " " + strings.Join(g.Domains, ", ")
 	}
+	if netgrant.Kind(g.Kind) == netgrant.Packages {
+		var roots []netgrant.PkgRoot
+		var names []string
+		_ = json.Unmarshal(g.Packages, &roots)
+		for _, r := range roots {
+			names = append(names, r.String())
+		}
+		return fmt.Sprintf("packages %s until installed (at the latest %s or %d MB)", strings.Join(names, ", "), untilOf(g), g.MaxBytes>>20)
+	}
 	until := ""
 	if g.ExpiresAt != nil {
 		until = g.ExpiresAt.UTC().Format("15:04")
 	}
 	return fmt.Sprintf("%s until %s or %d MB", what, until, g.MaxBytes>>20)
+}
+
+func untilOf(g store.Grant) string {
+	if g.ExpiresAt != nil {
+		return g.ExpiresAt.UTC().Format("15:04")
+	}
+	return ""
 }
 
 // activateGrant starts a pending grant after the user's approval: the clock starts now.
@@ -579,6 +633,9 @@ func (m *Manager) activateGrant(ctx context.Context, id int64) (store.Grant, err
 // the chat lock.
 func (m *Manager) startGrant(ctx context.Context, g store.Grant) error {
 	l := m.grants.add(g)
+	if g.Kind == string(netgrant.Packages) && l.pkgs == nil {
+		m.initPackages(ctx, l, packageRoots(g))
+	}
 	if err := m.syncEgress(ctx, g.ChatID); err != nil {
 		// No effect, no grant: end it again rather than leave a grant the sandbox does not have.
 		m.endLocked(ctx, g.ChatID, g.ID, store.EndError)
@@ -617,7 +674,7 @@ func (m *Manager) endLocked(ctx context.Context, chatID string, id int64, reason
 	}
 	m.syncInternetFlag(ctx, chatID)
 	if l != nil {
-		g = l.g
+		g = l.view()
 		g.State, g.EndedReason, g.Bytes, g.Blocked = store.GrantEnded, reason, total, int(l.blocked.Load())
 		now := time.Now()
 		g.EndedAt = &now
@@ -665,15 +722,21 @@ func (m *Manager) EndAllGrants(ctx context.Context, chatID, reason string) int {
 // startUserFull starts a full grant for the user's switch or the default of a new chat, with the default limits.
 // The caller holds the chat lock.
 func (m *Manager) startUserFull(ctx context.Context, chatID, origin, via string) error {
+	_, err := m.startUserFullGrant(ctx, chatID, origin, via)
+	return err
+}
+
+// startUserFullGrant is startUserFull returning the grant (the switch logs its ID).
+func (m *Manager) startUserFullGrant(ctx context.Context, chatID, origin, via string) (store.Grant, error) {
 	spec, _ := netgrant.Clamp(netgrant.Spec{Kind: netgrant.Full}, m.limits())
 	now := time.Now()
 	exp := now.Add(time.Duration(spec.Minutes) * time.Minute)
 	g, err := m.st.CreateGrant(ctx, store.Grant{ChatID: chatID, Kind: string(netgrant.Full), Origin: origin, Via: via, State: store.GrantActive,
 		MaxMinutes: spec.Minutes, MaxBytes: bytesOf(spec.MB), StartedAt: &now, ExpiresAt: &exp})
 	if err != nil {
-		return err
+		return g, err
 	}
-	return m.startGrant(ctx, g)
+	return g, m.startGrant(ctx, g)
 }
 
 // SetInternet runs under the chat lock. The old switch is now a full grant: on starts one with the default limits
@@ -697,14 +760,16 @@ func (m *Manager) setInternet(ctx context.Context, chatID string, on, byUser boo
 		return ChatView{}, err
 	}
 	had := len(m.grants.active(chatID)) > 0
+	var switchedOn int64
 	switch {
 	case on && !m.hasFull(chatID):
 		unlock := m.lock(chatID)
-		err := m.startUserFull(ctx, chatID, store.GrantByUser, ViaUser)
+		g, err := m.startUserFullGrant(ctx, chatID, store.GrantByUser, ViaUser)
 		unlock()
 		if err != nil {
 			return ChatView{}, err
 		}
+		switchedOn = g.ID
 	case !on:
 		reason := store.EndAgent
 		if byUser {
@@ -724,7 +789,11 @@ func (m *Manager) setInternet(ctx context.Context, chatID string, on, byUser boo
 			slot = l.slot.ID
 		}
 		m.mu.Unlock()
-		m.LogCallBy(ctx, slot, chatID, ViaUser, store.OpInternetUser, "", result)
+		detail := ""
+		if switchedOn > 0 {
+			detail = fmt.Sprintf("grant %d full", switchedOn)
+		}
+		m.LogCallBy(ctx, slot, chatID, ViaUser, store.OpInternetUser, detail, result)
 	}
 	m.publishChat(ctx, chatID)
 	return m.View(ctx, chatID)
@@ -773,7 +842,10 @@ func (m *Manager) LoadGrants(ctx context.Context) error {
 		return err
 	}
 	for _, g := range gs {
-		m.grants.add(g)
+		l := m.grants.add(g)
+		if g.Kind == string(netgrant.Packages) {
+			m.loadPackages(ctx, l)
+		}
 	}
 	return nil
 }
@@ -846,4 +918,107 @@ func (m *Manager) reconcileEgress(ctx context.Context) {
 		}
 		unlock()
 	}
+}
+
+// --- refusals at the chat ---
+
+// BlockedView is the chat's refusal counter: how many connections were refused since Since, and the latest ones.
+type BlockedView struct {
+	Count int                 `json:"count"`
+	Since time.Time           `json:"since"`
+	Last  []BlockedConnection `json:"last"`
+}
+
+// BlockedConnection is one refused connection in the counter's list.
+type BlockedConnection struct {
+	Host    string    `json:"host"`
+	Origin  string    `json:"origin"`
+	Reason  string    `json:"reason,omitempty"`
+	Denied  string    `json:"denied"`
+	Package string    `json:"package,omitempty"`
+	Service string    `json:"service,omitempty"`
+	At      time.Time `json:"at"`
+}
+
+// blockedWindow is how far back the counter looks when no grant is active.
+const blockedWindow = 15 * time.Minute
+
+// blockedView reads the counter; nil if nothing was refused in the window.
+func (m *Manager) blockedView(ctx context.Context, chatID string) *BlockedView {
+	since := time.Now().Add(-blockedWindow)
+	if act := m.grants.active(chatID); len(act) > 0 {
+		since = act[0].g.CreatedAt
+		for _, l := range act {
+			t := l.g.CreatedAt
+			if l.g.StartedAt != nil {
+				t = *l.g.StartedAt
+			}
+			if t.Before(since) {
+				since = t
+			}
+		}
+	}
+	n, last, err := m.st.ChatBlocked(ctx, chatID, since, 3)
+	if err != nil || n == 0 {
+		return nil
+	}
+	v := &BlockedView{Count: n, Since: since, Last: []BlockedConnection{}}
+	for _, r := range last {
+		v.Last = append(v.Last, BlockedConnection{Host: r.Host, Origin: r.Origin, Reason: r.Reason, Denied: r.Denied, Package: r.Package, Service: r.Service, At: r.StartedAt})
+	}
+	return v
+}
+
+// publishBlocked tells the UI the new state of the refusal counter.
+func (m *Manager) publishBlocked(chatID string) {
+	if v := m.blockedView(context.Background(), chatID); v != nil {
+		m.publish(chatID, Event{Kind: "internet_blocked", Data: v})
+	}
+}
+
+// GrantBrief is what the activity chips need of a grant: its kind and what it lists.
+type GrantBrief struct {
+	Kind     string   `json:"kind"`
+	Domains  []string `json:"domains"`
+	Packages []string `json:"packages"`
+}
+
+// ConnectionExtras completes a page of connections: the totals over the whole filter (summary, total rows for
+// "show N more"), the grants the rows refer to (chips), and the bytes full grants moved without being listed.
+func (m *Manager) ConnectionExtras(ctx context.Context, f store.WebConnectionFilter, rows []store.WebRequest) (store.WebSummary, int, map[int64]GrantBrief, []store.UnlistedBytes, error) {
+	sum, total, err := m.st.WebConnectionsSummary(ctx, f)
+	if err != nil {
+		return sum, 0, nil, nil, err
+	}
+	seen := map[int64]bool{}
+	var ids []int64
+	for _, r := range rows {
+		if r.GrantID > 0 && !seen[r.GrantID] {
+			seen[r.GrantID] = true
+			ids = append(ids, r.GrantID)
+		}
+	}
+	gs, err := m.st.GrantsByID(ctx, ids)
+	if err != nil {
+		return sum, total, nil, nil, err
+	}
+	briefs := map[int64]GrantBrief{}
+	for id, g := range gs {
+		briefs[id] = briefOf(g)
+	}
+	var unlisted []store.UnlistedBytes
+	if f.Result != "blocked" {
+		if unlisted, err = m.st.FullGrantsUnlisted(ctx, f); err != nil {
+			return sum, total, briefs, nil, err
+		}
+	}
+	return sum, total, briefs, unlisted, nil
+}
+
+func briefOf(g store.Grant) GrantBrief {
+	b := GrantBrief{Kind: g.Kind, Domains: g.Domains, Packages: g.RootStrings()}
+	if b.Domains == nil {
+		b.Domains = []string{}
+	}
+	return b
 }

@@ -1154,7 +1154,14 @@ func (s *Server) activityConnections(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	writeJSON(w, 200, map[string]any{"connections": rows, "chats": chats, "next_before": next})
+	// The totals cover the whole filter, not only this page (issue #175: summary, "show N more", chips, full grants).
+	sum, total, grants, unlisted, err := s.M.ConnectionExtras(r.Context(), f, rows)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"connections": rows, "chats": chats, "next_before": next, "summary": sum, "total": total,
+		"grants": grants, "unlisted": unlisted})
 }
 
 func connectionChats(rows []store.WebRequest) []string {

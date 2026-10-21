@@ -190,6 +190,10 @@ func (m *Manager) RecordToolExecution(e store.ToolExecution) {
 	}
 	if e.ChatID != "" {
 		m.publish(e.ChatID, Event{Kind: "tool_execution", Data: rec})
+		if e.Tool == "bash" {
+			// A command may have installed what a packages grant waits for (issue #175).
+			m.checkInstalled(e.ChatID)
+		}
 	}
 }
 
