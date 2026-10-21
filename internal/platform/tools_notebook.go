@@ -5,6 +5,8 @@
 package platform
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -109,6 +111,11 @@ func ParseRunForm(form map[string][]string, maxTimeoutMin int) (RunBody, error) 
 	if len(b.Args) > NotebookMaxArgs {
 		return b, fmt.Errorf("at most %d arguments", NotebookMaxArgs)
 	}
+	if len(b.Args) > 0 && strings.EqualFold(pathExt(b.Entry), ".ipynb") {
+		// A notebook is run as the user approved its cells; an argument could only be put in by changing a cell
+		// (papermill does) or be ignored. The settings of a notebook come from a file such as params.json.
+		return b, errors.New("args are only for a .py entry; a notebook reads its settings from a file such as params.json")
+	}
 	for _, v := range form["dataset_ids"] {
 		id, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64)
 		if err != nil || id < 0 {
@@ -211,6 +218,86 @@ func ValidateRunFiles(b RunBody, names []string, sizes []int64) error {
 	return nil
 }
 
+// CheckNotebookRun checks the files of a run that the names alone cannot show: no file may carry the name of
+// the executed notebook (the run would overwrite it), and a .ipynb entry must be a notebook the launcher accepts.
+func CheckNotebookRun(b RunBody, files []Upload) error {
+	for _, f := range files {
+		if strings.HasPrefix(f.Name, "executed-") && strings.EqualFold(pathExt(f.Name), ".ipynb") && f.Name == "executed-"+b.Entry {
+			return fmt.Errorf("%s is the name of the executed notebook; rename the file", f.Name)
+		}
+	}
+	if strings.EqualFold(pathExt(b.Entry), ".ipynb") {
+		for _, f := range files {
+			if f.Name == b.Entry {
+				return CheckNotebook(f.Data)
+			}
+		}
+	}
+	return nil
+}
+
+// notebookDoc is what the code of a notebook is read from.
+type notebookDoc struct {
+	NBFormat int `json:"nbformat"`
+	Cells    []struct {
+		Type   string          `json:"cell_type"`
+		Source json.RawMessage `json:"source"`
+	} `json:"cells"`
+}
+
+// CheckNotebook says whether data is a notebook in nbformat 4 whose code cells have source text. The launcher
+// checks the same again (and refuses duplicate keys) before it runs anything.
+func CheckNotebook(data []byte) error {
+	var nb notebookDoc
+	if json.Unmarshal(data, &nb) != nil || nb.NBFormat != 4 || nb.Cells == nil {
+		return errors.New("the entry is not a notebook in nbformat 4 (cells with source text)")
+	}
+	for _, c := range nb.Cells {
+		if c.Type != "code" {
+			continue
+		}
+		if _, ok := NotebookSource(c.Source); !ok {
+			return errors.New("the entry is not a notebook in nbformat 4 (cells with source text)")
+		}
+	}
+	return nil
+}
+
+// codeCells lists the source of the code cells that are run: those with text, in order.
+func codeCells(data []byte) ([]string, bool) {
+	var nb notebookDoc
+	if json.Unmarshal(data, &nb) != nil || len(nb.Cells) == 0 {
+		return nil, false
+	}
+	var out []string
+	for _, c := range nb.Cells {
+		if c.Type != "code" {
+			continue
+		}
+		src, ok := NotebookSource(c.Source)
+		if !ok || strings.TrimSpace(src) == "" {
+			continue
+		}
+		out = append(out, src)
+	}
+	return out, true
+}
+
+// NotebookCodeSHA256 binds a notebook by its code cells only: markdown, metadata and outputs are not part of it,
+// because the launcher runs nothing but the source of the code cells. Each cell enters with its length, so that
+// cell borders cannot move without changing the digest.
+func NotebookCodeSHA256(data []byte) (string, bool) {
+	cells, ok := codeCells(data)
+	if !ok {
+		return "", false
+	}
+	h := sha256.New()
+	for _, src := range cells {
+		fmt.Fprintf(h, "%d\n%s", len(src), src)
+	}
+	return hex.EncodeToString(h.Sum(nil)), true
+}
+
 // pathExt is filepath.Ext without the import (the names carry no directory).
 func pathExt(name string) string {
 	if i := strings.LastIndex(name, "."); i > 0 {
@@ -251,7 +338,7 @@ var notebookRun = Tool{
 		{Name: "files", Type: "array", Required: true, Path: true, Desc: "files from the sandbox, copied flat into a new run directory: code and small config files " +
 			"(.py .ipynb .txt .json .yaml .yml .csv .md .cfg .toml), at most 50 files and 4 MB"},
 		{Name: "entry", Type: "string", Required: true, Desc: "file name of the script or notebook to run, one of files"},
-		{Name: "args", Type: "array", Desc: "command line arguments for a .py entry, letters, digits and _.,=:/+- only"},
+		{Name: "args", Type: "array", Desc: "command line arguments for a .py entry (a notebook takes none), letters, digits and _.,=:/+- only"},
 		{Name: "dataset_ids", Type: "array", Desc: "ids of platform datasets to unpack before the run, at most 3"},
 		{Name: "timeout_minutes", Type: "integer", Desc: "at most this many minutes for the run (default 120)"},
 		{Name: "note", Type: "string", Desc: "your own short note to the user about what this run is for (at most 500 characters). " +
@@ -477,9 +564,18 @@ func NotebookPreview(r Request, s NotebookShape) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if err := CheckNotebookRun(b, r.Uploads); err != nil {
+		return "", err
+	}
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "Runs %s in your notebook server: %s, at most %d minutes.\n",
-		b.Entry, s.Line(), b.TimeoutMinutes)
+	if strings.EqualFold(pathExt(b.Entry), ".ipynb") {
+		fmt.Fprintf(&sb, "Runs %s as a notebook in your notebook server: %s, at most %d minutes.\n"+
+			"The executed notebook with all outputs is saved in the run directory and in notebooks/.\n",
+			b.Entry, s.Line(), b.TimeoutMinutes)
+	} else {
+		fmt.Fprintf(&sb, "Runs %s in your notebook server: %s, at most %d minutes.\n",
+			b.Entry, s.Line(), b.TimeoutMinutes)
+	}
 	if len(b.Args) > 0 {
 		fmt.Fprintf(&sb, "Arguments: %s\n", strings.Join(b.Args, " "))
 	}
@@ -502,7 +598,7 @@ func NotebookPreview(r Request, s NotebookShape) (string, error) {
 func notebookFileText(name string, data []byte) string {
 	ext := strings.ToLower(pathExt(name))
 	if ext == ".ipynb" {
-		if cells, ok := notebookCells(data); ok {
+		if cells, ok := NotebookCodeText(data); ok {
 			return cells
 		}
 	}
@@ -515,35 +611,22 @@ func notebookFileText(name string, data []byte) string {
 	return string(data) + "\n"
 }
 
-// notebookCells lists the source of the code cells of a notebook, as the user will run them.
-func notebookCells(data []byte) (string, bool) {
-	var nb struct {
-		Cells []struct {
-			Type   string          `json:"cell_type"`
-			Source json.RawMessage `json:"source"`
-		} `json:"cells"`
-	}
-	if json.Unmarshal(data, &nb) != nil || len(nb.Cells) == 0 {
+// NotebookCodeText lists the source of the code cells of a notebook, as the user will run them
+// ("# cell n", cells without text are not counted).
+func NotebookCodeText(data []byte) (string, bool) {
+	cells, ok := codeCells(data)
+	if !ok {
 		return "", false
 	}
 	var sb strings.Builder
-	n := 0
-	for _, c := range nb.Cells {
-		if c.Type != "code" {
-			continue
-		}
-		src, ok := NotebookSource(c.Source)
-		if !ok || strings.TrimSpace(src) == "" {
-			continue
-		}
-		n++
-		fmt.Fprintf(&sb, "# cell %d\n", n)
+	for i, src := range cells {
+		fmt.Fprintf(&sb, "# cell %d\n", i+1)
 		sb.WriteString(src)
 		if !strings.HasSuffix(src, "\n") {
 			sb.WriteString("\n")
 		}
 	}
-	if n == 0 {
+	if len(cells) == 0 {
 		return "(the notebook has no code cells)\n", true
 	}
 	return sb.String(), true

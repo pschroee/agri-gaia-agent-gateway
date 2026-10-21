@@ -79,6 +79,9 @@ func (n *Notebooks) ApprovalData(ctx context.Context, req platform.Request, read
 	if err != nil {
 		return nil, err
 	}
+	if err := platform.CheckNotebookRun(body, req.Uploads); err != nil {
+		return nil, err
+	}
 	data := ApprovalData{
 		Entry: platform.VisibleControls(body.Entry),
 		Note:  platform.VisibleControls(body.Note),
