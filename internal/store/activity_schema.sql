@@ -7,7 +7,8 @@
 -- grants (op internet_end, issue #175); it is dropped once, if its definition lacks that op, and created anew.
 DO $$
 BEGIN
-	IF EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = 'socket_calls_activity' AND indexdef NOT LIKE '%internet_end%') THEN
+	IF to_regclass(quote_ident(current_schema()) || '.socket_calls_activity') IS NOT NULL
+		AND pg_get_indexdef(to_regclass(quote_ident(current_schema()) || '.socket_calls_activity')) NOT LIKE '%internet_end%' THEN
 		DROP INDEX socket_calls_activity;
 	END IF;
 END $$;

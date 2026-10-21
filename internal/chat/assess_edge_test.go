@@ -95,3 +95,35 @@ func TestEdgeCheckForeignDeploymentRefused(t *testing.T) {
 		t.Fatalf("the refused check reached its service %d times", stub.calls)
 	}
 }
+
+// refusingStub answers like a handler that refuses the call itself before doing anything (#184).
+type refusingStub struct{ reason string }
+
+func (s refusingStub) Do(_ context.Context, _ string, _ platform.Request) (platform.Result, error) {
+	return platform.Result{Status: "error", Message: platform.RefusedPrefix + "not now",
+		Decision: platform.DecisionError, Reason: s.reason}, nil
+}
+
+// A handler that refuses a call with its own reason keeps decision and reason in the result the manager
+// records; a result without a reason still gets the decision of the executed call.
+func TestHandlerErrorReasonKept(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	onlineEdgePlatform(t, e)
+	e.m.RegisterVirtual(platform.AssessPrefix, refusingStub{reason: "preprocess_differs_from_run"})
+	c, err := e.m.Create(ctx, NewChat{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	slot := e.m.live[c.ID].slot.ID
+	if err := e.st.AddDelegationObject(ctx, c.ID, delegation.ContainerDeployment, "9"); err != nil {
+		t.Fatal(err)
+	}
+	res, err := invokePlatformTool(e, ctx, c.ID, slot, "deployment_check", `{"deployment_id":9,"model_id":5}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Decision != platform.DecisionError || res.Reason != "preprocess_differs_from_run" {
+		t.Fatalf("the handler's decision and reason were overwritten: %q / %q", res.Decision, res.Reason)
+	}
+}
