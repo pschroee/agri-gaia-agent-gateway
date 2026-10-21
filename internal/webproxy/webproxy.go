@@ -87,7 +87,13 @@ var (
 	TunnelMax    = 5 * time.Minute
 	DialTimout   = 10 * time.Second
 	RecheckEvery = 250 * time.Millisecond // a fast download ran 50 MB past a 3 MB limit at 2 s (Phase B, 21.10.2026)
+	// TunnelSlack is added to MaxDownload for a tunnel: TLS records and HTTP headers count with the bytes, and a file
+	// of exactly MaxDownload must still pass.
+	TunnelSlack int64 = 1 << 20
 )
+
+// errTooLarge ends a download that passed Proxy.MaxDownload.
+var errTooLarge = errors.New("download too large")
 
 type Proxy struct {
 	Gate Gate
@@ -103,6 +109,18 @@ type Proxy struct {
 	// For tests only: allowed ports (0: 80 and 443) and a custom check of the target address.
 	HTTPPort, HTTPSPort int
 	Allow               func(net.IP) bool
+	// MaxDownload is the most a single download may have (0: no limit); TmpMB and HomeMB are the sizes of /tmp and
+	// the home directory for the message.
+	MaxDownload   int64
+	TmpMB, HomeMB int64
+}
+
+// tunnelMax is the byte limit of one tunnel (downstream), 0: none.
+func (p *Proxy) tunnelMax() int64 {
+	if p.MaxDownload <= 0 {
+		return 0
+	}
+	return p.MaxDownload + TunnelSlack
 }
 
 func (p *Proxy) ports() (int, int) {
@@ -204,7 +222,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		// With NODE_USE_ENV_PROXY Node tunnels plain HTTP through CONNECT as well.
 		if r.Method == http.MethodConnect {
-			p.tunnel(w, r, &rec, p.Searx.Host, tunnelOpts{grant: dec.GrantID, still: still})
+			p.tunnel(w, r, &rec, p.Searx.Host, tunnelOpts{grant: dec.GrantID, still: still, maxDown: p.tunnelMax()})
 			return
 		}
 		p.forward(w, r, &rec, p.Searx.Host, p.Searx.Scheme, p.Searx.Host, dec.GrantID)
@@ -229,7 +247,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	addr := net.JoinHostPort(ip.String(), strconv.Itoa(port))
 	if r.Method == http.MethodConnect {
 		// A domains grant names a host, not an address: the TLS server name must be that host.
-		opts := tunnelOpts{grant: dec.GrantID, still: still}
+		opts := tunnelOpts{grant: dec.GrantID, still: still, maxDown: p.tunnelMax()}
 		if dec.Kind == netgrant.Domains {
 			opts.sniHost = netgrant.NormalizeHost(host)
 		}
@@ -348,9 +366,16 @@ type countWriter struct {
 	w     io.Writer
 	n     *atomic.Int64
 	count func(int64)
+	// max > 0: refuse the write that would take n over max and set over (downstream of a tunnel).
+	max  int64
+	over *atomic.Bool
 }
 
 func (c countWriter) Write(b []byte) (int, error) {
+	if c.max > 0 && c.n.Load()+int64(len(b)) > c.max {
+		c.over.Store(true)
+		return 0, errTooLarge
+	}
 	n, err := c.w.Write(b)
 	c.n.Add(int64(n))
 	if c.count != nil && n > 0 {
@@ -376,6 +401,8 @@ func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, rec *Request, ad
 		DisableKeepAlives:     true,
 	}
 	status := 0
+	var tooLarge string // message of a refusal for size
+	var bodyOver atomic.Bool
 	rp := &httputil.ReverseProxy{
 		Transport: tr,
 		Rewrite: func(pr *httputil.ProxyRequest) {
@@ -387,18 +414,68 @@ func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, rec *Request, ad
 		},
 		ModifyResponse: func(resp *http.Response) error {
 			status = resp.StatusCode
+			if m := p.MaxDownload; m > 0 {
+				if resp.ContentLength > m {
+					tooLarge = netgrant.MsgDownloadTooLarge(rec.Host, r.URL.Path, resp.ContentLength, m, p.TmpMB, p.HomeMB, grant)
+					return errTooLarge
+				}
+				if resp.ContentLength < 0 && resp.Body != nil {
+					resp.Body = &limitBody{rc: resp.Body, left: m, over: &bodyOver}
+				}
+			}
 			return nil
 		},
 		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, err error) {
+			if errors.Is(err, errTooLarge) && tooLarge != "" {
+				// Nothing of the body has been written yet.
+				status = http.StatusRequestEntityTooLarge
+				http.Error(w, tooLarge, status)
+				return
+			}
 			status = http.StatusBadGateway
 			http.Error(w, "upstream not reachable", http.StatusBadGateway)
 		},
 	}
 	rp.ServeHTTP(w, r)
+	if bodyOver.Load() {
+		// No length was known: the body was cut after MaxDownload bytes.
+		tooLarge = netgrant.MsgDownloadTooLarge(rec.Host, r.URL.Path, -1, p.MaxDownload, p.TmpMB, p.HomeMB, grant)
+	}
+	if tooLarge != "" {
+		rec.Denied, rec.Reason = tooLarge, netgrant.CodeTooLarge
+		slog.Warn("web proxy: download too large", "chat", rec.ChatID, "target", rec.Host, "grant", grant)
+	}
 	rec.Status, rec.BytesUp, rec.BytesDown = status, up.Load(), down.Load()
 	rec.DurationMs = time.Since(rec.StartedAt).Milliseconds()
 	p.Gate.RecordWeb(*rec)
 }
+
+// limitBody passes at most left bytes of a body and then fails with errTooLarge (and sets over).
+type limitBody struct {
+	rc   io.ReadCloser
+	left int64
+	over *atomic.Bool
+}
+
+func (l *limitBody) Read(b []byte) (int, error) {
+	if l.left <= 0 {
+		// Only an end of the body counts as complete.
+		var one [1]byte
+		if n, _ := l.rc.Read(one[:]); n > 0 {
+			l.over.Store(true)
+			return 0, errTooLarge
+		}
+		return 0, io.EOF
+	}
+	if int64(len(b)) > l.left {
+		b = b[:l.left]
+	}
+	n, err := l.rc.Read(b)
+	l.left -= int64(n)
+	return n, err
+}
+
+func (l *limitBody) Close() error { return l.rc.Close() }
 
 // tunnelOpts are what a tunnel needs of the decision: the grant it counts on, the recheck, and for a domains grant
 // the host the TLS server name must equal.
@@ -406,6 +483,8 @@ type tunnelOpts struct {
 	grant   int64
 	still   func() (bool, string)
 	sniHost string
+	// maxDown: the tunnel is closed on both sides when more than this comes from the target (0: no limit).
+	maxDown int64
 }
 
 // sniTimeout is how long a client has to send its ClientHello after the proxy answered the CONNECT.
@@ -516,7 +595,7 @@ func (p *Proxy) tunnel(w http.ResponseWriter, r *http.Request, rec *Request, add
 	_ = dst.SetDeadline(deadline)
 	done := make(chan struct{}, 2)
 	stop := make(chan struct{})
-	var revoked atomic.Bool
+	var revoked, over atomic.Bool
 	var revokedWhy atomic.Value
 	go func() {
 		t := time.NewTicker(RecheckEvery)
@@ -547,7 +626,12 @@ func (p *Proxy) tunnel(w http.ResponseWriter, r *http.Request, rec *Request, add
 		done <- struct{}{}
 	}()
 	go func() {
-		_, _ = io.Copy(countWriter{w: src, n: &down, count: count}, dst)
+		_, _ = io.Copy(countWriter{w: src, n: &down, count: count, max: o.maxDown, over: &over}, dst)
+		if over.Load() {
+			// Close both sides at once; this also ends the other direction.
+			src.Close()
+			dst.Close()
+		}
 		closeWrite(src)
 		done <- struct{}{}
 	}()
@@ -556,7 +640,11 @@ func (p *Proxy) tunnel(w http.ResponseWriter, r *http.Request, rec *Request, add
 	close(stop)
 	src.Close()
 	dst.Close()
-	if revoked.Load() {
+	if over.Load() {
+		rec.Denied = netgrant.MsgDownloadTooLarge(rec.Host, "", -1, p.MaxDownload, p.TmpMB, p.HomeMB, o.grant)
+		rec.Reason = netgrant.CodeTooLarge
+		slog.Warn("web proxy: tunnel closed, download too large", "chat", rec.ChatID, "target", rec.Host, "grant", o.grant)
+	} else if revoked.Load() {
 		why, _ := revokedWhy.Load().(string)
 		rec.Denied = "tunnel closed: " + strings.TrimPrefix(netgrant.MsgGrantEnded(o.grant, why), "blocked: ")
 		rec.Reason = netgrant.CodeAccessEnded

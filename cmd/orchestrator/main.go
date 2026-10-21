@@ -313,6 +313,7 @@ func run() error {
 			chatOf := func() string { c, _ := m.AttributeSlot(slotID); return c }
 			toolOf := func() string { return fg.Sole(chatOf()) }
 			px := &webproxy.Proxy{Gate: m.WebGate(), Blocked: execBlocked, Origin: netgrant.OriginExec,
+				MaxDownload: sandbox.PackageFileMax, TmpMB: sandbox.TmpfsMB(sandbox.ExecTmpfs, "/tmp"), HomeMB: sandbox.TmpfsMB(sandbox.ExecTmpfs, "/home/agent"),
 				AttributeReq: func(*http.Request) (string, string) { return m.AttributeSlot(slotID) },
 				ToolCallOf:   func(*http.Request) string { return toolOf() }}
 			return sock.Relay{Proxy: px, Pkg: pkgGate.Handler(chatOf, toolOf)}
@@ -475,7 +476,8 @@ func run() error {
 	proxySrv := &http.Server{Addr: env.ProxyAddr, Handler: proxy,
 		ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 60 * time.Second, MaxHeaderBytes: 64 << 10}
 	// Web proxy for web_search and web_extract from pi's container (only with internet).
-	web := &webproxy.Proxy{Gate: m.WebGate(), Blocked: blocked}
+	web := &webproxy.Proxy{Gate: m.WebGate(), Blocked: blocked, MaxDownload: sandbox.PackageFileMax,
+		TmpMB: sandbox.TmpfsMB(sandbox.ExecTmpfs, "/tmp"), HomeMB: sandbox.TmpfsMB(sandbox.ExecTmpfs, "/home/agent")}
 	if env.SearxURL != "" {
 		if u, err := url.Parse(env.SearxURL); err == nil && u.Host != "" {
 			web.Searx = u
