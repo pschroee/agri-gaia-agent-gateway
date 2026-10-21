@@ -103,3 +103,8 @@ ALTER TABLE chat_queue ADD COLUMN IF NOT EXISTS search_hint text NOT NULL DEFAUL
 -- says whether the run sampled a GPU.
 ALTER TABLE experiment_trials ADD COLUMN IF NOT EXISTS figures text NOT NULL DEFAULT '';
 ALTER TABLE experiment_trials ADD COLUMN IF NOT EXISTS gpu_available boolean;
+
+-- issue #194: a notebook run without figures is not a trial; remove the ones the first rule made.
+DELETE FROM experiment_trials t WHERE t.search_id IS NULL AND t.path = 'notebook'
+  AND t.state IN ('done','failed','stopped')
+  AND NOT EXISTS (SELECT 1 FROM trial_epochs e WHERE e.trial_id = t.id);
