@@ -124,6 +124,60 @@ func TestSubagentToolActiveFromStart(t *testing.T) {
 	}
 }
 
+// bg_wait is hidden from the main agent (#201): it knows only subagent runs, never bash tasks.
+func TestBgWaitHidden(t *testing.T) {
+	for _, v := range []string{"cli", "both", "cli,mcp"} {
+		args, err := PiArgs(v, "deepseek", "deepseek-flash")
+		if err != nil {
+			t.Fatal(err)
+		}
+		found := false
+		for i, a := range args {
+			if a == "--exclude-tools" && strings.Contains(","+args[i+1]+",", ",bg_wait,") {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("%s: bg_wait not excluded: %v", v, args)
+		}
+	}
+	for _, v := range []string{"mcp", "api"} {
+		args, err := PiArgs(v, "deepseek", "deepseek-flash")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if j := strings.Join(args, " "); strings.Contains(j, "pi-subagents") || strings.Contains(j, "bg_wait") {
+			t.Errorf("%s: subagents or bg_wait: %v", v, args)
+		}
+	}
+	args, _ := piArgs("exp:cli", "p", "m", "note")
+	if strings.Contains(strings.Join(args, " "), subagentsExt) {
+		t.Errorf("exp:cli loads pi-subagents: %v", args)
+	}
+}
+
+// Foreground or background by need of the next step; no tool waits for background tasks (#201).
+func TestSystemNoteBackground(t *testing.T) {
+	n := SystemNoteFor("cli", 5, nil)
+	for _, want := range []string{"run it in the foreground instead", "No tool waits for a background task", "works only with bg_output", "At most 5", "there is no tool for waiting"} {
+		if !strings.Contains(n, want) {
+			t.Errorf("cli note without %q", want)
+		}
+	}
+	if strings.Contains(n, "bg_wait") {
+		t.Error("cli note names bg_wait")
+	}
+	e := SystemNoteFor("exp:cli", 5, nil)
+	if !strings.Contains(e, "run it in the foreground instead") || strings.Contains(e, "there is no tool for waiting") || strings.Contains(e, "bg_wait") {
+		t.Errorf("exp:cli note: %q", e)
+	}
+	for _, v := range []string{"mcp", "api"} {
+		if strings.Contains(SystemNoteFor(v, 5, nil), "Background tasks:") {
+			t.Errorf("%s note with background tasks", v)
+		}
+	}
+}
+
 // The system note says how to keep the task list: status in_progress before starting,
 // completed immediately after finishing.
 func TestSystemNoteTodoDiscipline(t *testing.T) {
