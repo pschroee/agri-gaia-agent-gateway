@@ -2012,9 +2012,12 @@ func TestRenameKeepsOrder(t *testing.T) {
 	if _, err := e.m.RunCommand(ctx, older.ID, "/rename  Pen 3 classes "); err != nil {
 		t.Fatal(err)
 	}
-	ev := waitEvent(t, events, "chat", "")
-	if v, ok := ev.Data.(ChatView); !ok || v.Title != "Pen 3 classes" {
-		t.Fatalf("chat event: %#v", ev.Data)
+	// Other chat events (slot assignment) may arrive first; wait for the one that carries the new title.
+	for renamed := false; !renamed; {
+		ev := waitEvent(t, events, "chat", "")
+		if v, ok := ev.Data.(ChatView); ok && v.Title == "Pen 3 classes" {
+			renamed = true
+		}
 	}
 	if got := order(); got[0] != newer.ID || got[1] != older.ID {
 		t.Fatalf("rename moved the chat: %v", got)
