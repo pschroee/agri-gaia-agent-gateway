@@ -21,7 +21,7 @@ func TestRESTGatewaySearch(t *testing.T) {
 	if code, out, _ := apiCall(t, c, "GET", "/platform-api/_agw/search/s0123456789ab", "", "", nil); code != 200 {
 		t.Fatalf("status over REST: %d %s", code, out)
 	}
-	if len(b.reqs) != 2 || !strings.Contains(b.reqs[0], "POST /_agw/search|") || !strings.Contains(b.reqs[1], "GET /_agw/search/s0123456789ab|") {
+	if len(b.reqs) != 2 || !strings.Contains(b.reqs[0], "POST /_agw/search (multipart)|") || !strings.Contains(b.reqs[1], "GET /_agw/search/s0123456789ab|") {
 		t.Fatalf("what reached the backend: %v", b.reqs)
 	}
 	// A body in the old shape of the raw call, with notebook fields, is refused before the backend.

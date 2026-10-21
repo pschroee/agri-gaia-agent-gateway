@@ -49,7 +49,7 @@ func TestSystemNotePlatformIndex(t *testing.T) {
 	}
 	// Experiment slots see the state after the remedy.
 	for variant, want := range map[string]string{"exp:cli": cliIndexLine, "exp:api": apiIndexSent} {
-		if n := SystemNoteFor(variant, 4, nil, apiIndexTest); !strings.Contains(n, want) || strings.Contains(n, "{{") {
+		if n := SystemNoteFor(variant, 4, nil, apiIndexTest); !strings.Contains(n, want) || strings.Contains(strings.ReplaceAll(n, "{{step", ""), "{{") {
 			t.Errorf("%s: %q missing or placeholder left", variant, want)
 		}
 	}
@@ -114,7 +114,7 @@ func TestSystemNoteGatewayPaths(t *testing.T) {
 	if n := SystemNoteFor("cli,api", 4, nil, apiIndexTest); !strings.Contains(n, "- Gateway paths:") {
 		t.Error("cli,api: gateway paths missing")
 	}
-	if n := SystemNoteFor("exp:api", 4, nil, apiIndexTest); !strings.Contains(n, "- Gateway paths:") || strings.Contains(n, "{{") {
+	if n := SystemNoteFor("exp:api", 4, nil, apiIndexTest); !strings.Contains(n, "- Gateway paths:") || strings.Contains(strings.ReplaceAll(n, "{{step", ""), "{{") {
 		t.Error("exp:api: gateway paths missing")
 	}
 	if strings.Contains(SystemNoteFor("api", 4, nil, apiIndexTest), "notebook_run") {

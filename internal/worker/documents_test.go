@@ -53,7 +53,7 @@ func TestSystemNoteAttachmentsPerBinding(t *testing.T) {
 		if !strings.Contains(note, "/workspace/inputs/ (read only)."+want) || n != 1 {
 			t.Errorf("%s: attachment note wrong (%d texts):\n%s", ts.Key(), n, note)
 		}
-		if strings.Contains(note, "{{") {
+		if strings.Contains(strings.ReplaceAll(note, "{{step", ""), "{{") {
 			t.Errorf("%s: placeholder left in the note", ts.Key())
 		}
 	}

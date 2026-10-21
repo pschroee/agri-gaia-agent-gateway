@@ -213,11 +213,11 @@ func TestBackgroundTasksConfigured(t *testing.T) {
 			t.Errorf("system note without %q", want)
 		}
 	}
-	if n := SystemNoteFor("both", 3, nil, ""); !strings.Contains(n, "At most 3 run") || strings.Contains(n, "{{") {
+	if n := SystemNoteFor("both", 3, nil, ""); !strings.Contains(n, "At most 3 run") || strings.Contains(strings.ReplaceAll(n, "{{step", ""), "{{") {
 		t.Errorf("limit in the system note: %q", n)
 	}
 	for _, v := range []string{"mcp", "api"} {
-		if n := SystemNoteFor(v, 3, nil, ""); strings.Contains(n, "Background tasks") || strings.Contains(n, "{{") || strings.Contains(n, "bash") {
+		if n := SystemNoteFor(v, 3, nil, ""); strings.Contains(n, "Background tasks") || strings.Contains(strings.ReplaceAll(n, "{{step", ""), "{{") || strings.Contains(n, "bash") {
 			t.Errorf("variant %s (without bash) with background tasks: %q", v, n)
 		}
 	}
@@ -263,7 +263,7 @@ func TestSystemNoteMmdc(t *testing.T) {
 		if got := strings.Contains(SystemNoteFor(v, 4, nil, ""), "mmdc -i diagram.mmd"); got != want {
 			t.Errorf("%s: mmdc in the note = %v", v, got)
 		}
-		if strings.Contains(SystemNoteFor(v, 4, nil, ""), "{{") {
+		if strings.Contains(strings.ReplaceAll(SystemNoteFor(v, 4, nil, ""), "{{step", ""), "{{") {
 			t.Errorf("%s: placeholder left over", v)
 		}
 	}

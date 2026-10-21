@@ -48,13 +48,11 @@ func TestSearchNoteForms(t *testing.T) {
 		if s, _, err = e.st.DecideSearch(ctx, s.ID, store.SearchRunning, &ends); err != nil {
 			t.Fatal(err)
 		}
-		m.searchNote(ctx, s, "Read {{tool:search_status}}, then declare the next trial with {{tool:search_next}}.", "")
-		q, err := e.st.ListQueue(ctx, cv.ID)
-		if err != nil || len(q) == 0 {
-			t.Fatalf("%s: queue %+v %v", c.toolsets, q, err)
-		}
-		if !strings.Contains(q[0].Text, c.want) || strings.Contains(q[0].Text, "{{tool:") {
-			t.Errorf("%s: %s", c.toolsets, q[0].Text)
+		// The note itself, not its delivery: in a chat with the REST binding alone the queued note is taken
+		// into a turn at once, so the queue is empty by the time it is read.
+		text := m.RenderNote(ctx, s.ChatID, "Read {{tool:search_status}}, then declare the next trial with {{tool:search_next}}.")
+		if !strings.Contains(text, c.want) || strings.Contains(text, "{{tool:") {
+			t.Errorf("%s: %s", c.toolsets, text)
 		}
 		_, _ = m.Suspend(ctx, cv.ID)
 	}
