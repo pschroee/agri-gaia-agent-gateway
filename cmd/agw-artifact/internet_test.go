@@ -173,3 +173,66 @@ func TestInternetStatusPrintsRefusals(t *testing.T) {
 		t.Fatalf("no refusals, no output: %q", b.String())
 	}
 }
+
+// A sentence or a bare name where a list belongs is named as such, not reported as a missing reason (issue #196).
+func TestParseInternetArgsLists(t *testing.T) {
+	for _, c := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"packages", "pip install scikit-learn (Python package from the cache)"}, "is not a package list"},
+		{[]string{"packages", "scikit-learn", "r"}, "is not a package list"},
+		{[]string{"domains", "download tensorflow", "r"}, "is not a host list"},
+	} {
+		_, err := parseInternetArgs(c.args)
+		if err == nil || !strings.Contains(err.Error(), c.want) || strings.Contains(err.Error(), "no reason") {
+			t.Errorf("%q: %v, want %q", c.args, err, c.want)
+		}
+	}
+	_, err := parseInternetArgs([]string{"packages", "pip install scikit-learn"})
+	if err == nil || !strings.Contains(err.Error(), "pip:scikit-learn") {
+		t.Errorf("hint missing: %v", err)
+	}
+	if got, err := parseInternetArgs([]string{"packages", "pip:torch[a, b]", "r"}); err != nil || len(got.Packages) != 1 {
+		t.Errorf("extras with a space: %+v %v", got, err)
+	}
+}
+
+// captureStderr runs f and returns what it wrote to os.Stderr.
+func captureStderr(t *testing.T, f func()) string {
+	t.Helper()
+	old := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stderr = w
+	defer func() { os.Stderr = old }()
+	done := make(chan string)
+	go func() {
+		b, _ := io.ReadAll(r)
+		done <- string(b)
+	}()
+	f()
+	w.Close()
+	return <-done
+}
+
+func TestInternetUsageErrorIsShort(t *testing.T) {
+	var code int
+	out := captureStderr(t, func() { code, _ = internet(nil, []string{"packages", "pip install x"}) })
+	if code != exitUsage {
+		t.Errorf("exit %d", code)
+	}
+	if !strings.HasPrefix(out, "error:") || !strings.Contains(out, "usage: agw-internet packages") || strings.Contains(out, "agw-internet full") {
+		t.Errorf("stderr: %q", out)
+	}
+}
+
+func TestInternetHelpWithoutKind(t *testing.T) {
+	var code int
+	out := captureStderr(t, func() { code, _ = internet(nil, nil) })
+	if code != exitUsage || !strings.Contains(out, "agw-internet full") || !strings.Contains(out, "error:") {
+		t.Errorf("exit %d stderr: %q", code, out)
+	}
+}

@@ -117,3 +117,15 @@ func TestNormalizePipAndBuildTools(t *testing.T) {
 		t.Fatal("build tool list")
 	}
 }
+
+// A sentence is not a package: the message says how to write one (issue #196); spaces inside extras stay valid.
+func TestParsePackagesSpaces(t *testing.T) {
+	_, err := ParsePackages([]string{"pip install scikit-learn"})
+	if err == nil || !strings.Contains(err.Error(), "without spaces") {
+		t.Errorf("sentence: %v", err)
+	}
+	roots, err := ParsePackages([]string{"pip:torch[a, b]"})
+	if err != nil || len(roots) != 1 {
+		t.Errorf("extras with a space: %v %v", roots, err)
+	}
+}

@@ -1,6 +1,6 @@
 ---
 name: internet
-description: Ask the user for exactly the internet access a command needs, with agw-internet search|domains|packages|full and a reason; the user sees purpose, kind and list and approves exactly that. Use before pip install, npm install, curl, wget, git clone or any download, and when a command fails with "blocked:" or pip/npm fail with HTTP 403 or 413 (run agw-internet status for the reason). Large ML libraries (torch, torchvision, tensorflow) do not fit into the sandbox: use the skill notebook, not internet. Ask for the narrowest kind: packages for pip/npm (ends when installed), domains for downloads (exact host names, https only, no wildcards, redirects to other hosts are blocked until you ask for them too), full only when nothing else works. For looking things up use the skill web-research.
+description: Ask the user for exactly the internet access a command needs, with agw-internet search|domains|packages|full and a reason; the user sees purpose, kind and list and approves exactly that. Use before pip install, npm install, curl, wget, git clone or any download, and when a command fails with "blocked:" or pip/npm fail with HTTP 403 or 413 (run agw-internet status for the reason). Large ML libraries (torch, torchvision, tensorflow) do not fit into the sandbox: use the skill notebook, not internet. Ask for the narrowest kind: packages for pip/npm (ends when installed), domains for downloads (exact host names, https only, no wildcards, redirects to other hosts are blocked until you ask for them too), full only when nothing else works. For looking things up use the skill web-research. Run agw-internet on its own, without a pipe (no | tail, | head): only its exit code tells approved (0), refused or wrong usage (2) and rejected (3).
 ---
 
 # Internet access for commands
@@ -33,6 +33,8 @@ agw-internet full "clone a repository over ssh and run its installer"
 
 The command **waits** until the user decides (this can take minutes); call it with a generous
 timeout (at least 900 seconds) and not in the background.
+
+Run it without a pipe: `agw-internet … | tail` reports the exit code of `tail`, and a refusal looks like success. The list comes first and has no spaces: `pip:scikit-learn`, not `"pip install scikit-learn"`.
 
 - Exit code 0, `approved: …` — the access is available, carry on. The line names the kind, the end
   and the grant number.
