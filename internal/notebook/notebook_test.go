@@ -429,7 +429,7 @@ func TestRunScriptQuoting(t *testing.T) {
 	for _, w := range []string{
 		"cd '/home/jovyan/work/runs/r20260101120000-abcd' || exit 99",
 		"timeout --signal=TERM --kill-after=30s 120m python -u 'train.py' '--epochs' '5' 'a-b=c:/d+e' > run.log 2>&1",
-		"echo $? > .agw/exit_code",
+		"echo $rc > .agw/exit_code",
 		"date -u +%FT%TZ > .agw/started",
 		"date -u +%FT%TZ > .agw/finished",
 	} {
