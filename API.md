@@ -1024,7 +1024,7 @@ union. The agent can **end** grants itself without approval, because that only r
 Time and data: the agent may propose `minutes` and `megabytes`, the gateway clamps them (defaults 30 min and 500 MB,
 bounds 120 min and 5000 MB: `AGW_INTERNET_MINUTES_DEFAULT|MAX`, `AGW_INTERNET_MB_DEFAULT|MAX`). The clock starts at the
 approval and runs while the chat idles; bytes count both directions over all connections of the grant (the web proxy
-counts what it carries, Docker's counters the execution sandbox of a `full` grant). A tunnel is rechecked every 2 s and
+counts what it carries, Docker's counters the execution sandbox of a `full` grant). A tunnel is rechecked every 250 ms and
 closed when its grant ends or its data limit is reached.
 
 | Binding | Request | End |

@@ -86,7 +86,7 @@ const SearxHost = netgrant.SearxHost
 var (
 	TunnelMax    = 5 * time.Minute
 	DialTimout   = 10 * time.Second
-	RecheckEvery = 2 * time.Second
+	RecheckEvery = 250 * time.Millisecond // a fast download ran 50 MB past a 3 MB limit at 2 s (Phase B, 21.10.2026)
 )
 
 type Proxy struct {
