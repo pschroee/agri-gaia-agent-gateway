@@ -265,11 +265,13 @@ func platformNote(ts toolset.Set, apiIndex string) string {
 	}
 	if ts.Has(toolset.API) {
 		if apiIndex != "" {
-			b.WriteString("- Platform API: every operation of the platform's REST API is listed below (method, path, purpose, query parameters with * = required, kind of body); blocked paths are left out. For a single platform action call the path directly with platform_http; do not call GET /_agw/paths first, it returns the same list. The gateway's own paths (/_agw/rights, /_agw/capabilities, /_agw/plan) are described in the tool platform_http.\n")
+			b.WriteString("- Platform API: every operation of the platform's REST API is listed below (method, path, purpose, query parameters with * = required, kind of body); blocked paths are left out. For a single platform action call the path directly with platform_http; do not call GET /_agw/paths first, it returns the same list. The gateway's own paths follow under Gateway paths.\n")
 			b.WriteString(indent(apiIndex))
 		} else {
-			b.WriteString("- Platform API: GET /_agw/paths lists every operation of the platform's REST API, one per line; read it once before your first platform call.\n")
+			b.WriteString("- Platform API: GET /_agw/paths lists every operation of the platform's REST API, one per line; read it once before your first platform call. The gateway's own paths follow under Gateway paths.\n")
 		}
+		b.WriteString("- Gateway paths: the gateway answers these paths itself; call them with platform_http like the platform's paths. Each line gives method, path ({name} is a path argument), what the call does, query and JSON body fields (* = required) and the tool name the gateway's notes use for it. Arguments that need files of the sandbox are not available here. When an argument is unclear, GET /_agw/paths with query prefix=/_agw/<area> (e.g. /_agw/search) describes each argument; do not call it before a call whose arguments are listed here.\n")
+		b.WriteString(platform.GatewayIndex())
 	}
 	return b.String()
 }
