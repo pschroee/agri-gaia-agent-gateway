@@ -15,6 +15,7 @@ import (
 
 	"agw/internal/platform"
 	"agw/internal/store"
+	"agw/internal/watch"
 )
 
 // The states of a run as the gateway reports them.
@@ -222,7 +223,8 @@ func (n *Notebooks) Status(ctx context.Context, chatID, runID string) (RunInfo, 
 	return info, nil
 }
 
-// Log reads the end of a run's output.
+// Log reads the end of a run's output with progress bars collapsed (issue #178), so it can hold fewer
+// lines than asked for.
 func (n *Notebooks) Log(ctx context.Context, chatID, runID string, tail int) (string, error) {
 	row, err := n.store.GetNotebookRun(ctx, chatID, runID)
 	if err != nil {
@@ -245,7 +247,7 @@ func (n *Notebooks) Log(ctx context.Context, chatID, runID string, tail int) (st
 	if err != nil {
 		return "", err
 	}
-	return string(out), nil
+	return watch.CollapseProgress(string(out)), nil
 }
 
 // applyRun fills in what the stored row alone says.
