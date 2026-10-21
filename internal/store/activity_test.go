@@ -7,6 +7,7 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -394,5 +395,84 @@ func TestActivityFilterToolCall(t *testing.T) {
 	p, err = s.ListActivity(ctx, ActivityFilter{})
 	if err != nil || len(p.Calls) != 4 || p.Summary.Total != 4 {
 		t.Fatalf("without the filter: %v %d %+v", err, len(p.Calls), p.Summary)
+	}
+}
+
+func TestEndedGrantsDetail(t *testing.T) {
+	if EndedGrantsDetail(nil) != "" {
+		t.Error("no grants must give an empty detail")
+	}
+	d := EndedGrantsDetail([]int64{8, 7})
+	if d != "ended grants 7,8" {
+		t.Errorf("detail %q", d)
+	}
+	if got := endedGrantIDs(d); len(got) != 2 || got[0] != 7 || got[1] != 8 {
+		t.Errorf("round trip: %v", got)
+	}
+	if endedGrantIDs("grant 7 full") != nil || endedGrantIDs("") != nil {
+		t.Error("other details have no ended grants")
+	}
+}
+
+// Issue #185: the user's switch-off summarises the ends it caused; other ends stay as entries of their own.
+func TestListActivityGroupsUserSwitchOff(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	mk := func(owner string) Chat {
+		c, err := s.CreateChat(ctx, NewChat{Title: owner, Model: "p/m", Variant: "cli", Owner: owner})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	a, b := mk("sub-anna"), mk("sub-anna")
+	now := time.Now()
+	grant := func(chat string) int64 {
+		g, err := s.CreateGrant(ctx, Grant{ChatID: chat, Kind: "search", Origin: GrantByUser, Via: "user", State: GrantActive, StartedAt: &now})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return g.ID
+	}
+	add := func(chat, via, op, detail, result string) {
+		if _, err := s.AddSocketCall(ctx, SocketCall{ChatID: chat, SlotID: "p", Via: via, Op: op, Detail: detail, Result: result}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	g1, g2, g3, g4, g5 := grant(a.ID), grant(a.ID), grant(a.ID), grant(a.ID), grant(b.ID)
+	add(a.ID, "gateway", "internet_end", fmt.Sprintf("grant %d search", g3), "user") // single end, no parent: stays
+	add(a.ID, "gateway", "internet_end", fmt.Sprintf("grant %d search", g4), "time") // by time: stays
+	add(b.ID, "gateway", "internet_end", fmt.Sprintf("grant %d search", g5), "user") // other chat, no parent: stays
+	add(a.ID, "gateway", "internet_end", fmt.Sprintf("grant %d search", g1), "user")
+	add(a.ID, "gateway", "internet_end", fmt.Sprintf("grant %d search", g2), "user")
+	add(a.ID, "user", "internet_set", EndedGrantsDetail([]int64{g1, g2}), "off")
+
+	for _, kind := range []string{KindInternet, KindAll} {
+		p, err := s.ListActivity(ctx, ActivityFilter{Kind: kind})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(p.Calls) != 4 {
+			t.Fatalf("%s: %d entries, want 4: %+v", kind, len(p.Calls), p.Calls)
+		}
+		sw := p.Calls[0]
+		if sw.Op != OpInternetUser || len(sw.Ended) != 2 || sw.Ended[0].ID != g1 || sw.Ended[1].ID != g2 {
+			t.Fatalf("%s: switch-off entry %+v", kind, sw)
+		}
+		for _, c := range p.Calls[1:] {
+			if c.Op != "internet_end" || len(c.Ended) != 0 {
+				t.Errorf("%s: unexpected entry %+v", kind, c)
+			}
+		}
+	}
+
+	// An old switch-off without the detail leaves the ends in the list.
+	c := mk("sub-anna")
+	g6 := grant(c.ID)
+	add(c.ID, "gateway", "internet_end", fmt.Sprintf("grant %d search", g6), "user")
+	add(c.ID, "user", "internet_set", "", "off")
+	p, _ := s.ListActivity(ctx, ActivityFilter{Kind: KindInternet, ChatID: c.ID})
+	if len(p.Calls) != 2 {
+		t.Fatalf("old entry: %d entries, want 2", len(p.Calls))
 	}
 }

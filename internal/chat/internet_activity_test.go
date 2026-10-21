@@ -6,6 +6,7 @@ package chat
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -75,8 +76,7 @@ func TestInternetSwitchesInActivity(t *testing.T) {
 	}
 	type row struct{ action, origin, result, via, approval string }
 	want := []row{ // newest first
-		{"switch", "user", "off", "user", ""},
-		{"end", "user", "user", "gateway", ""},
+		{"switch", "user", "off", "user", ""}, // the user's end of the grant is summarised in this entry (issue #185)
 		{"switch", "user", "already_on", "user", ""},
 		{"switch", "user", "on", "user", ""},
 		{"off", "agent", "off", "cli", ""},
@@ -101,15 +101,50 @@ func TestInternetSwitchesInActivity(t *testing.T) {
 			t.Errorf("%d: got %+v, want %+v", i, got, w)
 		}
 	}
-	if p.Calls[8].Detail != "pip install pandas" || p.Calls[7].Detail != "read the docs" {
-		t.Errorf("reasons: %q %q", p.Calls[8].Detail, p.Calls[7].Detail)
+	if p.Calls[7].Detail != "pip install pandas" || p.Calls[6].Detail != "read the docs" {
+		t.Errorf("reasons: %q %q", p.Calls[7].Detail, p.Calls[6].Detail)
 	}
 	if p.Summary.Total != 1 || p.Summary.Chats != 1 {
 		t.Errorf("summary counts internet entries: %+v", p.Summary)
 	}
 	all, _ := e.st.ListActivity(ctx, store.ActivityFilter{Kind: store.KindAll})
 	plat, _ := e.st.ListActivity(ctx, store.ActivityFilter{})
-	if len(all.Calls) != 10 || all.Calls[0].Kind != store.KindPlatform || len(plat.Calls) != 1 || plat.Calls[0].Outcome != "ok" {
+	if len(all.Calls) != 9 || all.Calls[0].Kind != store.KindPlatform || len(plat.Calls) != 1 || plat.Calls[0].Outcome != "ok" {
 		t.Fatalf("all %d (first %+v), platform %d", len(all.Calls), all.Calls[0], len(plat.Calls))
+	}
+}
+
+// Issue #185: the user's switch-off carries the IDs of the grants it ended in its detail.
+func TestUserSwitchOffLogsEndedGrants(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	off := false
+	c, _ := e.m.Create(ctx, NewChat{Internet: &off})
+	if _, err := e.m.SetInternetByUser(ctx, c.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	// A second grant next to the full one (a domain grant of the agent's request).
+	g2, err := e.m.startUserFullGrant(ctx, c.ID, store.GrantByUser, ViaUser)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.m.SetInternetByUser(ctx, c.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	p, err := e.st.ListActivity(ctx, store.ActivityFilter{Kind: store.KindInternet})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sw *store.ActivityCall
+	for i := range p.Calls {
+		if p.Calls[i].Op == store.OpInternetUser && p.Calls[i].Result == "off" {
+			sw = &p.Calls[i]
+		}
+	}
+	if sw == nil || !strings.HasPrefix(sw.Detail, store.EndedGrantsPrefix) || !strings.Contains(sw.Detail, fmt.Sprint(g2.ID)) {
+		t.Fatalf("switch-off entry: %+v", sw)
+	}
+	if len(sw.Ended) != len(strings.Split(strings.TrimPrefix(sw.Detail, store.EndedGrantsPrefix), ",")) || len(sw.Ended) == 0 {
+		t.Errorf("ended grants of the entry: %+v for detail %q", sw.Ended, sw.Detail)
 	}
 }

@@ -402,7 +402,7 @@ ALTER TABLE socket_calls ADD COLUMN IF NOT EXISTS duration_ms double precision;
 CREATE INDEX IF NOT EXISTS socket_calls_platform ON socket_calls (id) WHERE op = 'platform';
 -- With kind=internet|all it also reads the internet switches (issue #37): the agent's request and switch-off and the
 -- user's switch (via 'user', op 'internet_set').
-CREATE INDEX IF NOT EXISTS socket_calls_activity ON socket_calls (id) WHERE op IN ('platform', 'internet', 'internet_off', 'internet_set');
+-- socket_calls_activity (all of these ops plus internet_end) is created in activity_schema.sql.
 -- The gateway's reads for approval summaries (op summary_read, issue L2/#119) show up in the platform kind next to
 -- the platform calls; they need an index of their own, because the predicate of socket_calls_activity above does not
 -- cover them. The figures (activitySummary) count op = 'platform' only, so socket_calls_platform stays as it is.
