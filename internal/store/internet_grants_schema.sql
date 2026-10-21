@@ -28,3 +28,9 @@ ALTER TABLE web_requests ADD COLUMN IF NOT EXISTS grant_id bigint, ADD COLUMN IF
   ADD COLUMN IF NOT EXISTS count int NOT NULL DEFAULT 1;
 CREATE INDEX IF NOT EXISTS web_requests_grant ON web_requests (grant_id, id) WHERE grant_id IS NOT NULL;
 ALTER TABLE approvals ADD COLUMN IF NOT EXISTS internet jsonb;
+
+-- Stage 2 (package gate, refusal codes, service of a row).
+ALTER TABLE web_requests ADD COLUMN IF NOT EXISTS reason text NOT NULL DEFAULT '', ADD COLUMN IF NOT EXISTS service text NOT NULL DEFAULT '';
+CREATE INDEX IF NOT EXISTS web_requests_chat_denied ON web_requests (chat_id, id DESC) WHERE denied <> '';
+ALTER TABLE internet_grant_packages ADD COLUMN IF NOT EXISTS version text NOT NULL DEFAULT '', ADD COLUMN IF NOT EXISTS extras text NOT NULL DEFAULT '',
+  ADD COLUMN IF NOT EXISTS downloaded_at timestamptz, ADD COLUMN IF NOT EXISTS installed_version text NOT NULL DEFAULT '';

@@ -115,7 +115,8 @@ func TestRequestInternetKinds(t *testing.T) {
 	}{
 		{"mcp", netgrant.Spec{Kind: netgrant.Full, Reason: "x"}, "needs the command line"},
 		{"api", netgrant.Spec{Kind: netgrant.Packages, Reason: "x", Packages: []string{"pip:torch"}}, "needs the command line"},
-		{"cli", netgrant.Spec{Kind: netgrant.Packages, Reason: "x", Packages: []string{"pip:torch"}}, "not available yet"},
+		{"cli", netgrant.Spec{Kind: netgrant.Packages, Reason: "x", Packages: []string{"pip:torch>=2"}}, "exact"},
+		{"cli", netgrant.Spec{Kind: netgrant.Packages, Reason: "x"}, "at least one package"},
 		{"cli", netgrant.Spec{Kind: netgrant.Domains, Reason: "x"}, "at least one host"},
 		{"cli", netgrant.Spec{Kind: netgrant.Domains, Reason: "x", Domains: []string{"*.example.org"}}, "wildcards"},
 		{"cli", netgrant.Spec{Kind: "everything", Reason: "x"}, "kind must be one of"},
@@ -167,7 +168,7 @@ func TestWebGateDecides(t *testing.T) {
 	if d := gate.Decide(chatID, netgrant.OriginExec, "download.tensorflow.org", 443); !d.Allow || d.GrantID != g.ID || d.Kind != netgrant.Domains {
 		t.Fatalf("listed host: %+v", d)
 	}
-	if d := gate.Decide(chatID, netgrant.OriginExec, "github.com", 443); d.Allow || !strings.Contains(d.Reason, "github.com is not in the allowed list") || d.GrantID != g.ID {
+	if d := gate.Decide(chatID, netgrant.OriginExec, "github.com", 443); d.Allow || !strings.Contains(d.Reason, "github.com is not in the allowed list") || d.GrantID != 0 || d.Code != netgrant.CodeNotListed {
 		t.Fatalf("unlisted host: %+v", d)
 	}
 	if d := gate.Decide(chatID, netgrant.OriginPi, "searxng", 8080); d.Allow {

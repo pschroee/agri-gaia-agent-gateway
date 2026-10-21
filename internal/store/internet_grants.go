@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+
+	"agw/internal/netgrant"
 )
 
 //go:embed internet_grants_schema.sql
@@ -73,14 +75,50 @@ type Grant struct {
 	EndedReason string          `json:"ended_reason,omitempty"`
 }
 
-// GrantPackage is a package a packages grant covers (stage 2): requested by the agent (Parent empty) or declared
-// by a package that is covered.
+// GrantPackage is a package a packages grant covers: requested by the agent (Parent empty) or declared by a package
+// that is covered (stage 2).
 type GrantPackage struct {
-	GrantID     int64      `json:"grant_id"`
-	Ecosystem   string     `json:"ecosystem"`
-	Name        string     `json:"name"`
-	Parent      string     `json:"parent,omitempty"`
-	InstalledAt *time.Time `json:"installed_at,omitempty"`
+	GrantID          int64      `json:"grant_id"`
+	Ecosystem        string     `json:"ecosystem"`
+	Name             string     `json:"name"`
+	Parent           string     `json:"parent,omitempty"`
+	Version          string     `json:"version,omitempty"` // exact pin of a root, empty: any version
+	Extras           string     `json:"extras,omitempty"`  // comma separated, normalised
+	DownloadedAt     *time.Time `json:"downloaded_at,omitempty"`
+	InstalledVersion string     `json:"installed_version,omitempty"`
+	InstalledAt      *time.Time `json:"installed_at,omitempty"`
+}
+
+// Package states shown to the user: waiting (nothing fetched yet), downloaded (the first file went through the
+// gate), installed (found installed in the sandbox).
+const (
+	PkgWaiting    = "waiting"
+	PkgDownloaded = "downloaded"
+	PkgInstalled  = "installed"
+)
+
+// PackageState is one package of a packages grant as the API shows it (Grant.Packages of a packages grant).
+type PackageState struct {
+	Ecosystem        string     `json:"ecosystem"`
+	Name             string     `json:"name"`
+	Version          string     `json:"version,omitempty"`
+	Parent           string     `json:"parent,omitempty"`
+	State            string     `json:"state"`
+	InstalledVersion string     `json:"installed_version,omitempty"`
+	InstalledAt      *time.Time `json:"installed_at,omitempty"`
+}
+
+// State derives the state of the package.
+func (p GrantPackage) State() PackageState {
+	st := PackageState{Ecosystem: p.Ecosystem, Name: p.Name, Version: p.Version, Parent: p.Parent, State: PkgWaiting,
+		InstalledVersion: p.InstalledVersion, InstalledAt: p.InstalledAt}
+	switch {
+	case p.InstalledAt != nil:
+		st.State = PkgInstalled
+	case p.DownloadedAt != nil:
+		st.State = PkgDownloaded
+	}
+	return st
 }
 
 const grantCols = `id, chat_id::text, COALESCE(approval_id::text,''), kind, origin, via, session, tool_call_id, reason, domains, packages::text, state,
@@ -234,22 +272,29 @@ func (s *Store) BumpBlocked(ctx context.Context, id int64) error {
 
 // AddGrantPackage records a package a packages grant covers; the first entry for a name wins (stage 2).
 func (s *Store) AddGrantPackage(ctx context.Context, p GrantPackage) error {
-	_, err := s.pool.Exec(ctx, `INSERT INTO internet_grant_packages (grant_id, ecosystem, name, parent) VALUES ($1,$2,$3,$4)
-		ON CONFLICT DO NOTHING`, p.GrantID, p.Ecosystem, p.Name, p.Parent)
+	_, err := s.pool.Exec(ctx, `INSERT INTO internet_grant_packages (grant_id, ecosystem, name, parent, version, extras) VALUES ($1,$2,$3,$4,$5,$6)
+		ON CONFLICT DO NOTHING`, p.GrantID, p.Ecosystem, p.Name, p.Parent, p.Version, p.Extras)
 	return err
 }
 
-// MarkInstalled sets the time a covered package was found installed (stage 2).
-func (s *Store) MarkInstalled(ctx context.Context, grantID int64, ecosystem, name string) error {
-	_, err := s.pool.Exec(ctx, `UPDATE internet_grant_packages SET installed_at=now()
-		WHERE grant_id=$1 AND ecosystem=$2 AND name=$3 AND installed_at IS NULL`, grantID, ecosystem, name)
+// MarkDownloaded sets the time the first file of a covered package went through the gate.
+func (s *Store) MarkDownloaded(ctx context.Context, grantID int64, ecosystem, name string) error {
+	_, err := s.pool.Exec(ctx, `UPDATE internet_grant_packages SET downloaded_at=now()
+		WHERE grant_id=$1 AND ecosystem=$2 AND name=$3 AND downloaded_at IS NULL`, grantID, ecosystem, name)
+	return err
+}
+
+// MarkInstalled sets the time and version a covered package was found installed.
+func (s *Store) MarkInstalled(ctx context.Context, grantID int64, ecosystem, name, version string) error {
+	_, err := s.pool.Exec(ctx, `UPDATE internet_grant_packages SET installed_at=now(), installed_version=$4
+		WHERE grant_id=$1 AND ecosystem=$2 AND name=$3 AND installed_at IS NULL`, grantID, ecosystem, name, version)
 	return err
 }
 
 // GrantPackages lists the packages of a grant, requested ones first.
 func (s *Store) GrantPackages(ctx context.Context, grantID int64) ([]GrantPackage, error) {
-	rows, err := s.pool.Query(ctx, `SELECT grant_id, ecosystem, name, parent, installed_at FROM internet_grant_packages
-		WHERE grant_id=$1 ORDER BY (parent <> ''), ecosystem, name`, grantID)
+	rows, err := s.pool.Query(ctx, `SELECT grant_id, ecosystem, name, parent, version, extras, downloaded_at, installed_version, installed_at
+		FROM internet_grant_packages WHERE grant_id=$1 ORDER BY (parent <> ''), ecosystem, name`, grantID)
 	if err != nil {
 		return nil, err
 	}
@@ -257,12 +302,71 @@ func (s *Store) GrantPackages(ctx context.Context, grantID int64) ([]GrantPackag
 	out := []GrantPackage{}
 	for rows.Next() {
 		var p GrantPackage
-		if err := rows.Scan(&p.GrantID, &p.Ecosystem, &p.Name, &p.Parent, &p.InstalledAt); err != nil {
+		if err := rows.Scan(&p.GrantID, &p.Ecosystem, &p.Name, &p.Parent, &p.Version, &p.Extras, &p.DownloadedAt, &p.InstalledVersion, &p.InstalledAt); err != nil {
 			return nil, err
 		}
 		out = append(out, p)
 	}
 	return out, rows.Err()
+}
+
+// GrantsByID reads grants by ID (the activity views).
+func (s *Store) GrantsByID(ctx context.Context, ids []int64) (map[int64]Grant, error) {
+	out := map[int64]Grant{}
+	if len(ids) == 0 {
+		return out, nil
+	}
+	gs, err := s.queryGrants(ctx, `id = ANY($1)`, ids)
+	if err != nil {
+		return nil, err
+	}
+	for _, g := range gs {
+		out[g.ID] = g
+	}
+	return out, nil
+}
+
+// GrantsByApproval reads grants by the approval they waited for (approval ID -> grant).
+func (s *Store) GrantsByApproval(ctx context.Context, approvalIDs []string) (map[string]Grant, error) {
+	out := map[string]Grant{}
+	if len(approvalIDs) == 0 {
+		return out, nil
+	}
+	gs, err := s.queryGrants(ctx, `approval_id::text = ANY($1)`, approvalIDs)
+	if err != nil {
+		return nil, err
+	}
+	for _, g := range gs {
+		out[g.ApprovalID] = g
+	}
+	return out, nil
+}
+
+// ChatBlocked counts the refused connections of a chat since the time (a collapsed row counts with its count) and
+// returns the latest ones, newest first, at most last.
+func (s *Store) ChatBlocked(ctx context.Context, chatID string, since time.Time, last int) (int, []WebRequest, error) {
+	if !isUUID(chatID) {
+		return 0, nil, nil
+	}
+	var n int
+	if err := s.pool.QueryRow(ctx, `SELECT COALESCE(sum(count),0)::int FROM web_requests WHERE chat_id=$1 AND denied <> '' AND started_at >= $2`,
+		chatID, since).Scan(&n); err != nil {
+		return 0, nil, err
+	}
+	if n == 0 || last <= 0 {
+		return n, []WebRequest{}, nil
+	}
+	rows, err := s.queryWeb(ctx, `SELECT `+webCols("w")+` FROM web_requests w WHERE w.chat_id=$1 AND w.denied <> '' AND w.started_at >= $2 ORDER BY w.id DESC LIMIT $3`,
+		chatID, since, last)
+	return n, rows, err
+}
+
+// WebSummary totals the connections of a filter: rows counted by their count, bytes, and refused ones.
+type WebSummary struct {
+	Count     int   `json:"count"`
+	BytesDown int64 `json:"bytes_down"`
+	BytesUp   int64 `json:"bytes_up"`
+	Blocked   int   `json:"blocked"`
 }
 
 // WebConnectionFilter selects rows of web_requests across chats (GET /api/activity/connections). Zero values do
@@ -281,12 +385,7 @@ type WebConnectionFilter struct {
 	Limit        int
 }
 
-// WebConnections lists connections newest first (one more than Limit, so that the caller can tell whether another
-// page follows). Rows of chats deleted for good are not listed: their chat_id is gone.
-func (s *Store) WebConnections(ctx context.Context, f WebConnectionFilter) ([]WebRequest, error) {
-	if f.Limit <= 0 {
-		f.Limit = 100
-	}
+func webConnWhere(f WebConnectionFilter, withCursor bool) ([]string, []any) {
 	var where []string
 	var args []any
 	add := func(cond string, v any) {
@@ -298,9 +397,6 @@ func (s *Store) WebConnections(ctx context.Context, f WebConnectionFilter) ([]We
 		add("w.chat_id IN (SELECT id FROM chats WHERE owner = $%d)", *f.Owner)
 	}
 	if f.ChatID != "" {
-		if !isUUID(f.ChatID) {
-			return []WebRequest{}, nil
-		}
 		add("w.chat_id = $%d::uuid", f.ChatID)
 	}
 	if f.GrantID > 0 {
@@ -321,13 +417,39 @@ func (s *Store) WebConnections(ctx context.Context, f WebConnectionFilter) ([]We
 	if !f.Until.IsZero() {
 		add("w.started_at < $%d", f.Until)
 	}
-	if f.Before > 0 {
+	if withCursor && f.Before > 0 {
 		add("w.id < $%d", f.Before)
 	}
+	return where, args
+}
+
+// WebConnections lists connections newest first (one more than Limit, so that the caller can tell whether another
+// page follows). Rows of chats deleted for good are not listed: their chat_id is gone.
+func (s *Store) WebConnections(ctx context.Context, f WebConnectionFilter) ([]WebRequest, error) {
+	if f.Limit <= 0 {
+		f.Limit = 100
+	}
+	if f.ChatID != "" && !isUUID(f.ChatID) {
+		return []WebRequest{}, nil
+	}
+	where, args := webConnWhere(f, true)
 	args = append(args, f.Limit+1)
 	q := `SELECT ` + webCols("w") + ` FROM web_requests w WHERE ` + strings.Join(where, " AND ") +
 		fmt.Sprintf(` ORDER BY w.id DESC LIMIT $%d`, len(args))
 	return s.queryWeb(ctx, q, args...)
+}
+
+// WebConnectionsSummary totals everything the filter selects, ignoring the cursor and the limit. Total is the number
+// of rows (for "show N more"); Count counts a collapsed row with its count.
+func (s *Store) WebConnectionsSummary(ctx context.Context, f WebConnectionFilter) (sum WebSummary, total int, err error) {
+	if f.ChatID != "" && !isUUID(f.ChatID) {
+		return sum, 0, nil
+	}
+	where, args := webConnWhere(f, false)
+	err = s.pool.QueryRow(ctx, `SELECT count(*), COALESCE(sum(w.count),0), COALESCE(sum(w.bytes_down),0), COALESCE(sum(w.bytes_up),0),
+		COALESCE(sum(w.count) FILTER (WHERE w.denied <> ''),0) FROM web_requests w WHERE `+strings.Join(where, " AND "), args...).
+		Scan(&total, &sum.Count, &sum.BytesDown, &sum.BytesUp, &sum.Blocked)
+	return sum, total, err
 }
 
 // ActivityChats returns what the activity views need of the given chats (title, model, binding), by id.
@@ -353,4 +475,99 @@ func (s *Store) ActivityChats(ctx context.Context, ids []string) (map[string]Act
 		out[c.ID] = c
 	}
 	return out, rows.Err()
+}
+
+// UnlistedBytes is the data a full grant moved that the web proxy did not list: the grant's byte count (Docker's
+// counters) minus the bytes of its listed connections. Programs that ignore the proxy leave only this trace.
+type UnlistedBytes struct {
+	GrantID int64  `json:"grant_id"`
+	ChatID  string `json:"chat_id"`
+	Bytes   int64  `json:"bytes"`
+}
+
+// FullGrantsUnlisted lists, for the full grants in the filter's scope (owner, chat, grant, period), the bytes that
+// are in no listed connection. Grants with nothing unlisted are left out.
+func (s *Store) FullGrantsUnlisted(ctx context.Context, f WebConnectionFilter) ([]UnlistedBytes, error) {
+	if f.ChatID != "" && !isUUID(f.ChatID) {
+		return []UnlistedBytes{}, nil
+	}
+	var where []string
+	var args []any
+	add := func(cond string, v any) {
+		args = append(args, v)
+		where = append(where, fmt.Sprintf(cond, len(args)))
+	}
+	where = append(where, "g.kind = 'full'", "g.started_at IS NOT NULL")
+	if f.Owner != nil {
+		add("g.chat_id IN (SELECT id FROM chats WHERE owner = $%d)", *f.Owner)
+	}
+	if f.ChatID != "" {
+		add("g.chat_id = $%d::uuid", f.ChatID)
+	}
+	if f.GrantID > 0 {
+		add("g.id = $%d", f.GrantID)
+	}
+	if !f.Since.IsZero() {
+		add("g.started_at >= $%d", f.Since)
+	}
+	if !f.Until.IsZero() {
+		add("g.started_at < $%d", f.Until)
+	}
+	rows, err := s.pool.Query(ctx, `SELECT g.id, g.chat_id::text, g.bytes - COALESCE((SELECT sum(w.bytes_up + w.bytes_down) FROM web_requests w WHERE w.grant_id = g.id), 0)
+		FROM internet_grants g WHERE `+strings.Join(where, " AND ")+` ORDER BY g.id DESC LIMIT 200`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []UnlistedBytes{}
+	for rows.Next() {
+		var u UnlistedBytes
+		if err := rows.Scan(&u.GrantID, &u.ChatID, &u.Bytes); err != nil {
+			return nil, err
+		}
+		if u.Bytes > 0 {
+			out = append(out, u)
+		}
+	}
+	return out, rows.Err()
+}
+
+// RootStrings lists the packages the agent asked for in the canonical form ("pip:torch==2.5.1"); empty for other
+// kinds. (The stored column holds the roots; the API replaces it by the package states.)
+func (g Grant) RootStrings() []string {
+	out := []string{}
+	var roots []netgrant.PkgRoot
+	if json.Unmarshal(g.Packages, &roots) == nil {
+		for _, r := range roots {
+			if r.Name != "" {
+				out = append(out, r.String())
+			}
+		}
+	}
+	return out
+}
+
+// ActivityGrant describes the grant an internet entry of the activity belongs to.
+type ActivityGrant struct {
+	ID          int64      `json:"id"`
+	Kind        string     `json:"kind"`
+	Domains     []string   `json:"domains"`
+	Packages    []string   `json:"packages"`
+	Bytes       int64      `json:"bytes"`
+	MaxBytes    int64      `json:"max_bytes"`
+	State       string     `json:"state"`
+	Origin      string     `json:"origin"`
+	StartedAt   *time.Time `json:"started_at,omitempty"`
+	ExpiresAt   *time.Time `json:"expires_at,omitempty"`
+	EndedAt     *time.Time `json:"ended_at,omitempty"`
+	EndedReason string     `json:"ended_reason,omitempty"`
+}
+
+func activityGrantOf(g Grant) *ActivityGrant {
+	d := g.Domains
+	if d == nil {
+		d = []string{}
+	}
+	return &ActivityGrant{ID: g.ID, Kind: g.Kind, Domains: d, Packages: g.RootStrings(), Bytes: g.Bytes, MaxBytes: g.MaxBytes, State: g.State,
+		Origin: g.Origin, StartedAt: g.StartedAt, ExpiresAt: g.ExpiresAt, EndedAt: g.EndedAt, EndedReason: g.EndedReason}
 }

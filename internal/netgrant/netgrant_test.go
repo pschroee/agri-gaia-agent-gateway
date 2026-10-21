@@ -171,10 +171,10 @@ func TestDecideOrigins(t *testing.T) {
 		{"domains, listed, case and dot", []Active{domains}, OriginExec, "Download.TensorFlow.org.", 443, true, 2, Domains, ""},
 		{"domains, listed, http", []Active{domains}, OriginExec, "download.tensorflow.org", 80, false, 2, "", "only https is allowed for listed domains"},
 		{"domains, listed, other port", []Active{domains}, OriginExec, "download.tensorflow.org", 8443, false, 2, "", "only https"},
-		{"domains, not listed", []Active{domains}, OriginExec, "github.com", 443, false, 2, "", `github.com is not in the allowed list of this chat; ask for it with agw-internet domains github.com "<reason>"`},
-		{"domains, subdomain is not listed", []Active{domains}, OriginExec, "x.download.tensorflow.org", 443, false, 2, "", "not in the allowed list"},
-		{"domains, IP literal", []Active{domains}, OriginPi, "93.184.216.34", 443, false, 2, "", "not in the allowed list"},
-		{"domains, searx", []Active{domains}, OriginPi, "searxng", 8080, false, 2, "", "not in the allowed list"},
+		{"domains, not listed", []Active{domains}, OriginExec, "github.com", 443, false, 0, "", `github.com is not in the allowed list of this chat; ask for it with agw-internet domains github.com "<reason>"`},
+		{"domains, subdomain is not listed", []Active{domains}, OriginExec, "x.download.tensorflow.org", 443, false, 0, "", "not in the allowed list"},
+		{"domains, IP literal", []Active{domains}, OriginPi, "93.184.216.34", 443, false, 0, "", "IP addresses are not allowed"},
+		{"domains, searx", []Active{domains}, OriginPi, "searxng", 8080, false, 0, "", "not in the allowed list"},
 
 		{"full, sandbox", []Active{full}, OriginExec, "anything.example.org", 443, true, 3, Full, ""},
 		{"full, pi, searx", []Active{full}, OriginPi, "searxng", 8080, true, 3, Full, ""},
@@ -186,12 +186,15 @@ func TestDecideOrigins(t *testing.T) {
 		{"search + domains, listed host, https", []Active{search, domains}, OriginPi, "download.tensorflow.org", 443, true, 2, Domains, ""},
 		{"search + domains, unlisted, pi", []Active{search, domains}, OriginPi, "other.example.org", 443, true, 1, Search, ""},
 		{"search + domains, unlisted, sandbox", []Active{search, domains}, OriginExec, "other.example.org", 443, false, 1, "", "not commands"},
-		{"package gate, search only", []Active{search}, OriginPkg, "pypi.org", 443, false, 1, "", "not in the allowed list"},
+		{"package gate, search only", []Active{search}, OriginPkg, "pypi.org", 443, false, 0, "", "not in the allowed list"},
 	}
 	for _, tc := range cases {
 		d := Decide(tc.grants, tc.o, tc.host, tc.port)
 		if d.Allow != tc.allow || d.GrantID != tc.id || d.Kind != tc.kind || !strings.Contains(d.Reason, tc.reason) {
 			t.Errorf("%s: %+v, want allow=%v grant=%d kind=%q reason~%q", tc.name, d, tc.allow, tc.id, tc.kind, tc.reason)
+		}
+		if !tc.allow && d.Code == "" {
+			t.Errorf("%s: a refusal carries a code", tc.name)
 		}
 		if !tc.allow && !strings.HasPrefix(d.Reason, "blocked: ") && d.Reason != MsgNoChat {
 			t.Errorf("%s: a refusal starts with \"blocked: \": %q", tc.name, d.Reason)

@@ -69,6 +69,12 @@ type Request struct {
 	// Origin: pi, exec or pkg. ToolCallID: the tool call a command of the sandbox belongs to (empty: unknown).
 	Origin     string
 	ToolCallID string
+	// Reason: code of the refusal (netgrant.Code…); Service: search for our SearXNG.
+	Reason, Service string
+	// Package, Version, Parent: package gate rows (pkggate uses this type for its log).
+	Package, Version, Parent string
+	// Aggregate: the row joins the collapsed row of its grant, origin, host and service.
+	Aggregate bool
 }
 
 // SearxHost is the name under which pi addresses our own SearXNG service (SEARXNG_URL).
@@ -139,8 +145,8 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if p.ToolCallOf != nil {
 		rec.ToolCallID = p.ToolCallOf(r)
 	}
-	deny := func(code int, why string) {
-		rec.Status, rec.Denied, rec.DurationMs = code, why, time.Since(start).Milliseconds()
+	deny := func(code int, why, reason string) {
+		rec.Status, rec.Denied, rec.Reason, rec.DurationMs = code, why, reason, time.Since(start).Milliseconds()
 		if chat != "" {
 			p.Gate.RecordWeb(rec)
 		}
@@ -148,17 +154,17 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, why, code)
 	}
 	if chat == "" {
-		deny(http.StatusForbidden, netgrant.MsgNoChat)
+		deny(http.StatusForbidden, netgrant.MsgNoChat, netgrant.CodeUnassigned)
 		return
 	}
 	if host == "" {
 		// Decide first, so that a refusal for a chat without access names the missing access, not the missing host.
 		if d := p.Gate.Decide(chat, p.origin(), "", port); !d.Allow {
 			rec.GrantID = d.GrantID
-			deny(http.StatusForbidden, d.Reason)
+			deny(http.StatusForbidden, d.Reason, d.Code)
 			return
 		}
-		deny(http.StatusBadRequest, "no target host")
+		deny(http.StatusBadRequest, "no target host", netgrant.CodeBadRequest)
 		return
 	}
 	// The grants speak of port 80 and 443; the ports of a test proxy (HTTPPort, HTTPSPort) map to them.
@@ -171,7 +177,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	dec := p.Gate.Decide(chat, p.origin(), host, dport)
 	rec.GrantID = dec.GrantID
 	if !dec.Allow {
-		deny(http.StatusForbidden, dec.Reason)
+		deny(http.StatusForbidden, dec.Reason, dec.Code)
 		return
 	}
 	// still reports whether the grant that allowed the request still holds (an ended grant or an exceeded data
@@ -185,12 +191,15 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return p.Gate.Still(chat, dec.GrantID)
 	}
 	if ok, why := still(); !ok {
-		deny(http.StatusForbidden, netgrant.MsgGrantEnded(dec.GrantID, why))
+		// The grant ended between the decision and now: no grant is involved any more.
+		rec.GrantID = 0
+		deny(http.StatusForbidden, netgrant.MsgGrantEnded(dec.GrantID, why), netgrant.CodeAccessEnded)
 		return
 	}
 	if strings.EqualFold(host, SearxHost) {
+		rec.Service = "search"
 		if p.Searx == nil {
-			deny(http.StatusServiceUnavailable, "search service not configured")
+			deny(http.StatusServiceUnavailable, "search service not configured", netgrant.CodeUpstream)
 			return
 		}
 		// With NODE_USE_ENV_PROXY Node tunnels plain HTTP through CONNECT as well.
@@ -205,16 +214,16 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodConnect {
 		// Port 443 for HTTPS, 80 for HTTP, which Node also tunnels through CONNECT.
 		if port != httpsPort && port != httpPort {
-			deny(http.StatusForbidden, "only ports 80 and 443 are allowed")
+			deny(http.StatusForbidden, "only ports 80 and 443 are allowed", netgrant.CodePortNotAllowed)
 			return
 		}
 	} else if r.URL.Scheme != "http" || port != httpPort {
-		deny(http.StatusForbidden, "only http on port 80 or https on port 443 is allowed")
+		deny(http.StatusForbidden, "only http on port 80 or https on port 443 is allowed", netgrant.CodePortNotAllowed)
 		return
 	}
 	ip, err := p.publicIP(r.Context(), host)
 	if err != nil {
-		deny(http.StatusForbidden, err.Error())
+		deny(http.StatusForbidden, err.Error(), netgrant.CodeNotPublic)
 		return
 	}
 	addr := net.JoinHostPort(ip.String(), strconv.Itoa(port))
@@ -448,7 +457,7 @@ func (p *Proxy) tunnel(w http.ResponseWriter, r *http.Request, rec *Request, add
 	count := func(n int64) { p.Gate.Count(o.grant, n) }
 	dst, err := (&net.Dialer{Timeout: DialTimout}).DialContext(r.Context(), "tcp", addr)
 	if err != nil {
-		rec.Status, rec.Denied = http.StatusBadGateway, "upstream not reachable"
+		rec.Status, rec.Denied, rec.Reason = http.StatusBadGateway, "upstream not reachable", netgrant.CodeUpstream
 		rec.DurationMs = time.Since(rec.StartedAt).Milliseconds()
 		p.Gate.RecordWeb(*rec)
 		http.Error(w, "upstream not reachable", http.StatusBadGateway)
@@ -488,7 +497,7 @@ func (p *Proxy) tunnel(w http.ResponseWriter, r *http.Request, rec *Request, add
 			why = netgrant.MsgSNIMismatch(sni, o.sniHost)
 		}
 		if why != "" {
-			rec.Status, rec.Denied, rec.DurationMs = http.StatusForbidden, why, time.Since(rec.StartedAt).Milliseconds()
+			rec.Status, rec.Denied, rec.Reason, rec.DurationMs = http.StatusForbidden, why, netgrant.CodeSNIMismatch, time.Since(rec.StartedAt).Milliseconds()
 			p.Gate.RecordWeb(*rec)
 			slog.Warn("web proxy: tunnel refused", "chat", rec.ChatID, "target", rec.Host, "reason", why)
 			src.Close()
@@ -550,6 +559,7 @@ func (p *Proxy) tunnel(w http.ResponseWriter, r *http.Request, rec *Request, add
 	if revoked.Load() {
 		why, _ := revokedWhy.Load().(string)
 		rec.Denied = "tunnel closed: " + strings.TrimPrefix(netgrant.MsgGrantEnded(o.grant, why), "blocked: ")
+		rec.Reason = netgrant.CodeAccessEnded
 		slog.Info("web proxy: tunnel closed, grant over", "chat", rec.ChatID, "target", rec.Host, "grant", o.grant, "why", why)
 	}
 	rec.BytesUp, rec.BytesDown = up.Load(), down.Load()

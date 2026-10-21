@@ -7,6 +7,7 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 )
@@ -95,7 +96,7 @@ func TestGrantPackages(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := s.MarkInstalled(ctx, g.ID, "pip", "torch"); err != nil {
+	if err := s.MarkInstalled(ctx, g.ID, "pip", "torch", "2.5.1"); err != nil {
 		t.Fatal(err)
 	}
 	list, err := s.GrantPackages(ctx, g.ID)
@@ -209,5 +210,69 @@ func TestWebConnectionsFilter(t *testing.T) {
 	}
 	if rows, _ = s.WebConnections(ctx, WebConnectionFilter{Owner: &u1, Before: rows[1].ID}); len(rows) != 1 {
 		t.Fatalf("before: %+v", rows)
+	}
+}
+
+// Index calls of the package gate join one collapsed row per grant, origin, host and service; refused ones stay single;
+// the refusal counter of a chat counts a collapsed row with its count; the summary and the unlisted bytes of a full
+// grant follow the filter.
+func TestIndexAggregateBlockedAndSummary(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	mine, _ := s.CreateChat(ctx, NewChat{Title: "mine", Model: "m", Variant: "cli", Owner: "u1"})
+	now := time.Now()
+	g, _ := s.CreateGrant(ctx, Grant{ChatID: mine.ID, Kind: "packages", Origin: GrantByAgent, State: GrantActive, MaxMinutes: 60, MaxBytes: 4000 << 20, StartedAt: &now})
+	idx := func(denied string) WebRequest {
+		return WebRequest{ChatID: mine.ID, Method: "GET", Host: "pypi.org", Port: 443, Status: 200, Denied: denied, StartedAt: now, GrantID: g.ID,
+			Origin: "pkg", Service: "index", Aggregate: true, BytesDown: 100, Package: "torch"}
+	}
+	a, _ := s.AddWebRequest(ctx, idx(""))
+	b, _ := s.AddWebRequest(ctx, idx(""))
+	c, _ := s.AddWebRequest(ctx, idx(""))
+	if a != b || b != c {
+		t.Fatalf("index calls are one row: %d %d %d", a, b, c)
+	}
+	d, _ := s.AddWebRequest(ctx, idx("blocked: x"))
+	if d == a {
+		t.Fatal("a refused index call is listed on its own")
+	}
+	rows, _ := s.GrantWebRequests(ctx, mine.ID, g.ID)
+	if len(rows) != 2 || rows[0].Count != 3 || rows[0].BytesDown != 300 || rows[0].Method != CollapsedMethod || rows[0].Service != "index" || rows[1].Reason != "" {
+		t.Fatalf("rows: %+v", rows)
+	}
+	// Refusals: one without a grant, with a code.
+	if _, err := s.AddWebRequest(ctx, WebRequest{ChatID: mine.ID, Method: "CONNECT", Host: "github.com", Port: 443, Status: 403, Denied: "blocked: y", Reason: "not_listed",
+		StartedAt: now.Add(time.Second), Origin: "exec"}); err != nil {
+		t.Fatal(err)
+	}
+	n, last, err := s.ChatBlocked(ctx, mine.ID, now.Add(-time.Minute), 3)
+	if err != nil || n != 2 || len(last) != 2 || last[0].Host != "github.com" || last[0].Reason != "not_listed" {
+		t.Fatalf("blocked: %d %+v %v", n, last, err)
+	}
+	if n, _, _ = s.ChatBlocked(ctx, mine.ID, now.Add(time.Hour), 3); n != 0 {
+		t.Fatalf("window: %d", n)
+	}
+	u1 := "u1"
+	sum, total, err := s.WebConnectionsSummary(ctx, WebConnectionFilter{Owner: &u1})
+	if err != nil || total != 3 || sum.Count != 5 || sum.Blocked != 2 || sum.BytesDown != 400 {
+		t.Fatalf("summary: %+v total %d %v", sum, total, err)
+	}
+	// A full grant that moved more than its listed connections shows the rest.
+	f, _ := s.CreateGrant(ctx, Grant{ChatID: mine.ID, Kind: "full", Origin: GrantByUser, State: GrantActive, MaxMinutes: 30, MaxBytes: 1 << 20, StartedAt: &now})
+	if err := s.SetGrantBytes(ctx, f.ID, 5000); err != nil {
+		t.Fatal(err)
+	}
+	s.AddWebRequest(ctx, WebRequest{ChatID: mine.ID, Method: "CONNECT", Host: "a.example.org", Port: 443, Status: 200, StartedAt: now, GrantID: f.ID, Origin: "exec", BytesDown: 1200, BytesUp: 300})
+	un, err := s.FullGrantsUnlisted(ctx, WebConnectionFilter{Owner: &u1})
+	if err != nil || len(un) != 1 || un[0].GrantID != f.ID || un[0].Bytes != 3500 {
+		t.Fatalf("unlisted: %+v %v", un, err)
+	}
+	// Activity entries find their grant by the detail.
+	if _, err := s.AddSocketCall(ctx, SocketCall{SlotID: "s", ChatID: mine.ID, Via: "gateway", Op: "internet_end", Detail: fmt.Sprintf("grant %d full", f.ID), Result: "time"}); err != nil {
+		t.Fatal(err)
+	}
+	page, err := s.ListActivity(ctx, ActivityFilter{Kind: KindInternet, Owner: &u1})
+	if err != nil || len(page.Calls) != 1 || page.Calls[0].Grant == nil || page.Calls[0].Grant.ID != f.ID || page.Calls[0].Grant.Kind != "full" {
+		t.Fatalf("activity: %+v %v", page.Calls, err)
 	}
 }

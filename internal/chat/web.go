@@ -18,7 +18,8 @@ func (m *Manager) InternetOn(ctx context.Context, chatID string) bool {
 func webRow(r webproxy.Request) store.WebRequest {
 	return store.WebRequest{ChatID: r.ChatID, SlotID: r.SlotID, SourceIP: r.SourceIP, Method: r.Method, Host: r.Host, Port: r.Port,
 		Path: r.Path, Status: r.Status, BytesUp: r.BytesUp, BytesDown: r.BytesDown, Denied: r.Denied, StartedAt: r.StartedAt, DurationMs: r.DurationMs,
-		GrantID: r.GrantID, Origin: r.Origin, ToolCallID: r.ToolCallID}
+		GrantID: r.GrantID, Origin: r.Origin, ToolCallID: r.ToolCallID, Reason: r.Reason, Service: r.Service,
+		Package: r.Package, Version: r.Version, Parent: r.Parent, Aggregate: r.Aggregate, Count: 1}
 }
 
 // RecordWeb stores a request at the web proxy (webproxy.Gate) and reports it to the UI. A refusal counts on the
@@ -32,13 +33,17 @@ func (m *Manager) RecordWeb(r webproxy.Request) int64 {
 	}
 	wr.ID = id
 	m.publish(r.ChatID, Event{Kind: "web_request", Data: wr})
-	if r.Denied != "" && r.GrantID > 0 {
-		if l := m.grants.get(r.GrantID); l != nil {
-			l.blocked.Add(1)
+	if r.Denied != "" {
+		if r.GrantID > 0 {
+			if l := m.grants.get(r.GrantID); l != nil {
+				l.blocked.Add(1)
+			}
+			if err := m.st.BumpBlocked(context.Background(), r.GrantID); err != nil {
+				slog.Warn("blocked count not stored", "grant", r.GrantID, "err", err)
+			}
 		}
-		if err := m.st.BumpBlocked(context.Background(), r.GrantID); err != nil {
-			slog.Warn("blocked count not stored", "grant", r.GrantID, "err", err)
-		}
+		// Every refusal counts at the chat, with or without a grant (issue #175, G2).
+		m.publishBlocked(r.ChatID)
 	}
 	return id
 }
