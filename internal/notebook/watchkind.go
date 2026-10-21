@@ -78,6 +78,7 @@ func (n *Notebooks) poll(ctx context.Context, j watch.Job, _ watch.Reader) (watc
 		return watch.Progress{}, err
 	}
 	p := watch.Progress{State: info.State, Message: runMessage(info), Outputs: runOutputs(info), Link: info.Link}
+	p.RunStartedAt, p.RunEndedAt = markerTime(info.ownStart), markerTime(info.ownEnd)
 	if info.State != StateRunning {
 		pct := 100.0
 		p.Percent = &pct
@@ -226,4 +227,16 @@ func runOutputs(info RunInfo) []watch.Output {
 			Size: f.Bytes})
 	}
 	return out
+}
+
+// markerTime parses a marker of the starter; an empty or unreadable value is nil (issue #203).
+func markerTime(v string) *time.Time {
+	if v == "" {
+		return nil
+	}
+	t, err := time.Parse(time.RFC3339, v)
+	if err != nil {
+		return nil
+	}
+	return &t
 }

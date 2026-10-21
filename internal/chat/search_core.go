@@ -158,7 +158,8 @@ func (m *Manager) publishTrial(ctx context.Context, chatID, trialID string) {
 }
 
 // trialView adds the duration, the expected end (from the observed job), the name and the link to a trial. The
-// duration of a single trial is the run time of its job, the figure the run card shows too.
+// duration is the run's own time (markers of its starter) when the job has it, else the job's times for a
+// single trial, else the trial's own times; the run card counts the same way.
 func (m *Manager) trialView(ctx context.Context, t store.Trial, jobs map[string]store.WatchJob) TrialView {
 	v := TrialView{Trial: t}
 	if t.StartedAt != nil {
@@ -180,7 +181,16 @@ func (m *Manager) trialView(ctx context.Context, t store.Trial, jobs map[string]
 		if t.State == store.TrialRunning && job.State == watch.StateRunning {
 			v.ETA = job.ETA
 		}
-		if t.SearchID == "" && !job.StartedAt.IsZero() {
+		if job.RunStartedAt != nil {
+			// The run's own clock (issue #203): the same two instants as the job line and the run card.
+			end := time.Now()
+			if job.RunEndedAt != nil {
+				end = *job.RunEndedAt
+			} else if job.EndedAt != nil {
+				end = *job.EndedAt
+			}
+			v.DurationS = end.Sub(*job.RunStartedAt).Seconds()
+		} else if t.SearchID == "" && !job.StartedAt.IsZero() {
 			end := time.Now()
 			if job.EndedAt != nil {
 				end = *job.EndedAt

@@ -76,6 +76,8 @@ type RunInfo struct {
 	GPU string `json:"gpu,omitempty"`
 	// Note carries what the store alone cannot say, e.g. that the server is gone.
 	Note string `json:"note,omitempty"`
+	// ownStart and ownEnd are the starter's markers as written (issue #203); not part of the JSON.
+	ownStart, ownEnd string
 }
 
 // RunFile is one file in the run directory, as find reports it.
@@ -292,9 +294,11 @@ func applyRun(info *RunInfo, row store.NotebookRun) {
 func applyMarkers(info *RunInfo, m markers) {
 	if m.Started != "" {
 		info.StartedAt = m.Started
+		info.ownStart = m.Started
 	}
 	if m.Finished != "" {
 		info.FinishedAt = m.Finished
+		info.ownEnd = m.Finished
 	}
 	if m.ExitCode != nil {
 		info.ExitCode = m.ExitCode
