@@ -17,22 +17,65 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"agw/internal/netgrant"
 )
 
+// gate is a fake manager: attribution, a set of active grants decided by netgrant.Decide, a byte counter per
+// grant and the log.
 type gate struct {
 	mu       sync.Mutex
-	internet bool
 	known    bool
+	grants   []netgrant.Active
+	ended    string // non-empty: Still reports the grant over for this reason
+	maxBytes int64  // 0: no limit
+	counted  int64
 	recs     []Request
 }
 
-func (g *gate) WebAccess(string) (string, string, bool) {
+func full() []netgrant.Active { return []netgrant.Active{{ID: 1, Kind: netgrant.Full}} }
+func domains(hosts ...string) []netgrant.Active {
+	return []netgrant.Active{{ID: 1, Kind: netgrant.Domains, Domains: hosts}}
+}
+func search() []netgrant.Active { return []netgrant.Active{{ID: 1, Kind: netgrant.Search}} }
+
+func (g *gate) Attribute(string) (string, string) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if !g.known {
-		return "", "", false
+		return "", ""
 	}
-	return "chat-1", "p-1", g.internet
+	return "chat-1", "p-1"
+}
+
+func (g *gate) Decide(_ string, o netgrant.Origin, host string, port int) netgrant.Decision {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return netgrant.Decide(g.grants, o, host, port)
+}
+
+func (g *gate) Still(_ string, grant int64) (bool, string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.ended != "" {
+		return false, g.ended
+	}
+	if g.maxBytes > 0 && g.counted >= g.maxBytes {
+		return false, "data limit"
+	}
+	return true, ""
+}
+
+func (g *gate) Count(_, n int64) {
+	g.mu.Lock()
+	g.counted += n
+	g.mu.Unlock()
+}
+
+func (g *gate) setGrants(a []netgrant.Active) {
+	g.mu.Lock()
+	g.grants = a
+	g.mu.Unlock()
 }
 
 func (g *gate) RecordWeb(r Request) int64 {
@@ -63,8 +106,8 @@ func portOf(t *testing.T, raw string) int {
 }
 
 // setup: proxy in front of an HTTP and an HTTPS target on 127.0.0.1, which counts as public in the
-// tests; "internal.test" points to 10.0.0.5, "target.test" to the target.
-func setup(t *testing.T, g *gate) (client *http.Client, target, tlsTarget *httptest.Server, searx *httptest.Server) {
+// tests; "internal.test" points to 10.0.0.5, "target.test" and "other.test" to the target.
+func setup(t *testing.T, g *gate, opts ...func(*Proxy)) (client *http.Client, target, tlsTarget *httptest.Server, searx *httptest.Server) {
 	t.Helper()
 	target = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, "hello from "+r.Host+r.URL.Path)
@@ -79,18 +122,26 @@ func setup(t *testing.T, g *gate) (client *http.Client, target, tlsTarget *httpt
 		Allow: func(ip net.IP) bool { return ip.IsLoopback() },
 		Lookup: func(_ context.Context, host string) ([]net.IPAddr, error) {
 			switch host {
-			case "target.test":
+			case "target.test", "other.test":
 				return []net.IPAddr{{IP: net.ParseIP("127.0.0.1")}}, nil
 			case "internal.test":
 				return []net.IPAddr{{IP: net.ParseIP("10.0.0.5")}}, nil
 			}
 			return nil, &net.DNSError{Err: "no such host", Name: host}
 		}}
+	for _, o := range opts {
+		o(p)
+	}
 	ps := httptest.NewServer(p)
 	t.Cleanup(ps.Close)
 	pu, _ := url.Parse(ps.URL)
 	client = &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(pu), TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}}
 	return
+}
+
+func proxyHost(c *http.Client) string {
+	u, _ := c.Transport.(*http.Transport).Proxy(&http.Request{URL: &url.URL{Scheme: "https", Host: "x"}})
+	return u.Host
 }
 
 func TestGate(t *testing.T) {
@@ -106,7 +157,7 @@ func TestGate(t *testing.T) {
 	g.known = true
 	resp, err := c.Get(u)
 	if err != nil || resp.StatusCode != 403 {
-		t.Fatalf("internet off: %v %v", resp, err)
+		t.Fatalf("no grant: %v %v", resp, err)
 	}
 	if b, _ := io.ReadAll(resp.Body); !strings.Contains(string(b), "internet access is off") || g.last().Denied == "" {
 		t.Fatalf("reason: %q %+v", b, g.last())
@@ -114,7 +165,7 @@ func TestGate(t *testing.T) {
 }
 
 func TestForwardAndBlock(t *testing.T) {
-	g := &gate{known: true, internet: true}
+	g := &gate{known: true, grants: full()}
 	c, target, tlsTarget, _ := setup(t, g)
 	port := strconv.Itoa(portOf(t, target.URL))
 	resp, err := c.Get("http://target.test:" + port + "/page")
@@ -125,8 +176,11 @@ func TestForwardAndBlock(t *testing.T) {
 	if string(b) != "hello from target.test:"+port+"/page" {
 		t.Fatalf("response: %q", b)
 	}
-	if r := g.last(); r.Host != "target.test" || r.Status != 200 || r.BytesDown == 0 || r.Path != "/page" || r.Denied != "" {
+	if r := g.last(); r.Host != "target.test" || r.Status != 200 || r.BytesDown == 0 || r.Path != "/page" || r.Denied != "" || r.GrantID != 1 || r.Origin != "pi" {
 		t.Fatalf("log: %+v", r)
+	}
+	if g.counted == 0 {
+		t.Fatal("bytes not counted on the grant")
 	}
 	// HTTPS through CONNECT
 	resp, err = c.Get("https://target.test:" + strconv.Itoa(portOf(t, tlsTarget.URL)) + "/")
@@ -153,15 +207,13 @@ func TestForwardAndBlock(t *testing.T) {
 
 // With NODE_USE_ENV_PROXY Node also tunnels HTTP through CONNECT: to SearXNG and to port 80.
 func TestConnectForHTTP(t *testing.T) {
-	g := &gate{known: true, internet: true}
+	g := &gate{known: true, grants: full()}
 	c, target, _, _ := setup(t, g)
-	pu := c.Transport.(*http.Transport).Proxy
-	proxyURL, _ := pu(&http.Request{URL: &url.URL{Scheme: "https", Host: "x"}})
 	for _, tc := range []struct{ host, want string }{
 		{"searxng:8080", `"q":"tunnel"`},
 		{"target.test:" + strconv.Itoa(portOf(t, target.URL)), "hello from"},
 	} {
-		conn, err := net.Dial("tcp", proxyURL.Host)
+		conn, err := net.Dial("tcp", proxyHost(c))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -181,7 +233,7 @@ func TestConnectForHTTP(t *testing.T) {
 }
 
 func TestSearxng(t *testing.T) {
-	g := &gate{known: true, internet: true}
+	g := &gate{known: true, grants: full()}
 	c, _, _, _ := setup(t, g)
 	resp, err := c.Get("http://searxng:8080/search?q=pig&format=json")
 	if err != nil || resp.StatusCode != 200 {
@@ -191,10 +243,17 @@ func TestSearxng(t *testing.T) {
 	if !strings.Contains(string(b), `"q":"pig"`) {
 		t.Fatalf("response: %q", b)
 	}
-	// Without internet no search either.
-	g.mu.Lock()
-	g.internet = false
-	g.mu.Unlock()
+	// A search grant covers the search service too.
+	g.setGrants(search())
+	if resp, _ := c.Get("http://searxng:8080/search?q=x"); resp.StatusCode != 200 {
+		t.Fatalf("search grant: %d", resp.StatusCode)
+	}
+	// A domains grant does not cover web_search, and without a grant there is no search either.
+	g.setGrants(domains("target.test"))
+	if resp, _ := c.Get("http://searxng:8080/search?q=x"); resp.StatusCode != 403 {
+		t.Fatalf("search with a domains grant: %d", resp.StatusCode)
+	}
+	g.setGrants(nil)
 	if resp, _ := c.Get("http://searxng:8080/search?q=x"); resp.StatusCode != 403 {
 		t.Fatalf("search without internet: %d", resp.StatusCode)
 	}
@@ -214,37 +273,219 @@ func TestPublic(t *testing.T) {
 	}
 }
 
-// An open tunnel closes as soon as the chat no longer has internet.
-func TestTunnelClosedWhenInternetOff(t *testing.T) {
-	old := RecheckEvery
-	RecheckEvery = 50 * time.Millisecond
-	defer func() { RecheckEvery = old }()
-	g := &gate{known: true, internet: true}
-	c, target, _, _ := setup(t, g)
-	proxyURL, _ := c.Transport.(*http.Transport).Proxy(&http.Request{URL: &url.URL{Scheme: "https", Host: "x"}})
-	host := "target.test:" + strconv.Itoa(portOf(t, target.URL))
-	conn, err := net.Dial("tcp", proxyURL.Host)
+// connect opens a tunnel through the proxy to host:port.
+func connect(t *testing.T, c *http.Client, hostport string) (net.Conn, *bufio.Reader, *http.Response) {
+	t.Helper()
+	conn, err := net.Dial("tcp", proxyHost(c))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer conn.Close()
-	fmt.Fprintf(conn, "CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", host, host)
+	t.Cleanup(func() { conn.Close() })
+	fmt.Fprintf(conn, "CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", hostport, hostport)
 	br := bufio.NewReader(conn)
-	if resp, err := http.ReadResponse(br, &http.Request{Method: "CONNECT"}); err != nil || resp.StatusCode != 200 {
-		t.Fatalf("CONNECT: %v %v", resp, err)
+	resp, err := http.ReadResponse(br, &http.Request{Method: "CONNECT"})
+	if err != nil {
+		t.Fatalf("CONNECT %s: %v", hostport, err)
+	}
+	return conn, br, resp
+}
+
+// An open tunnel closes as soon as its grant ends, and the log says which grant and why.
+func TestGrantEndClosesTunnel(t *testing.T) {
+	old := RecheckEvery
+	RecheckEvery = 50 * time.Millisecond
+	defer func() { RecheckEvery = old }()
+	g := &gate{known: true, grants: full()}
+	c, target, _, _ := setup(t, g)
+	conn, br, resp := connect(t, c, "target.test:"+strconv.Itoa(portOf(t, target.URL)))
+	if resp.StatusCode != 200 {
+		t.Fatalf("CONNECT: %v", resp)
 	}
 	g.mu.Lock()
-	g.internet = false
+	g.ended = "switched off"
 	g.mu.Unlock()
 	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
 	if _, err := br.ReadByte(); err == nil || errors.Is(err, os.ErrDeadlineExceeded) {
 		t.Fatalf("tunnel not closed: %v", err)
 	}
 	deadline := time.Now().Add(2 * time.Second)
-	for !strings.Contains(g.last().Denied, "internet switched off") {
+	for !strings.Contains(g.last().Denied, "grant 1 ended (switched off)") {
 		if time.Now().After(deadline) {
 			t.Fatalf("log: %+v", g.last())
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// The data limit of a grant closes a tunnel in the middle of a transfer: the bytes of both directions count.
+func TestProxyByteLimitClosesTunnel(t *testing.T) {
+	old := RecheckEvery
+	RecheckEvery = 300 * time.Millisecond // long enough for the response to pass before the tunnel closes
+	defer func() { RecheckEvery = old }()
+	g := &gate{known: true, grants: full(), maxBytes: 100}
+	c, target, _, _ := setup(t, g)
+	hp := "target.test:" + strconv.Itoa(portOf(t, target.URL))
+	conn, br, resp := connect(t, c, hp)
+	if resp.StatusCode != 200 {
+		t.Fatalf("CONNECT: %v", resp)
+	}
+	fmt.Fprintf(conn, "GET /%s HTTP/1.1\r\nHost: %s\r\n\r\n", strings.Repeat("a", 200), hp) // keep-alive: the tunnel stays open
+	r, err := http.ReadResponse(br, nil)
+	if err != nil {
+		t.Fatalf("response: %v", err)
+	}
+	_, _ = io.Copy(io.Discard, r.Body)
+	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	if _, err := br.ReadByte(); err == nil || errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("tunnel not closed at the data limit: %v", err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for !strings.Contains(g.last().Denied, "data limit") {
+		if time.Now().After(deadline) {
+			t.Fatalf("log: %+v", g.last())
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	// A new connection is refused as well, with the reason.
+	_, _, resp2 := connect(t, c, hp)
+	if resp2.StatusCode != 403 {
+		t.Fatalf("after the limit: %d", resp2.StatusCode)
+	}
+}
+
+// tlsThrough opens a tunnel to the TLS target and starts a handshake with the given server name.
+func tlsThrough(t *testing.T, c *http.Client, tlsTarget *httptest.Server, host, serverName string) (*tls.Conn, error) {
+	t.Helper()
+	conn, br, resp := connect(t, c, host+":"+strconv.Itoa(portOf(t, tlsTarget.URL)))
+	if resp.StatusCode != 200 {
+		t.Fatalf("CONNECT: %v", resp)
+	}
+	_ = br
+	tc := tls.Client(conn, &tls.Config{ServerName: serverName, InsecureSkipVerify: true})
+	_ = conn.SetDeadline(time.Now().Add(3 * time.Second))
+	return tc, tc.Handshake()
+}
+
+// A domains grant lets a tunnel through only if the TLS server name is the host of CONNECT (SNI = CONNECT host).
+func TestProxyDomainsSNIMismatch(t *testing.T) {
+	g := &gate{known: true, grants: domains("target.test")}
+	c, _, tlsTarget, _ := setup(t, g)
+
+	// The matching name: the handshake works and the request goes through.
+	tc, err := tlsThrough(t, c, tlsTarget, "target.test", "target.test")
+	if err != nil {
+		t.Fatalf("matching SNI: %v", err)
+	}
+	fmt.Fprintf(tc, "GET / HTTP/1.1\r\nHost: target.test\r\nConnection: close\r\n\r\n")
+	body, _ := io.ReadAll(tc)
+	if !strings.Contains(string(body), "secure") {
+		t.Fatalf("body: %q", body)
+	}
+	if r := g.last(); r.Denied != "" || r.GrantID != 1 {
+		t.Fatalf("log of the allowed tunnel: %+v", r)
+	}
+	// Case and a trailing dot do not matter.
+	if _, err := tlsThrough(t, c, tlsTarget, "target.test", "TARGET.test."); err != nil {
+		t.Fatalf("SNI case: %v", err)
+	}
+
+	// Another name: the tunnel is closed, the row is denied and names both.
+	if _, err := tlsThrough(t, c, tlsTarget, "target.test", "other.test"); err == nil {
+		t.Fatal("handshake with a foreign server name succeeded")
+	}
+	if r := g.last(); !strings.Contains(r.Denied, "TLS server name other.test does not match target.test") || r.Status != 403 {
+		t.Fatalf("log: %+v", r)
+	}
+	// No name at all (an IP address as server name sends none): refused.
+	if _, err := tlsThrough(t, c, tlsTarget, "target.test", ""); err == nil {
+		t.Fatal("handshake without a server name succeeded")
+	}
+	if r := g.last(); !strings.Contains(r.Denied, "no TLS server name") {
+		t.Fatalf("log: %+v", r)
+	}
+}
+
+// A grant with the full kind does not look at the server name.
+func TestProxyFullIgnoresSNI(t *testing.T) {
+	g := &gate{known: true, grants: full()}
+	c, _, tlsTarget, _ := setup(t, g)
+	if _, err := tlsThrough(t, c, tlsTarget, "target.test", "other.test"); err != nil {
+		t.Fatalf("full: %v", err)
+	}
+}
+
+// A domains grant is https only; a host that is not listed is refused with the way to ask for it.
+func TestProxyDomainsHTTPRefused(t *testing.T) {
+	g := &gate{known: true, grants: domains("target.test")}
+	c, target, _, _ := setup(t, g)
+	port := strconv.Itoa(portOf(t, target.URL))
+	resp, err := c.Get("http://target.test:" + port + "/")
+	if err != nil || resp.StatusCode != 403 {
+		t.Fatalf("http to a listed host: %v %v", resp, err)
+	}
+	if b, _ := io.ReadAll(resp.Body); !strings.Contains(string(b), "only https is allowed for listed domains") {
+		t.Fatalf("reason: %q", b)
+	}
+	// CONNECT to port 80 of the listed host is plain http as well.
+	_, _, r := connect(t, c, "target.test:"+port)
+	if r.StatusCode != 403 {
+		t.Fatalf("CONNECT to port 80: %d", r.StatusCode)
+	}
+	// Not listed.
+	resp, err = c.Get("http://other.test:" + port + "/")
+	if err != nil || resp.StatusCode != 403 {
+		t.Fatalf("not listed: %v %v", resp, err)
+	}
+	b, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(b), `other.test is not in the allowed list of this chat; ask for it with agw-internet domains other.test`) {
+		t.Fatalf("reason: %q", b)
+	}
+	if r := g.last(); r.GrantID != 1 || r.Denied == "" {
+		t.Fatalf("a refusal counts on the governing grant: %+v", r)
+	}
+}
+
+// Commands of the sandbox (origin exec) are not covered by a search grant; pi's tools are.
+func TestProxyOriginExecSearchRefused(t *testing.T) {
+	g := &gate{known: true, grants: search()}
+	c, target, _, _ := setup(t, g, func(p *Proxy) { p.Origin = netgrant.OriginExec })
+	resp, err := c.Get("http://target.test:" + strconv.Itoa(portOf(t, target.URL)) + "/")
+	if err != nil || resp.StatusCode != 403 {
+		t.Fatalf("exec with a search grant: %v %v", resp, err)
+	}
+	if b, _ := io.ReadAll(resp.Body); !strings.Contains(string(b), "search-only access covers web_search and web_extract, not commands") {
+		t.Fatalf("reason: %q", b)
+	}
+	if r := g.last(); r.Origin != "exec" {
+		t.Fatalf("origin: %+v", r)
+	}
+}
+
+// A redirect is passed on, not followed: the proxy returns the 302 and never contacts the target of it.
+func TestProxyDoesNotFollowRedirects(t *testing.T) {
+	var mu sync.Mutex
+	hits := 0
+	elsewhere := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		hits++
+		mu.Unlock()
+	}))
+	defer elsewhere.Close()
+	redirecting := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, elsewhere.URL, http.StatusFound)
+	}))
+	defer redirecting.Close()
+	g := &gate{known: true, grants: full()}
+	// The redirecting server plays the plain-http target: its port is the proxy's "port 80".
+	c, _, _, _ := setup(t, g, func(p *Proxy) { p.HTTPPort = portOf(t, redirecting.URL) })
+	c.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	resp, err := c.Get("http://target.test:" + strconv.Itoa(portOf(t, redirecting.URL)) + "/")
+	if err != nil || resp.StatusCode != http.StatusFound {
+		t.Fatalf("redirect: %v %v", resp, err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if hits != 0 {
+		t.Fatal("the proxy followed the redirect")
 	}
 }

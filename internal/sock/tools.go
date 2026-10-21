@@ -13,7 +13,7 @@ package sock
 //	POST /tool/bg/start  bash with run_in_background: start a background task, immediate response
 //	POST /tool/bg/output bg_output: state and tail of the output of a background task
 //	POST /tool/bg/stop   bg_stop: end a background task
-//	GET  /tool/internet  web-gate.ts: is internet on? (shows or hides web_search and web_extract)
+//	GET  /tool/internet  web-gate.ts: which web tools do the grants cover? (shows or hides web_search and web_extract)
 //	POST /internet       request_internet of the REST binding (api.ts), waits for confirmation
 //	POST /internet/off   disable_internet of the REST binding (api.ts), no confirmation
 //
@@ -614,14 +614,20 @@ func withToolCallEnv(env map[string]string, id, session string) map[string]strin
 	return out
 }
 
-// InternetStater reports a chat's internet switch (manager). The extension web-gate.ts in pi
+// InternetStater reports whether a chat has any internet grant (manager). The extension web-gate.ts in pi
 // uses it to show and hide web_search and web_extract.
 type InternetStater interface {
 	InternetOn(ctx context.Context, chatID string) bool
 }
 
-// internetState: GET /tool/internet → {"enabled": bool}. The switch is enforced at the web proxy;
-// this only controls whether the tools are offered to the model.
+// InternetToolStater tells which of the web tools the chat's grants cover (issue #175): web_search needs a search
+// or full grant, web_extract a search, domains or full grant.
+type InternetToolStater interface {
+	InternetState(chatID string) (enabled, search, extract bool)
+}
+
+// internetState: GET /tool/internet → {"enabled": bool, "search": bool, "extract": bool}. The grants are enforced
+// at the web proxy; this only controls whether the tools are offered to the model.
 //
 // A freshly started slot asks once before it is assigned (web-gate.ts on session_start). That is
 // expected and answered quietly, without a log entry: a slot without a chat has no internet, so the
@@ -632,11 +638,16 @@ func (th *toolHandler) internetState(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "slot not assigned"})
 		return
 	}
-	on := false
-	if s, ok := th.b.(InternetStater); ok {
+	var on, search, extract bool
+	switch s := th.b.(type) {
+	case InternetToolStater:
+		on, search, extract = s.InternetState(chat)
+	case InternetStater:
+		// A backend that only knows the switch: both tools, as before issue #175.
 		on = s.InternetOn(r.Context(), chat)
+		search, extract = on, on
 	}
-	writeJSON(w, http.StatusOK, map[string]bool{"enabled": on})
+	writeJSON(w, http.StatusOK, map[string]bool{"enabled": on, "search": search, "extract": extract})
 }
 
 // upload: mcp_upload_artifact names a path; the file is in the execution sandbox. The orchestrator reads it there

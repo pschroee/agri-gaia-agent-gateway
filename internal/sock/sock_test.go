@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"agw/internal/netgrant"
 	"agw/internal/store"
 )
 
@@ -33,6 +34,11 @@ type fakeBackend struct {
 	sess    []string // sessions at upload and internet (store.SessionFrom)
 	// internetOn is the chat's switch for DisableInternet.
 	internetOn bool
+	// specs: the internet requests that arrived (issue #175); offGrants: the grant ids of the "off" calls;
+	// grants: what GET /internet lists.
+	specs     []netgrant.Spec
+	offGrants []int64
+	grants    []store.Grant
 }
 
 func (f *fakeBackend) ChatForSlot(string) string {
@@ -64,21 +70,27 @@ func (f *fakeBackend) OpenArtifact(_ context.Context, chatID, kind, name string)
 	return io.NopCloser(strings.NewReader(v)), int64(len(v)), nil
 }
 
-func (f *fakeBackend) RequestInternet(ctx context.Context, chatID, slotID, via, reason string) (UploadResult, error) {
+func (f *fakeBackend) RequestInternet(ctx context.Context, chatID, slotID, via string, spec netgrant.Spec) (UploadResult, error) {
 	f.mu.Lock()
 	f.sess = append(f.sess, store.SessionFrom(ctx))
 	f.mu.Unlock()
 	f.mu.Lock()
-	f.uploads = append(f.uploads, "internet|"+chatID+"|"+via+"|"+reason)
+	f.uploads = append(f.uploads, "internet|"+chatID+"|"+via+"|"+spec.Reason)
+	f.specs = append(f.specs, spec)
 	f.mu.Unlock()
 	return UploadResult{Status: f.decide, Name: "internet", Message: "x"}, nil
 }
 
-func (f *fakeBackend) DisableInternet(ctx context.Context, chatID, slotID, via string) (UploadResult, error) {
+func (f *fakeBackend) ActiveGrantViews(chatID string) []store.Grant {
+	return f.grants
+}
+
+func (f *fakeBackend) DisableInternet(ctx context.Context, chatID, slotID, via string, grantID int64) (UploadResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.sess = append(f.sess, store.SessionFrom(ctx))
 	f.uploads = append(f.uploads, "internet_off|"+chatID+"|"+via)
+	f.offGrants = append(f.offGrants, grantID)
 	if !f.internetOn {
 		return UploadResult{Status: InternetAlreadyOff, Name: "internet", Message: "internet access was already off"}, nil
 	}

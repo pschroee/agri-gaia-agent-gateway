@@ -5,8 +5,9 @@
 //	POST /artifacts?name=N   send a file to the user: stored as an artifact at once, no confirmation
 //	GET  /artifacts          artifacts of the chat
 //	GET  /artifacts/{name}   download (?kind=input|output)
-//	POST /internet           request internet access, waits for confirmation
-//	POST /internet/off       switch internet access off (no confirmation, idempotent)
+//	POST /internet           request internet access of one kind (search, domains, packages, full), waits for confirmation
+//	GET  /internet           the chat's active internet grants
+//	POST /internet/off       end one grant or all (no confirmation, idempotent)
 //	POST /platform/{tool}    tool of the platform binding (agw-platform); writing calls need confirmation
 //	POST /mcp                MCP (Streamable HTTP, stateless)
 package sock
@@ -33,6 +34,7 @@ import (
 	"agw/internal/artifacts"
 	"agw/internal/delegation"
 	"agw/internal/execproto"
+	"agw/internal/netgrant"
 	"agw/internal/platform"
 	"agw/internal/store"
 
@@ -66,10 +68,11 @@ type Backend interface {
 	Upload(ctx context.Context, chatID, slotID, via, name string, size int64, sha string, body io.Reader) (UploadResult, error)
 	ListArtifacts(ctx context.Context, chatID string) ([]store.Artifact, error)
 	OpenArtifact(ctx context.Context, chatID, kind, name string) (io.ReadCloser, int64, error)
-	RequestInternet(ctx context.Context, chatID, slotID, via, reason string) (UploadResult, error)
-	// DisableInternet switches the chat's internet off without approval (it only removes a right);
-	// status InternetOff or InternetAlreadyOff.
-	DisableInternet(ctx context.Context, chatID, slotID, via string) (UploadResult, error)
+	// RequestInternet asks the user for one internet grant (issue #175); status approved, rejected or refused.
+	RequestInternet(ctx context.Context, chatID, slotID, via string, spec netgrant.Spec) (UploadResult, error)
+	// DisableInternet ends one grant (grantID > 0) or all grants of the chat without approval (it only removes a
+	// right); status InternetOff or InternetAlreadyOff.
+	DisableInternet(ctx context.Context, chatID, slotID, via string, grantID int64) (UploadResult, error)
 	LogCall(slotID, chatID, via, op, detail, result string)
 }
 
@@ -101,6 +104,12 @@ type PlatformPrechecker interface {
 	PlatformPrecheck(ctx context.Context, chatID string, req platform.Request) (platform.Result, bool)
 }
 
+// InternetStatusBackend lists a chat's active internet grants with their counters (GET /internet); a backend that
+// does not implement it answers with an empty list.
+type InternetStatusBackend interface {
+	ActiveGrantViews(chatID string) []store.Grant
+}
+
 // Statuses of DisableInternet.
 const (
 	InternetOff        = "off"
@@ -124,6 +133,12 @@ type handler struct {
 }
 
 // maxReason limits the reason of an internet request already at the socket.
+// RequestInternetDescription is the text of the tool request_internet (MCP and the REST binding): the agent reads it
+// before it acts, so the rules are in the description (issue #175). The command line also knows packages and full.
+const RequestInternetDescription = "Asks the user for internet access, only as much as the task needs. kind: search (web_search and web_extract only), " +
+	"domains (https downloads from the listed host names, no wildcards). Give a short, concrete reason; the call waits for the user's decision. " +
+	"Access ends by itself after a time or data limit; switch it off earlier with disable_internet."
+
 const maxReason = 500
 
 func truncReason(s string) string {
@@ -166,6 +181,7 @@ func NewHandlerRunFg(slotID string, b Backend, maxBytes int64, run ToolRunner, f
 	mux.HandleFunc("GET /artifacts", h.list)
 	mux.HandleFunc("GET /artifacts/{name}", h.get)
 	mux.HandleFunc("POST /internet", h.internet)
+	mux.HandleFunc("GET /internet", h.internetStatus)
 	mux.HandleFunc("POST /internet/off", h.internetOff)
 	mux.HandleFunc("POST /platform/{tool}", h.platform)
 	mux.Handle("/mcp", h.mcp)
@@ -388,19 +404,42 @@ func (h *handler) restVia() string {
 	return h.apiVia
 }
 
+// internetRequest is the body of POST /internet.
+type internetRequest struct {
+	Kind      string   `json:"kind"`
+	Reason    string   `json:"reason"`
+	Domains   []string `json:"domains"`
+	Packages  []string `json:"packages"`
+	Minutes   int      `json:"minutes"`
+	Megabytes int      `json:"megabytes"`
+}
+
+func (r internetRequest) spec() netgrant.Spec {
+	return netgrant.Spec{Kind: netgrant.Kind(r.Kind), Reason: truncReason(r.Reason), Domains: r.Domains, Packages: r.Packages, Minutes: r.Minutes, MB: r.Megabytes}
+}
+
+// kindError is the answer to a request without a valid kind: the old form (reason only) would otherwise silently
+// become full access.
+func kindError() string {
+	return "kind is required: one of " + netgrant.KindList() + " (search: web_search and web_extract only; domains: https to listed hosts; packages: pip and npm; full: everything)"
+}
+
 func (h *handler) internet(w http.ResponseWriter, r *http.Request) {
 	via := h.restVia()
-	var req struct {
-		Reason string `json:"reason"`
-	}
-	_ = json.NewDecoder(io.LimitReader(r.Body, 8<<10)).Decode(&req)
+	var req internetRequest
+	_ = json.NewDecoder(io.LimitReader(r.Body, 16<<10)).Decode(&req)
 	req.Reason = truncReason(req.Reason)
+	if _, ok := netgrant.ParseKind(req.Kind); !ok {
+		h.b.LogCall(h.slot, h.b.ChatForSlot(h.slot), via, "internet", req.Reason, "refused: no valid kind")
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": kindError()})
+		return
+	}
 	chat, err := h.chat(via, "internet", req.Reason)
 	if err != nil {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "not assigned"})
 		return
 	}
-	res, err := h.doInternet(h.callerCtx(r), chat, via, req.Reason)
+	res, err := h.doInternet(h.callerCtx(r), chat, via, req.spec())
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -408,8 +447,8 @@ func (h *handler) internet(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, res)
 }
 
-func (h *handler) doInternet(ctx context.Context, chat, via, reason string) (UploadResult, error) {
-	res, err := h.b.RequestInternet(ctx, chat, h.slot, via, reason)
+func (h *handler) doInternet(ctx context.Context, chat, via string, spec netgrant.Spec) (UploadResult, error) {
+	res, err := h.b.RequestInternet(ctx, chat, h.slot, via, spec)
 	result := res.Status
 	if res.Log != "" {
 		result = res.Log
@@ -417,19 +456,39 @@ func (h *handler) doInternet(ctx context.Context, chat, via, reason string) (Upl
 	if err != nil {
 		result = "error: " + err.Error()
 	}
-	h.logCall(ctx, chat, via, "internet", reason, result)
+	h.logCall(ctx, chat, via, "internet", spec.Reason, result)
 	return res, err
 }
 
-// internetOff: POST /internet/off switches the chat's internet off. No body, no approval.
+// internetStatus: GET /internet lists the chat's active grants (agw-internet status).
+func (h *handler) internetStatus(w http.ResponseWriter, r *http.Request) {
+	chat := h.b.ChatForSlot(h.slot)
+	if chat == "" {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "not assigned"})
+		return
+	}
+	grants := []store.Grant{}
+	if sb, ok := h.b.(InternetStatusBackend); ok {
+		if g := sb.ActiveGrantViews(chat); g != nil {
+			grants = g
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"grants": grants})
+}
+
+// internetOff: POST /internet/off ends one grant ({"grant_id": n}) or all (no body). No approval.
 func (h *handler) internetOff(w http.ResponseWriter, r *http.Request) {
 	via := h.restVia()
+	var req struct {
+		GrantID int64 `json:"grant_id"`
+	}
+	_ = json.NewDecoder(io.LimitReader(r.Body, 1<<10)).Decode(&req)
 	chat, err := h.chat(via, "internet_off", "")
 	if err != nil {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "not assigned"})
 		return
 	}
-	res, err := h.doInternetOff(h.callerCtx(r), chat, via)
+	res, err := h.doInternetOff(h.callerCtx(r), chat, via, req.GrantID)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -463,14 +522,19 @@ func (h *handler) subagentRelayResult(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
-// doInternetOff switches internet off and logs the call (op internet_off, result "off" or "already off").
-func (h *handler) doInternetOff(ctx context.Context, chat, via string) (UploadResult, error) {
-	res, err := h.b.DisableInternet(ctx, chat, h.slot, via)
+// doInternetOff ends internet grants and logs the call (op internet_off, result "off" or "already off"; detail the
+// grant id when one was named).
+func (h *handler) doInternetOff(ctx context.Context, chat, via string, grantID int64) (UploadResult, error) {
+	res, err := h.b.DisableInternet(ctx, chat, h.slot, via, grantID)
 	result := strings.ReplaceAll(res.Status, "_", " ")
 	if err != nil {
 		result = "error: " + err.Error()
 	}
-	h.logCall(ctx, chat, via, "internet_off", "", result)
+	detail := ""
+	if grantID > 0 {
+		detail = fmt.Sprintf("grant %d", grantID)
+	}
+	h.logCall(ctx, chat, via, "internet_off", detail, result)
 	return res, err
 }
 
@@ -741,9 +805,15 @@ func (h *handler) get(w http.ResponseWriter, r *http.Request) {
 
 type pingIn struct{}
 type listIn struct{}
-type internetOffIn struct{}
+type internetOffIn struct {
+	GrantID int64 `json:"grant_id,omitempty" jsonschema:"the grant to switch off; omit to switch all of this chat's internet access off"`
+}
 type internetIn struct {
-	Reason string `json:"reason" jsonschema:"Reason for the user: what is internet needed for?"`
+	Kind      string   `json:"kind" jsonschema:"search (web_search and web_extract only) or domains (https downloads from the listed host names)"`
+	Reason    string   `json:"reason" jsonschema:"short, concrete reason for the user: what is the access needed for?"`
+	Domains   []string `json:"domains,omitempty" jsonschema:"kind domains: exact host names, no wildcards, at most 10"`
+	Minutes   int      `json:"minutes,omitempty" jsonschema:"proposed duration in minutes; the gateway limits it"`
+	Megabytes int      `json:"megabytes,omitempty" jsonschema:"proposed data limit in MB; the gateway limits it"`
 }
 
 type uploadIn struct {
@@ -807,29 +877,36 @@ func (h *handler) mcpServer() *mcp.Server {
 			}
 			return textResult(res.Status != UploadStored, "%s", UploadResultText(res)), nil, nil
 		})
-	mcp.AddTool(s, &mcp.Tool{Name: "request_internet", Description: "Asks the user for internet access for this sandbox (off by default). Call it with a reason; the call waits for the user's decision."},
+	mcp.AddTool(s, &mcp.Tool{Name: "request_internet", Description: RequestInternetDescription},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in internetIn) (*mcp.CallToolResult, any, error) {
 			in.Reason = truncReason(in.Reason)
+			if _, ok := netgrant.ParseKind(in.Kind); !ok {
+				h.b.LogCall(h.slot, h.b.ChatForSlot(h.slot), "mcp", "internet", in.Reason, "refused: no valid kind")
+				return textResult(true, "refused: %s", kindError()), nil, nil
+			}
 			chat, err := h.chat("mcp", "internet", in.Reason)
 			if err != nil {
 				return textResult(true, "error: %v", err), nil, nil
 			}
-			res, err := h.doInternet(ctx, chat, "mcp", in.Reason)
+			res, err := h.doInternet(ctx, chat, "mcp", internetRequest{Kind: in.Kind, Reason: in.Reason, Domains: in.Domains, Minutes: in.Minutes, Megabytes: in.Megabytes}.spec())
 			if err != nil {
 				return textResult(true, "error: %v", err), nil, nil
 			}
-			if res.Status == "approved" {
+			switch res.Status {
+			case "approved":
 				return textResult(false, "approved: %s", res.Message), nil, nil
+			case "refused":
+				return textResult(false, "refused: %s", res.Message), nil, nil
 			}
 			return textResult(false, "rejected: %s", res.Message), nil, nil
 		})
-	mcp.AddTool(s, &mcp.Tool{Name: "disable_internet", Description: "Switches internet access for this sandbox off again, e.g. once downloads or web research are done. Needs no approval; if internet is already off, nothing changes."},
-		func(ctx context.Context, _ *mcp.CallToolRequest, _ internetOffIn) (*mcp.CallToolResult, any, error) {
+	mcp.AddTool(s, &mcp.Tool{Name: "disable_internet", Description: "Ends internet access for this chat again (all grants, or the one named by grant_id), e.g. once downloads or web research are done. Needs no approval; if nothing is active, nothing changes."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in internetOffIn) (*mcp.CallToolResult, any, error) {
 			chat, err := h.chat("mcp", "internet_off", "")
 			if err != nil {
 				return textResult(true, "error: %v", err), nil, nil
 			}
-			res, err := h.doInternetOff(ctx, chat, "mcp")
+			res, err := h.doInternetOff(ctx, chat, "mcp", in.GrantID)
 			if err != nil {
 				return textResult(true, "error: %v", err), nil, nil
 			}

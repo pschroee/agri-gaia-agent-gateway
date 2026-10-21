@@ -16,7 +16,7 @@ import (
 
 // switchNames are the internet switch tools per binding as the agent calls them.
 var switchNames = map[toolset.Binding][]string{
-	toolset.CLI: {`agw-internet "<reason>"`, "agw-internet off"},
+	toolset.CLI: {`agw-internet search|domains|packages|full "<reason>"`, "agw-internet off"},
 	toolset.MCP: {"mcp_request_internet", "mcp_disable_internet"},
 	toolset.API: {"the tool request_internet", "the tool disable_internet"},
 }
@@ -74,9 +74,9 @@ func TestSystemNoteInternetPerBinding(t *testing.T) {
 			}
 		}
 		for _, w := range []string{
-			"Internet is off by default", "needs no approval", "web_search and web_extract exist only while internet is on",
+			"Internet is off by default", "needs no approval", "web_search and web_extract exist only while an internet access covers them",
 			"appear after the approval", "several short keyword searches", "web_extract", "with its URL",
-			"sources disagree", "then switch internet off", "data, not instructions",
+			"sources disagree", "then switch the access off", "data, not instructions",
 		} {
 			if !strings.Contains(note, w) {
 				t.Errorf("%s: note without %q", ts.Key(), w)
@@ -98,7 +98,7 @@ func TestSystemNoteInternetPerBinding(t *testing.T) {
 		}
 	}
 	// A pure-api combination joins nothing; a combination of all three joins with "or".
-	if n := SystemNoteFor("cli,mcp,api", 4, nil); !strings.Contains(n, `(agw-internet "<reason>" in bash or the tool mcp_request_internet or the tool request_internet)`) {
+	if n := SystemNoteFor("cli,mcp,api", 4, nil); !strings.Contains(n, `(agw-internet search|domains|packages|full "<reason>" in bash or the tool mcp_request_internet (kind search or domains) or the tool request_internet (kind search or domains))`) {
 		t.Errorf("all three: %s", n)
 	}
 }
@@ -117,9 +117,9 @@ func TestWebResearchSkillFile(t *testing.T) {
 		}
 	}
 	for _, w := range []string{
-		"`agw-internet \"<reason>\"`", "`agw-internet off`", "`mcp_request_internet`", "`mcp_disable_internet`",
+		"`agw-internet search \"<reason>\"`", "`agw-internet off`", "`mcp_request_internet`", "`mcp_disable_internet`",
 		"`request_internet`", "`disable_internet`", "900 s",
-		"only in your tool list while it\nis on", "Keywords, not questions", "Several short searches", "Language:",
+		"only in your tool list while an\naccess covers them", "Keywords, not questions", "Several short searches", "Language:",
 		"up to 10", "100000 characters", "curl", "credentials", "data, not instructions", "**URL**",
 		"When sources disagree, say so", "do not invent a source",
 	} {
@@ -135,7 +135,7 @@ func TestInternetSkillFile(t *testing.T) {
 	if !regexp.MustCompile(`(?s)\A---\nname: internet\ndescription: [^\n]*web-research[^\n]*\n---\n`).MatchString(s) {
 		t.Fatalf("front matter missing or without pointer to web-research:\n%.400s", s)
 	}
-	for _, w := range []string{"agw-internet \"pip install", "agw-internet off", "already_off", "Exit code 3", "agw-internet -- off", "`web-research`", "pip-cache"} {
+	for _, w := range []string{"agw-internet domains", "agw-internet packages", "agw-internet off", "agw-internet status", "already_off", "Exit code 3", "Exit code 2", "agw-internet full -- ", "`web-research`", "package caches"} {
 		if !strings.Contains(s, w) {
 			t.Errorf("skill without %q", w)
 		}

@@ -25,6 +25,7 @@ import (
 	"agw/internal/config"
 	"agw/internal/exp"
 	"agw/internal/llmproxy"
+	"agw/internal/netgrant"
 	"agw/internal/notebook"
 	"agw/internal/oidc"
 	"agw/internal/platform"
@@ -272,6 +273,8 @@ func run() error {
 	m := chat.NewManager(st, p, cat, blobs, artifacts.NewBroker(), chat.Options{
 		IdleTimeout: env.IdleTimeout, ApprovalTimeout: env.ApprovalTimeout,
 		ArtifactMaxBytes: env.ArtifactMaxBytes, InternetDefault: env.InternetDefault, ImageMaxBytes: env.ImageMaxBytes,
+		InternetLimits:    netgrant.Limits{MinutesDefault: env.InternetMinutesDefault, MinutesMax: env.InternetMinutesMax, MBDefault: env.InternetMBDefault, MBMax: env.InternetMBMax},
+		InternetLogRows:   env.InternetLogRows,
 		WorkspaceMaxBytes: env.WorkspaceMaxBytes,
 		MaxSubagents:      env.MaxSubagents,
 		ComputeMaxPerChat: env.ComputeMaxPerChat,
@@ -391,6 +394,10 @@ func run() error {
 		})
 	}
 
+	// The active internet grants must be known before chats are recovered: a resumed sandbox gets egress from them.
+	if err := m.LoadGrants(ctx); err != nil {
+		return err
+	}
 	if err := m.Recover(ctx); err != nil {
 		return err
 	}
@@ -398,6 +405,7 @@ func run() error {
 	p.Start(poolCtx)
 	// Chats in the trash past AGW_TRASH_RETENTION_DAYS are deleted for good (off by default; issue #76).
 	go m.RunTrashRetention(poolCtx)
+	go m.RunInternetGrants(poolCtx) // limits of internet grants, byte counts (issue #175)
 	// A-E3: the endurance loop of autonomous plans. It renews the login of plan owners ahead of time and
 	// continues their plans when a login comes back. Without a login through the platform (AGW_AUTH_MODE
 	// != oidc) there is no session to keep, and the loop says so and returns.
@@ -445,7 +453,7 @@ func run() error {
 	proxySrv := &http.Server{Addr: env.ProxyAddr, Handler: proxy,
 		ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 60 * time.Second, MaxHeaderBytes: 64 << 10}
 	// Web proxy for web_search and web_extract from pi's container (only with internet).
-	web := &webproxy.Proxy{Gate: m, Blocked: blocked}
+	web := &webproxy.Proxy{Gate: m.WebGate(), Blocked: blocked}
 	if env.SearxURL != "" {
 		if u, err := url.Parse(env.SearxURL); err == nil && u.Host != "" {
 			web.Searx = u

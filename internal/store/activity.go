@@ -50,18 +50,23 @@ var ActivityKinds = []string{KindPlatform, KindInternet, KindAll}
 const OpInternetUser = "internet_set"
 
 // internetSQL describes an internet entry: action, origin and result. Request results: approved, already_on
-// (internet was on, no approval), expired (no decision in time), rejected, error; switch-off by the agent: off,
+// (the access was already granted, no approval), expired (no decision in time), rejected, refused (the gateway
+// refused the request, issue #175), error; the end of a grant (op internet_end, action end): the result is the
+// reason, time, bytes, installed, user or agent, and the origin user, agent or system; switch-off by the agent: off,
 // already_off, error; the user's switch: on, off, already_on, already_off, error. Older entries logged an expired
 // request as "rejected"; with a tool call its approval tells (ap.state).
-const internetSQL = `CASE sc.op WHEN 'internet' THEN 'request' WHEN 'internet_off' THEN 'off' ELSE 'switch' END,
-	CASE WHEN sc.op = 'internet_set' THEN 'user' ELSE 'agent' END,
+const internetSQL = `CASE sc.op WHEN 'internet' THEN 'request' WHEN 'internet_off' THEN 'off' WHEN 'internet_end' THEN 'end' ELSE 'switch' END,
+	CASE WHEN sc.op = 'internet_set' OR (sc.op = 'internet_end' AND sc.result = 'user') THEN 'user'
+		WHEN sc.op = 'internet_end' AND sc.result <> 'agent' THEN 'system' ELSE 'agent' END,
 	CASE sc.op
 	WHEN 'internet' THEN CASE
 		WHEN sc.result LIKE 'approved%' THEN 'approved'
 		WHEN sc.result LIKE 'already on%' THEN 'already_on'
 		WHEN sc.result LIKE 'expired%' OR (sc.result LIKE 'rejected%' AND ap.state = 'expired') THEN 'expired'
 		WHEN sc.result LIKE 'rejected%' THEN 'rejected'
+		WHEN sc.result LIKE 'refused%' THEN 'refused'
 		ELSE 'error' END
+	WHEN 'internet_end' THEN sc.result
 	ELSE CASE
 		WHEN sc.result IN ('on', 'off') THEN sc.result
 		WHEN sc.result IN ('already on', 'already off') THEN replace(sc.result, ' ', '_')
@@ -96,9 +101,10 @@ type ActivityApproval struct {
 
 // ActivityInternet describes an internet entry (kind internet).
 type ActivityInternet struct {
-	// Action: request (the agent asked, with approval), off (the agent switched off), switch (the user's switch).
+	// Action: request (the agent asked, with approval), off (the agent switched off), switch (the user's switch),
+	// end (a grant ended, issue #175).
 	Action string `json:"action"`
-	// Origin: agent (main agent or subagent, see session) or user.
+	// Origin: agent (main agent or subagent, see session), user, or system (a grant ended by itself).
 	Origin string `json:"origin"`
 	// Result: approved, already_on, rejected, expired, on, off, already_off or error (see internetSQL).
 	Result string `json:"result"`
@@ -204,9 +210,9 @@ func (s *Store) ListActivity(ctx context.Context, f ActivityFilter) (ActivityPag
 	ops := "sc.op IN ('platform', 'summary_read')"
 	switch f.Kind {
 	case KindInternet:
-		ops = "sc.op IN ('internet', 'internet_off', 'internet_set')"
+		ops = "sc.op IN ('internet', 'internet_off', 'internet_set', 'internet_end')"
 	case KindAll:
-		ops = "sc.op IN ('platform', 'summary_read', 'internet', 'internet_off', 'internet_set')"
+		ops = "sc.op IN ('platform', 'summary_read', 'internet', 'internet_off', 'internet_set', 'internet_end')"
 	}
 	where := append([]string{ops, "(sc.chat_id IS NOT NULL OR sc.deleted_chat IS NOT NULL)"}, activityWhere(f, "sc", activityOwner, &args)...)
 	if f.Outcome != "" {

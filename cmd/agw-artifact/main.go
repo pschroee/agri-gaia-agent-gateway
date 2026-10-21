@@ -19,6 +19,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -30,6 +31,9 @@ const defaultSocket = "/run/agw/agw.sock"
 // Exit codes: 0 approved/successful, 1 error, 3 rejected by the user (internet, platform writes),
 // 4 outside the delegated rights, 5 the capability is not part of this setup (G1.13).
 const exitRejected = 3
+
+// exitUsage: wrong usage, or a request the gateway refused (issue #175).
+const exitUsage = 2
 
 func main() {
 	socket := os.Getenv("AGW_SOCKET")
@@ -97,8 +101,8 @@ func usage() {
   agw-artifact upload <file> [--name <name>]    send a file inside /workspace to the user (shown in the chat at once)
   agw-artifact list                             list the artifacts of this chat
   agw-artifact get <name> [-o <file>]           download an artifact (user inputs: --kind input)
-  agw-internet "<reason>"                       request internet access; waits for the user
-  agw-internet off                              switch internet access off again (no approval)
+  agw-internet search|domains|packages|full …   request internet access of one kind; waits for the user (agw-internet --help)
+  agw-internet status | off [<grant id>]        list the grants / end them (no approval)
   agw-platform <command> …                      Agri-Gaia platform (agw-platform --help)
 
 Exit code for upload: 0 sent, 1 not sent (error).
@@ -209,68 +213,166 @@ func parseUploadArgs(args []string) (file, name string, err error) {
 // workspace is the directory files are sent from; tests replace it (no environment variable, so the agent cannot).
 var workspace = execproto.Workspace
 
-const internetHelp = `agw-internet "<reason>"   asks the user for internet access and waits for the decision.
-                          Exit code: 0 granted, 3 rejected, 1 error.
-agw-internet off          switches internet access off again; needs no approval and succeeds
-                          also when it is already off. Exit code: 0 off, 1 error.
-agw-internet -- <reason>  requests with a reason that is literally "off" or starts with "-".
+const internetHelp = `agw-internet asks the user for exactly the internet access a command needs and waits for the decision.
+Ask for the narrowest kind; the user sees the kind, the list and the limits and approves exactly that.
+
+  agw-internet search "<reason>"                          web_search and web_extract only (no commands)
+  agw-internet domains <host[,host…]> "<reason>" [--minutes N] [--mb N]
+                                                          https to exactly these host names (no wildcards,
+                                                          at most 10); a redirect to another host is blocked
+                                                          until you ask for that host too
+  agw-internet packages <pip:name[==ver]|npm:name[@ver][,…]> "<reason>"
+                                                          pip and npm packages, ends when they are installed
+  agw-internet full "<reason>" [--minutes N] [--mb N]     everything, as the last resort
+  agw-internet status                                     list the active grants with their limits
+  agw-internet off [<grant id>]                           end one grant or all (no approval)
+
+Time and data are limited: the gateway clamps --minutes and --mb to its bounds (defaults 30 min, 500 MB).
+Use -- before a reason that starts with "-".
+Exit code: 0 granted, 1 error, 2 wrong usage or refused by the gateway, 3 rejected by the user.
 `
 
 // Actions of agw-internet.
 const (
 	internetRequest = "request"
 	internetOff     = "off"
+	internetStatus  = "status"
 	internetHelpCmd = "help"
 )
 
-// parseInternetArgs decides between request and switching off. "off" as the only argument (any case,
-// surrounding spaces ignored) switches off; everything after "--" is a reason, so a reason that is
-// literally "off" can still be given. "off" with further arguments is refused instead of guessed: it
-// could be meant either way.
-func parseInternetArgs(args []string) (action, reason string, err error) {
-	if len(args) > 0 && args[0] == "--" {
-		reason = strings.TrimSpace(strings.Join(args[1:], " "))
-		if reason == "" {
-			return "", "", errors.New("no reason given after --")
-		}
-		return internetRequest, reason, nil
-	}
-	if len(args) == 0 {
-		return "", "", errors.New("no reason given")
-	}
-	first := strings.TrimSpace(args[0])
-	switch {
-	case len(args) == 1 && (first == "-h" || first == "--help"):
-		return internetHelpCmd, "", nil
-	case strings.EqualFold(first, internetOff):
-		if len(args) > 1 {
-			return "", "", errors.New(`"off" takes no further arguments; to request internet with a reason starting with "off", use: agw-internet -- <reason>`)
-		}
-		return internetOff, "", nil
-	}
-	reason = strings.TrimSpace(strings.Join(args, " "))
-	if reason == "" {
-		return "", "", errors.New("no reason given")
-	}
-	return internetRequest, reason, nil
+// internetCmd is a parsed agw-internet command line.
+type internetCmd struct {
+	Action   string
+	Kind     string
+	Reason   string
+	Domains  []string
+	Packages []string
+	Minutes  int
+	MB       int
+	GrantID  int64
 }
 
-// internet asks the user for internet access and waits for the decision, or switches it off.
+var internetKinds = []string{"search", "domains", "packages", "full"}
+
+// errOldForm is the answer to the form before issue #175, which asked for everything: it would become full access
+// silently, so it is refused (exit code 2).
+var errOldForm = errors.New(`the first argument must be one of search, domains, packages, full, status, off (the old form agw-internet "<reason>" is gone: ask for the narrowest kind, e.g. agw-internet domains download.example.org "<reason>")`)
+
+// parseInternetArgs reads a command line: a kind with its list and a reason, status, off [<grant id>] or help.
+// --minutes and --mb may stand anywhere; everything after "--" is the reason.
+func parseInternetArgs(args []string) (internetCmd, error) {
+	var c internetCmd
+	if len(args) == 0 {
+		return c, errors.New("no kind given: " + strings.Join(internetKinds, ", "))
+	}
+	first := strings.ToLower(strings.TrimSpace(args[0]))
+	rest := args[1:]
+	switch first {
+	case "-h", "--help", "help":
+		c.Action = internetHelpCmd
+		return c, nil
+	case "status":
+		if len(rest) > 0 {
+			return c, errors.New(`"status" takes no arguments`)
+		}
+		c.Action = internetStatus
+		return c, nil
+	case "off":
+		c.Action = internetOff
+		switch len(rest) {
+		case 0:
+		case 1:
+			n, err := strconv.ParseInt(strings.TrimSpace(rest[0]), 10, 64)
+			if err != nil || n < 1 {
+				return c, errors.New(`"off" takes an optional grant id (a positive number)`)
+			}
+			c.GrantID = n
+		default:
+			return c, errors.New(`"off" takes at most one argument, a grant id`)
+		}
+		return c, nil
+	case "search", "domains", "packages", "full":
+		c.Action, c.Kind = internetRequest, first
+	default:
+		return c, errOldForm
+	}
+	// Flags and words. After "--" every word belongs to the reason.
+	var words []string
+	for i := 0; i < len(rest); i++ {
+		w := rest[i]
+		if w == "--" {
+			words = append(words, rest[i+1:]...)
+			break
+		}
+		name, val, hasVal := strings.Cut(w, "=")
+		if name == "--minutes" || name == "--mb" {
+			if !hasVal {
+				if i+1 >= len(rest) {
+					return c, fmt.Errorf("%s needs a number", name)
+				}
+				i++
+				val = rest[i]
+			}
+			n, err := strconv.Atoi(strings.TrimSpace(val))
+			if err != nil || n < 1 {
+				return c, fmt.Errorf("%s needs a positive number", name)
+			}
+			if name == "--minutes" {
+				c.Minutes = n
+			} else {
+				c.MB = n
+			}
+			continue
+		}
+		words = append(words, w)
+	}
+	switch c.Kind {
+	case "domains", "packages":
+		if len(words) == 0 {
+			return c, fmt.Errorf("%s needs a list first: agw-internet %s <%s> \"<reason>\"", c.Kind, c.Kind, map[string]string{"domains": "host[,host…]", "packages": "pip:name[==ver]|npm:name[@ver][,…]"}[c.Kind])
+		}
+		var list []string
+		for _, e := range strings.Split(words[0], ",") {
+			if e = strings.TrimSpace(e); e != "" {
+				list = append(list, e)
+			}
+		}
+		if len(list) == 0 {
+			return c, fmt.Errorf("%s: the list is empty", c.Kind)
+		}
+		if c.Kind == "domains" {
+			c.Domains = list
+		} else {
+			c.Packages = list
+		}
+		words = words[1:]
+	}
+	c.Reason = strings.TrimSpace(strings.Join(words, " "))
+	if c.Reason == "" {
+		return c, errors.New("no reason given: say in a few words what the access is for")
+	}
+	return c, nil
+}
+
+// internet asks the user for internet access and waits for the decision, lists the grants or ends them.
 func internet(hc *http.Client, args []string) (int, error) {
-	action, reason, err := parseInternetArgs(args)
+	c, err := parseInternetArgs(args)
 	if err != nil {
 		fmt.Fprint(os.Stderr, internetHelp)
-		return 1, err
+		fmt.Fprintln(os.Stderr, "error:", err)
+		return exitUsage, nil
 	}
-	switch action {
+	switch c.Action {
 	case internetHelpCmd:
 		fmt.Fprint(os.Stderr, internetHelp)
 		return 0, nil
 	case internetOff:
-		return internetSwitchOff(hc)
+		return internetSwitchOff(hc, c.GrantID)
+	case internetStatus:
+		return internetShowStatus(hc)
 	}
-	body, _ := json.Marshal(map[string]string{"reason": reason})
-	fmt.Fprintln(os.Stderr, "Requesting internet access. Waiting for the user's decision …")
+	body, _ := json.Marshal(map[string]any{"kind": c.Kind, "reason": c.Reason, "domains": c.Domains, "packages": c.Packages, "minutes": c.Minutes, "megabytes": c.MB})
+	fmt.Fprintln(os.Stderr, "Requesting internet access ("+c.Kind+"). Waiting for the user's decision …")
 	req, _ := http.NewRequest(http.MethodPost, "http://agw/internet", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	setCaller(req)
@@ -280,6 +382,14 @@ func internet(hc *http.Client, args []string) (int, error) {
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode == http.StatusBadRequest {
+		var e struct {
+			Error string `json:"error"`
+		}
+		_ = json.Unmarshal(raw, &e)
+		fmt.Println("refused:", e.Error)
+		return exitUsage, nil
+	}
 	if resp.StatusCode != http.StatusOK {
 		return 1, fmt.Errorf("orchestrator responds %d: %s", resp.StatusCode, raw)
 	}
@@ -287,17 +397,29 @@ func internet(hc *http.Client, args []string) (int, error) {
 	if err := json.Unmarshal(raw, &r); err != nil {
 		return 1, fmt.Errorf("unreadable response: %s", raw)
 	}
-	if r.Status == "approved" {
+	switch r.Status {
+	case "approved":
 		fmt.Println("approved:", r.Message)
 		return 0, nil
+	case "refused":
+		fmt.Println("refused:", r.Message)
+		return exitUsage, nil
 	}
 	fmt.Println("rejected:", r.Message)
 	return exitRejected, nil
 }
 
-// internetSwitchOff switches internet access off (POST /internet/off). Already off is a success.
-func internetSwitchOff(hc *http.Client) (int, error) {
-	req, _ := http.NewRequest(http.MethodPost, "http://agw/internet/off", nil)
+// internetSwitchOff ends one grant or all (POST /internet/off). Nothing active is a success.
+func internetSwitchOff(hc *http.Client, grantID int64) (int, error) {
+	var body io.Reader
+	if grantID > 0 {
+		b, _ := json.Marshal(map[string]int64{"grant_id": grantID})
+		body = bytes.NewReader(b)
+	}
+	req, _ := http.NewRequest(http.MethodPost, "http://agw/internet/off", body)
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	setCaller(req)
 	resp, err := hc.Do(req)
 	if err != nil {
@@ -313,6 +435,51 @@ func internetSwitchOff(hc *http.Client) (int, error) {
 		return 1, fmt.Errorf("unreadable response: %s", raw)
 	}
 	fmt.Printf("%s: %s\n", r.Status, r.Message)
+	return 0, nil
+}
+
+// internetShowStatus lists the active grants (GET /internet): kind, list, time and data left.
+func internetShowStatus(hc *http.Client) (int, error) {
+	req, _ := http.NewRequest(http.MethodGet, "http://agw/internet", nil)
+	setCaller(req)
+	resp, err := hc.Do(req)
+	if err != nil {
+		return 1, err
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return 1, fmt.Errorf("orchestrator responds %d: %s", resp.StatusCode, raw)
+	}
+	var out struct {
+		Grants []struct {
+			ID        int64      `json:"id"`
+			Kind      string     `json:"kind"`
+			Domains   []string   `json:"domains"`
+			MaxBytes  int64      `json:"max_bytes"`
+			Bytes     int64      `json:"bytes"`
+			Blocked   int        `json:"blocked"`
+			ExpiresAt *time.Time `json:"expires_at"`
+		} `json:"grants"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return 1, fmt.Errorf("unreadable response: %s", raw)
+	}
+	if len(out.Grants) == 0 {
+		fmt.Println("no internet access is active")
+		return 0, nil
+	}
+	for _, g := range out.Grants {
+		what := g.Kind
+		if len(g.Domains) > 0 {
+			what += " " + strings.Join(g.Domains, ", ")
+		}
+		left := ""
+		if g.ExpiresAt != nil {
+			left = fmt.Sprintf("until %s", g.ExpiresAt.UTC().Format("15:04"))
+		}
+		fmt.Printf("grant %d: %s %s, %d of %d MB used, %d blocked\n", g.ID, what, left, g.Bytes>>20, g.MaxBytes>>20, g.Blocked)
+	}
 	return 0, nil
 }
 

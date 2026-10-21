@@ -345,19 +345,22 @@ type Env struct {
 	PiImage      string // pi's container (E9): no shell, no Python
 	// SkillsPath: the skill directory copied into the gateway image (X8.2). Its checksum names the
 	// skills a slot runs with; the source is images/agw-basis/skills in the build context.
-	SkillsPath           string
-	SandboxNetwork       string
-	EgressNetwork        string
-	EgressSubnet         string
-	BlockedSubnets       string
-	NpmCache             string // container of the npm package cache, empty = none
-	PipCache             string // container of the pip package cache, empty = none
-	InternetDefault      bool
-	AutoCompactDefault   bool
-	CompactReserveTokens int
-	CompactKeepRecent    int
-	SocketVolume         string // named volume holding the socket directories
-	SocketRoot           string // mount point of this volume in the orchestrator
+	SkillsPath      string
+	SandboxNetwork  string
+	EgressNetwork   string
+	EgressSubnet    string
+	BlockedSubnets  string
+	NpmCache        string // container of the npm package cache, empty = none
+	PipCache        string // container of the pip package cache, empty = none
+	InternetDefault bool
+	// Internet grants (issue #175): defaults and bounds of the time and data of a grant, and the single rows per
+	// grant in web_requests before the log collapses.
+	InternetMinutesDefault, InternetMinutesMax, InternetMBDefault, InternetMBMax, InternetLogRows int
+	AutoCompactDefault                                                                            bool
+	CompactReserveTokens                                                                          int
+	CompactKeepRecent                                                                             int
+	SocketVolume                                                                                  string // named volume holding the socket directories
+	SocketRoot                                                                                    string // mount point of this volume in the orchestrator
 	// Toolsets: the bindings every new chat gets (AGW_TOOLSETS, comma-separated cli, mcp, api;
 	// default cli). Raw value; Toolset() checks it (issue #29).
 	Toolsets string
@@ -612,56 +615,61 @@ func planMaxLLMCost() float64 {
 func FromEnv() Env {
 	exp := expLimits()
 	return Env{
-		HTTPAddr:             ":" + str("AGW_HTTP_PORT", "18480"),
-		ProxyAddr:            ":" + str("AGW_PROXY_PORT", "18481"),
-		WebProxyAddr:         ":" + str("AGW_WEB_PROXY_PORT", "18486"),
-		WebProxyURL:          str("AGW_WEB_PROXY_URL", "http://orchestrator:18486"),
-		SearxURL:             str("AGW_SEARXNG_URL", "http://searxng:8080"),
-		ProxyBaseURL:         str("AGW_PROXY_BASE_URL", "http://orchestrator:18481"),
-		CatalogPath:          str("AGW_CATALOG", "/etc/agw/models.json"),
-		DatabaseURL:          str("AGW_DATABASE_URL", ""),
-		S3Endpoint:           str("AGW_S3_ENDPOINT", "rustfs:9000"),
-		S3AccessKey:          str("RUSTFS_ACCESS_KEY", ""),
-		S3SecretKey:          str("RUSTFS_SECRET_KEY", ""),
-		S3Bucket:             str("AGW_S3_BUCKET", "agw-artifacts"),
-		Image:                str("AGW_IMAGE", "agwpoc/agw-basis:dev"),
-		PiImage:              str("AGW_PI_IMAGE", "agwpoc/agw-pi:dev"),
-		SkillsPath:           str("AGW_SKILLS_PATH", "/etc/agw/skills"),
-		SandboxNetwork:       str("AGW_SANDBOX_NETWORK", "agwpoc_sandbox"),
-		EgressNetwork:        str("AGW_EGRESS_NETWORK", "agwpoc_egress"),
-		EgressSubnet:         str("AGW_EGRESS_SUBNET", "10.231.20.0/24"), // never Docker's 172.x (would otherwise hide VPN destinations)
-		BlockedSubnets:       str("AGW_BLOCKED_SUBNETS", ""),
-		NpmCache:             str("AGW_NPM_CACHE", ""),
-		PipCache:             str("AGW_PIP_CACHE", ""),
-		InternetDefault:      str("AGW_INTERNET_DEFAULT", "false") == "true",
-		AutoCompactDefault:   str("AGW_AUTO_COMPACT_DEFAULT", "true") == "true",
-		CompactReserveTokens: num("AGW_COMPACT_RESERVE_TOKENS", 16384),
-		CompactKeepRecent:    num("AGW_COMPACT_KEEP_RECENT_TOKENS", 20000),
-		SocketVolume:         str("AGW_SOCKET_VOLUME", "agwpoc_sockets"),
-		SocketRoot:           str("AGW_SOCKET_ROOT", "/run/agw"),
-		Toolsets:             toolsetsEnv(),
-		PoolSize:             max(0, num("AGW_POOL_SIZE", DefaultPoolSize)),
-		ExperimentPool:       experimentPool(),
-		ExperimentUsers:      commaList("AGW_EXPERIMENT_USERS"),
-		IdleTimeout:          dur("AGW_IDLE_TIMEOUT", 10*time.Minute),
-		ApprovalTimeout:      dur("AGW_APPROVAL_TIMEOUT", 10*time.Minute),
-		ArtifactMaxBytes:     int64(num("AGW_ARTIFACT_MAX_MB", 50)) << 20,
-		ImageMaxBytes:        int64(num("AGW_IMAGE_MAX_MB", 10)) << 20,
-		WorkspaceMaxBytes:    workspaceMax(num("AGW_WORKSPACE_MAX_MB", 200)),
-		SandboxMemoryMB:      int64(num("AGW_SANDBOX_MEMORY_MB", 2048)),
-		SandboxCPUs:          flt("AGW_SANDBOX_CPUS", 1),
-		SandboxPids:          int64(num("AGW_SANDBOX_PIDS", 256)),
-		ExecMemoryMB:         int64(num("AGW_EXEC_MEMORY_MB", 2048)),
-		ExecCPUs:             flt("AGW_EXEC_CPUS", 1),
-		ExecPids:             int64(num("AGW_EXEC_PIDS", 256)),
-		DefaultModel:         str("AGW_DEFAULT_MODEL", ""),
-		TitleModel:           str("AGW_TITLE_MODEL", ""),
-		APIToken:             str("AGW_API_TOKEN", ""),
-		MaxSubagents:         max(0, num("AGW_MAX_SUBAGENTS", DefaultMaxSubagents)),
-		ComputeMaxPerChat:    max(1, num("AGW_COMPUTE_MAX_PER_CHAT", DefaultComputeMaxPerChat)),
-		PlanMaxDuration:      planMaxDuration(),
-		PlanMaxLLMCost:       planMaxLLMCost(),
-		SearchMaxHours:       max(1, num("AGW_SEARCH_MAX_HOURS", DefaultSearchMaxHours)),
+		HTTPAddr:               ":" + str("AGW_HTTP_PORT", "18480"),
+		ProxyAddr:              ":" + str("AGW_PROXY_PORT", "18481"),
+		WebProxyAddr:           ":" + str("AGW_WEB_PROXY_PORT", "18486"),
+		WebProxyURL:            str("AGW_WEB_PROXY_URL", "http://orchestrator:18486"),
+		SearxURL:               str("AGW_SEARXNG_URL", "http://searxng:8080"),
+		ProxyBaseURL:           str("AGW_PROXY_BASE_URL", "http://orchestrator:18481"),
+		CatalogPath:            str("AGW_CATALOG", "/etc/agw/models.json"),
+		DatabaseURL:            str("AGW_DATABASE_URL", ""),
+		S3Endpoint:             str("AGW_S3_ENDPOINT", "rustfs:9000"),
+		S3AccessKey:            str("RUSTFS_ACCESS_KEY", ""),
+		S3SecretKey:            str("RUSTFS_SECRET_KEY", ""),
+		S3Bucket:               str("AGW_S3_BUCKET", "agw-artifacts"),
+		Image:                  str("AGW_IMAGE", "agwpoc/agw-basis:dev"),
+		PiImage:                str("AGW_PI_IMAGE", "agwpoc/agw-pi:dev"),
+		SkillsPath:             str("AGW_SKILLS_PATH", "/etc/agw/skills"),
+		SandboxNetwork:         str("AGW_SANDBOX_NETWORK", "agwpoc_sandbox"),
+		EgressNetwork:          str("AGW_EGRESS_NETWORK", "agwpoc_egress"),
+		EgressSubnet:           str("AGW_EGRESS_SUBNET", "10.231.20.0/24"), // never Docker's 172.x (would otherwise hide VPN destinations)
+		BlockedSubnets:         str("AGW_BLOCKED_SUBNETS", ""),
+		NpmCache:               str("AGW_NPM_CACHE", ""),
+		PipCache:               str("AGW_PIP_CACHE", ""),
+		InternetDefault:        str("AGW_INTERNET_DEFAULT", "false") == "true",
+		InternetMinutesDefault: num("AGW_INTERNET_MINUTES_DEFAULT", 30),
+		InternetMinutesMax:     num("AGW_INTERNET_MINUTES_MAX", 120),
+		InternetMBDefault:      num("AGW_INTERNET_MB_DEFAULT", 500),
+		InternetMBMax:          num("AGW_INTERNET_MB_MAX", 5000),
+		InternetLogRows:        num("AGW_INTERNET_LOG_ROWS", 500),
+		AutoCompactDefault:     str("AGW_AUTO_COMPACT_DEFAULT", "true") == "true",
+		CompactReserveTokens:   num("AGW_COMPACT_RESERVE_TOKENS", 16384),
+		CompactKeepRecent:      num("AGW_COMPACT_KEEP_RECENT_TOKENS", 20000),
+		SocketVolume:           str("AGW_SOCKET_VOLUME", "agwpoc_sockets"),
+		SocketRoot:             str("AGW_SOCKET_ROOT", "/run/agw"),
+		Toolsets:               toolsetsEnv(),
+		PoolSize:               max(0, num("AGW_POOL_SIZE", DefaultPoolSize)),
+		ExperimentPool:         experimentPool(),
+		ExperimentUsers:        commaList("AGW_EXPERIMENT_USERS"),
+		IdleTimeout:            dur("AGW_IDLE_TIMEOUT", 10*time.Minute),
+		ApprovalTimeout:        dur("AGW_APPROVAL_TIMEOUT", 10*time.Minute),
+		ArtifactMaxBytes:       int64(num("AGW_ARTIFACT_MAX_MB", 50)) << 20,
+		ImageMaxBytes:          int64(num("AGW_IMAGE_MAX_MB", 10)) << 20,
+		WorkspaceMaxBytes:      workspaceMax(num("AGW_WORKSPACE_MAX_MB", 200)),
+		SandboxMemoryMB:        int64(num("AGW_SANDBOX_MEMORY_MB", 2048)),
+		SandboxCPUs:            flt("AGW_SANDBOX_CPUS", 1),
+		SandboxPids:            int64(num("AGW_SANDBOX_PIDS", 256)),
+		ExecMemoryMB:           int64(num("AGW_EXEC_MEMORY_MB", 2048)),
+		ExecCPUs:               flt("AGW_EXEC_CPUS", 1),
+		ExecPids:               int64(num("AGW_EXEC_PIDS", 256)),
+		DefaultModel:           str("AGW_DEFAULT_MODEL", ""),
+		TitleModel:             str("AGW_TITLE_MODEL", ""),
+		APIToken:               str("AGW_API_TOKEN", ""),
+		MaxSubagents:           max(0, num("AGW_MAX_SUBAGENTS", DefaultMaxSubagents)),
+		ComputeMaxPerChat:      max(1, num("AGW_COMPUTE_MAX_PER_CHAT", DefaultComputeMaxPerChat)),
+		PlanMaxDuration:        planMaxDuration(),
+		PlanMaxLLMCost:         planMaxLLMCost(),
+		SearchMaxHours:         max(1, num("AGW_SEARCH_MAX_HOURS", DefaultSearchMaxHours)),
 
 		// X3: limits of an experiment run (placeholders until XE5).
 		ExpMaxCostUSD:        exp.MaxCostUSD,

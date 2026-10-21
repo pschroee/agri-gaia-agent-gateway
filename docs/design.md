@@ -1237,10 +1237,13 @@ items. Fixed and backed by tests (unit tests or `TestSandboxEscapesBlocked` in t
 
 **Deliberately open, or settled with E9:**
 
-- **M3 – "internet" means the whole network:** through the egress network the sandbox also reaches
+- **M3 – "internet" means the whole network (kind `full`):** through the egress network the sandbox also reaches
   LAN, VPN and services of the host (on the Mac `host.docker.internal`, e.g. Postgres on 18482). The
-  user API is protected by the token, other services are not. A remedy would be an egress proxy with
-  an allowlist.
+  user API is protected by the token, other services are not. Since issue #175 internet is granted in kinds
+  (*Internet grants* below): for pi's web tools (`search`, `domains`) the web proxy is the only way out and enforces
+  the list; the execution sandbox still has the egress network with `full`, so M3 stays open for that kind (the
+  grant carries a time and data limit and the card says so). Closing it for commands of the sandbox (a relay
+  through the socket instead of the egress network, for `domains` and `packages`) is stage 2 of issue #175.
 - **M4 – E9: closed** (2026-09-29). `bash` and the file tools no longer run next to pi but in the
   execution sandbox; pi runs without a shell, and the agent reaches neither pi's `/proc/<pid>/fd`
   nor session files or configuration (`TestE9BashRunsOutsidePi`). The orchestrator logs every
@@ -1673,3 +1676,32 @@ them:
       used, the sandbox shares the kernel with the host. Escapes via kernel vulnerabilities are
       explicitly named as outside the model; what is measured is violations at the application
       level.
+
+
+## Internet grants (issue #175)
+
+Internet is not a switch but a set of **grants** (`internet_grants`): kind `search`, `domains`, `packages` or `full`,
+with a list, a time and a data limit, an origin (agent, user, default) and an end (`time`, `bytes`, `installed`,
+`user`, `agent`, `error`). The agent asks for one kind with a reason; the gateway normalises the request
+(`internal/netgrant`: exact host names, no wildcards, no IP literals, limits clamped), builds the card data itself
+(`approvals.internet`) and shows the agent's reason only as an unverified note. `chats.internet` is derived: true while
+any grant is active.
+
+- **Decision:** `netgrant.Decide(active grants, origin, host, port)` is the one place that says yes or no, for pi's
+  web proxy today and for the sandbox's relay and the package gate later. Precedence `full`, then a `domains` grant
+  that lists the host (https only), then `search` (pi's tools only, never commands). A refusal names the reason and the
+  next step.
+- **Web proxy:** attribution by source address, `Decide`, then port and scheme, then the resolution in the proxy to a
+  public address (the connection goes to exactly that address). For a `domains` grant the proxy reads the TLS
+  ClientHello of the tunnel (peeked, replayed to the target) and requires the server name to equal the CONNECT host;
+  a missing name is refused. Redirects are never followed. Every read and write counts on the grant; the tunnel
+  rechecks the grant every 2 s and closes when it ended or reached its data limit.
+- **Counting and ends:** the web proxy counts what it carries; for a `full` grant Docker's network counters of the
+  execution sandbox are sampled every 6 s (all interfaces, a smaller value means a new container). A maintenance loop
+  (2 s) ends grants at their limits, saves counters every 10 s and tells the UI (`internet_grant` events). The active
+  grants are kept in memory (`chat/grants.go`, loaded at the start before chats are recovered); the database is the record.
+- **Egress network:** only an active `full` grant attaches the execution sandbox to the egress network (with the package
+  caches as before); the last `full` grant ending detaches it again, and a failed detach is retried by the loop.
+- **Log:** `web_requests` rows carry `grant_id`, `origin`, `package`, `version`, `parent`, `tool_call_id`, `count`. After
+  `AGW_INTERNET_LOG_ROWS` single rows a grant collapses further connections into one row per (origin, host,
+  allowed/refused). Ends are `socket_calls` entries with op `internet_end`.

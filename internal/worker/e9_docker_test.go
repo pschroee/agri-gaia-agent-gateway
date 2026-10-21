@@ -20,6 +20,7 @@ import (
 
 	"agw/internal/config"
 	"agw/internal/fakellm"
+	"agw/internal/netgrant"
 	"agw/internal/platform"
 	"agw/internal/sandbox"
 	"agw/internal/sock"
@@ -48,10 +49,10 @@ func (b *e9Backend) ListArtifacts(context.Context, string) ([]store.Artifact, er
 func (b *e9Backend) OpenArtifact(context.Context, string, string, string) (io.ReadCloser, int64, error) {
 	return nil, 0, store.ErrNotFound
 }
-func (b *e9Backend) RequestInternet(context.Context, string, string, string, string) (sock.UploadResult, error) {
+func (b *e9Backend) RequestInternet(context.Context, string, string, string, netgrant.Spec) (sock.UploadResult, error) {
 	return sock.UploadResult{Status: "rejected"}, nil
 }
-func (b *e9Backend) DisableInternet(context.Context, string, string, string) (sock.UploadResult, error) {
+func (b *e9Backend) DisableInternet(context.Context, string, string, string, int64) (sock.UploadResult, error) {
 	return sock.UploadResult{Status: sock.InternetAlreadyOff}, nil
 }
 func (b *e9Backend) LogCall(slot, chat, via, op, detail, result string) {
