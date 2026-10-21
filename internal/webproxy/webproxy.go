@@ -436,7 +436,20 @@ func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, rec *Request, ad
 			http.Error(w, "upstream not reachable", http.StatusBadGateway)
 		},
 	}
-	rp.ServeHTTP(w, r)
+	aborted := false
+	func() {
+		// ReverseProxy aborts the handler with http.ErrAbortHandler when the body copy fails after the
+		// headers went out (a body cut at the limit); the log below must still run, the connection is closed.
+		defer func() {
+			if v := recover(); v != nil {
+				if v != http.ErrAbortHandler {
+					panic(v)
+				}
+				aborted = true
+			}
+		}()
+		rp.ServeHTTP(w, r)
+	}()
 	if bodyOver.Load() {
 		// No length was known: the body was cut after MaxDownload bytes.
 		tooLarge = netgrant.MsgDownloadTooLarge(rec.Host, r.URL.Path, -1, p.MaxDownload, p.TmpMB, p.HomeMB, grant)
@@ -448,6 +461,10 @@ func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, rec *Request, ad
 	rec.Status, rec.BytesUp, rec.BytesDown = status, up.Load(), down.Load()
 	rec.DurationMs = time.Since(rec.StartedAt).Milliseconds()
 	p.Gate.RecordWeb(*rec)
+	if aborted {
+		// Close the connection so that the client sees a truncated body, not a finished one.
+		panic(http.ErrAbortHandler)
+	}
 }
 
 // limitBody passes at most left bytes of a body and then fails with errTooLarge (and sets over).
