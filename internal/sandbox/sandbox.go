@@ -12,7 +12,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/netip"
 	"slices"
 	"strings"
@@ -122,52 +121,27 @@ func (i *Instance) Done() <-chan struct{} { return i.done }
 type Runtime struct {
 	cli       *client.Client
 	egressNet string
-	self      string     // the orchestrator's own container (for slot networks)
-	caches    []PkgCache // package caches, reachable only with internet
+	self      string // the orchestrator's own container (for slot networks)
 }
 
-// PkgCache is a package cache (container) that a sandbox reaches under
-// a fixed name, but only while it has internet.
-type PkgCache struct {
-	Container string // name or ID of the container
-	Alias     string // name in the sandbox's slot network
-}
+// RelayAddr is where the relay in the execution sandbox listens (agw-exec serve); pip, npm and every program that
+// honours the proxy variables reach the gateway through it and through nothing else (issue #175).
+const RelayAddr = "127.0.0.1:3128"
 
-const (
-	NpmCacheAlias = "npm-cache"
-	PipCacheAlias = "pip-cache"
-	npmCacheURL   = "http://" + NpmCacheAlias + ":4873/"
-	pipCacheURL   = "http://" + PipCacheAlias + ":5000/index/"
-)
-
-// SetPkgCaches names the containers of the caches for npm (Verdaccio)
-// and pip (proxpi). Empty names turn the respective cache off.
-func (r *Runtime) SetPkgCaches(npmContainer, pipContainer string) {
-	r.caches = nil
-	if npmContainer != "" {
-		r.caches = append(r.caches, PkgCache{Container: npmContainer, Alias: NpmCacheAlias})
+// RelayEnv returns the environment of the execution sandbox that points pip, npm and the proxy-aware programs at
+// the relay. The relay is the only way out: without it, or without a grant that covers the target, nothing is
+// reachable (the sandbox's network has no route; fail closed). Both spellings of the proxy variables are set
+// because git and curl read the lower case ones.
+func RelayEnv() []string {
+	proxy := "http://" + RelayAddr
+	return []string{
+		"http_proxy=" + proxy, "https_proxy=" + proxy, "HTTP_PROXY=" + proxy, "HTTPS_PROXY=" + proxy,
+		"no_proxy=127.0.0.1,localhost", "NO_PROXY=127.0.0.1,localhost",
+		"PIP_INDEX_URL=" + proxy + "/index/",
+		"NPM_CONFIG_REGISTRY=" + proxy + "/npm/",
+		"NPM_CONFIG_AUDIT=false", "NPM_CONFIG_FUND=false",
+		"NPM_CONFIG_FETCH_RETRIES=1", "NPM_CONFIG_FETCH_RETRY_MINTIMEOUT=2000", "NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT=5000",
 	}
-	if pipContainer != "" {
-		r.caches = append(r.caches, PkgCache{Container: pipContainer, Alias: PipCacheAlias})
-	}
-}
-
-// PkgCacheEnv returns the environment with which npm and pip in the sandbox use the
-// caches. Without internet the name does not resolve and
-// installation fails: pip after about 8 s (five retries), npm
-// thanks to a short retry after about 2 s instead of 70 s.
-func (r *Runtime) PkgCacheEnv() []string {
-	var env []string
-	for _, c := range r.caches {
-		switch c.Alias {
-		case NpmCacheAlias:
-			env = append(env, "NPM_CONFIG_REGISTRY="+npmCacheURL,
-				"NPM_CONFIG_FETCH_RETRIES=1", "NPM_CONFIG_FETCH_RETRY_MINTIMEOUT=2000", "NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT=5000")
-		case PipCacheAlias:
-			env = append(env, "PIP_INDEX_URL="+pipCacheURL, "PIP_TRUSTED_HOST="+PipCacheAlias)
-		}
-	}
-	return env
 }
 
 func New(egressNet string) (*Runtime, error) {
@@ -241,14 +215,9 @@ func (r *Runtime) createNetwork(ctx context.Context, slotID, name string, withSe
 }
 
 // RemoveSlotNetwork detaches the orchestrator from the slot network and removes it.
-// If a cache is still attached (sandbox torn down with internet),
-// it is detached as well.
 func (r *Runtime) RemoveSlotNetwork(ctx context.Context, name string) error {
 	if r.self != "" {
 		_, _ = r.cli.NetworkDisconnect(ctx, name, client.NetworkDisconnectOptions{Container: r.self, Force: true})
-	}
-	for _, c := range r.caches {
-		_, _ = r.cli.NetworkDisconnect(ctx, name, client.NetworkDisconnectOptions{Container: c.Container, Force: true})
 	}
 	_, err := r.cli.NetworkRemove(ctx, name, client.NetworkRemoveOptions{})
 	return err
@@ -477,12 +446,9 @@ func (r *Runtime) ContainerIP(ctx context.Context, id, netName string) (string, 
 	return ep.IPAddress.String(), nil
 }
 
-// SetInternet connects the container to the egress network or disconnects it.
-// The package caches follow the switch: with internet the orchestrator attaches
-// them under their alias to the sandbox's slot network, without internet
-// it detaches them again. They cannot go into the egress network, because without ICC it
-// drops traffic between containers. Without internet there is thus still
-// no way out, not even through a cache.
+// SetInternet connects the container to the egress network or disconnects it. Only a full grant does that; every
+// other kind goes through the relay and the gateway, which need no network route of their own. The package caches
+// no longer join the slot network: the package gate in the gateway speaks to them (issue #175).
 func (r *Runtime) SetInternet(ctx context.Context, id string, on bool) error {
 	if r.egressNet == "" {
 		return errors.New("no egress network configured")
@@ -492,14 +458,13 @@ func (r *Runtime) SetInternet(ctx context.Context, id string, on bool) error {
 		if err != nil && !strings.Contains(err.Error(), "already exists") {
 			return err
 		}
-		r.attachCaches(ctx, id)
 		return nil
 	}
 	_, err := r.cli.NetworkDisconnect(ctx, r.egressNet, client.NetworkDisconnectOptions{Container: id, Force: true})
 	if err != nil && !notConnected(err) {
 		return err
 	}
-	return r.detachCaches(ctx, id)
+	return nil
 }
 
 // NetBytes returns the bytes the container's network interfaces have received and sent together (Docker's counters;
@@ -529,70 +494,6 @@ func (r *Runtime) NetBytes(ctx context.Context, id string) (int64, error) {
 func notConnected(err error) bool {
 	m := err.Error()
 	return strings.Contains(m, "not connected") || strings.Contains(m, "No such container") || strings.Contains(m, "not found")
-}
-
-// sandboxNets returns the container's networks except the egress network, i.e.
-// its slot network.
-func (r *Runtime) sandboxNets(ctx context.Context, id string) ([]string, error) {
-	res, err := r.cli.ContainerInspect(ctx, id, client.ContainerInspectOptions{})
-	if err != nil {
-		return nil, err
-	}
-	var nets []string
-	if res.Container.NetworkSettings != nil {
-		for n := range res.Container.NetworkSettings.Networks {
-			if n != r.egressNet {
-				nets = append(nets, n)
-			}
-		}
-	}
-	return nets, nil
-}
-
-// attachCaches attaches the caches to the slot network. If one is missing
-// (service not started), the internet stays on anyway; installations
-// through it then fail.
-func (r *Runtime) attachCaches(ctx context.Context, id string) {
-	if len(r.caches) == 0 {
-		return
-	}
-	nets, err := r.sandboxNets(ctx, id)
-	if err != nil {
-		slog.Warn("package cache not attached", "error", err)
-		return
-	}
-	for _, n := range nets {
-		for _, c := range r.caches {
-			_, err := r.cli.NetworkConnect(ctx, n, client.NetworkConnectOptions{
-				Container: c.Container, EndpointConfig: &network.EndpointSettings{Aliases: []string{c.Alias}},
-			})
-			if err != nil && !strings.Contains(err.Error(), "already exists") {
-				slog.Warn("package cache not attached", "container", c.Container, "network", n, "error", err)
-			}
-		}
-	}
-}
-
-// detachCaches detaches the caches from the slot network. If that fails, it reports
-// an error: a remaining cache would be a way out.
-func (r *Runtime) detachCaches(ctx context.Context, id string) error {
-	if len(r.caches) == 0 {
-		return nil
-	}
-	nets, err := r.sandboxNets(ctx, id)
-	if err != nil {
-		return fmt.Errorf("detaching package caches: %w", err)
-	}
-	var errs []error
-	for _, n := range nets {
-		for _, c := range r.caches {
-			_, err := r.cli.NetworkDisconnect(ctx, n, client.NetworkDisconnectOptions{Container: c.Container, Force: true})
-			if err != nil && !notConnected(err) {
-				errs = append(errs, fmt.Errorf("detaching %s from %s: %w", c.Container, n, err))
-			}
-		}
-	}
-	return errors.Join(errs...)
 }
 
 // EnsureEgressNetwork creates the egress network if it is missing. Compose does not

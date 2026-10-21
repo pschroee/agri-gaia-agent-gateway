@@ -332,9 +332,16 @@ func parseInternetArgs(args []string) (internetCmd, error) {
 			return c, fmt.Errorf("%s needs a list first: agw-internet %s <%s> \"<reason>\"", c.Kind, c.Kind, map[string]string{"domains": "host[,host…]", "packages": "pip:name[==ver]|npm:name[@ver][,…]"}[c.Kind])
 		}
 		var list []string
-		for _, e := range strings.Split(words[0], ",") {
-			if e = strings.TrimSpace(e); e != "" {
-				list = append(list, e)
+		if c.Kind == "packages" {
+			// The gateway splits the list itself: extras may contain commas (pip:torch[a,b]).
+			if e := strings.TrimSpace(words[0]); e != "" {
+				list = []string{e}
+			}
+		} else {
+			for _, e := range strings.Split(words[0], ",") {
+				if e = strings.TrimSpace(e); e != "" {
+					list = append(list, e)
+				}
 			}
 		}
 		if len(list) == 0 {

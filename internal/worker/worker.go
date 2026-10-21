@@ -519,10 +519,13 @@ func experimentTools(ts toolset.Set) []string {
 }
 
 type Factory struct {
-	RT        *sandbox.Runtime
-	Cat       *config.Catalog
-	Env       config.Env
-	Backend   Backend // set after the manager has been created
+	RT      *sandbox.Runtime
+	Cat     *config.Catalog
+	Env     config.Env
+	Backend Backend // set after the manager has been created
+	// Relay builds, for one slot, the handlers the execution sandbox's socket hands internet traffic to (the web
+	// proxy and the package gate); nil: the socket carries no internet traffic.
+	Relay     func(slotID string, fg *sock.Foreground) sock.Relay
 	modelsB64 string
 	settings  string
 }
@@ -773,6 +776,9 @@ func (f *Factory) Create(ctx context.Context, slotID, variant string) (chat.Agen
 	if f.Backend != nil {
 		piH = sock.NewPiHandlerFg(slotID, f.Backend, f.Env.ArtifactMaxBytes, w.box, f.Backend, w.bg, w.fg)
 		exH = sock.NewHandlerRunFg(slotID, f.Backend, f.Env.ArtifactMaxBytes, w.box, w.fg)
+		if f.Relay != nil {
+			exH = sock.WithRelay(exH, f.Relay(slotID, w.fg))
+		}
 	}
 	if w.xsrv, err = sock.Listen(filepath.Join(w.dir, "exec"), exH); err != nil {
 		cleanup()
@@ -783,14 +789,14 @@ func (f *Factory) Create(ctx context.Context, slotID, variant string) (chat.Agen
 		return nil, fmt.Errorf("Socket: %w", err)
 	}
 	labels := map[string]string{sandbox.LabelSlot: slotID, sandbox.LabelVariant: variant}
-	execEnv := append([]string{"AGW_SLOT=" + slotID}, f.RT.PkgCacheEnv()...)
+	execEnv := append([]string{"AGW_SLOT=" + slotID}, sandbox.RelayEnv()...)
 	if _, experiment := SplitExperiment(variant); experiment {
 		// X6.5: only experiment slots trace failed syscalls; product slots do not carry the slowdown.
 		execEnv = append(execEnv, "AGW_EXEC_TRACE=failed")
 	}
 	w.exec, err = f.RT.Start(ctx, sandbox.Spec{
 		Name: "agwpoc-" + slotID, Image: f.Env.Image, NoAttach: true,
-		// Package caches for npm and pip (reachable only with internet); tracing only for experiments.
+		// The relay variables for npm, pip and proxy-aware programs; tracing only for experiments.
 		Env:    execEnv,
 		Labels: withRole(labels, "exec"), Tmpfs: sandbox.ExecTmpfs, CapAdd: sandbox.ExecCaps,
 		InternalNet: w.xnet, SocketVolume: f.Env.SocketVolume, SocketSubpath: slotID + "/exec",
