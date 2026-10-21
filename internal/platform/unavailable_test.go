@@ -17,7 +17,7 @@ func TestUnavailableStatusText(t *testing.T) {
 	}
 	msg := UnavailableText("notebook", "the notebook server is not configured on this instance", "run the code in your own sandbox")
 	want := "notebook is not available in this setup: the notebook server is not configured on this instance. " +
-		"run the code in your own sandbox. capabilities shows what this setup offers."
+		"run the code in your own sandbox. {{tool:capabilities}} shows what this setup offers."
 	if msg != want {
 		t.Fatalf("message:\n got %q\nwant %q", msg, want)
 	}

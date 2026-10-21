@@ -160,7 +160,7 @@ func TestEndTextWinnerAndFinalCalls(t *testing.T) {
 	obj := search.Objective{Metric: "val_acc", Mode: "max"}
 	s := store.Search{Path: store.SearchPathTemplate}
 	got := m.endText(s, obj, "budget_runs", w, SearchHoldout{Available: true, FinalState: "pending", EvalDataset: &SearchNamed{ID: 12}})
-	for _, want := range []string{"The training search ended", "Winner: trial 2", "val_acc 0.91", "create_model_from_training", "final=true", "eval_dataset_id=12"} {
+	for _, want := range []string{"The training search ended", "Winner: trial 2", "val_acc 0.91", "{{tool:create_model_from_training}}", "final=true", "eval_dataset_id=12"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("end text lacks %q: %s", want, got)
 		}
@@ -227,7 +227,7 @@ func TestSearchNextOutsideSpaceAndRepeat(t *testing.T) {
 		t.Fatalf("events: %+v", events)
 	}
 	res, _ = e.m.searchNext(ctx, c.ID, s.ID, []byte(`{"params":{"lr":0.01},"note":"first"}`))
-	if res.Status != "ok" || !strings.Contains(res.Body, "clone_training with container_id=7") || !strings.Contains(res.Body, `"lr":0.01`) ||
+	if res.Status != "ok" || !strings.Contains(res.Body, "{{tool:clone_training}} with container_id=7") || !strings.Contains(res.Body, `"lr":0.01`) ||
 		!strings.Contains(res.Body, `"epochs":5`) {
 		t.Fatalf("declared: %+v", res)
 	}

@@ -52,7 +52,7 @@ func TestModelIDAndPathExclusive(t *testing.T) {
 		t.Errorf("the body: %s", req.Body)
 	}
 	// The description names the source of the file, so that the agent finds it (R2).
-	if !strings.Contains(tool.Desc, "notebook_fetch") || !strings.Contains(tool.Desc, "before upload_model") {
+	if !strings.Contains(tool.Desc, "{{tool:notebook_fetch}}") || !strings.Contains(tool.Desc, "before {{tool:upload_model}}") {
 		t.Errorf("the description does not name the file: %q", tool.Desc)
 	}
 }

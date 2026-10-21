@@ -27,8 +27,8 @@ func TestDeploymentCheckTool(t *testing.T) {
 	if tool.MCPName() != "platform_deployment_check" {
 		t.Errorf("MCP name: %q", tool.MCPName())
 	}
-	if !strings.Contains(tool.Desc, "Use it after platform_deployment_status shows deployed.") ||
-		!strings.Contains(tool.Desc, "accuracy comes from assess_model") {
+	if !strings.Contains(tool.Desc, "Use it after {{tool:deployment_status}} shows deployed.") ||
+		!strings.Contains(tool.Desc, "accuracy comes from {{tool:assess_model}}") {
 		t.Errorf("description: %q", tool.Desc)
 	}
 	if len(tool.Params) != 2 || tool.Params[0].Name != "deployment_id" || !tool.Params[0].Required ||

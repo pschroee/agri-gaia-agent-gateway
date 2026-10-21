@@ -21,7 +21,7 @@ func TestGatewayIndexLines(t *testing.T) {
 	for i, tool := range tools {
 		line := lines[i]
 		c := tool.RESTCall()
-		if !strings.HasPrefix(line, "  "+c.Method+" "+c.Path+" — ") || !strings.HasSuffix(line, " · tool "+tool.Name) {
+		if !strings.HasPrefix(line, "  "+c.Method+" "+c.Path+" — ") || strings.Contains(line, " · tool ") {
 			t.Errorf("%s: line %q", tool.Name, line)
 		}
 		for _, a := range tool.restArgs(c) {
@@ -38,11 +38,11 @@ func TestGatewayIndexLines(t *testing.T) {
 			}
 		}
 	}
-	if !strings.Contains(idx, "  POST /_agw/search/{search_id}/trials — ") || !strings.Contains(idx, "· tool search_next") {
+	if !strings.Contains(idx, "  POST /_agw/search/{search_id}/trials — ") {
 		t.Error("search_next line missing")
 	}
 	for _, name := range []string{"notebook_run", "notebook_status", "notebook_fetch"} {
-		if strings.Contains(idx, "· tool "+name) {
+		if strings.Contains(idx, "/_agw/"+strings.SplitN(name, "_", 2)[0]) {
 			t.Errorf("%s must have no line (sandbox files)", name)
 		}
 	}
@@ -171,7 +171,7 @@ func TestGatewayCallRefuses(t *testing.T) {
 
 func TestGatewayIndexDetail(t *testing.T) {
 	d := GatewayIndexDetail("/_agw/search")
-	if !strings.Contains(d, "search_id* (path, string) — id of the search") || !strings.Contains(d, "· tool search_next") {
+	if !strings.Contains(d, "search_id* (path, string) — id of the search") {
 		t.Errorf("detail of /_agw/search:\n%s", d)
 	}
 	if strings.Contains(d, "annotation") || strings.Contains(d, "entry (") {

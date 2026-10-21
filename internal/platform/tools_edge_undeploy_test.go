@@ -103,7 +103,7 @@ func TestDeleteDeploymentRefusesDeployed(t *testing.T) {
 			"GET /container-deployments/9": {Status: "ok", HTTPStatus: 200, Body: undeployDeploymentJSON("deployed", true)},
 			del:                            {Status: "ok", HTTPStatus: 204},
 		})
-		if refused != "deployment 9 is deployed; undeploy it first" || res.Status != "error" {
+		if refused != "deployment 9 is deployed; {{tool:undeploy}} it first" || res.Status != "error" {
 			t.Fatalf("res=%+v refused=%q", res, refused)
 		}
 		if countCalls(calls, del) != 0 {
@@ -169,7 +169,7 @@ func TestUndeployToolsInAllBindings(t *testing.T) {
 		cli  string
 		desc string
 	}{
-		{"undeploy", "undeploy", "The deployment stays and can be started again with platform_start_deployment."},
+		{"undeploy", "undeploy", "The deployment stays and can be started again with {{tool:start_deployment}}."},
 		{"delete_deployment", "delete-deployment", "Irreversible: the user must approve it on its own, also inside a plan."},
 	}
 	for _, c := range cases {

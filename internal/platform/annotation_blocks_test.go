@@ -20,8 +20,8 @@ func TestCVATBlockedForAgent(t *testing.T) {
 		{"POST", "/cvat/auth/login", "annotation_ tools"},
 		{"GET", "/cvat/user/exists", "annotation_ tools"},
 		{"POST", "/Cvat/auth/login", "annotation_ tools"},
-		{"POST", "/datasets/5/annotate", "use annotation_task"},
-		{"POST", "/datasets/auto-annotation", "use annotation_function"},
+		{"POST", "/datasets/5/annotate", "use {{tool:annotation_task}}"},
+		{"POST", "/datasets/auto-annotation", "use {{tool:annotation_function}}"},
 	} {
 		if _, err := Normalize(Request{Method: tc.method, Path: tc.path}); err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%s %s: %v", tc.method, tc.path, err)
