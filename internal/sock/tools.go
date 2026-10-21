@@ -63,6 +63,8 @@ type BackgroundTasks interface {
 	Output(ctx context.Context, chatID, id string) (store.BackgroundTask, string, error)
 	Stop(ctx context.Context, chatID, id, by string) (store.BackgroundTask, error)
 	Max() int
+	// EndSeen: the session read the state of a task (issue #197).
+	EndSeen(chatID, id, session string)
 	// Adopt takes over a running foreground command as a background task.
 	Adopt(ctx context.Context, p bgtask.StartParams, logPath string, soFar []byte, cancel context.CancelFunc) (*bgtask.Adopted, error)
 }

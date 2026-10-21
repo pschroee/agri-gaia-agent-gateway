@@ -41,6 +41,9 @@ type Notifier interface {
 	BackgroundEnded(t store.BackgroundTask, notify bool)
 	// BackgroundLookup: a task this registry does not know (e.g. from before idling).
 	BackgroundLookup(ctx context.Context, chatID string, seq int) (store.BackgroundTask, error)
+	// BackgroundEndSeen: the main session has read the end of the task (bg_output), so the note
+	// about its end is redundant (issue #197).
+	BackgroundEndSeen(chatID string, seq int)
 }
 
 // Limits and intervals.
@@ -508,6 +511,22 @@ func (r *Registry) Output(ctx context.Context, chatID, id string) (store.Backgro
 	full := cleanTail(t.tail.bytes(), TailBytes)
 	t.mu.Unlock()
 	return s, full, nil
+}
+
+// EndSeen reports that a session read the state of a task with bg_output. Only if the main session
+// read the end of a task the main session started does the manager drop the note about its end
+// (issue #197). Unknown tasks (already delivered or held) and everything else do nothing.
+func (r *Registry) EndSeen(chatID, id, session string) {
+	if session != "main" {
+		return
+	}
+	t, seq, err := r.get(chatID, id)
+	if err != nil || t == nil {
+		return
+	}
+	if s := t.snapshot(); s.State != store.BgRunning && s.Session == "main" {
+		r.n.BackgroundEndSeen(chatID, seq)
+	}
 }
 
 // Stop stops a task (by: agent or user) and waits briefly for its end. If it has already
