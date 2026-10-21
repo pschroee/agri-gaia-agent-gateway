@@ -141,7 +141,7 @@ func usedText(st searchStats) string {
 
 // searchNote queues a note about a search for the agent and wakes it (within the wake limit of the search).
 func (m *Manager) searchNote(ctx context.Context, s store.Search, summary, body string) {
-	n := systemNote{Type: store.NoteSearch, Refs: []string{s.ID}, Summary: summary, Body: body}
+	n := systemNote{Type: store.NoteSearch, Refs: []string{s.ID}, Summary: m.RenderNote(ctx, s.ChatID, summary), Body: m.RenderNote(ctx, s.ChatID, body)}
 	if _, err := m.st.EnqueueSystem(ctx, s.ChatID, n.Type, n.Refs, n.Text()); err != nil {
 		slog.Error("note about a search not queued", "search", s.ID, "error", err)
 		return

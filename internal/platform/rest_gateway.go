@@ -155,7 +155,6 @@ func (t Tool) restLine(c *RESTCall) string {
 	if c.Note != "" {
 		fmt.Fprintf(&b, " · here: %s", c.Note)
 	}
-	fmt.Fprintf(&b, " · tool %s", t.Name)
 	return b.String()
 }
 
@@ -171,8 +170,8 @@ func gatewayTools() []Tool {
 }
 
 // GatewayIndex is the block "Gateway paths" of the system note of the REST binding: one line per tool with
-// a gateway path (method, path, what it does, query and body fields, the tool name the gateway's notes use),
-// every line with two spaces of indent, then the count.
+// a gateway path (method, path, what it does, query and body fields), every line with two spaces of indent,
+// then the count. The descriptions carry tool references; the caller renders them (Render).
 func GatewayIndex() string {
 	var b strings.Builder
 	n := 0

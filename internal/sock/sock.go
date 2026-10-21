@@ -30,6 +30,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"agw/internal/artifacts"
@@ -38,6 +39,7 @@ import (
 	"agw/internal/netgrant"
 	"agw/internal/platform"
 	"agw/internal/store"
+	"agw/internal/toolset"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -103,6 +105,38 @@ type PlatformBackend interface {
 // PlatformPrechecker checks a call against the delegation up front (before reading files).
 type PlatformPrechecker interface {
 	PlatformPrecheck(ctx context.Context, chatID string, req platform.Request) (platform.Result, bool)
+}
+
+// BindingsReader tells which bindings a chat has (chat.Manager). The references to tools in the texts for the
+// agent are rendered with them (#200); a backend without it renders for the binding of the call alone.
+type BindingsReader interface {
+	ChatBindings(ctx context.Context, chatID string) toolset.Set
+}
+
+// bindings are the bindings the references in a text for the chat are rendered for.
+func (h *handler) bindings(ctx context.Context, chat, via string) toolset.Set {
+	if r, ok := h.b.(BindingsReader); ok && chat != "" {
+		if set := r.ChatBindings(ctx, chat); !set.Empty() {
+			return set
+		}
+	}
+	return toolset.Of(toolset.Binding(via))
+}
+
+// render replaces the tool references ({{tool:name}}) in a text for the agent by the forms of the binding the
+// call came in on (#200).
+func (h *handler) render(ctx context.Context, chat, via, s string) string {
+	if !strings.Contains(s, "{{tool:") {
+		return s
+	}
+	return platform.Render(s, toolset.Binding(via), h.bindings(ctx, chat, via))
+}
+
+func (h *handler) renderResult(ctx context.Context, chat, via string, res platform.Result) platform.Result {
+	if !strings.Contains(res.Message+res.Note+res.Body, "{{tool:") {
+		return res
+	}
+	return res.RenderedFor(toolset.Binding(via), h.bindings(ctx, chat, via))
 }
 
 // InternetStatusBackend lists a chat's active internet grants with their counters (GET /internet); a backend that
@@ -232,6 +266,7 @@ type CallerLogger interface {
 }
 
 func (h *handler) logCall(ctx context.Context, chat, via, op, detail, result string) {
+	result = h.render(ctx, chat, via, result) // the log shows what the agent read
 	if l, ok := h.b.(CallerLogger); ok {
 		l.LogCallBy(ctx, h.slot, chat, via, op, detail, result)
 		return
@@ -686,19 +721,19 @@ func (h *handler) doPlatform(ctx context.Context, chat, via string, tool platfor
 			n, err := platform.Normalize(r)
 			if err != nil {
 				h.logCall(ctx, chat, via, "platform", tool.Name, "refused: "+err.Error())
-				return platform.Result{Status: "error", Message: err.Error()}, nil
+				return h.renderResult(ctx, chat, via, platform.Result{Status: "error", Message: err.Error()}), nil
 			}
 			return h.runPlatform(ctx, chat, via, n)
 		})
 		if refused != "" {
 			h.logCall(ctx, chat, via, "platform", tool.Name, "refused: "+refused)
 		}
-		return res, err
+		return h.renderResult(ctx, chat, via, res), err
 	}
 	req, err := tool.Build(raw)
 	if err != nil {
 		h.logCall(ctx, chat, via, "platform", tool.Name, "refused: "+err.Error())
-		return platform.Result{Status: "error", Message: err.Error()}, nil
+		return h.renderResult(ctx, chat, via, platform.Result{Status: "error", Message: err.Error()}), nil
 	}
 	return h.runPlatform(ctx, chat, via, req)
 }
@@ -716,6 +751,7 @@ func (h *handler) runPlatform(ctx context.Context, chat, via string, req platfor
 	if len(req.Files) > 0 {
 		if pc, ok := h.b.(PlatformPrechecker); ok {
 			if res, allowed := pc.PlatformPrecheck(ctx, chat, req); !allowed {
+				res = h.renderResult(ctx, chat, via, res)
 				h.logPlatform(ctx, chat, via, req.String(), "violation blocked: "+res.Message, res)
 				return res, nil
 			}
@@ -734,6 +770,7 @@ func (h *handler) runPlatform(ctx context.Context, chat, via string, req platfor
 		}
 	}
 	res, err := pb.PlatformCall(ctx, chat, h.slot, via, req)
+	res = h.renderResult(ctx, chat, via, res) // the agent and the log read the same text
 	if err == nil && res.File != nil {
 		// A virtual tool handed a file over instead of an answer (notebook_fetch, own code C-E3): it
 		// goes into the workspace, and the agent gets where it lies and what it is.
@@ -937,7 +974,7 @@ func (h *handler) mcpServer() *mcp.Server {
 			}
 			return textResult(false, "%s: %s", res.Status, res.Message), nil, nil
 		})
-	for _, t := range platform.Tools {
+	for _, t := range mcpPlatformTools() {
 		s.AddTool(&mcp.Tool{Name: t.MCPName(), Description: t.Desc, InputSchema: t.Schema()},
 			func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 				chat, err := h.chat("mcp", "platform", t.Name)
@@ -948,11 +985,21 @@ func (h *handler) mcpServer() *mcp.Server {
 				if err != nil {
 					return textResult(true, "error: %v", err), nil
 				}
-				return textResult(res.Status == "error" || res.Status == "denied", "%s", res.Text()), nil
+				return textResult(res.Status == "error" || res.Status == "denied", "%s", h.render(ctx, chat, "mcp", res.Text())), nil
 			})
 	}
 	return s
 }
+
+// mcpPlatformTools are the platform tools as the MCP server lists them: the references to tools in their
+// descriptions are rendered in MCP names (#200). Built once.
+var mcpPlatformTools = sync.OnceValue(func() []platform.Tool {
+	out := make([]platform.Tool, len(platform.Tools))
+	for i, t := range platform.Tools {
+		out[i] = t.RenderedFor(toolset.MCP, toolset.Of(toolset.MCP))
+	}
+	return out
+})
 
 // Server is an HTTP server on a Unix socket.
 type Server struct {
@@ -1007,8 +1054,9 @@ func (h *handler) platformAPI(w http.ResponseWriter, r *http.Request) {
 	if via == "" {
 		via = "api"
 	}
+	chatID := "" // set once the chat is known; the references in a refusal are rendered for its bindings
 	fail := func(code int, msg string) {
-		writeJSON(w, code, map[string]string{"error": msg})
+		writeJSON(w, code, map[string]string{"error": h.render(r.Context(), chatID, via, msg)})
 	}
 	// The authorization service does not allow percent-encoding: what it checks should be exactly
 	// what the platform reads (no second decoding, no parser differential).
@@ -1035,13 +1083,14 @@ func (h *handler) platformAPI(w http.ResponseWriter, r *http.Request) {
 		fail(http.StatusRequestEntityTooLarge, "body too large (at most 1 MiB)")
 		return
 	}
-	if ct := r.Header.Get("Content-Type"); len(bytes.TrimSpace(raw)) > 0 && ct != "" && !strings.HasPrefix(ct, "application/json") {
-		fail(http.StatusUnsupportedMediaType, "JSON bodies only; files go through upload_dataset and upload_model")
-		return
-	}
 	chat, err := h.chat(via, "platform", r.Method+" "+path)
 	if err != nil {
 		fail(http.StatusConflict, "not assigned")
+		return
+	}
+	chatID = chat
+	if ct := r.Header.Get("Content-Type"); len(bytes.TrimSpace(raw)) > 0 && ct != "" && !strings.HasPrefix(ct, "application/json") {
+		fail(http.StatusUnsupportedMediaType, "JSON bodies only; files go through {{tool:upload_dataset}} and {{tool:upload_model}}")
 		return
 	}
 	ctx := h.callerCtx(r)
@@ -1049,7 +1098,7 @@ func (h *handler) platformAPI(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case path == "/_agw/paths" && strings.HasPrefix(q["prefix"], "/_agw"):
 		// The arguments of the gateway's own paths, answered inside the gateway (#199).
-		body := platform.GatewayIndexDetail(q["prefix"])
+		body := h.render(ctx, chat, via, platform.GatewayIndexDetail(q["prefix"]))
 		h.logCall(ctx, chat, via, "platform", "api_paths", "ok")
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		_, _ = io.WriteString(w, body)

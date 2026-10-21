@@ -65,6 +65,7 @@ func (s *Server) assessments(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]assessmentRow, 0, len(rows))
 	for _, row := range rows {
+		row.Report = json.RawMessage(s.M.RenderNote(r.Context(), id, string(row.Report))) // references to tools (#200)
 		line := assessmentLine(row)
 		line.UploadedModel = s.uploadedModelOf(r.Context(), id, row)
 		out = append(out, line)

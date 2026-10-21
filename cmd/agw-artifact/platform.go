@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"agw/internal/platform"
+	"agw/internal/toolset"
 )
 
 // platformCmd is agw-platform: the tools of the platform binding as
@@ -38,12 +39,12 @@ func platformCmd(hc *http.Client, args []string) (int, error) {
 		return 1, fmt.Errorf("unknown command %q", args[0])
 	}
 	if len(args) > 1 && (args[1] == "-h" || args[1] == "--help") {
-		toolUsage(os.Stdout, tool)
+		toolUsage(os.Stdout, tool.RenderedFor(toolset.CLI, toolset.Of(toolset.CLI)))
 		return 0, nil
 	}
 	in, err := parseToolArgs(tool, args[1:], os.Stdin)
 	if err != nil {
-		toolUsage(os.Stderr, tool)
+		toolUsage(os.Stderr, tool.RenderedFor(toolset.CLI, toolset.Of(toolset.CLI)))
 		return 1, err
 	}
 	body, _ := json.Marshal(in)
@@ -66,7 +67,7 @@ func platformCmd(hc *http.Client, args []string) (int, error) {
 	if err := json.Unmarshal(raw, &r); err != nil {
 		return 1, fmt.Errorf("unreadable response: %s", raw)
 	}
-	fmt.Println(r.Text())
+	fmt.Println(cliRender(r.Text()))
 	switch r.Status {
 	case "ok":
 		return 0, nil
@@ -194,14 +195,17 @@ func parseToolArgs(tool platform.Tool, args []string, stdin io.Reader) (map[stri
 	return out, nil
 }
 
+// cliRender puts the command line forms in the tool references of a text (#200).
+func cliRender(s string) string { return platform.Render(s, toolset.CLI, toolset.Of(toolset.CLI)) }
+
 func platformUsage(w io.Writer) {
 	fmt.Fprint(w, "agw-platform — Agri-Gaia platform through the orchestrator (the token is kept there, not here)\n\n")
 	for _, t := range platform.Tools {
 		fmt.Fprintf(w, "  agw-platform %s%s\n", t.CLI, t.Synopsis())
 	}
-	fmt.Fprint(w, "\nagw-platform <command> --help shows the description. Writing calls wait for confirmation\n"+
+	fmt.Fprint(w, cliRender("\nagw-platform <command> --help shows the description. Writing calls wait for confirmation\n"+
 		"by the user. Exit code: 0 ok, 3 rejected by the user, 4 outside the delegated rights\n"+
-		"(agw-platform rights shows them), 1 error (including HTTP errors of the platform).\n")
+		"({{tool:rights}} shows them), 1 error (including HTTP errors of the platform).\n"))
 }
 
 func toolUsage(w io.Writer, t platform.Tool) {

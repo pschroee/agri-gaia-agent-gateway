@@ -2980,6 +2980,35 @@ func (m *Manager) Messages(ctx context.Context, chatID string) ([]store.Message,
 	return m.st.Messages(ctx, chatID)
 }
 
+// ChatBindings are the bindings the chat has (its variant, without the experiment prefix); empty if the chat
+// or its variant cannot be read. The references to tools in the texts for the agent are rendered with them (#200).
+func (m *Manager) ChatBindings(ctx context.Context, chatID string) toolset.Set {
+	c, err := m.st.GetChat(ctx, chatID)
+	if err != nil {
+		return toolset.Set{}
+	}
+	base, _ := toolset.SplitExperiment(c.Variant)
+	ts, err := toolset.FromVariant(base)
+	if err != nil {
+		return toolset.Set{}
+	}
+	return ts
+}
+
+// RenderNote renders the tool references in a note the gateway wrote itself, for all bindings of the chat
+// (a note answers no call, so it names the forms of every binding with "or"). Text from the sandbox is not
+// rendered.
+func (m *Manager) RenderNote(ctx context.Context, chatID, s string) string {
+	if !strings.Contains(s, "{{tool:") {
+		return s
+	}
+	set := m.ChatBindings(ctx, chatID)
+	if set.Empty() {
+		set = toolset.Of(toolset.Order...)
+	}
+	return platform.Render(s, "", set)
+}
+
 // ChatOwner returns a chat's owner (empty: without owner, token mode).
 func (m *Manager) ChatOwner(ctx context.Context, chatID string) (string, error) {
 	return m.st.ChatOwner(ctx, chatID)
