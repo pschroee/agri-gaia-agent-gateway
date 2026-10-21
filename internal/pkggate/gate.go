@@ -80,6 +80,9 @@ type Gate struct {
 	Client *http.Client
 	// TmpDir holds a wheel while it is scanned ("" : the system's temporary directory).
 	TmpDir string
+	// MaxFile: the largest package file (wheel, sdist, tarball) the gate passes on; 0: no limit. TmpMB and HomeMB
+	// are the sizes of /tmp and the home directory of the sandbox, named in the refusal.
+	MaxFile, TmpMB, HomeMB int64
 
 	once sync.Once
 	def  *http.Client
@@ -187,6 +190,13 @@ func (g *Gate) serve(w http.ResponseWriter, r *http.Request, chat, toolCall stri
 		rec.Aggregate = isIndex
 		g.Source.RecordWeb(rec)
 	}
+	isFile := rt.Kind == KindFile || rt.Kind == KindTarball
+	if isFile && resp.StatusCode == http.StatusOK && g.MaxFile > 0 && resp.ContentLength > g.MaxFile {
+		// Before any byte (and before any header) goes to the sandbox; closing the body aborts the fetch.
+		why := netgrant.MsgTooLarge(rt.Eco, rt.Name, rt.File, resp.ContentLength, g.MaxFile, g.TmpMB, g.HomeMB, v.GrantID)
+		deny(http.StatusRequestEntityTooLarge, why, netgrant.CodeTooLarge)
+		return
+	}
 	if resp.StatusCode != http.StatusOK || r.Method == http.MethodHead {
 		copyHeader(w, resp, true)
 		w.WriteHeader(resp.StatusCode)
@@ -238,28 +248,42 @@ func (g *Gate) serve(w http.ResponseWriter, r *http.Request, chat, toolCall stri
 		_ = copyChecked(counted, resp.Body, still)
 		finish(http.StatusOK)
 	case KindFile, KindTarball:
-		g.streamFile(w, resp, counted, rt, v, chat, still, finish, deny)
+		if err := g.streamFile(w, resp, counted, rt, v, chat, still, finish, deny); errors.Is(err, errTooLarge) {
+			// The answer had no length and grew past the limit: the client got a cut-off download.
+			rec.Denied = netgrant.MsgTooLarge(rt.Eco, rt.Name, rt.File, -1, g.MaxFile, g.TmpMB, g.HomeMB, v.GrantID)
+			rec.Reason = netgrant.CodeTooLarge
+			slog.Warn("package gate: refused", "chat", chat, "eco", rt.Eco, "package", rt.Name, "reason", netgrant.CodeTooLarge)
+			finish(http.StatusOK)
+		}
 	}
 }
 
 // streamFile passes a wheel, an sdist or a tarball on. The last holdBack bytes stay back until the file has been
 // scanned for the dependencies it declares, so that the client cannot ask for them before they are allowed.
 func (g *Gate) streamFile(w http.ResponseWriter, resp *http.Response, counted *countWriter, rt Route, v Verdict, chat string,
-	still func() error, finish func(int), deny func(int, string, string)) {
+	still func() error, finish func(int), deny func(int, string, string)) error {
 	tmp, err := os.CreateTemp(g.TmpDir, "pkggate-*")
 	if err != nil {
 		deny(http.StatusInternalServerError, "no temporary file", netgrant.CodeUpstream)
-		return
+		return nil
 	}
 	defer os.Remove(tmp.Name())
 	defer tmp.Close()
 	copyHeader(w, resp, true)
 	w.WriteHeader(http.StatusOK)
 	tw := &tailWriter{w: counted, keep: holdBack}
-	if err := copyChecked(io.MultiWriter(tmp, tw), resp.Body, still); err != nil {
-		// Cut the answer short: the client sees a broken download, not a complete file.
+	var src io.Reader = resp.Body
+	if g.MaxFile > 0 {
+		src = &limitReader{r: resp.Body, max: g.MaxFile}
+	}
+	if err := copyChecked(io.MultiWriter(tmp, tw), src, still); err != nil {
+		// Cut the answer short: the client sees a broken download, not a complete file. Nothing is flushed, the
+		// file is not counted as downloaded and its dependencies do not join the grant.
+		if errors.Is(err, errTooLarge) {
+			return err // serve records the refusal
+		}
 		finish(http.StatusOK)
-		return
+		return nil
 	}
 	if rt.Eco == netgrant.Pip && !v.Full {
 		if meta := scanPipFile(tmp.Name(), rt.File); meta != nil {
@@ -269,6 +293,25 @@ func (g *Gate) streamFile(w http.ResponseWriter, resp *http.Response, counted *c
 	g.Source.Downloaded(chat, rt.Eco, rt.Name, v.Grants)
 	_ = tw.Flush()
 	finish(http.StatusOK)
+	return nil
+}
+
+var errTooLarge = errors.New("package file too large")
+
+// limitReader fails with errTooLarge before it hands out the byte that passes max.
+type limitReader struct {
+	r   io.Reader
+	max int64
+	n   int64
+}
+
+func (l *limitReader) Read(p []byte) (int, error) {
+	n, err := l.r.Read(p)
+	l.n += int64(n)
+	if l.n > l.max {
+		return 0, errTooLarge
+	}
+	return n, err
 }
 
 func (g *Gate) addDeps(chat string, rt Route, v Verdict, deps []netgrant.Dep) {

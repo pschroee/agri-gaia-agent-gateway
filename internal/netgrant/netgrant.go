@@ -280,6 +280,7 @@ const (
 	CodeUnassigned       = "unassigned"
 	CodeCacheRedirect    = "cache_redirect"
 	CodeBadRequest       = "bad_request"
+	CodeTooLarge         = "too_large"
 )
 
 // Decision is the verdict on one connection. GrantID names the grant that allowed it, or, for a refusal that a grant
@@ -312,6 +313,29 @@ func MsgPackageNotListed(eco, name string) string {
 // MsgVersionMismatch: the agent asked for exactly one version of a root package.
 func MsgVersionMismatch(eco, name, want, got string) string {
 	return fmt.Sprintf("blocked: %s package %s is allowed in version %s only, not %s", eco, name, want, got)
+}
+
+// MsgTooLarge: a package file does not fit into the sandbox. size < 0: the answer had no length, max was passed.
+// tmpMB and homeMB are the sizes of /tmp and the home directory; grant 0 leaves out the hint to end the access.
+func MsgTooLarge(eco, name, file string, size, max, tmpMB, homeMB, grant int64) string {
+	has := fmt.Sprintf("has more than %d MB", max>>20)
+	if size >= 0 {
+		has = fmt.Sprintf("has %d MB", size>>20)
+	}
+	msg := fmt.Sprintf("blocked: %s package %s is too large for this sandbox: %s %s, package files may have at most %d MB "+
+		"(/tmp holds %d MB, the home directory %s). Large ML libraries such as torch and torchvision are preinstalled in "+
+		"notebook runs: use the skill notebook.", eco, name, file, has, max>>20, tmpMB, mbOrGB(homeMB))
+	if grant > 0 {
+		msg += fmt.Sprintf(" If this access is no longer needed, end it with agw-internet off %d", grant)
+	}
+	return msg
+}
+
+func mbOrGB(mb int64) string {
+	if mb >= 1024 && mb%1024 == 0 {
+		return fmt.Sprintf("%d GB", mb>>10)
+	}
+	return fmt.Sprintf("%d MB", mb)
 }
 
 // MsgNotListed: the host is not part of any grant.
