@@ -849,14 +849,14 @@ func nullGrant(id int64) *int64 {
 
 // FinishWebRequest completes a tunnel when it closes. A collapsed row adds the bytes to its total and keeps its
 // outcome; a single row takes the final values.
-func (s *Store) FinishWebRequest(ctx context.Context, id, up, down, durationMs int64, denied string) error {
+func (s *Store) FinishWebRequest(ctx context.Context, id, up, down, durationMs int64, denied, reason string) error {
 	return s.exec1(ctx, `UPDATE web_requests SET
 		bytes_up = CASE WHEN method = $6 THEN bytes_up + $2 ELSE $2 END,
 		bytes_down = CASE WHEN method = $6 THEN bytes_down + $3 ELSE $3 END,
 		duration_ms = CASE WHEN method = $6 THEN duration_ms + $4 ELSE $4 END,
 		denied = CASE WHEN method = $6 THEN denied ELSE $5 END,
-		reason = CASE WHEN method <> $6 AND $5::text <> '' AND reason = '' THEN 'access_ended' ELSE reason END
-		WHERE id=$1`, id, up, down, durationMs, noNUL(denied), CollapsedMethod)
+		reason = CASE WHEN method <> $6 AND $5::text <> '' AND reason = '' THEN COALESCE(NULLIF($7,''),'access_ended') ELSE reason END
+		WHERE id=$1`, id, up, down, durationMs, noNUL(denied), CollapsedMethod, reason)
 }
 
 // WebRequests returns a chat's requests through the web proxy.

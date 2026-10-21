@@ -26,7 +26,7 @@ Ask for the narrowest kind that does the job. One kind per request; ask again fo
 
 ```bash
 agw-internet search "find two sources on tail biting in pigs"
-agw-internet domains download.tensorflow.org,storage.googleapis.com "download the flowers archive" --mb 800
+agw-internet domains download.tensorflow.org,storage.googleapis.com "download the flowers archive" --mb 400
 agw-internet packages pip:scikit-learn,pip:lightgbm "fit a gradient boosting model on the table"
 agw-internet full "clone a repository over ssh and run its installer"
 ```
@@ -56,6 +56,7 @@ A refused connection says why and what to do next, for example
   it (`agw-internet domains <target host> "<reason>"`). Read the `Location` of the redirect.
 - `blocked: only https is allowed for listed domains`: use the https URL.
 - pip or npm only print an HTTP error (403, 413): `agw-internet status` lists the last refusals with their reason.
+- curl or wget stop with an incomplete transfer or "unexpected eof": run agw-internet status; too_large means the file is over 256 MB.
 - `blocked: grant <n> ended (time limit | data limit | installed | switched off)`: the access is
   over; ask again if the task still needs it.
 
@@ -65,6 +66,9 @@ Every access except `packages` is limited in time and data, whichever comes firs
 500 MB by default, at most 120 minutes and 5000 MB). You may propose `--minutes N` and `--mb N`;
 the gateway keeps them within its bounds. `agw-internet status` lists the active grants with the
 time and data left. Large downloads need a larger `--mb` from the start.
+A single download may have at most 256 MB: the gateway closes a connection that passes it (curl then fails with an
+incomplete transfer; agw-internet status shows "too_large"). Larger datasets belong on the platform, not in the
+sandbox. Several files over one connection count together, so download large files one per command.
 
 ## Switching it off
 

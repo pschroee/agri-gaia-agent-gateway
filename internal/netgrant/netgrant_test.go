@@ -228,3 +228,36 @@ func TestMsgTooLarge(t *testing.T) {
 		t.Errorf("without length or grant: %q", m)
 	}
 }
+
+// The wording of the package message must not change when the tail is shared.
+func TestMsgTooLargeUnchanged(t *testing.T) {
+	got := MsgTooLarge("pip", "torch", "t.whl", 555<<20, 256<<20, 512, 1024, 8)
+	want := "blocked: pip package torch is too large for this sandbox: t.whl has 555 MB, package files may have at most 256 MB " +
+		"(/tmp holds 512 MB, the home directory 1 GB). Large ML libraries such as torch and torchvision are preinstalled in " +
+		"notebook runs: use the skill notebook. If this access is no longer needed, end it with agw-internet off 8"
+	if got != want {
+		t.Fatalf("got  %q\nwant %q", got, want)
+	}
+}
+
+func TestMsgDownloadTooLarge(t *testing.T) {
+	m := MsgDownloadTooLarge("files.example.org", "/data/big.zip", 700<<20, 256<<20, 512, 1024, 8)
+	for _, want := range []string{"blocked: the download from files.example.org is too large for this sandbox", "/data/big.zip has 700 MB",
+		"at most 256 MB", "/tmp holds 512 MB", "home directory 1 GB", "skill notebook", "agw-internet off 8"} {
+		if !strings.Contains(m, want) {
+			t.Errorf("%q misses %q", m, want)
+		}
+	}
+	m = MsgDownloadTooLarge("files.example.org", "", -1, 256<<20, 512, 1024, 0)
+	for _, want := range []string{"the connection to files.example.org was closed after 256 MB", "at most 256 MB per connection"} {
+		if !strings.Contains(m, want) {
+			t.Errorf("tunnel: %q misses %q", m, want)
+		}
+	}
+	if strings.Contains(m, "agw-internet off") {
+		t.Errorf("without a grant: %q", m)
+	}
+	if m := MsgDownloadTooLarge("h", "/x", -1, 256<<20, 512, 1024, 0); !strings.Contains(m, "/x has more than 256 MB") {
+		t.Errorf("without length: %q", m)
+	}
+}

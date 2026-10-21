@@ -143,7 +143,7 @@ func TestGrantLogRowCap(t *testing.T) {
 		t.Fatalf("collapsed row: %+v", coll)
 	}
 	// Finishing a tunnel recorded into a collapsed row adds to it and keeps its outcome.
-	if err := s.FinishWebRequest(ctx, id4, 5, 7, 100, "tunnel closed"); err != nil {
+	if err := s.FinishWebRequest(ctx, id4, 5, 7, 100, "tunnel closed", ""); err != nil {
 		t.Fatal(err)
 	}
 	rows, _ = s.GrantWebRequests(ctx, chat, g.ID)
@@ -154,7 +154,7 @@ func TestGrantLogRowCap(t *testing.T) {
 	}
 	// A single row is overwritten by the final values.
 	one, _ := s.AddWebRequest(ctx, WebRequest{ChatID: chat, Method: "CONNECT", Host: "b.example.org", StartedAt: now})
-	if err := s.FinishWebRequest(ctx, one, 1, 2, 3, "tunnel closed: grant 1 ended (time limit)"); err != nil {
+	if err := s.FinishWebRequest(ctx, one, 1, 2, 3, "tunnel closed: grant 1 ended (time limit)", ""); err != nil {
 		t.Fatal(err)
 	}
 	all, _ := s.WebRequests(ctx, chat)
@@ -274,5 +274,50 @@ func TestIndexAggregateBlockedAndSummary(t *testing.T) {
 	page, err := s.ListActivity(ctx, ActivityFilter{Kind: KindInternet, Owner: &u1})
 	if err != nil || len(page.Calls) != 1 || page.Calls[0].Grant == nil || page.Calls[0].Grant.ID != f.ID || page.Calls[0].Grant.Kind != "full" {
 		t.Fatalf("activity: %+v %v", page.Calls, err)
+	}
+}
+
+// A tunnel closed for its size keeps the code too_large; an unnamed refusal is access_ended; a collapsed row is unchanged.
+func TestFinishWebRequestReason(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	chat := newGrantChat(t, s)
+	now := time.Now()
+	a, _ := s.AddWebRequest(ctx, WebRequest{ChatID: chat, Method: "CONNECT", Host: "a.example.org", StartedAt: now})
+	b, _ := s.AddWebRequest(ctx, WebRequest{ChatID: chat, Method: "CONNECT", Host: "b.example.org", StartedAt: now})
+	if err := s.FinishWebRequest(ctx, a, 1, 2, 3, "blocked: too large", "too_large"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.FinishWebRequest(ctx, b, 1, 2, 3, "tunnel closed: grant ended", ""); err != nil {
+		t.Fatal(err)
+	}
+	rows, _ := s.WebRequests(ctx, chat)
+	for _, r := range rows {
+		switch r.ID {
+		case a:
+			if r.Reason != "too_large" {
+				t.Errorf("reason of a: %q", r.Reason)
+			}
+		case b:
+			if r.Reason != "access_ended" {
+				t.Errorf("reason of b: %q", r.Reason)
+			}
+		}
+	}
+	// The collapsed row keeps its outcome whatever the tunnel reports.
+	g, _ := s.CreateGrant(ctx, Grant{ChatID: chat, Kind: "full", Origin: GrantByUser, State: GrantActive, MaxMinutes: 30, MaxBytes: 1 << 20})
+	id1, _ := s.AddWebRequestCapped(ctx, webRow(chat, g.ID, "c.example.org", "", now), 0)
+	id2, _ := s.AddWebRequestCapped(ctx, webRow(chat, g.ID, "c.example.org", "", now), 0)
+	if id1 != id2 {
+		t.Skip("rows did not collapse")
+	}
+	if err := s.FinishWebRequest(ctx, id1, 1, 1, 1, "x", "too_large"); err != nil {
+		t.Fatal(err)
+	}
+	grows, _ := s.GrantWebRequests(ctx, chat, g.ID)
+	for _, r := range grows {
+		if r.ID == id1 && (r.Denied != "" || r.Reason == "too_large") {
+			t.Errorf("collapsed row: %+v", r)
+		}
 	}
 }

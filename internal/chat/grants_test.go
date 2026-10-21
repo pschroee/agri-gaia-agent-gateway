@@ -502,3 +502,26 @@ func TestRecentRefusalsWindow(t *testing.T) {
 		t.Fatalf("other chat: %+v", rs)
 	}
 }
+
+// A tunnel that closes with a refusal counts like a refused request: the grant counter and the event.
+func TestFinishWebCountsRefusal(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	chatID, _ := newChatNoNet(t, e)
+	g := startTestGrant(t, e, chatID, "domains", []string{"a.example.org"}, 30, 100)
+	id := e.m.RecordWeb(webproxy.Request{ChatID: chatID, Method: "CONNECT", Host: "a.example.org", Port: 443, Status: 200, StartedAt: time.Now(), GrantID: g.ID, Origin: "exec"})
+	if id == 0 {
+		t.Fatal("not stored")
+	}
+	events, cancel := e.m.Subscribe(chatID)
+	defer cancel()
+	e.m.FinishWeb(id, webproxy.Request{ChatID: chatID, GrantID: g.ID, BytesDown: 5 << 20, Denied: "blocked: the connection to a.example.org was closed after 256 MB", Reason: "too_large"})
+	waitEvent(t, events, "internet_blocked", "")
+	if got, _ := e.st.GetGrant(ctx, g.ID); got.Blocked != 1 {
+		t.Fatalf("blocked stored: %+v", got)
+	}
+	rows, _ := e.m.GrantWebRequests(ctx, chatID, g.ID)
+	if len(rows) != 1 || rows[0].Reason != "too_large" {
+		t.Fatalf("rows: %+v", rows)
+	}
+}

@@ -2,6 +2,7 @@ package webproxy
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/tls"
 	"errors"
@@ -488,4 +489,202 @@ func TestProxyDoesNotFollowRedirects(t *testing.T) {
 	if hits != 0 {
 		t.Fatal("the proxy followed the redirect")
 	}
+}
+
+// bigTarget is a raw TCP target that sends n bytes to each connection and then keeps it open until the client closes.
+func bigTarget(t *testing.T, n int) int {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer c.Close()
+				_, _ = c.Write(bytes.Repeat([]byte("x"), n))
+				_, _ = io.Copy(io.Discard, c)
+			}()
+		}
+	}()
+	return ln.Addr().(*net.TCPAddr).Port
+}
+
+func limited(max int64, port int) func(*Proxy) {
+	return func(p *Proxy) { p.MaxDownload, p.TmpMB, p.HomeMB, p.HTTPPort = max, 512, 1024, port }
+}
+
+func withSlack(t *testing.T, n int64) {
+	old := TunnelSlack
+	TunnelSlack = n
+	t.Cleanup(func() { TunnelSlack = old })
+}
+
+func waitRec(t *testing.T, g *gate, ok func(Request) bool) Request {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for !ok(g.last()) {
+		if time.Now().After(deadline) {
+			t.Fatalf("log: %+v", g.last())
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	return g.last()
+}
+
+// A tunnel that passes the limit is closed on both sides; the client gets at most the limit.
+func TestTunnelTooLarge(t *testing.T) {
+	withSlack(t, 0)
+	const max = 1 << 20
+	port := bigTarget(t, max+1)
+	g := &gate{known: true, grants: full()}
+	c, _, _, _ := setup(t, g, limited(max, port))
+	conn, br, resp := connect(t, c, "target.test:"+strconv.Itoa(port))
+	if resp.StatusCode != 200 {
+		t.Fatalf("CONNECT: %v", resp)
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	n, _ := io.Copy(io.Discard, br)
+	if n > max {
+		t.Fatalf("client got %d bytes, limit %d", n, max)
+	}
+	r := waitRec(t, g, func(r Request) bool { return r.Reason == netgrant.CodeTooLarge })
+	if !strings.Contains(r.Denied, "closed after") || r.BytesDown > max {
+		t.Fatalf("log: %+v", r)
+	}
+}
+
+// Exactly the limit passes.
+func TestTunnelAtLimit(t *testing.T) {
+	withSlack(t, 0)
+	const max = 1 << 20
+	port := bigTarget(t, max)
+	g := &gate{known: true, grants: full()}
+	c, _, _, _ := setup(t, g, limited(max, port))
+	conn, br, _ := connect(t, c, "target.test:"+strconv.Itoa(port))
+	got := 0
+	buf := make([]byte, 32<<10)
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	for got < max {
+		n, err := br.Read(buf)
+		got += n
+		if err != nil {
+			break
+		}
+	}
+	if got != max {
+		t.Fatalf("got %d, want %d", got, max)
+	}
+	conn.Close()
+	r := waitRec(t, g, func(r Request) bool { return r.BytesDown > 0 })
+	if r.Reason == netgrant.CodeTooLarge {
+		t.Fatalf("refused at the limit: %+v", r)
+	}
+}
+
+// The size limit wins over an ended grant when both apply.
+func TestTunnelLimitBeatsRevoked(t *testing.T) {
+	withSlack(t, 0)
+	old := RecheckEvery
+	RecheckEvery = 20 * time.Millisecond
+	defer func() { RecheckEvery = old }()
+	const max = 1 << 20
+	port := bigTarget(t, 2*max)
+	g := &gate{known: true, grants: full()}
+	g.mu.Lock()
+	g.ended = "switched off"
+	g.mu.Unlock()
+	c, _, _, _ := setup(t, g, limited(max, port))
+	conn, br, resp := connect(t, c, "target.test:"+strconv.Itoa(port))
+	if resp.StatusCode == 200 {
+		_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		_, _ = io.Copy(io.Discard, br)
+		waitRec(t, g, func(r Request) bool { return r.Reason == netgrant.CodeTooLarge || r.Reason == netgrant.CodeAccessEnded })
+	}
+}
+
+// Without a limit nothing is cut.
+func TestTunnelNoLimit(t *testing.T) {
+	const n = 2 << 20
+	port := bigTarget(t, n)
+	g := &gate{known: true, grants: full()}
+	c, _, _, _ := setup(t, g, limited(0, port))
+	conn, br, _ := connect(t, c, "target.test:"+strconv.Itoa(port))
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if _, err := io.CopyN(io.Discard, br, n); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A known length over the limit is answered with 413 before any body byte.
+func TestForwardTooLargeByLength(t *testing.T) {
+	const max = 1 << 20
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", strconv.Itoa(2*max))
+		_, _ = w.Write(bytes.Repeat([]byte("x"), 2*max))
+	}))
+	defer target.Close()
+	g := &gate{known: true, grants: full()}
+	c, _, _, _ := setup(t, g, limited(max, portOf(t, target.URL)))
+	resp, err := c.Get("http://target.test:" + strconv.Itoa(portOf(t, target.URL)) + "/data/big.zip")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 413 || !strings.Contains(string(b), "/data/big.zip has 2 MB") || len(b) > 2000 {
+		t.Fatalf("status %d body %q", resp.StatusCode, b)
+	}
+	r := waitRec(t, g, func(r Request) bool { return r.Reason == netgrant.CodeTooLarge })
+	if r.Status != 413 {
+		t.Fatalf("log: %+v", r)
+	}
+}
+
+// Without a length the body is cut after the limit and the refusal is logged.
+func TestForwardTooLargeChunked(t *testing.T) {
+	const max = 1 << 20
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.(http.Flusher).Flush()
+		_, _ = w.Write(bytes.Repeat([]byte("x"), 2*max))
+	}))
+	defer target.Close()
+	g := &gate{known: true, grants: full()}
+	c, _, _, _ := setup(t, g, limited(max, portOf(t, target.URL)))
+	resp, err := c.Get("http://target.test:" + strconv.Itoa(portOf(t, target.URL)) + "/chunked")
+	if err == nil {
+		b, rerr := io.ReadAll(resp.Body)
+		if rerr == nil || len(b) > max {
+			t.Fatalf("body of %d bytes, err %v", len(b), rerr)
+		}
+	}
+	waitRec(t, g, func(r Request) bool {
+		return r.Reason == netgrant.CodeTooLarge && strings.Contains(r.Denied, "more than")
+	})
+}
+
+// SearXNG tunnels are limited as well.
+func TestSearxTunnelLimited(t *testing.T) {
+	withSlack(t, 0)
+	const max = 1 << 20
+	port := bigTarget(t, max+1)
+	g := &gate{known: true, grants: full()}
+	c, _, _, _ := setup(t, g, func(p *Proxy) {
+		p.MaxDownload = max
+		p.Searx, _ = url.Parse("http://127.0.0.1:" + strconv.Itoa(port))
+	})
+	conn, br, resp := connect(t, c, "searxng:8080")
+	if resp.StatusCode != 200 {
+		t.Fatalf("CONNECT: %v", resp)
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	n, _ := io.Copy(io.Discard, br)
+	if n > max {
+		t.Fatalf("client got %d bytes", n)
+	}
+	waitRec(t, g, func(r Request) bool { return r.Reason == netgrant.CodeTooLarge })
 }
