@@ -317,7 +317,8 @@ func (m *Manager) hasPackagesGrant(chatID string) bool {
 	return false
 }
 
-// installedScript prints {"pip:name": "version", "npm:name": "version"} for the wanted names it finds installed:
+// installedScript prints {"pip:name": ["version", …], "npm:name": ["version", …]} for the wanted names it finds installed
+// (every version found: a system package of another version must not hide the one in the sandbox's virtualenv):
 // pip through importlib.metadata (the interpreter's sites) and *.dist-info below /workspace and the home directory,
 // npm through node_modules/<name>/package.json below /workspace and the global prefixes.
 const installedScript = `
@@ -333,7 +334,7 @@ if pw:
         for d in md.distributions():
             n = norm(d.metadata["Name"] or "")
             if n in pw:
-                out.setdefault("pip:" + n, d.version)
+                out.setdefault("pip:" + n, []).append(d.version)
     except Exception:
         pass
 budget = 60000
@@ -353,14 +354,14 @@ for root in roots:
             if d.endswith(".dist-info"):
                 m = re.match(r"(.+?)-(\d[^-]*)\.dist-info$", d)
                 if m and norm(m.group(1)) in pw:
-                    out.setdefault("pip:" + norm(m.group(1)), m.group(2))
+                    out.setdefault("pip:" + norm(m.group(1)), []).append(m.group(2))
                 continue
             if d == "node_modules":
                 for n in nw:
                     pj = os.path.join(dp, d, n, "package.json")
                     if os.path.isfile(pj):
                         try:
-                            out.setdefault("npm:" + n, json.load(open(pj)).get("version", ""))
+                            out.setdefault("npm:" + n, []).append(json.load(open(pj)).get("version", ""))
                         except Exception:
                             pass
                 continue
@@ -371,7 +372,7 @@ for g in ["/home/agent/.local/lib/node_modules", os.path.expanduser("~/.local/li
         pj = os.path.join(g, n, "package.json")
         if os.path.isfile(pj):
             try:
-                out.setdefault("npm:" + n, json.load(open(pj)).get("version", ""))
+                out.setdefault("npm:" + n, []).append(json.load(open(pj)).get("version", ""))
             except Exception:
                 pass
 print(json.dumps(out))
@@ -409,7 +410,7 @@ func (m *Manager) runInstalledCheck(chatID string) {
 		slog.Debug("installed check failed", "chat", chatID, "err", err)
 		return
 	}
-	var found map[string]string
+	var found map[string][]string
 	if json.Unmarshal(lastLine(out), &found) != nil {
 		return
 	}
@@ -425,19 +426,28 @@ func lastLine(b []byte) []byte {
 }
 
 // applyInstalled marks the found packages and ends a grant whose roots are all installed.
-func (m *Manager) applyInstalled(ctx context.Context, chatID string, found map[string]string) {
+func (m *Manager) applyInstalled(ctx context.Context, chatID string, found map[string][]string) {
 	for _, l := range m.grants.active(chatID) {
 		if l.g.Kind != string(netgrant.Packages) || l.pkgs == nil {
 			continue
 		}
 		changed := false
 		for _, p := range l.pkgs.list() {
-			ver, ok := found[pkgKey(p.Ecosystem, p.Name)]
-			if !ok || p.InstalledAt != nil {
+			vers := found[pkgKey(p.Ecosystem, p.Name)]
+			if len(vers) == 0 || p.InstalledAt != nil {
 				continue
 			}
-			if p.Version != "" && normVersion(p.Version) != normVersion(ver) {
-				continue // another version is there; the pinned one is not installed yet
+			ver := vers[len(vers)-1] // the last one found lies below the workspace or home, after the system's
+			if p.Version != "" {
+				ver = ""
+				for _, v := range vers {
+					if normVersion(p.Version) == normVersion(v) {
+						ver = v
+					}
+				}
+				if ver == "" {
+					continue // other versions are there; the pinned one is not installed yet
+				}
 			}
 			now := time.Now()
 			if l.pkgs.update(p.Ecosystem, p.Name, func(e *store.GrantPackage) bool {

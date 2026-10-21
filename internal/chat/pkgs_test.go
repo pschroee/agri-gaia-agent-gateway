@@ -104,14 +104,14 @@ func TestInstalledEndsPackagesGrant(t *testing.T) {
 	if s := states(); s["torch"].State != store.PkgDownloaded || s["timm"].State != store.PkgWaiting || s["numpy"].Parent != "torch" {
 		t.Fatalf("states: %+v", s)
 	}
-	e.m.applyInstalled(ctx, chatID, map[string]string{"pip:torch": "2.5.1", "pip:timm": "1.0.9", "pip:numpy": "2.1.0"})
+	e.m.applyInstalled(ctx, chatID, map[string][]string{"pip:torch": {"2.5.1"}, "pip:timm": {"1.0.9"}, "pip:numpy": {"2.1.0"}})
 	if s := states(); s["torch"].State != store.PkgInstalled || s["torch"].InstalledVersion != "2.5.1" || s["timm"].State != store.PkgWaiting {
 		t.Fatalf("a wrong version of a pinned root is not installed: %+v", s)
 	}
 	if got, _ := e.st.GetGrant(ctx, g.ID); got.State != store.GrantActive {
 		t.Fatalf("ended too early: %+v", got)
 	}
-	e.m.applyInstalled(ctx, chatID, map[string]string{"pip:timm": "1.0.11"})
+	e.m.applyInstalled(ctx, chatID, map[string][]string{"pip:timm": {"1.0.11"}})
 	got, _ := e.st.GetGrant(ctx, g.ID)
 	if got.State != store.GrantEnded || got.EndedReason != store.EndInstalled {
 		t.Fatalf("grant: %+v", got)
@@ -125,6 +125,24 @@ func TestInstalledEndsPackagesGrant(t *testing.T) {
 	_ = json.Unmarshal(list[0].Packages, &ps)
 	if len(ps) != 3 {
 		t.Fatalf("packages of the ended grant: %+v", ps)
+	}
+}
+
+// A system package of another version (six 1.17.0 in /usr/local) must not hide the pinned one in the sandbox's
+// virtualenv: the check reports every version found (Phase B, 21.10.2026).
+func TestInstalledPinnedBesideSystemVersion(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	chatID, _ := newChatNoNet(t, e)
+	g := startPackagesGrant(t, e, chatID, "pip:six==1.16.0")
+	e.m.applyInstalled(ctx, chatID, map[string][]string{"pip:six": {"1.17.0"}})
+	if got, _ := e.st.GetGrant(ctx, g.ID); got.State != store.GrantActive {
+		t.Fatalf("another version is not the pinned one: %+v", got)
+	}
+	e.m.applyInstalled(ctx, chatID, map[string][]string{"pip:six": {"1.17.0", "1.16.0"}})
+	got, _ := e.st.GetGrant(ctx, g.ID)
+	if got.State != store.GrantEnded || got.EndedReason != store.EndInstalled {
+		t.Fatalf("grant: %+v", got)
 	}
 }
 

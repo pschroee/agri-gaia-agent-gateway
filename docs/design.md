@@ -723,7 +723,7 @@ images. Both run as an extension **in pi's container** and call `fetch`.
   status, bytes, duration, reason for refusal), SSE `web_request`, API `GET /api/chats/{id}/web_requests`.
   A tunnel is listed there from the moment it is set up; bytes and duration are added on close (Node keeps tunnels
   open). For HTTPS only the target is visible, not the path. An open tunnel re-checks the switch
-  every 2 s and closes as soon as internet is off (`denied`: "tunnel closed: internet
+  every 250 ms and closes as soon as internet is off (`denied`: "tunnel closed: internet
   switched off"); otherwise Node could have kept sending through an open tunnel for up to 5 min after switching off
   (security review 2026-09-30, classified as hardening).
 - **Offered only with internet:** `web-gate.ts` queries the switch at the socket (`GET /tool/internet`)
@@ -1699,7 +1699,7 @@ any grant is active.
   public address (the connection goes to exactly that address). For a `domains` grant the proxy reads the TLS
   ClientHello of the tunnel (peeked, replayed to the target) and requires the server name to equal the CONNECT host;
   a missing name is refused. Redirects are never followed. Every read and write counts on the grant; the tunnel
-  rechecks the grant every 2 s and closes when it ended or reached its data limit.
+  rechecks the grant every 250 ms and closes when it ended or reached its data limit.
 - **Counting and ends:** the web proxy counts what it carries; for a `full` grant Docker's network counters of the
   execution sandbox are sampled every 6 s (all interfaces, a smaller value means a new container). A maintenance loop
   (2 s) ends grants at their limits, saves counters every 10 s and tells the UI (`internet_grant` events). The active
