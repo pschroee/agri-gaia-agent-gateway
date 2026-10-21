@@ -106,14 +106,25 @@ refer to this repository.
   `bindingTools` and that test. Old chats of any combination resume through slots started on demand
   (`pool.SetKnown`). Rules in `API.md`, *Bindings of new chats*.
 
-## Internet switch of the agent
+## Internet grants of the agent
 
-- The agent requests internet (approval) and switches it off itself (no approval) in every binding (issue #34):
-  `agw-internet "<reason>"` / `agw-internet off`, MCP `request_internet` / `disable_internet`, and in the REST binding
-  the tools `request_internet` / `disable_internet` of `api.ts` (socket `POST /internet`, `POST /internet/off` at pi's
-  socket, logged as `api`). `Manager.DisableInternet` reuses `SetInternet` (chat lock, `chat` event) and is a no-op
-  with `already_off` when internet is off. `agw-internet off` with further arguments is refused on purpose; a reason
-  that is literally `off` goes after `--`. Rules in `API.md`, *Internet switch of the agent*.
+- Internet is a set of **grants**, not a switch (issue #175, stage 1): the agent requests one kind (`search`,
+  `domains`, `packages`, `full`) with a reason and ends grants itself (no approval), in every binding: `agw-internet
+  search|domains|packages|full … ` / `agw-internet off [<id>]` / `agw-internet status`, MCP `request_internet` /
+  `disable_internet`, the tools of `api.ts` (socket `POST /internet`, `GET /internet`, `POST /internet/off`, logged as
+  `api`). The rules live in `internal/netgrant` (pure, no I/O: parsing, limits, `Decide`); `chat/grants.go` holds the
+  active grants in memory and does requests, starts, ends, the 2 s loop and the web proxy's gate (`Manager.WebGate()`,
+  a separate type because `Manager.Decide`/`Attribute` already mean other things). `chats.internet` is only derived
+  ("any grant active"); the old user switch is a `full` grant of the user's with the default limits. The old form
+  `agw-internet "<reason>"` exits with 2 on purpose (it would silently become `full`). Rules in `API.md`,
+  *Internet grants of the agent*.
+- **Stage 1 limits:** `packages` is refused (stage 2: package gate and relay together, they must be rolled out as one);
+  commands in the sandbox still reach the network only through the egress network of a `full` grant, so `search` and
+  `domains` take effect for pi's web tools only until the relay exists.
+- **Web proxy details that cost thought:** the SNI of a `domains` tunnel is peeked from a 20 KiB buffer (the hijacked
+  reader holds 4 KiB, a ClientHello with post-quantum key shares can exceed that) and replayed to the target;
+  `closeWrite` needs the raw `net.Conn`, so byte counting wraps the writers, not the connection. Collapsed rows of
+  `web_requests` have `method "*"`; `FinishWebRequest` adds to them instead of overwriting.
 - **Guidance on web research** (issue #44) has three layers that must stay consistent: the tool texts in
   `images/agw-basis/ext/web-tools.ts` (loaded in place of pi-searxng-suite, which stays unchanged; pi keeps the first
   registration of a tool name, so the texts are set while the suite registers, through a proxy of the API), the

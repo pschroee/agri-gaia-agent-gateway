@@ -106,7 +106,8 @@ type Chat = {
   model: string;          // Model.id
   variant: Variant["id"];
   state: "active" | "dormant";  // dormant (idle): continues with the next message
-  internet: boolean;      // sandbox has internet access (switch per chat, takes effect immediately; off by default, the agent can ask for it via approval and switch it off itself, see "Internet switch of the agent")
+  internet: boolean;      // true while any internet grant is active (off by default; the agent asks for a kind of access via approval and ends it itself, see "Internet grants of the agent")
+  internet_grants: Grant[]; // the active internet grants with their counters (issue #175)
   auto_compact: boolean;  // automatic compaction (switch per chat)
   compactions: number;    // number of compactions so far
   max_subagents: number;  // at most this many subagents at the same time; fixed for the service, the same in every chat (see below)
@@ -1006,42 +1007,77 @@ the old id `both`) stops the start with an error naming the variable.
   socket), `api` (`platform_http`) and `cli` (`agw-platform` and `curl` at the sandbox's socket). In a combination all
   of them reach the same checks (delegation, approval) of the same chat.
 
-## Internet switch of the agent
+## Internet grants of the agent
 
-The sandbox has no internet by default (`Chat.internet`, `AGW_INTERNET_DEFAULT`). The agent can **request** it, which
-creates an `internet_access` approval and waits for the user's decision, and it can **switch it off** again itself
-without approval, because that only removes a right (issue #34). Both exist in every binding:
+The sandbox has no internet by default. The agent **requests** access of one **kind**, which creates an
+`internet_access` approval and waits for the user's decision; approving starts an **internet grant** (issue #175, it
+replaced the single switch of issue #34). A chat can hold several grants (at most 5 active); what it may reach is their
+union. The agent can **end** grants itself without approval, because that only removes a right. Kinds:
 
-| Binding | Request | Switch off |
+| Kind | Covers | Ends |
 |---|---|---|
-| `cli` | `agw-internet "<reason>"` (exit 0 approved, 3 rejected) | `agw-internet off` (exit 0) |
-| `mcp` | `mcp_request_internet {reason}` | `mcp_disable_internet {}` |
-| `api` | `request_internet {reason}` | `disable_internet {}` |
+| `search` | `web_search` and `web_extract` (pi's tools); never commands of the sandbox | time or data limit |
+| `domains` | https (CONNECT on 443) to the **exact** host names listed, at most 10, no wildcards, no IP addresses | time or data limit |
+| `packages` | pip and npm packages (not available yet: the request is refused) | when installed |
+| `full` | the whole internet through the egress network, as before issue #175 | time or data limit |
 
-- **CLI syntax:** `off` as the only argument (any case) switches off; anything else is the reason of a request.
-  `off` followed by further arguments is refused with exit 1 instead of guessed. A reason that is literally `off` or
-  starts with `-` goes after `--` (`agw-internet -- off`). `agw-artifact internet …` takes the same arguments.
-- **Switching off is idempotent:** with internet already off the call succeeds with `status: "already_off"` and
-  changes nothing (no network change, no event); otherwise the orchestrator disconnects the execution sandbox from the
-  egress network like the user's switch (`POST /api/chats/{id}/internet`), stores `internet: false` and sends the
-  `chat` event, so the toggles of the gateway UI and the platform frontend follow live. The web tools `web_search`
-  and `web_extract` disappear from the next request on (`web-gate.ts`); the web proxy refuses at once.
-- **Guidance for the agent** (issue #44): the system note names only the switch tools of the chat's bindings and the
-  flow request, `web_search`, `web_extract`, cite sources with URL, switch off; the skill `web-research` (`cli`,
-  `mcp`) has the details, and `ext/web-tools.ts` gives the two web tools fuller descriptions. Sources are cited as
-  Markdown links with a meaningful title, never as bare URLs (issue #61: rule in the skill's description, its text,
-  `web-tools.ts`, and `linkRule` in the system note, which also covers platform links and files).
-- **Socket endpoints** (both sockets; the channel follows from the socket: `cli` at the sandbox's socket, `api` at
-  pi's socket): `POST /internet {reason}` → `{status: "approved"|"rejected", name: "internet", message}`, and
-  `POST /internet/off` (no body) → `{status: "off"|"already_off", name: "internet", message}`. A slot without a chat
-  gets 409. MCP offers `request_internet` and `disable_internet` at both sockets.
-- **Log:** every call is a `socket_calls` entry: `op: "internet"` with the reason as `detail` and `result`
-  `approved`, `already on` (no approval needed), `rejected`, `expired` (no decision in time; before issue #37 logged as
-  `rejected`) or `error: …`, `op: "internet_off"` with `result` `off`, `already off`, `refused: not assigned` or
-  `error: …`; the user's switch is `via: "user"`, `op: "internet_set"`. The SSE event `socket_call` shows them in the
-  chat's activity, `GET /api/activity?kind=internet|all` across chats. The answer to the agent is unchanged
-  (`approved`/`rejected`).
-- **System note:** the agent is told to switch internet off again as soon as it is done with it.
+Time and data: the agent may propose `minutes` and `megabytes`, the gateway clamps them (defaults 30 min and 500 MB,
+bounds 120 min and 5000 MB: `AGW_INTERNET_MINUTES_DEFAULT|MAX`, `AGW_INTERNET_MB_DEFAULT|MAX`). The clock starts at the
+approval and runs while the chat idles; bytes count both directions over all connections of the grant (the web proxy
+counts what it carries, Docker's counters the execution sandbox of a `full` grant). A tunnel is rechecked every 2 s and
+closed when its grant ends or its data limit is reached.
+
+| Binding | Request | End |
+|---|---|---|
+| `cli` | `agw-internet search "<reason>"`, `agw-internet domains <host[,host…]> "<reason>" [--minutes N] [--mb N]`, `agw-internet packages <list> "<reason>"`, `agw-internet full "<reason>" [--minutes N] [--mb N]` | `agw-internet off [<grant id>]`; `agw-internet status` lists the active grants |
+| `mcp` | `mcp_request_internet {kind, reason, domains?, minutes?, megabytes?}` (kind `search` or `domains`) | `mcp_disable_internet {grant_id?}` |
+| `api` | `request_internet {kind, reason, domains?, minutes?, megabytes?}` (kind `search` or `domains`) | `disable_internet {grant_id?}` |
+
+- **CLI exit codes:** 0 approved (`approved: domains download.example.org until 15:42 or 500 MB (grant 7)`), 1 error,
+  2 wrong usage or `refused: <reason>` (the gateway checked the list or the binding), 3 `rejected: …` by the user. The old
+  form `agw-internet "<reason>"` exits with 2: it would silently have become full access. A reason that starts with `-`
+  goes after `--`. `agw-artifact internet …` takes the same arguments.
+- **MCP and API have no shell:** `packages` and `full` are refused there (`refused: … needs the command line`).
+- **What the user approves is what the gateway enforces:** the approval carries `internet` (`{grant_id, kind, domains,
+  packages, minutes, megabytes, ends_when_installed}`), built by the gateway from the normalised request; the agent's
+  reason is only a note. `preview` holds the same as readable text for clients that do not know the field.
+- **Same kind again:** a request that an active grant already covers answers `approved … (grant n, already active)`
+  without asking.
+- **Refusals at the proxy** are HTTP 403 with a text that names the reason and the next step (`blocked: <host> is not in
+  the allowed list of this chat; ask for it with agw-internet domains <host> "<reason>"`, `blocked: only https is
+  allowed for listed domains`, `blocked: TLS server name <sni> does not match <host>`, `blocked: search-only access
+  covers web_search and web_extract, not commands`, `blocked: internet access is off for this chat; …`, `blocked: grant
+  <id> ended (time limit|data limit|installed|switched off)`). **Redirects are never followed**: the target of a redirect
+  is a new connection, decided for itself. For a `domains` grant the TLS server name of the first flight must equal the
+  CONNECT host.
+- **Socket endpoints** (both sockets; the channel follows from the socket: `cli` at the sandbox's socket, `api` at pi's):
+  `POST /internet {kind, reason, domains?, packages?, minutes?, megabytes?}` → `{status: "approved"|"rejected"|"refused",
+  name: "internet", message}` (a missing or unknown `kind` is 400), `GET /internet` → `{grants: Grant[]}` (active),
+  `POST /internet/off {grant_id?}` → `{status: "off"|"already_off", …}`. A slot without a chat gets 409.
+  `GET /tool/internet` → `{enabled, search, extract}` steers `web-gate.ts`: `web_search` is on offer with a `search` or
+  `full` grant, `web_extract` with `search`, `domains` or `full`.
+- **Grants over HTTP:** `Chat.internet` (bool, true while any grant is active) and `Chat.internet_grants: Grant[]` (active).
+  `GET /api/chats/{id}/internet/grants` lists all (newest first), `POST /api/chats/{id}/internet/grants/{gid}/end` ends one
+  (200 with the grant, 409 `the internet grant is not active`). `POST /api/chats/{id}/internet {enabled}` is the user's
+  switch: **off ends all grants** (`ended_reason: user`), **on starts a `full` grant** of the user's with the default limits.
+  A chat created with `internet: true` (or `AGW_INTERNET_DEFAULT`) starts with such a grant. SSE: `internet_grant` (a
+  `Grant`) when a grant starts or ends and while its bytes grow (at most every 2 s).
+  `Grant`: `{id, chat_id, approval_id?, kind, origin: agent|user|default, via, reason, domains[], packages, state:
+  pending|active|ended|rejected|expired, max_minutes, max_bytes, bytes, blocked, created_at, started_at, expires_at,
+  ended_at, ended_reason: time|bytes|installed|user|agent|error}`.
+- **Log of connections:** every connection of pi through the web proxy is a `web_requests` row with `grant_id`, `origin`
+  (`pi`, `exec`, `pkg`), `package`, `version`, `parent`, `tool_call_id` and `count`. A grant keeps at most
+  `AGW_INTERNET_LOG_ROWS` (500) single rows; further connections are added to one collapsed row per (origin, host,
+  allowed/refused) with `method: "*"` and `count`. `GET /api/chats/{id}/web_requests?grant=<id>` filters by grant;
+  `GET /api/activity/connections?since&until&chat&grant&result=allowed|blocked&origin=pi|exec|pkg&before&limit` lists
+  them across the user's chats → `{connections: WebRequest[], chats, next_before}`.
+- **Log of requests:** every call is a `socket_calls` entry: `op: "internet"` with the reason as `detail` and `result`
+  `approved`, `already on`, `rejected`, `expired`, `refused: …` or `error: …`; `op: "internet_off"` (detail `grant <id>`
+  when one was named) with `off`, `already off`, `refused: not assigned` or `error: …`; the user's switch is
+  `via: "user"`, `op: "internet_set"`; **the end of a grant** is `op: "internet_end"`, `via: "gateway"`, detail
+  `grant <id> <kind>`, result `time|bytes|installed|user|agent|error`. `GET /api/activity?kind=internet|all` shows all of
+  them (`internet.action` request, off, switch or end).
+- **System note:** the agent is told to end internet access again as soon as it is done with it.
 
 ## Limit for subagents
 
@@ -2391,7 +2427,7 @@ not at the socket of the execution sandbox:
 | `POST /tool/bg/output` | `bg_output`: `{toolCallId, tool: "bg_output", sessionFile, id, tailLines}` → `{task, output}` (end of the output, up to 100 KiB) or `{error}` |
 | `POST /tool/bg/stop` | `bg_stop`: `{toolCallId, tool: "bg_stop", sessionFile, id}` → `{task}` or `{error}` |
 | `GET /tool/internet` | `web-gate.ts`: `{enabled}`, whether the chat has internet (shows or hides `web_search` and `web_extract`). A slot without a chat gets 409 without a log entry: every freshly started slot asks once before it is assigned |
-| `POST /internet`, `POST /internet/off` | `request_internet` and `disable_internet` of the REST binding (`api.ts`), logged with `via: "api"`; see *Internet switch of the agent* |
+| `POST /internet`, `GET /internet`, `POST /internet/off` | `request_internet` and `disable_internet` of the REST binding (`api.ts`), logged with `via: "api"`; see *Internet grants of the agent* |
 | `POST /tool/workflow` | script of a workflow (`subagent` with `workflowScript`), NDJSON in both directions on one connection. Request: first line `{"toolCallId", "tool": "subagent", "sessionFile", "source"}` (`source` is the source code of pi-subagents' worker, at most 4 MiB), then one host message `{"m": …}` per line; the end of the request ends the input. Response: per line what the worker writes in the execution sandbox (`{"m": …}` or `{"__agw":"error","message":…}`), at the end `{"done":true,"exit":n}`. Closing the connection aborts. The caller is `remote-worker.mjs`, which sends every message of the worker through the guard before pi-subagents sees it |
 
 Limits per slot (all endpoints together): at most **32 concurrent requests**; requests with large content (body,
