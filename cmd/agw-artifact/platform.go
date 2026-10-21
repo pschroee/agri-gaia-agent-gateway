@@ -197,7 +197,7 @@ func parseToolArgs(tool platform.Tool, args []string, stdin io.Reader) (map[stri
 func platformUsage(w io.Writer) {
 	fmt.Fprint(w, "agw-platform — Agri-Gaia platform through the orchestrator (the token is kept there, not here)\n\n")
 	for _, t := range platform.Tools {
-		fmt.Fprintf(w, "  agw-platform %s%s\n", t.CLI, synopsis(t))
+		fmt.Fprintf(w, "  agw-platform %s%s\n", t.CLI, t.Synopsis())
 	}
 	fmt.Fprint(w, "\nagw-platform <command> --help shows the description. Writing calls wait for confirmation\n"+
 		"by the user. Exit code: 0 ok, 3 rejected by the user, 4 outside the delegated rights\n"+
@@ -205,7 +205,7 @@ func platformUsage(w io.Writer) {
 }
 
 func toolUsage(w io.Writer, t platform.Tool) {
-	fmt.Fprintf(w, "agw-platform %s%s\n\n%s\n", t.CLI, synopsis(t), t.Desc)
+	fmt.Fprintf(w, "agw-platform %s%s\n\n%s\n", t.CLI, t.Synopsis(), t.Desc)
 	for _, p := range t.Params {
 		req := ""
 		if p.Required {
@@ -217,27 +217,4 @@ func toolUsage(w io.Writer, t platform.Tool) {
 		}
 		fmt.Fprintf(w, "  --%-20s %s (%s%s)\n", p.Name, p.Desc, typ, req)
 	}
-}
-
-func synopsis(t platform.Tool) string {
-	var b strings.Builder
-	afterList := false // after a list everything else only works as an option
-	for _, p := range t.Params {
-		switch {
-		case p.Required && p.Type == "array":
-			fmt.Fprintf(&b, " <%s …>", p.Name)
-			afterList = true
-		case p.Required:
-			fmt.Fprintf(&b, " <%s>", p.Name)
-		case p.Type == "string" && !afterList:
-			fmt.Fprintf(&b, " [%s]", p.Name)
-		case p.Name == "query":
-			b.WriteString(" [--query k=v …]")
-		case p.Type == "array":
-			fmt.Fprintf(&b, " [--%s x …]", p.Name)
-		default:
-			fmt.Fprintf(&b, " [--%s …]", p.Name)
-		}
-	}
-	return b.String()
 }
