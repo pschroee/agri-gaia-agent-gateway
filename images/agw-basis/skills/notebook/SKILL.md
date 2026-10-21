@@ -23,7 +23,7 @@ agw-platform capabilities
 The entry `notebook` says whether a notebook server is available. Without it (not configured, JupyterHub not
 reachable, or the user never opened JupyterHub), say so plainly and take one of the two other ways:
 
-- small models with `numpy`/`pandas` in the sandbox (no `torch` there), or
+- small models with `numpy`/`pandas` in the sandbox (no `torch` there, and it cannot be installed: package files over 256 MB are refused), or
 - a platform training template (`train-options`, `create-training`) if the task fits one.
 
 Never promise a notebook run you cannot start, and never retry a call that answered `unavailable`.
