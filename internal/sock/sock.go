@@ -1045,39 +1045,39 @@ func (h *handler) platformAPI(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := h.callerCtx(r)
 	var res platform.Result
-	if path == "/_agw/paths" {
+	switch {
+	case path == "/_agw/paths" && strings.HasPrefix(q["prefix"], "/_agw"):
+		// The arguments of the gateway's own paths, answered inside the gateway (#199).
+		body := platform.GatewayIndexDetail(q["prefix"])
+		h.logCall(ctx, chat, via, "platform", "api_paths", "ok")
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		_, _ = io.WriteString(w, body)
+		return
+	case path == "/_agw/paths":
 		// Condensed path directory like the tool api_paths (the OpenAPI description is ~100 KB).
 		tool, _ := platform.Lookup("api_paths")
 		args, _ := json.Marshal(map[string]string{"prefix": q["prefix"]})
 		res, err = h.doPlatform(ctx, chat, via, tool, args)
-	} else {
-		req := platform.Request{Method: r.Method, Path: path, Body: bytes.TrimSpace(raw), Full: true}
-		if len(q) > 0 {
-			req.Query = q
-		}
-		if len(req.Body) == 0 {
-			req.Body = nil
-		}
-		// The notebook paths belong to the notebook tools (own code C-E3): the REST binding cannot
-		// name the sandbox files a run gets, so it is refused here too (not only in the tool).
-		if why := platform.NotebookCallRefusal(req); why != "" {
+	case strings.ToLower(path) == "/_agw" || strings.HasPrefix(strings.ToLower(path), "/_agw/"):
+		// A gateway path is the tool of the same name (#199): the call is built like the tool's, so the
+		// checks, the delegation and the approval are the same as in the other bindings. A path without a
+		// tool, the notebook paths and the reading paths of the gateway are refused here.
+		tool, args, why := platform.GatewayCall(r.Method, path, q, bytes.TrimSpace(raw))
+		if why != "" {
 			h.logCall(ctx, chat, via, "platform", r.Method+" "+path, "refused: "+why)
 			fail(http.StatusBadRequest, why)
 			return
 		}
-		// The check paths belong to the check tools (R0): the gateway decides what a check runs on.
-		if why := platform.AssessCallRefusal(req); why != "" {
-			h.logCall(ctx, chat, via, "platform", r.Method+" "+path, "refused: "+why)
-			fail(http.StatusBadRequest, why)
-			return
+		if args == nil { // rights, capabilities, plan: passed through
+			res, err = h.runGatewayRaw(ctx, chat, via, r.Method, path, q, raw)
+			break
 		}
-		norm, nerr := platform.Normalize(req)
-		if nerr != nil {
-			h.logCall(ctx, chat, via, "platform", r.Method+" "+path, "refused: "+nerr.Error())
-			fail(http.StatusBadRequest, nerr.Error())
-			return
+		res, err = h.doPlatform(ctx, chat, via, tool, args)
+		if err == nil && res.HTTPStatus == 0 && res.Status == "error" && strings.Contains(res.Message, "unknown argument") {
+			res.Message += platform.RESTHint
 		}
-		res, err = h.runPlatform(ctx, chat, via, norm)
+	default:
+		res, err = h.runGatewayRaw(ctx, chat, via, r.Method, path, q, raw)
 	}
 	if err != nil {
 		fail(http.StatusInternalServerError, err.Error())
@@ -1113,4 +1113,22 @@ func (h *handler) platformAPI(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(res.HTTPStatus)
 	_, _ = io.WriteString(w, res.Body)
+}
+
+// runGatewayRaw passes a REST call on to the platform as it is (after Normalize): the paths of the platform
+// itself and the gateway's pass-through paths /_agw/rights, /_agw/capabilities and /_agw/plan.
+func (h *handler) runGatewayRaw(ctx context.Context, chat, via, method, path string, q map[string]string, raw []byte) (platform.Result, error) {
+	req := platform.Request{Method: method, Path: path, Body: bytes.TrimSpace(raw), Full: true}
+	if len(q) > 0 {
+		req.Query = q
+	}
+	if len(req.Body) == 0 {
+		req.Body = nil
+	}
+	norm, nerr := platform.Normalize(req)
+	if nerr != nil {
+		h.logCall(ctx, chat, via, "platform", method+" "+path, "refused: "+nerr.Error())
+		return platform.Result{Status: "error", Message: nerr.Error()}, nil
+	}
+	return h.runPlatform(ctx, chat, via, norm)
 }
