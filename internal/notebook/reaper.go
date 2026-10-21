@@ -19,6 +19,7 @@ import (
 // runs themselves: the status call and the watcher record an end (they see the exit code in the run
 // directory), the store keeps what the run itself wrote. A stop is recorded on the chat's last run row,
 // so the server is stopped once; the next run is a new row and makes the server a candidate again.
+// A server the user works in (its last activity in the hub is newer than the idle time) is kept.
 // A run holds the chat's lock (chatLock) while it starts; the reaper only stops under that lock.
 //
 // How often the reaper looks; a variable, so that a test does not wait.
@@ -79,7 +80,8 @@ func (n *Notebooks) stopOne(ctx context.Context, s store.NotebookServer, before 
 	if !idle {
 		return nil
 	}
-	state, err := n.hub.ServerState(ctx, s.HubUser, s.Server)
+	info, err := n.hub.ServerInfo(ctx, s.HubUser, s.Server)
+	state := info.State
 	switch {
 	case errors.Is(err, ErrNoHubUser):
 		state = stateNotStarted
@@ -89,6 +91,10 @@ func (n *Notebooks) stopOne(ctx context.Context, s store.NotebookServer, before 
 	}
 	// "stopping" counts like "running": the stop is asked again (the hub answers 202) and recorded.
 	running := state != stateNotStarted
+	if running && info.LastActivity.After(before) {
+		slog.Info("idle notebook server kept, used in JupyterHub", "chat", s.ChatID, "server", s.Server, "last_activity", info.LastActivity)
+		return nil
+	}
 	if running {
 		if err := n.hub.Stop(ctx, s.HubUser, s.Server); err != nil {
 			slog.Warn("idle notebook server not stopped", "chat", s.ChatID, "server", s.Server, "error", err)

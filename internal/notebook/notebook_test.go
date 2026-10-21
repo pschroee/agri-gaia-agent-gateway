@@ -13,9 +13,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"agw/internal/platform"
 	"agw/internal/store"
@@ -75,6 +77,8 @@ type fakeHub struct {
 	// pendingReads: that many reads of the user model still report pending "stop"; after the last one
 	// the hub has stopped the server (no entry, not pending).
 	pendingReads int
+	// lastActivity, when set, is the "last_activity" of the server in the user model (RFC 3339); empty: null.
+	lastActivity string
 	// gate, when set, holds every read of the user model until it is closed.
 	gate chan struct{}
 }
@@ -169,7 +173,13 @@ func (h *fakeHub) handler() http.Handler {
 			}
 			servers := "{}"
 			if server != "" {
-				servers = fmt.Sprintf(`{"%s":{"ready":%t,"pending":%q}}`, server, ready, pending)
+				h.mu.Lock()
+				act := "null"
+				if h.lastActivity != "" {
+					act = strconv.Quote(h.lastActivity)
+				}
+				h.mu.Unlock()
+				servers = fmt.Sprintf(`{"%s":{"ready":%t,"pending":%q,"last_activity":%s}}`, server, ready, pending, act)
 			}
 			fmt.Fprintf(w, `{"name":%q,"servers":%s}`, lastSegment(r.URL.Path), servers)
 		default:
@@ -516,5 +526,34 @@ func TestRunValidation(t *testing.T) {
 	}
 	if err := platform.ValidateRunFiles(platform.RunBody{Entry: files[0]}, files, nil); err == nil {
 		t.Error("more than 50 files must be refused")
+	}
+}
+
+// The hub's last_activity of a server is read from the user model.
+func TestServerInfoLastActivity(t *testing.T) {
+	hub := newFakeHub()
+	hub.server, hub.ready = "agw-x", true
+	at := time.Now().Add(-5 * time.Minute).UTC().Truncate(time.Second)
+	hub.lastActivity = at.Format(time.RFC3339Nano)
+	_, srv := testService(t, testStore(t), &fakeDocker{}, hub)
+	h := NewHub(srv.URL+"/hub/api", "tok", nil)
+	info, err := h.ServerInfo(context.Background(), "agent-test", "agw-x")
+	if err != nil || info.State != "running" || !info.LastActivity.Equal(at) {
+		t.Fatalf("info %+v, err %v (want running, %v)", info, err, at)
+	}
+}
+
+// A missing or unreadable last_activity yields the zero time.
+func TestServerInfoNoActivity(t *testing.T) {
+	for _, val := range []string{"", "yesterday"} {
+		hub := newFakeHub()
+		hub.server, hub.ready = "agw-x", true
+		hub.lastActivity = val
+		_, srv := testService(t, testStore(t), &fakeDocker{}, hub)
+		h := NewHub(srv.URL+"/hub/api", "tok", nil)
+		info, err := h.ServerInfo(context.Background(), "agent-test", "agw-x")
+		if err != nil || info.State != "running" || !info.LastActivity.IsZero() {
+			t.Fatalf("last_activity %q: info %+v, err %v", val, info, err)
+		}
 	}
 }
