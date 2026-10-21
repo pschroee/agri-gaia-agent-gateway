@@ -1238,3 +1238,48 @@ func TestRunHoldsLockUntilRecorded(t *testing.T) {
 		t.Errorf("the run row is missing after Run: %v", err)
 	}
 }
+
+// pollRunTimes polls a run whose directory answers with the given status script output.
+func pollRunTimes(t *testing.T, status string) watch.Progress {
+	t.Helper()
+	st := testStore(t)
+	chatID := testChat(t, st)
+	hub := newFakeHub()
+	docker := &fakeDocker{ids: []string{"c1"}}
+	n, _ := testService(t, st, docker, hub)
+	run := store.NotebookRun{ID: "r20260101120000-abcd", ChatID: chatID, HubUser: "agent-test", Server: n.Server(chatID),
+		Entry: "train.py", TimeoutMin: 60, StartedAt: time.Now()}
+	if err := st.CreateNotebookRun(context.Background(), run); err != nil {
+		t.Fatal(err)
+	}
+	docker.reply = func(cmd []string, _ []byte) ([]byte, int) {
+		if len(cmd) > 2 && cmd[2] == statusScript {
+			return []byte(status), 0
+		}
+		return nil, 0
+	}
+	p, err := n.poll(context.Background(), watch.Job{ChatID: chatID, Ref: run.ID}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// Issue #203: the poll carries the starter's markers as the run's own start and end.
+func TestPollCarriesMarkerTimes(t *testing.T) {
+	p := pollRunTimes(t, "started\t2026-01-01T10:00:00Z\nexit_code\t0\nfinished\t2026-01-01T10:00:36Z\n")
+	from := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
+	if p.RunStartedAt == nil || !p.RunStartedAt.Equal(from) || p.RunEndedAt == nil || !p.RunEndedAt.Equal(from.Add(36*time.Second)) {
+		t.Fatalf("run times: %v %v", p.RunStartedAt, p.RunEndedAt)
+	}
+	if !strings.Contains(p.Message, "36 s") {
+		t.Errorf("the job line and the run times disagree: %q", p.Message)
+	}
+}
+
+func TestPollWithoutMarkersNoRunTimes(t *testing.T) {
+	p := pollRunTimes(t, "")
+	if p.RunStartedAt != nil || p.RunEndedAt != nil {
+		t.Fatalf("run times without markers: %v %v", p.RunStartedAt, p.RunEndedAt)
+	}
+}

@@ -342,3 +342,54 @@ func TestUpdateJobProgressReportsClose(t *testing.T) {
 		t.Fatalf("second close must report no change: changed=%v err=%v", changed, err)
 	}
 }
+
+// Issue #203: the run's own start and end are kept once set; a later poll without them leaves them alone.
+func TestJobRunTimes(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	c := newPlanChat(t, s)
+	jobID, err := s.AddWatchJob(ctx, WatchJob{ChatID: c.ID, Kind: "notebook_run", Ref: "r1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
+	end := start.Add(36 * time.Second)
+	if _, err := s.UpdateJobProgress(ctx, jobID, WatchProgress{State: JobRunning, RunStartedAt: &start}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.UpdateJobProgress(ctx, jobID, WatchProgress{State: JobDone, RunStartedAt: &start, RunEndedAt: &end}); err != nil {
+		t.Fatal(err)
+	}
+	j, err := s.GetWatchJob(ctx, c.ID, jobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if j.RunStartedAt == nil || !j.RunStartedAt.Equal(start) || j.RunEndedAt == nil || !j.RunEndedAt.Equal(end) {
+		t.Fatalf("run times: %v %v", j.RunStartedAt, j.RunEndedAt)
+	}
+	// An update without them (the server is gone) clears nothing; the row is closed, so write on a second row.
+	id2, _ := s.AddWatchJob(ctx, WatchJob{ChatID: c.ID, Kind: "notebook_run", Ref: "r2"})
+	s.UpdateJobProgress(ctx, id2, WatchProgress{State: JobRunning, RunStartedAt: &start})
+	s.UpdateJobProgress(ctx, id2, WatchProgress{State: JobRunning})
+	j2, _ := s.GetWatchJob(ctx, c.ID, id2)
+	if j2.RunStartedAt == nil || !j2.RunStartedAt.Equal(start) {
+		t.Fatalf("run start lost: %v", j2.RunStartedAt)
+	}
+}
+
+func TestJobRunTimesNilForOtherKinds(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	c := newPlanChat(t, s)
+	jobID, err := s.AddWatchJob(ctx, WatchJob{ChatID: c.ID, Kind: "platform_task", Ref: "task:5"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.UpdateJobProgress(ctx, jobID, WatchProgress{State: JobDone}); err != nil {
+		t.Fatal(err)
+	}
+	j, _ := s.GetWatchJob(ctx, c.ID, jobID)
+	if j.RunStartedAt != nil || j.RunEndedAt != nil {
+		t.Fatalf("run times on a kind without them: %v %v", j.RunStartedAt, j.RunEndedAt)
+	}
+}
