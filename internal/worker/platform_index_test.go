@@ -86,3 +86,34 @@ func TestPlatformSkillDescription(t *testing.T) {
 		t.Error("sentence on the command index missing")
 	}
 }
+
+// #199: the REST binding gets the block of the gateway's own paths; the other bindings do not.
+func TestSystemNoteGatewayPaths(t *testing.T) {
+	for _, index := range []string{apiIndexTest, ""} { // with and without the platform's index
+		api := SystemNoteFor("api", 4, nil, index)
+		if !strings.Contains(api, "- Gateway paths: the gateway answers these paths itself") ||
+			!strings.Contains(api, "tool search_next") || !strings.Contains(api, "  (") {
+			t.Errorf("api (index %v): gateway paths missing", index != "")
+		}
+		if !strings.Contains(api, "The gateway's own paths follow under Gateway paths.") {
+			t.Errorf("api (index %v): pointer sentence missing", index != "")
+		}
+		if strings.Contains(api, "are described in the tool platform_http") {
+			t.Error("the old sentence is still there")
+		}
+	}
+	for _, v := range []string{"cli", "mcp", "cli,mcp"} {
+		if n := SystemNoteFor(v, 4, nil, apiIndexTest); strings.Contains(n, "- Gateway paths:") || strings.Contains(n, "tool search_next") {
+			t.Errorf("%s: carries the gateway paths", v)
+		}
+	}
+	if n := SystemNoteFor("cli,api", 4, nil, apiIndexTest); !strings.Contains(n, "- Gateway paths:") {
+		t.Error("cli,api: gateway paths missing")
+	}
+	if n := SystemNoteFor("exp:api", 4, nil, apiIndexTest); !strings.Contains(n, "- Gateway paths:") || strings.Contains(n, "{{") {
+		t.Error("exp:api: gateway paths missing")
+	}
+	if strings.Contains(SystemNoteFor("api", 4, nil, apiIndexTest), "notebook_run") {
+		t.Error("notebook tools have no gateway path in the REST binding")
+	}
+}
