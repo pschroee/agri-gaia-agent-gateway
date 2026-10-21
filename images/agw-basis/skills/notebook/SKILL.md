@@ -87,6 +87,16 @@ Inside a training search (skill `training-search`) the script reads its paramete
 directory and writes one JSON line per epoch to `outputs/metrics.jsonl` (`epoch`, `epochs`, `train_loss`, `val_loss`,
 `train_acc`, `val_acc`); the search skill has the snippet.
 
+A script that writes a model should also write `outputs/model.json` with exactly what it does to an image:
+
+```python
+json.dump({"class_names": classes, "preprocess": {"color": "gray", "size": [IMG, IMG], "scale": 1/255}},
+          open("outputs/model.json", "w"))
+```
+
+Write exactly what the script does to an image; no mean or std unless the script subtracts them. The gateway
+reads the file when you fetch the `.onnx` file of that run and the check uses it.
+
 `exit_code` 124 means the run hit the time limit: nothing after that point is in the output. Look at the log,
 make the code faster or ask for a longer limit with a new run.
 

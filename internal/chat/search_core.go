@@ -270,6 +270,24 @@ func (m *Manager) withFinalResult(ctx context.Context, s store.Search) store.Sea
 		} `json:"figures"`
 		MeasuredImages int    `json:"measured_images"`
 		Verdict        string `json:"verdict"`
+		HoldoutNotRun  bool   `json:"holdout_not_run"`
+	}
+	if len(row.Report) > 0 && json.Unmarshal(row.Report, &rep) == nil && rep.HoldoutNotRun && row.State == store.AssessFinished {
+		// #181: the check ended before the hold-out images ran through the model, so the final test is not
+		// used up. The search goes back to "pending" and the agent may run the check again.
+		ho.FinalState, ho.CheckID = "pending", ""
+		ho.FinalRetries++
+		out, err := json.Marshal(ho)
+		if err != nil {
+			return s
+		}
+		if err := m.st.SetSearchHoldout(ctx, s.ID, out); err != nil {
+			slog.Warn("final retry of a search not stored", "search", s.ID, "error", err)
+			return s
+		}
+		s.Holdout = out
+		m.publishSearch(ctx, s.ChatID, s.ID)
+		return s
 	}
 	if len(row.Report) > 0 && json.Unmarshal(row.Report, &rep) == nil {
 		res.Accuracy = rep.Figures.Overall.Accuracy

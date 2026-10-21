@@ -27,5 +27,9 @@ CREATE TABLE IF NOT EXISTS assessments (
     ended_at        timestamptz
 );
 CREATE INDEX IF NOT EXISTS assessments_chat ON assessments (chat_id, created_at DESC);
-CREATE UNIQUE INDEX IF NOT EXISTS assessments_final_once ON assessments (chat_id, eval_dataset_id)
-    WHERE final AND state <> 'failed';
+-- holdout_measured (#181): false when a final check ended before the hold-out images went through the
+-- model (class order not derivable); such a check does not use up the final test.
+ALTER TABLE assessments ADD COLUMN IF NOT EXISTS holdout_measured boolean NOT NULL DEFAULT true;
+DROP INDEX IF EXISTS assessments_final_once;
+CREATE UNIQUE INDEX IF NOT EXISTS assessments_final_once2 ON assessments (chat_id, eval_dataset_id)
+    WHERE final AND holdout_measured AND state <> 'failed';

@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"regexp"
 	"strings"
@@ -294,6 +295,12 @@ func (s *Service) work(id, chatID string, run func(ctx context.Context, checkID 
 	if merr != nil {
 		s.fail(id, chatID, Report{}, "the report is not writable: "+merr.Error())
 		return
+	}
+	// Marked before the end is recorded, so that nobody who sees the finished check sees it as measured.
+	if rep.HoldoutNotRun {
+		if err := s.St.MarkHoldoutNotRun(ctx, id); err != nil {
+			slog.Warn("assess: could not mark the hold-out set as not run", "check", id, "err", err)
+		}
 	}
 	_ = s.St.FinishAssessment(ctx, chatID, id, store.AssessFinished, raw, "")
 }

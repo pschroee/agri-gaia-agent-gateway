@@ -124,3 +124,43 @@ func MapPredictions(m map[int]string, outIdx []int) (pred []string, ok bool) {
 	}
 	return pred, true
 }
+
+// CollapseShare is the share of the seen images a model may answer with one and the same output before
+// the answer counts as collapsed (#181): a model that gives every image the same class has not been
+// fed the images the way it was trained.
+const CollapseShare = 0.9
+
+// collapsedOutput reports whether (nearly) all seen images got the same output. outIdx[i] is the output
+// of the i-th seen image, truth[i] its class. out is that output, k the images with it, n all images.
+// ok is false when the sample holds fewer than two classes (then one output may be right) or no output
+// reaches CollapseShare.
+func collapsedOutput(outIdx []int, truth []string) (out, k, n int, ok bool) {
+	n = len(outIdx)
+	if len(truth) < n {
+		n = len(truth)
+	}
+	classes := map[string]bool{}
+	counts := map[int]int{}
+	for i := 0; i < n; i++ {
+		classes[truth[i]] = true
+		counts[outIdx[i]]++
+	}
+	if n == 0 || len(classes) < 2 {
+		return 0, 0, n, false
+	}
+	idx := make([]int, 0, len(counts))
+	for i := range counts {
+		idx = append(idx, i)
+	}
+	sort.Ints(idx)
+	best := -1
+	for _, i := range idx {
+		if counts[i] > k {
+			best, k = i, counts[i]
+		}
+	}
+	if best < 0 || float64(k) < CollapseShare*float64(n) {
+		return 0, 0, n, false
+	}
+	return best, k, n, true
+}

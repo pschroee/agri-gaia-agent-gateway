@@ -42,7 +42,7 @@ func TestNotebookSkillBody(t *testing.T) {
 		"agw-platform capabilities", "agw-platform notebook-run", "agw-platform notebook-run-status",
 		"agw-platform notebook-log", "agw-platform notebook-fetch", "agw-platform upload-model",
 		"/home/jovyan/work/datasets/<id>/", "/workspace/notebook/<run_id>/", "dynamo=False", "opset_version=18",
-		"124", "exit_code", "small sample", "The server belongs to the user", "no internet",
+		"124", "exit_code", "small sample", "outputs/model.json", "no mean or std unless the script subtracts them", "The server belongs to the user", "no internet",
 	} {
 		if !strings.Contains(s, w) {
 			t.Errorf("skill text without %q", w)

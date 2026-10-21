@@ -46,7 +46,7 @@ func TestTrainingSearchSkillBody(t *testing.T) {
 	for _, w := range []string{
 		"agw-platform propose-search", "agw-platform search-status", "agw-platform search-next",
 		"agw-platform end-search", "clone-training", "--path template", "--path notebook",
-		"outputs/metrics.jsonl", "params.json", "json.dumps", "final=true", "held-back",
+		"outputs/metrics.jsonl", "outputs/model.json", "no mean or std unless the script subtracts them", "params.json", "json.dumps", "final=true", "held-back",
 	} {
 		if !strings.Contains(s, w) {
 			t.Errorf("skill text without %q", w)

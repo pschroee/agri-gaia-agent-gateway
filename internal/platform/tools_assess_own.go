@@ -200,3 +200,40 @@ func checkPreprocess(raw json.RawMessage) ([]byte, bool, error) {
 	checked, err := json.Marshal(p)
 	return checked, names, err
 }
+
+// ModelMeta is outputs/model.json of a notebook run (#181): what the training script itself says about
+// how it feeds an image to its model. The fields are the ones of the check call (class_names, preprocess).
+type ModelMeta struct {
+	ClassNames []string        `json:"class_names,omitempty"`
+	Preprocess json.RawMessage `json:"preprocess,omitempty"`
+}
+
+// CheckModelMeta validates the content of outputs/model.json with the rules of the check call and answers it
+// in canonical form. Unknown fields, an empty file, invalid class names and invalid preprocessing are errors.
+func CheckModelMeta(raw []byte) (json.RawMessage, error) {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	var m ModelMeta
+	if err := dec.Decode(&m); err != nil {
+		return nil, fmt.Errorf("model.json: %v (fields: class_names, preprocess)", err)
+	}
+	if dec.More() {
+		return nil, errors.New("model.json: more than one JSON value")
+	}
+	if m.ClassNames == nil && len(m.Preprocess) == 0 {
+		return nil, errors.New("model.json names neither class_names nor preprocess")
+	}
+	if m.ClassNames != nil {
+		if err := checkClassNames(m.ClassNames); err != nil {
+			return nil, err
+		}
+	}
+	if len(m.Preprocess) > 0 {
+		checked, _, err := checkPreprocess(m.Preprocess)
+		if err != nil {
+			return nil, err
+		}
+		m.Preprocess = checked
+	}
+	return json.Marshal(m)
+}

@@ -212,6 +212,11 @@ type JudgeInput struct {
 	ImageReview ImageReview
 	// Previous: the last interim check of the same dataset in this chat (R1.12).
 	Previous *CheckComparison
+	// Collapse: the model answered one output for nearly all seen images while the class order is unclear
+	// (#181); nil otherwise. PreSummary: the preprocessing of an own model for the reason (empty for a
+	// platform template).
+	Collapse   *Collapse
+	PreSummary string
 }
 
 // JudgeClassification turns a measurement into the report of a training check (R1.9–R1.11). It is a
@@ -306,6 +311,9 @@ func judgeReport(in JudgeInput, figures ModelFigures) Report {
 	var reasons []string
 	if !in.MappingOK {
 		reasons = append(reasons, ClassOrderUnclear(in.MappingReason))
+		if in.Collapse != nil {
+			reasons = append(reasons, collapseReason(*in.Collapse, in.PreSummary))
+		}
 	} else if declaredOrderDiffers(in.Mapping, in.DeclaredClassNames) {
 		// An own model (R2.4): the order the agent declared contradicts the one the model shows. The
 		// gateway keeps its own order; the difference is what the user has to know.
@@ -722,12 +730,27 @@ func (s *Service) runTrainingCheck(ctx context.Context, chatID, checkID string, 
 			Steps: []ProgressStep{{Name: "statistics", K: len(measured), M: len(measured)}}})
 	}
 	sample := seenSample(seenImages)
+	// The preprocessing of the templates (R1.8): RGB, the size of the model, values times 1/255,
+	// NCHW, no mean and no std (efficientnet_dataset.py).
+	pre := Pre{Color: "rgb", Scale: ScaleToUnit, Layout: "nchw"}
+	if body.Final {
+		// #181: the hold-out images only go through the model when the class order is clear.
+		pf, err := s.preflight(ctx, Job{Model: modelBytes, Pre: pre}, sample, "")
+		if err != nil {
+			return Report{}, err
+		}
+		if pf.Stop {
+			rep := notMeasuredReport(in, "")
+			rep.Reasons = preflightReasons(pf)
+			rep.Suggestions = []Suggestion{suggestionRetrain}
+			rep.HoldoutNotRun = true
+			return rep, nil
+		}
+	}
 	out, err := s.Run.Run(ctx, Job{
 		Model:  modelBytes,
 		Images: append(imagesOf(sample), imagesOf(measured)...),
-		// The preprocessing of the templates (R1.8): RGB, the size of the model, values times 1/255,
-		// NCHW, no mean and no std (efficientnet_dataset.py).
-		Pre: Pre{Color: "rgb", Scale: ScaleToUnit, Layout: "nchw"},
+		Pre:    pre,
 	})
 	if err != nil {
 		return Report{}, err
@@ -792,18 +815,14 @@ func (s *Service) measure(in *JudgeInput, out Output, sample, measured []checkIm
 	in.OutputShape, in.Outputs, in.NotClassification = shape, outputs, notClassification
 
 	// The class order comes from the sample of seen images (P9); the measured set stays untouched.
-	var sampleIdx []int
-	var sampleTruth []string
-	for _, im := range sample {
-		p, ok := byID[im.SHA]
-		if !ok || !p.OK || len(p.Probs) == 0 {
-			continue
-		}
-		sampleIdx = append(sampleIdx, p.Top)
-		sampleTruth = append(sampleTruth, im.Class)
-	}
+	sampleIdx, sampleTruth := sampleAnswers(byID, sample)
 	mapping, ok, reason := DeriveMapping(sampleIdx, sampleTruth, outputs)
 	in.Mapping, in.MappingOK, in.MappingReason = mapping, ok, reason
+	if !ok {
+		if o, k, n, collapsed := collapsedOutput(sampleIdx, sampleTruth); collapsed {
+			in.Collapse = &Collapse{Output: o, K: k, N: n}
+		}
+	}
 	if ok && len(sampleIdx) > 0 {
 		correct := 0
 		for i := range sampleIdx {

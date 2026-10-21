@@ -48,6 +48,9 @@ type Assessment struct {
 	// Final: the check measured at the hold-out set (P4).
 	Final bool   `json:"final"`
 	State string `json:"state"`
+	// HoldoutMeasured: false when a final check ended before the hold-out images ran through the model
+	// (#181); such a check does not use up the final test.
+	HoldoutMeasured bool `json:"holdout_measured"`
 	// Progress: what the check is doing while it runs (L4); nil otherwise.
 	Progress json.RawMessage `json:"progress"`
 	Report   json.RawMessage `json:"report"`
@@ -64,7 +67,7 @@ func AssessmentFinal(state string) bool {
 	return state == AssessFinished || state == AssessFailed
 }
 
-const assessmentCols = `id::text, chat_id::text, kind, subject, COALESCE(eval_dataset_id, 0), final, state, progress, report, error, tool_call_id, created_at, started_at, ended_at`
+const assessmentCols = `id::text, chat_id::text, kind, subject, COALESCE(eval_dataset_id, 0), final, state, progress, report, error, tool_call_id, created_at, started_at, ended_at, holdout_measured`
 
 // CreateAssessment stores a new check (state AssessQueued). The unique partial index refuses a second
 // final check of the same dataset in this chat (P4).
@@ -81,7 +84,7 @@ INSERT INTO assessments (chat_id, kind, subject, eval_dataset_id, final, state, 
 VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING `+assessmentCols,
 		a.ChatID, a.Kind, a.Subject, dataset, a.Final, a.State, a.ToolCallID).Scan(&a.ID, &a.ChatID, &a.Kind,
 		&a.Subject, &a.EvalDatasetID, &a.Final, &a.State, &a.Progress, &a.Report, &a.Error, &a.ToolCallID,
-		&a.CreatedAt, &a.StartedAt, &a.EndedAt)
+		&a.CreatedAt, &a.StartedAt, &a.EndedAt, &a.HoldoutMeasured)
 	return a, err
 }
 
@@ -121,7 +124,7 @@ func (s *Store) Assessment(ctx context.Context, chatID, id string) (Assessment, 
 	var a Assessment
 	err := s.pool.QueryRow(ctx, `SELECT `+assessmentCols+` FROM assessments WHERE chat_id=$1 AND id=$2`, chatID, id).
 		Scan(&a.ID, &a.ChatID, &a.Kind, &a.Subject, &a.EvalDatasetID, &a.Final, &a.State, &a.Progress, &a.Report,
-			&a.Error, &a.ToolCallID, &a.CreatedAt, &a.StartedAt, &a.EndedAt)
+			&a.Error, &a.ToolCallID, &a.CreatedAt, &a.StartedAt, &a.EndedAt, &a.HoldoutMeasured)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Assessment{}, ErrNotFound
 	}
@@ -139,7 +142,7 @@ func (s *Store) Assessments(ctx context.Context, chatID string) ([]Assessment, e
 	for rows.Next() {
 		var a Assessment
 		if err := rows.Scan(&a.ID, &a.ChatID, &a.Kind, &a.Subject, &a.EvalDatasetID, &a.Final, &a.State, &a.Progress,
-			&a.Report, &a.Error, &a.ToolCallID, &a.CreatedAt, &a.StartedAt, &a.EndedAt); err != nil {
+			&a.Report, &a.Error, &a.ToolCallID, &a.CreatedAt, &a.StartedAt, &a.EndedAt, &a.HoldoutMeasured); err != nil {
 			return nil, err
 		}
 		out = append(out, a)
@@ -165,8 +168,15 @@ func (s *Store) FinalUsed(ctx context.Context, chatID string, datasetID int64) (
 	}
 	var ok bool
 	err := s.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM assessments
-WHERE chat_id=$1 AND final AND state <> $3 AND eval_dataset_id IS NOT DISTINCT FROM $2)`, chatID, dataset, AssessFailed).Scan(&ok)
+WHERE chat_id=$1 AND final AND holdout_measured AND state <> $3 AND eval_dataset_id IS NOT DISTINCT FROM $2)`, chatID, dataset, AssessFailed).Scan(&ok)
 	return ok, err
+}
+
+// MarkHoldoutNotRun records that a final check ended without the hold-out images having run through the
+// model (#181): the final test stays available.
+func (s *Store) MarkHoldoutNotRun(ctx context.Context, id string) error {
+	_, err := s.pool.Exec(ctx, `UPDATE assessments SET holdout_measured=false WHERE id=$1`, id)
+	return err
 }
 
 // RecoverAssessments runs at startup: a check that was queued or running when the gateway stopped has

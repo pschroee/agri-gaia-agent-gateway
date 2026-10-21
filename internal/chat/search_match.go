@@ -240,6 +240,10 @@ func fileChanges(old, next store.SearchCode, changed []string) []SearchFileChang
 	return out
 }
 
+// maxFinalRetries is how often a final test is covered again after a check that did not run the hold-out
+// images (#181).
+const maxFinalRetries = 3
+
 // matchFinal covers assess_model final=true when the chat's last search ended with a winner and the call checks
 // exactly that winner on the test set the split held back.
 func (m *Manager) matchFinal(ctx context.Context, chatID string, b finalCheckBody) *trialClaim {
@@ -257,8 +261,13 @@ func (m *Manager) matchFinal(ctx context.Context, chatID string, b finalCheckBod
 	if s == nil || s.WinnerIdx == nil {
 		return nil
 	}
+	// A final check that ended without the hold-out run puts the search back to pending (#181).
+	*s = m.withFinalResult(ctx, *s)
 	var ho SearchHoldout
 	if json.Unmarshal(s.Holdout, &ho) != nil || !ho.Available || ho.FinalState != "pending" || ho.EvalDataset == nil {
+		return nil
+	}
+	if ho.FinalRetries >= maxFinalRetries {
 		return nil
 	}
 	if b.EvalDatasetID != 0 && b.EvalDatasetID != ho.EvalDataset.ID {
