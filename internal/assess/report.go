@@ -54,6 +54,9 @@ type Report struct {
 	// Figures: what was measured, e.g. Figures of ClassMetrics. nil: nothing was measured.
 	Figures any    `json:"figures,omitempty"`
 	Note    string `json:"note,omitempty"`
+	// HoldoutNotRun: a final check ended before the hold-out images ran through the model, because the
+	// class order was not derivable from the seen images (#181). The final test stays available.
+	HoldoutNotRun bool `json:"holdout_not_run,omitempty"`
 	// Header: the one line the agent starts its reply with (Header(r)).
 	Header string `json:"header"`
 }

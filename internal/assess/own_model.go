@@ -75,8 +75,11 @@ type PreprocessFigures struct {
 	Mean   []float64 `json:"mean,omitempty"`
 	Std    []float64 `json:"std,omitempty"`
 	Layout string    `json:"layout"`
-	// Declared: the agent named this preprocessing; false: the default of the platform templates.
+	// Declared: the agent named this preprocessing (or the run's outputs/model.json did); false: the
+	// default of the platform templates. Kept for the frontend; true for source "run" and "declared".
 	Declared bool `json:"declared"`
+	// Source: "run" (outputs/model.json of the notebook run), "declared" (the call) or "default" (#181).
+	Source string `json:"source"`
 }
 
 // BasicFigures is what the check found out about the file itself, without measuring anything (R2.5).
@@ -188,10 +191,11 @@ func (p *PreprocessInput) Pre() Pre {
 // preprocessFigures names the preprocessing for the report (R2.4): the declared one, or the default of
 // the platform templates with declared false.
 func preprocessFigures(p *PreprocessInput) PreprocessFigures {
-	f := PreprocessFigures{Color: "rgb", Scale: ScaleToUnit, Layout: "nchw", Declared: p != nil}
+	f := PreprocessFigures{Color: "rgb", Scale: ScaleToUnit, Layout: "nchw", Declared: p != nil, Source: "default"}
 	if p == nil {
 		return f
 	}
+	f.Source = "declared"
 	f.Color, f.Size, f.Scale, f.Mean, f.Std, f.Layout = p.Color, p.Size, p.Scale, p.Mean, p.Std, p.Layout
 	if f.Color == "" {
 		f.Color = "rgb"
@@ -273,11 +277,19 @@ func (s *Service) defaultEvalDatasetForSeen(ctx context.Context, chatID string, 
 // judgement.
 func (s *Service) runOwnModelCheck(ctx context.Context, chatID string, body assessRequest, file fileInput,
 	seenIDs []int64) (Report, error) {
-	in := JudgeInput{Kind: KindOwnModel, Final: body.Final, DeclaredClassNames: body.ClassNames}
-	pre := preprocessFigures(body.Preprocess)
 	fetch, found, err := s.St.NotebookFetchOf(ctx, chatID, file.SHA256)
 	if err != nil {
 		return Report{}, err
+	}
+	// NT5/NT6: outputs/model.json of the run, read when the file was fetched, goes before the call.
+	hint := ""
+	if found && len(fetch.ModelMeta) > 0 {
+		body, hint = withRunMeta(body, fetch.ModelMeta, fetch.RunID)
+	}
+	in := JudgeInput{Kind: KindOwnModel, Final: body.Final, DeclaredClassNames: body.ClassNames}
+	pre := preprocessFigures(body.Preprocess)
+	if found && body.Preprocess != nil && runHasPreprocess(fetch.ModelMeta) {
+		pre.Source = "run"
 	}
 	fileRef := FileRef{Name: file.Name, SHA256: file.SHA256}
 	if found {
@@ -354,6 +366,23 @@ func (s *Service) runOwnModelCheck(ctx context.Context, chatID string, body asse
 	// The probe asks whether the model answers differently at all (R2.5): four images of the validation
 	// set, which is untouched by the hold-out images of a final check.
 	probe := probeImages(validation, ProbeImages)
+	if body.Final {
+		// #181: the hold-out images only go through the model when the class order is clear.
+		pf, err := s.preflight(ctx, Job{Model: file.Data, Pre: body.Preprocess.Pre(), KeepLoadError: true}, sample, pre.Short())
+		if err != nil {
+			return Report{}, err
+		}
+		if pf.Stop {
+			rep := notMeasuredOwn(in, fileRef, pre, nil, "")
+			rep.Reasons = preflightReasons(pf)
+			rep.Suggestions = []Suggestion{suggestionCheckPreprocess}
+			rep.HoldoutNotRun = true
+			if hint != "" {
+				rep.Hints = append(rep.Hints, hint)
+			}
+			return rep, nil
+		}
+	}
 	out, err := s.Run.Run(ctx, Job{
 		Model:  file.Data,
 		Images: jobImages(sample, probe, measured),
@@ -365,7 +394,52 @@ func (s *Service) runOwnModelCheck(ctx context.Context, chatID string, body asse
 	if err != nil {
 		return Report{}, err
 	}
-	return s.judgeOwnRun(ctx, chatID, in, out, fileRef, pre, sample, probe, measured, seen, skipped), nil
+	rep := s.judgeOwnRun(ctx, chatID, in, out, fileRef, pre, sample, probe, measured, seen, skipped)
+	if hint != "" {
+		rep.Hints = append(rep.Hints, hint)
+	}
+	return rep, nil
+}
+
+// withRunMeta puts the content of outputs/model.json of the run into the call (NT6): its class names and
+// its preprocessing replace what the call declared. A call that declared something else gets a hint.
+func withRunMeta(body assessRequest, meta json.RawMessage, runID string) (assessRequest, string) {
+	var m platform.ModelMeta
+	if json.Unmarshal(meta, &m) != nil {
+		return body, ""
+	}
+	hint := ""
+	var pre *PreprocessInput
+	if len(m.Preprocess) > 0 {
+		pre = &PreprocessInput{}
+		if json.Unmarshal(m.Preprocess, pre) != nil {
+			return body, ""
+		}
+	}
+	if (body.Preprocess != nil && !samePreprocess(body.Preprocess, pre)) ||
+		(body.ClassNames != nil && m.ClassNames != nil && strings.Join(body.ClassNames, "\x00") != strings.Join(m.ClassNames, "\x00")) {
+		hint = fmt.Sprintf("the call declared other preprocessing than outputs/model.json of run %s; the check used the run's file", runID)
+	}
+	if m.ClassNames != nil {
+		body.ClassNames = m.ClassNames
+	}
+	if pre != nil {
+		body.Preprocess = pre
+	}
+	return body, hint
+}
+
+// runHasPreprocess reports whether outputs/model.json of the run names a preprocessing.
+func runHasPreprocess(meta json.RawMessage) bool {
+	var m platform.ModelMeta
+	return len(meta) > 0 && json.Unmarshal(meta, &m) == nil && len(m.Preprocess) > 0
+}
+
+// samePreprocess compares two declarations in canonical form (defaults filled in).
+func samePreprocess(a, b *PreprocessInput) bool {
+	ja, _ := json.Marshal(preprocessFigures(a))
+	jb, _ := json.Marshal(preprocessFigures(b))
+	return string(ja) == string(jb)
 }
 
 // ProbeImages is how many images of the validation set ask whether the model answers differently (R2.5).
@@ -423,6 +497,7 @@ func jobImages(groups ...[]checkImage) []Image {
 // file (R2.5), the measurement (measure) and the judgement of the shared rules (R2.4).
 func (s *Service) judgeOwnRun(ctx context.Context, chatID string, in JudgeInput, out Output, file FileRef,
 	pre PreprocessFigures, sample, probe, measured []checkImage, seen map[string]Item, skipped int) Report {
+	in.PreSummary = pre.Short()
 	byID := s.measure(&in, out, sample, measured, seen)
 	basic := basicFigures(out.Model, byID, probe, in.Mapping, in.MappingOK, in.DeclaredClassNames)
 	if basic.Varied != nil && !*basic.Varied {
@@ -439,6 +514,14 @@ func (s *Service) judgeOwnRun(ctx context.Context, chatID string, in JudgeInput,
 	in.Previous = s.previousCheck(ctx, chatID, in.EvalDataset.ID, FileSubject(file.SHA256))
 	rep := JudgeOwnModel(in, file, pre, basic)
 	rep.Note = ownReportNote(in, file, skipped, len(measured))
+	if in.Collapse != nil {
+		// NT4: a new training does not help when the check feeds the images differently.
+		for i, sg := range rep.Suggestions {
+			if sg.ID == suggestionRetrain.ID {
+				rep.Suggestions[i] = suggestionCheckPreprocess
+			}
+		}
+	}
 	return rep
 }
 
