@@ -261,3 +261,45 @@ func TestMsgDownloadTooLarge(t *testing.T) {
 		t.Errorf("without length: %q", m)
 	}
 }
+
+// Package indexes with a package gate are asked for as kind packages, never as domains (issue #205).
+func TestParseDomainsRefusesGatedIndexes(t *testing.T) {
+	for h, eco := range gatedHosts {
+		for _, in := range []string{h, strings.ToUpper(h) + "."} {
+			_, err := ParseDomains([]string{in})
+			if err == nil || !strings.Contains(err.Error(), "kind packages") || !strings.Contains(err.Error(), eco) {
+				t.Errorf("%q: %v, want a refusal naming kind packages and %s", in, err, eco)
+			}
+		}
+	}
+	if _, err := ParseDomains([]string{"PyPI.org."}); err == nil || !strings.Contains(err.Error(), "kind packages") {
+		t.Errorf("PyPI.org.: %v", err)
+	}
+}
+
+// System package archives have no gate and the sandbox has no root: only kind full is left (issue #205).
+func TestParseDomainsRefusesSystemArchives(t *testing.T) {
+	for _, h := range []string{"deb.debian.org", "security.debian.org", "ftp.de.debian.org", "de.archive.ubuntu.com",
+		"archive.ubuntu.com", "ppa.launchpadcontent.net", "repo.anaconda.com", "dl-cdn.alpinelinux.org"} {
+		_, err := ParseDomains([]string{h})
+		if err == nil || !strings.Contains(err.Error(), "kind full") {
+			t.Errorf("%q: %v, want a refusal naming kind full", h, err)
+		}
+	}
+}
+
+func TestParseDomainsKeepsLookalikes(t *testing.T) {
+	for _, h := range []string{"wiki.debian.org", "www.debian.org", "pypi.org.example.com", "download.pytorch.org",
+		"github.com", "storage.googleapis.com", "deb.debian.org.example.com", "x.deb.debian.org", "abc.deb.debian.org"} {
+		if got, err := ParseDomains([]string{h}); err != nil || len(got) != 1 {
+			t.Errorf("%q: %v %v, want allowed", h, got, err)
+		}
+	}
+}
+
+func TestClampRefusesPackageHostInList(t *testing.T) {
+	_, err := Clamp(Spec{Kind: Domains, Reason: "x", Domains: []string{"download.tensorflow.org", "files.pythonhosted.org"}}, DefaultLimits())
+	if err == nil || !strings.Contains(err.Error(), "kind packages") {
+		t.Fatalf("mixed list: %v", err)
+	}
+}

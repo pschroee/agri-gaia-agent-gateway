@@ -131,6 +131,32 @@ func TestRequestInternetKinds(t *testing.T) {
 	}
 }
 
+// A package source is refused as a domain with the same text in every binding, and nobody is asked (issue #205).
+func TestRequestInternetPackageHostSameForAllBindings(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	chatID, slot := newChatNoNet(t, e)
+	before, _ := e.st.ListApprovals(ctx, "", chatID)
+	var first string
+	for _, via := range []string{"cli", "mcp", "api"} {
+		r, err := e.m.RequestInternet(ctx, chatID, slot, via, netgrant.Spec{Kind: netgrant.Domains, Reason: "x", Domains: []string{"deb.debian.org"}})
+		if err != nil || r.Status != "refused" || !strings.Contains(r.Message, "kind full") {
+			t.Fatalf("%s: %+v %v", via, r, err)
+		}
+		if first == "" {
+			first = r.Message
+		} else if r.Message != first {
+			t.Errorf("%s: message differs: %q vs %q", via, r.Message, first)
+		}
+	}
+	if after, _ := e.st.ListApprovals(ctx, "", chatID); len(after) != len(before) {
+		t.Fatalf("refusals created approvals: %d -> %d", len(before), len(after))
+	}
+	if v, _ := e.m.View(ctx, chatID); len(v.InternetGrants) != 0 {
+		t.Fatalf("grants: %+v", v.InternetGrants)
+	}
+}
+
 // At most five grants are active in a chat; the sixth request is refused before anyone is asked.
 func TestRequestInternetTooManyGrants(t *testing.T) {
 	e := setup(t)
