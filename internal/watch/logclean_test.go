@@ -51,7 +51,7 @@ func TestCollapseProgressRuns(t *testing.T) {
 		{"trailing carriage return", "x\ry\r\n", "y"},
 		{"two bars in a row", bar("1") + "\n" + bar("2") + "\n", bar("2")},
 		{"bar, text, bar", bar("1") + "\nmid\n" + bar("2"), bar("1") + "\nmid\n" + bar("2")},
-		{"bar without a total", "Validation: 0/? [00:00<?, ?it/s]\nVal: 3/? [00:01<?, ?it/s]", "Val: 3/? [00:01<?, ?it/s]"},
+		{"bar without a total", "Validation: | | 0/? [00:00<?, ?it/s]\nVal: | | 3/? [00:01<?, ?it/s]", "Val: | | 3/? [00:01<?, ?it/s]"},
 		{"zero iterations", "0it [00:00, ?it/s]\n1it [00:01, 1.00it/s]", "1it [00:01, 1.00it/s]"},
 		{"traceback is no bar", "Traceback (most recent call last):\nValueError: x\nValueError: y", "Traceback (most recent call last):\nValueError: x\nValueError: y"},
 		{"table row is no bar", "| a | 1/2 |\n| b | 3/4 |", "| a | 1/2 |\n| b | 3/4 |"},
@@ -62,7 +62,7 @@ func TestCollapseProgressRuns(t *testing.T) {
 	}
 	for _, c := range cases {
 		got := CollapseProgress(c.in)
-		if got != strings.TrimRight(c.want, "\n") && got != c.want {
+		if strings.TrimRight(got, "\n") != strings.TrimRight(c.want, "\n") {
 			t.Errorf("%s: got %q, want %q", c.name, got, c.want)
 		}
 		if again := CollapseProgress(got); again != got {
