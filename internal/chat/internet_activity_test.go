@@ -148,3 +148,53 @@ func TestUserSwitchOffLogsEndedGrants(t *testing.T) {
 		t.Errorf("ended grants of the entry: %+v for detail %q", sw.Ended, sw.Detail)
 	}
 }
+
+// Issue #186: the user's switch-on next to another active grant starts a full grant and is logged as "on", not as
+// "already on"; a second switch-on is "already on".
+func TestUserSwitchOnBesideSearchGrant(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	chatID, _ := newChatNoNet(t, e)
+	startTestGrant(t, e, chatID, "search", nil, 10, 10)
+	if _, err := e.m.SetInternetByUser(ctx, chatID, true); err != nil {
+		t.Fatal(err)
+	}
+	p, err := e.st.ListActivity(ctx, store.ActivityFilter{Kind: store.KindInternet})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sw []store.ActivityCall
+	for _, c := range p.Calls {
+		if c.Op == store.OpInternetUser {
+			sw = append(sw, c)
+		}
+	}
+	if len(sw) != 1 || sw[0].Internet.Result != "on" || sw[0].Grant == nil || sw[0].Grant.Kind != "full" ||
+		!strings.HasSuffix(sw[0].Detail, " full") || !strings.HasPrefix(sw[0].Detail, "grant ") {
+		t.Fatalf("switch-on beside a search grant: %+v", sw)
+	}
+	if _, err := e.m.SetInternetByUser(ctx, chatID, true); err != nil {
+		t.Fatal(err)
+	}
+	p, _ = e.st.ListActivity(ctx, store.ActivityFilter{Kind: store.KindInternet})
+	if p.Calls[0].Internet.Result != "already_on" || p.Calls[0].Detail != "" {
+		t.Fatalf("second switch-on: %+v", p.Calls[0])
+	}
+}
+
+// Issue #186: switching off with nothing active is "already off" and ends nothing.
+func TestUserSwitchOffNothingActive(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	chatID, _ := newChatNoNet(t, e)
+	if _, err := e.m.SetInternetByUser(ctx, chatID, false); err != nil {
+		t.Fatal(err)
+	}
+	p, err := e.st.ListActivity(ctx, store.ActivityFilter{Kind: store.KindInternet})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p.Calls) != 1 || p.Calls[0].Internet.Result != "already_off" || len(p.Calls[0].Ended) != 0 {
+		t.Fatalf("switch-off with nothing active: %+v", p.Calls)
+	}
+}
