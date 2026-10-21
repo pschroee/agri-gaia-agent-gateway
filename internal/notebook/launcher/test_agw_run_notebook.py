@@ -56,7 +56,8 @@ class LauncherTest(unittest.TestCase):
             self.assertEqual(rc, 0)
             nb = nbformat.read(os.path.join(d, "executed-t.ipynb"), as_version=4)
             self.assertEqual(nb.cells[1].outputs[0]["text"], "ran\n")
-            self.assertEqual(nb.cells[1].metadata, {})
+            # nbclient adds its own timing record; what the file carried (the tag) is gone
+            self.assertNotIn("tags", nb.cells[1].metadata)
 
     def test_duplicate_key_is_refused(self):
         with tempfile.TemporaryDirectory() as d:
