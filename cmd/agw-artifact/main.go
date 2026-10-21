@@ -22,6 +22,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"agw/internal/execproto"
 )
@@ -258,6 +259,54 @@ var internetKinds = []string{"search", "domains", "packages", "full"}
 // silently, so it is refused (exit code 2).
 var errOldForm = errors.New(`the first argument must be one of search, domains, packages, full, status, off (the old form agw-internet "<reason>" is gone: ask for the narrowest kind, e.g. agw-internet domains download.example.org "<reason>")`)
 
+// kindUsage is the usage line of each kind, shown with a usage error of that kind instead of the whole help.
+var kindUsage = map[string]string{
+	"search":   `agw-internet search "<reason>"`,
+	"domains":  `agw-internet domains <host[,host…]> "<reason>" [--minutes N] [--mb N]`,
+	"packages": `agw-internet packages <pip:name[==ver]|npm:name[@ver][,…]> "<reason>"`,
+	"full":     `agw-internet full "<reason>" [--minutes N] [--mb N]`,
+}
+
+// hasSpaceOutsideBrackets reports white space in s that is not inside [...] (pip extras may say [a, b]).
+func hasSpaceOutsideBrackets(s string) bool {
+	depth := 0
+	for _, r := range strings.TrimSpace(s) {
+		switch {
+		case r == '[':
+			depth++
+		case r == ']' && depth > 0:
+			depth--
+		case unicode.IsSpace(r) && depth == 0:
+			return true
+		}
+	}
+	return false
+}
+
+// shortText cuts s to 60 characters for an error message.
+func shortText(s string) string {
+	if r := []rune(s); len(r) > 60 {
+		return string(r[:60]) + "…"
+	}
+	return s
+}
+
+// listProblem names what is wrong with the first word of a domains or packages request ("" if it looks like a list):
+// a sentence such as "pip install scikit-learn" is a reason or a command, not a list (issue #196).
+func listProblem(kind, s string) string {
+	switch kind {
+	case "packages":
+		if hasSpaceOutsideBrackets(s) || !strings.Contains(s, ":") {
+			return fmt.Sprintf(`packages: "%s" is not a package list; write ecosystem:name without spaces, e.g. agw-internet packages pip:scikit-learn "<reason>"`, shortText(s))
+		}
+	case "domains":
+		if len(strings.Fields(s)) > 1 {
+			return fmt.Sprintf(`domains: "%s" is not a host list; write host names separated by commas, e.g. agw-internet domains download.example.org "<reason>"`, shortText(s))
+		}
+	}
+	return ""
+}
+
 // parseInternetArgs reads a command line: a kind with its list and a reason, status, off [<grant id>] or help.
 // --minutes and --mb may stand anywhere; everything after "--" is the reason.
 func parseInternetArgs(args []string) (internetCmd, error) {
@@ -329,7 +378,10 @@ func parseInternetArgs(args []string) (internetCmd, error) {
 	switch c.Kind {
 	case "domains", "packages":
 		if len(words) == 0 {
-			return c, fmt.Errorf("%s needs a list first: agw-internet %s <%s> \"<reason>\"", c.Kind, c.Kind, map[string]string{"domains": "host[,host…]", "packages": "pip:name[==ver]|npm:name[@ver][,…]"}[c.Kind])
+			return c, fmt.Errorf("%s needs a list first", c.Kind)
+		}
+		if msg := listProblem(c.Kind, words[0]); msg != "" {
+			return c, errors.New(msg)
 		}
 		var list []string
 		if c.Kind == "packages" {
@@ -365,6 +417,12 @@ func parseInternetArgs(args []string) (internetCmd, error) {
 func internet(hc *http.Client, args []string) (int, error) {
 	c, err := parseInternetArgs(args)
 	if err != nil {
+		if u, ok := kindUsage[c.Kind]; ok {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			fmt.Fprintln(os.Stderr, "usage:", u)
+			fmt.Fprintln(os.Stderr, "(agw-internet --help lists all kinds)")
+			return exitUsage, nil
+		}
 		fmt.Fprint(os.Stderr, internetHelp)
 		fmt.Fprintln(os.Stderr, "error:", err)
 		return exitUsage, nil
