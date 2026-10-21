@@ -274,7 +274,7 @@ var Tools = []Tool{
 		Params: pagingParams, build: get("/models")},
 	{Name: "get_model", CLI: "model", Desc: "Returns the metadata of a platform model.",
 		Params: []Param{{Name: "model_id", Type: "integer", Desc: "id of the model", Required: true}}, build: byID(http.MethodGet, "/models", "model_id", "")},
-	{Name: "train_options", CLI: "train-options", Desc: "Training templates of the platform. Without arguments: providers (e.g. Torchvision, Ultralytics). With provider: architectures including category. With provider and architecture: JSON Schema and default values of the train_config for platform_create_training.",
+	{Name: "train_options", CLI: "train-options", Desc: "Training templates of the platform. Without arguments: providers (e.g. Torchvision, Ultralytics). With provider: architectures including category. With provider and architecture: JSON Schema and default values of the train_config for {{tool:create_training}}.",
 		Params: []Param{{Name: "provider", Type: "string", Desc: "provider, e.g. Torchvision"}, {Name: "architecture", Type: "string", Desc: "architecture, e.g. EfficientNet (only with provider)"}},
 		build: func(a Args) (Request, error) {
 			p, hasP, err := a.seg("provider")
@@ -325,18 +325,18 @@ var Tools = []Tool{
 	{Name: "list_tasks", CLI: "tasks", Desc: "Lists the platform's background tasks (building and starting training containers, among others) with status, completion_percentage and message.",
 		Params: pagingParams, build: get("/tasks")},
 	{Name: "task_status", CLI: "task", Desc: "Returns a background task of the platform (status: inprogress, completed, failed; completion_percentage; message).",
-		Params: []Param{{Name: "task_id", Type: "integer", Desc: "id of the task (given in the Location of platform_create_training and platform_start_training)", Required: true}}, build: byID(http.MethodGet, "/tasks", "task_id", "")},
+		Params: []Param{{Name: "task_id", Type: "integer", Desc: "id of the task (given in the Location of {{tool:create_training}} and {{tool:start_training}})", Required: true}}, build: byID(http.MethodGet, "/tasks", "task_id", "")},
 	// list_edge_devices lives in tools_edge.go (edge D2.2): a compact list with the online state, its
 	// devices' deployments and the deployments of the platform (list_deployments).
 	{Name: "list_container_images", CLI: "container-images", Desc: "Lists the container images in the platform's registry.",
 		Params: nil, build: get("/container-images")},
-	{Name: "create_training", CLI: "create-training", Desc: "Creates a training container (POST /train/config): the platform builds a training image from the installed template in the background. Effect compute: uses compute time, the user must approve, and a chat has a limited number of compute calls (default 3). Response: Location with the task (/tasks/<id>). When the task is completed, its message names the container: \"Train Container #<id> created.\" Get the values for train_config with platform_train_options first. Values of train_config must be numbers, true/false, null or short text of letters, digits, _.,:/+- (the platform passes them through a shell).",
+	{Name: "create_training", CLI: "create-training", Desc: "Creates a training container (POST /train/config): the platform builds a training image from the installed template in the background. Effect compute: uses compute time, the user must approve, and a chat has a limited number of compute calls (default 3). Response: Location with the task (/tasks/<id>). When the task is completed, its message names the container: \"Train Container #<id> created.\" Get the values for train_config with {{tool:train_options}} first. Values of train_config must be numbers, true/false, null or short text of letters, digits, _.,:/+- (the platform passes them through a shell).",
 		Params: []Param{
 			{Name: "provider", Type: "string", Desc: "provider, e.g. Torchvision", Required: true},
 			{Name: "architecture", Type: "string", Desc: "architecture, e.g. EfficientNet", Required: true},
-			{Name: "category", Type: "string", Desc: "category of the architecture according to platform_train_options, e.g. Classification", Required: true},
+			{Name: "category", Type: "string", Desc: "category of the architecture according to {{tool:train_options}}, e.g. Classification", Required: true},
 			{Name: "dataset_id", Type: "integer", Desc: "id of the dataset", Required: true},
-			{Name: "train_config", Type: "object", Desc: "training parameters following the template's schema (values from platform_train_options as a starting point)", Required: true},
+			{Name: "train_config", Type: "object", Desc: "training parameters following the template's schema (values from {{tool:train_options}} as a starting point)", Required: true},
 			{Name: "export_config", Type: "object", Desc: "settings for the ONNX export. Always send it: without it the platform saves model.pt without tensor metadata, and no inference container can be built from the model. Example for img-size 64: {\"model_type\":\"pytorch\",\"input_names\":[],\"output_names\":[],\"input_shapes\":[[1,3,64,64]],\"input_types\":[\"float32\"],\"verbose\":false,\"dynamo\":false,\"opset_version\":18}; the last two numbers of input_shapes are the img-size of the train_config; keep dynamo false (detection models cannot be traced with it)"},
 		},
 		Write: true,
@@ -385,7 +385,7 @@ var Tools = []Tool{
 			{Name: "annotation_labels", Type: "array", Desc: "classes (labels) of the dataset, e.g. [\"0\",\"1\"]"},
 			{Name: "dataset_type", Type: "string", Desc: "dataset type (default AgriImageDataResource; only this one can be annotated)"},
 			{Name: "metadata", Type: "object", Desc: "further metadata as an object (default {}); the platform stores it in the triple store"},
-			{Name: "keywords", Type: "array", Desc: "keywords as AGROVOC URIs (search: platform_request GET /agrovoc/keywords?keyword=…)"},
+			{Name: "keywords", Type: "array", Desc: "keywords as AGROVOC URIs (search with a GET on /agrovoc/keywords?keyword=…)"},
 		},
 		Write: true,
 		build: func(a Args) (Request, error) {
@@ -464,7 +464,7 @@ var Tools = []Tool{
 			{Name: "description", Type: "string", Desc: "short description", Required: true},
 			{Name: "format", Type: "string", Desc: "onnx, pytorch, tensorflow or tensorrt", Required: true},
 			{Name: "model_file", Type: "string", Desc: "path of the model file in the sandbox, e.g. /workspace/model.onnx", Required: true, Path: true},
-			{Name: "keywords", Type: "array", Desc: "keywords as AGROVOC URIs (search: platform_request GET /agrovoc/keywords?keyword=…); no class names"},
+			{Name: "keywords", Type: "array", Desc: "keywords as AGROVOC URIs (search with a GET on /agrovoc/keywords?keyword=…); no class names"},
 		},
 		Write: true,
 		build: func(a Args) (Request, error) {
@@ -499,7 +499,7 @@ var Tools = []Tool{
 			}
 			return Request{Method: http.MethodPost, Path: "/models", Form: form, Files: []File{{Field: "modelfile", Path: mf}}}, nil
 		}},
-	{Name: "api_paths", CLI: "api-paths", Desc: "Index of all paths of the platform's REST API from its OpenAPI description: one line per operation with method, path, purpose, parameters and kind of body. With prefix only paths starting with it (e.g. /train). Basis for platform_request.",
+	{Name: "api_paths", CLI: "api-paths", Desc: "Index of all paths of the platform's REST API from its OpenAPI description: one line per operation with method, path, purpose, parameters and kind of body. With prefix only paths starting with it (e.g. /train). Basis for {{tool:request}}.",
 		Params: []Param{{Name: "prefix", Type: "string", Desc: "only paths with this beginning, e.g. /datasets"}},
 		build: func(a Args) (Request, error) {
 			prefix, _, err := a.str("prefix")
@@ -508,7 +508,7 @@ var Tools = []Tool{
 			}
 			return Request{Method: http.MethodGet, Path: "/openapi.json", Digest: func(b []byte) ([]byte, error) { return openAPIDigest(b, prefix) }}, nil
 		}},
-	{Name: "request", CLI: "request", Desc: "Any call to the platform's REST API for everything the other platform_ tools do not cover (paths: platform_api_paths). Every call has an effect class: read runs directly; write, compute (building or starting a training) and irreversible (DELETE, publishing with toggle-public) must be approved by the user; irreversible ones always, also within a delegation; known GETs that write in the backend (e.g. /train/containers/<id>/model) count as write. The orchestrator redacts values containing passwords, keys and tokens. JSON bodies only, no file uploads.",
+	{Name: "request", CLI: "request", Desc: "Any call to the platform's REST API for everything the other platform tools do not cover (paths: {{tool:api_paths}}). Every call has an effect class: read runs directly; write, compute (building or starting a training) and irreversible (DELETE, publishing with toggle-public) must be approved by the user; irreversible ones always, also within a delegation; known GETs that write in the backend (e.g. /train/containers/<id>/model) count as write. The orchestrator redacts values containing passwords, keys and tokens. JSON bodies only, no file uploads.",
 		Params: []Param{
 			{Name: "method", Type: "string", Desc: "GET, POST, PUT, PATCH or DELETE", Required: true},
 			{Name: "path", Type: "string", Desc: "path relative to the API, e.g. /datasets/3 (without query)", Required: true},
@@ -639,6 +639,6 @@ func openAPIDigest(raw []byte, prefix string) ([]byte, error) {
 			b.WriteString("\n")
 		}
 	}
-	fmt.Fprintf(&b, "(%d operations; * = required; multipart/form-data bodies do not work via platform_request)\n", n)
+	fmt.Fprintf(&b, "(%d operations; * = required; multipart/form-data bodies cannot be sent as JSON)\n", n)
 	return []byte(b.String()), nil
 }

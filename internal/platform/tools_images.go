@@ -50,7 +50,7 @@ type inferenceTemplate struct {
 
 var listTemplates = Tool{
 	Name: "list_templates", CLI: "templates",
-	Desc:   "Lists the inference container templates installed on the platform (id, name, source, git_url, git_ref). build_inference_image needs the id of a template; import_template fetches the official one.",
+	Desc:   "Lists the inference container templates installed on the platform (id, name, source, git_url, git_ref). {{tool:build_inference_image}} needs the id of a template; {{tool:import_template}} fetches the official one.",
 	Params: pagingParams,
 	build:  get(templatesPath),
 }
@@ -123,8 +123,8 @@ func importTemplateSteps(ctx context.Context, a Args, final Request, do Doer) (R
 var validateModel = Tool{
 	Name: "validate_model", CLI: "validate-model",
 	Desc: "Checks whether a model can become an inference container (reads only): ONNX format, tensor metadata, a name that Triton can address over HTTP, output labels. " +
-		"The answer has ready, problems and warnings. build_inference_image runs the same checks before it builds.",
-	Params: []Param{{Name: "model_id", Type: "integer", Desc: "id of the model (platform_list_models)", Required: true}},
+		"The answer has ready, problems and warnings. {{tool:build_inference_image}} runs the same checks before it builds.",
+	Params: []Param{{Name: "model_id", Type: "integer", Desc: "id of the model ({{tool:list_models}})", Required: true}},
 	build:  byID(http.MethodGet, "/models", "model_id", ""),
 	steps:  validateModelSteps,
 }
@@ -150,7 +150,7 @@ func validateModelSteps(ctx context.Context, a Args, final Request, do Doer) (Re
 func modelReadiness(m map[string]any) (problems, warnings []string) {
 	problems, warnings = []string{}, []string{}
 	if f, _ := m["format"].(string); f != "onnx" {
-		problems = append(problems, fmt.Sprintf("format is %s, not onnx: the inference container needs an ONNX export (platform_create_training with export_config)", f))
+		problems = append(problems, fmt.Sprintf("format is %s, not onnx: the inference container needs an ONNX export ({{tool:create_training}} with export_config)", f))
 	}
 	var missing []string
 	for _, k := range modelTensorFields {
@@ -159,15 +159,15 @@ func modelReadiness(m map[string]any) (problems, warnings []string) {
 		}
 	}
 	if len(missing) > 0 {
-		problems = append(problems, "tensor metadata missing: "+strings.Join(missing, ", ")+" (set them with platform_update_model)")
+		problems = append(problems, "tensor metadata missing: "+strings.Join(missing, ", ")+" (set them with {{tool:update_model}})")
 	}
 	name, _ := m["name"].(string)
 	if !TritonNameRe.MatchString(name) {
 		problems = append(problems, fmt.Sprintf("name %q cannot be addressed by Triton over HTTP (spaces, brackets, commas and the like); "+
-			"rename the model with platform_update_model to letters, digits, _ . - only, e.g. mnist_efficientnet", name))
+			"rename the model with {{tool:update_model}} to letters, digits, _ . - only, e.g. mnist_efficientnet", name))
 	}
 	if strings.Contains(name, "None Acc.") {
-		warnings = append(warnings, `name contains "None Acc.": the score was not recognized in the training log (check the model with platform_assess_model)`)
+		warnings = append(warnings, `name contains "None Acc.": the score was not recognized in the training log (check the model with {{tool:assess_model}})`)
 	}
 	if labels, _ := m["output_labels"].([]any); len(labels) == 0 {
 		warnings = append(warnings, "no output_labels: the service returns class indices only")
@@ -178,13 +178,13 @@ func modelReadiness(m map[string]any) (problems, warnings []string) {
 var buildInferenceImage = Tool{
 	Name: "build_inference_image", CLI: "build-image",
 	Desc: "Builds an inference container image from a model and an installed template into the platform's registry (several minutes, about 9 GB). " +
-		"Before the build it checks: the model is ready (validate_model), the template is installed, the repository (the owner of the model, then /name) and <name>:<tag> is not in the registry yet " +
+		"Before the build it checks: the model is ready ({{tool:validate_model}}), the template is installed, the repository (the owner of the model, then /name) and <name>:<tag> is not in the registry yet " +
 		"(the platform would overwrite it silently), and no build of that image is running. Writes; the user must approve. " +
-		"The answer has repository, tag and the task (/tasks/<id>); follow the task with platform_task_status and then check platform_container_image_status. " +
+		"The answer has repository, tag and the task (/tasks/<id>); follow the task with {{tool:task_status}} and then check {{tool:container_image_status}}. " +
 		"An image cannot be started without an edge device.",
 	Params: []Param{
-		{Name: "template_id", Type: "integer", Desc: "id of the installed template (platform_list_templates)", Required: true},
-		{Name: "model_id", Type: "integer", Desc: "id of the model (platform_list_models)", Required: true},
+		{Name: "template_id", Type: "integer", Desc: "id of the installed template ({{tool:list_templates}})", Required: true},
+		{Name: "model_id", Type: "integer", Desc: "id of the model ({{tool:list_models}})", Required: true},
 		{Name: "name", Type: "string", Desc: "name of the image: lowercase letters, digits and . _ -, e.g. mnist-triton", Required: true},
 		{Name: "tag", Type: "string", Desc: "tag, e.g. v1", Required: true},
 		{Name: "architecture", Type: "string", Desc: "amd64 or arm64", Required: true},
@@ -264,7 +264,7 @@ func buildInferenceImageSteps(ctx context.Context, a Args, _ Request, do Doer) (
 		return res, "", err
 	}
 	if !slices.ContainsFunc(installed, func(t inferenceTemplate) bool { return t.ID.String() == strconv.FormatInt(tid, 10) }) {
-		return Refuse("container template %d is not installed; platform_list_templates lists them, platform_import_template imports the official one", tid)
+		return Refuse("container template %d is not installed; {{tool:list_templates}} lists them, {{tool:import_template}} imports the official one", tid)
 	}
 
 	image := repo + ":" + tag

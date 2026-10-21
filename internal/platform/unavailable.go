@@ -21,5 +21,5 @@ const StatusPendingUser = "pending_user"
 // UnavailableText is the fixed wording of such an answer (G1.13):
 // "<capability> is not available in this setup: <reason>. <what to do instead>. capabilities shows what this setup offers."
 func UnavailableText(capability, reason, instead string) string {
-	return fmt.Sprintf("%s is not available in this setup: %s. %s. capabilities shows what this setup offers.", capability, reason, instead)
+	return fmt.Sprintf("%s is not available in this setup: %s. %s. {{tool:capabilities}} shows what this setup offers.", capability, reason, instead)
 }

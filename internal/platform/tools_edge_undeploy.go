@@ -34,9 +34,9 @@ type undeployInfo struct {
 // (delegation.go:248).
 var undeployTool = Tool{
 	Name: "undeploy", CLI: "undeploy",
-	Desc:   "Stops and removes the container of a deployment created in this chat from its edge device (anonymous volumes are removed too). The deployment stays and can be started again with platform_start_deployment. Writes; the user must approve. Response: the task (/tasks/<id>).",
+	Desc:   "Stops and removes the container of a deployment created in this chat from its edge device (anonymous volumes are removed too). The deployment stays and can be started again with {{tool:start_deployment}}. Writes; the user must approve. Response: the task (/tasks/<id>).",
 	Write:  true,
-	Params: []Param{{Name: "deployment_id", Type: "integer", Desc: "id of the deployment (platform_list_deployments or the answer of platform_create_deployment)", Required: true}},
+	Params: []Param{{Name: "deployment_id", Type: "integer", Desc: "id of the deployment ({{tool:list_deployments}} or the answer of {{tool:create_deployment}})", Required: true}},
 	build:  byID(http.MethodPut, "/container-deployments", "deployment_id", "/undeploy"),
 	steps:  undeploySteps,
 }
@@ -66,7 +66,7 @@ func undeploySteps(ctx context.Context, a Args, final Request, do Doer) (Result,
 		"deployment_id": id,
 		"status":        "undeployed",
 		"task":          res.Location,
-		"note":          "the platform removes the container in the background; the deployment stays and can be started again, follow the task with platform_deployment_status",
+		"note":          "the platform removes the container in the background; the deployment stays and can be started again, follow the task with {{tool:deployment_status}}",
 	})
 	return res, "", nil
 }
@@ -75,9 +75,9 @@ func undeploySteps(ctx context.Context, a Args, final Request, do Doer) (Result,
 // back, so the user approves it on its own, also inside a plan.
 var deleteDeploymentTool = Tool{
 	Name: "delete_deployment", CLI: "delete-deployment",
-	Desc:   "Deletes a deployment created in this chat that is not running (undeploy it first). Irreversible: the user must approve it on its own, also inside a plan.",
+	Desc:   "Deletes a deployment created in this chat that is not running ({{tool:undeploy}} it first). Irreversible: the user must approve it on its own, also inside a plan.",
 	Write:  true,
-	Params: []Param{{Name: "deployment_id", Type: "integer", Desc: "id of the deployment (platform_list_deployments or the answer of platform_create_deployment)", Required: true}},
+	Params: []Param{{Name: "deployment_id", Type: "integer", Desc: "id of the deployment ({{tool:list_deployments}} or the answer of {{tool:create_deployment}})", Required: true}},
 	build:  byID(http.MethodDelete, "/container-deployments", "deployment_id", ""),
 	steps:  deleteDeploymentSteps,
 }
@@ -92,7 +92,7 @@ func deleteDeploymentSteps(ctx context.Context, a Args, final Request, do Doer) 
 		return res, "", err
 	}
 	if dep.Status == "deployed" {
-		return Refuse("deployment %d is deployed; undeploy it first", id)
+		return Refuse("deployment %d is deployed; {{tool:undeploy}} it first", id)
 	}
 	res, err := do(ctx, final)
 	if err != nil || res.Status != "ok" || res.HTTPStatus < 200 || res.HTTPStatus >= 300 {

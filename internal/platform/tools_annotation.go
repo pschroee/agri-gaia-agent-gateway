@@ -38,7 +38,7 @@ const (
 
 var annotationFunctions = Tool{
 	Name: "annotation_functions", CLI: "annotation-functions",
-	Desc:   "Lists the pre-annotation functions the agent may run (CVAT/Nuclio detectors): id, labels, kind and where it comes from (yours from annotation_function, or installed by the operator). Functions of other users are not usable, because a function receives every image of the run.",
+	Desc:   "Lists the pre-annotation functions the agent may run (CVAT/Nuclio detectors): id, labels, kind and where it comes from (yours from {{tool:annotation_function}}, or installed by the operator). Functions of other users are not usable, because a function receives every image of the run.",
 	Params: nil,
 	build: func(Args) (Request, error) {
 		return Request{Method: http.MethodGet, Path: AnnotationPrefix + "/functions"}, nil
@@ -62,10 +62,10 @@ var annotationTask = Tool{
 
 var preAnnotate = Tool{
 	Name: "pre_annotate", CLI: "pre-annotate",
-	Desc: `Runs a pre-annotation function over all images of the dataset's CVAT task. mapping maps function labels to dataset classes ({"cow": "Rind"}); without mapping only equal names are used, unmapped labels are dropped. min_confidence in percent (default 50). existing=keep adds to the task and is refused if the task already has annotations (use annotation_fill for images without annotations); existing=replace deletes ALL annotations of the task first (irreversible). Effect compute; the user must approve. Returns run_id; follow it with annotation_run in a background loop (30 s or more between queries).`,
+	Desc: `Runs a pre-annotation function over all images of the dataset's CVAT task. mapping maps function labels to dataset classes ({"cow": "Rind"}); without mapping only equal names are used, unmapped labels are dropped. min_confidence in percent (default 50). existing=keep adds to the task and is refused if the task already has annotations (use {{tool:annotation_fill}} for images without annotations); existing=replace deletes ALL annotations of the task first (irreversible). Effect compute; the user must approve. Returns run_id; follow it with {{tool:annotation_run}} in a background loop (30 s or more between queries).`,
 	Params: []Param{
 		{Name: "dataset_id", Type: "integer", Desc: "id of the dataset", Required: true},
-		{Name: "function", Type: "string", Desc: "id of the pre-annotation function (platform_annotation_functions)", Required: true},
+		{Name: "function", Type: "string", Desc: "id of the pre-annotation function ({{tool:annotation_functions}})", Required: true},
 		{Name: "min_confidence", Type: "integer", Desc: "confidence threshold in percent, 1 to 99 (default 50)"},
 		{Name: "mapping", Type: "object", Desc: `function label to dataset class, e.g. {"cow": "Rind"}`},
 		{Name: "existing", Type: "string", Desc: "keep (default; adds to the task) or replace (deletes all annotations of the task first)"},
@@ -130,7 +130,7 @@ func buildPreAnnotate(a Args) (Request, error) {
 var annotationRun = Tool{
 	Name: "annotation_run", CLI: "annotation-run",
 	Desc:   "State and progress of a pre-annotation run started in this chat (queued, started, finished, failed, expired).",
-	Params: []Param{{Name: "run_id", Type: "string", Desc: "run_id from platform_pre_annotate", Required: true}},
+	Params: []Param{{Name: "run_id", Type: "string", Desc: "run_id from {{tool:pre_annotate}}", Required: true}},
 	build: func(a Args) (Request, error) {
 		id, ok, err := a.str("run_id")
 		if err != nil {
@@ -178,9 +178,9 @@ func init() { Tools = append(Tools, annotationFunction) }
 
 var annotationFunction = Tool{
 	Name: "annotation_function", CLI: "annotation-function",
-	Desc: "Builds a CVAT pre-annotation function from your own ONNX model of the platform and provides it for the platform: the gateway packs a fixed, versioned template (classification or detection) with the model, a config.json and a function.yaml and sends the archive to POST /datasets/auto-annotation. Code never comes from the agent. kind is classification or detection; labels are the class names in the order the model outputs them (default: the model's output_labels, and for classification class_0 … class_{n-1} from output_shape); input_size is the square input side in pixels (default: from input_shape, else 224 for classification and 640 for detection). Effect irreversible with its own approval: the function is visible to and usable by every CVAT user, it receives every image of a run, and the agent cannot remove it (ask the operator). The build takes several minutes; annotation_functions then shows the state until it is ready. At most AGW_ANNOTATION_MAX_FUNCTIONS functions per user.",
+	Desc: "Builds a CVAT pre-annotation function from your own ONNX model of the platform and provides it for the platform: the gateway packs a fixed, versioned template (classification or detection) with the model, a config.json and a function.yaml and sends the archive to POST /datasets/auto-annotation. Code never comes from the agent. kind is classification or detection; labels are the class names in the order the model outputs them (default: the model's output_labels, and for classification class_0 … class_{n-1} from output_shape); input_size is the square input side in pixels (default: from input_shape, else 224 for classification and 640 for detection). Effect irreversible with its own approval: the function is visible to and usable by every CVAT user, it receives every image of a run, and the agent cannot remove it (ask the operator). The build takes several minutes; {{tool:annotation_functions}} then shows the state until it is ready. At most AGW_ANNOTATION_MAX_FUNCTIONS functions per user.",
 	Params: []Param{
-		{Name: "model_id", Type: "integer", Desc: "id of your own ONNX model of the platform (platform_list_models)", Required: true},
+		{Name: "model_id", Type: "integer", Desc: "id of your own ONNX model of the platform ({{tool:list_models}})", Required: true},
 		{Name: "kind", Type: "string", Desc: "classification or detection", Required: true},
 		{Name: "labels", Type: "array", Desc: "class names in the order the model outputs them"},
 		{Name: "input_size", Type: "integer", Desc: "square input side in pixels, 32 to 2048"},
@@ -273,12 +273,12 @@ func init() {
 
 var annotationCheck = Tool{
 	Name: "annotation_check", CLI: "annotation-check",
-	Desc: `Measures a pre-annotation function before it runs over all images, names the images whose answer is weak, or judges the result of a run or a fill. mode=calibrate asks the function about the images of the calibration set (the ones the mapping and the threshold may be chosen on), counts the confusion between the classes it answers and the manual classes and proposes the mapping plus a threshold; mode=uncertain asks about the images of the task and lists the ones under uncertain_below with their CVAT link; mode=verify measures the function of the named run or fill (source_id) with ITS mapping and threshold on the held-out images (final=true) or on the validation images (final=false, an interim figure) and reports a verdict usable, questionable or not measured. In mode verify do not send function or mapping: judged is the setting that produced the result. A final verdict is possible once per task and chat. An interim verify of a task carries round, previous and delta; a further fill or run of that task in this chat is a correction round (at most 3, one retraining), and the gateway refuses it while the last round did not make the validation figure at least 0.02 better — report that refusal instead of trying another setting. Limit 1 to 1000 images (default 50 for calibrate, 200 for uncertain; verify measures the whole set). Without mapping the calls of calibrate and uncertain map every class of the function onto the first class of the dataset, so that CVAT drops nothing and the check reads the classes of the function (a function that answers no raw_label needs mapping). Effect compute; the user must approve. Runs as a background job (annotation_jobs): the answer carries job_id, follow it with annotation-job.`,
+	Desc: `Measures a pre-annotation function before it runs over all images, names the images whose answer is weak, or judges the result of a run or a fill. mode=calibrate asks the function about the images of the calibration set (the ones the mapping and the threshold may be chosen on), counts the confusion between the classes it answers and the manual classes and proposes the mapping plus a threshold; mode=uncertain asks about the images of the task and lists the ones under uncertain_below with their CVAT link; mode=verify measures the function of the named run or fill (source_id) with ITS mapping and threshold on the held-out images (final=true) or on the validation images (final=false, an interim figure) and reports a verdict usable, questionable or not measured. In mode verify do not send function or mapping: judged is the setting that produced the result. A final verdict is possible once per task and chat. An interim verify of a task carries round, previous and delta; a further fill or run of that task in this chat is a correction round (at most 3, one retraining), and the gateway refuses it while the last round did not make the validation figure at least 0.02 better — report that refusal instead of trying another setting. Limit 1 to 1000 images (default 50 for calibrate, 200 for uncertain; verify measures the whole set). Without mapping the calls of calibrate and uncertain map every class of the function onto the first class of the dataset, so that CVAT drops nothing and the check reads the classes of the function (a function that answers no raw_label needs mapping). Effect compute; the user must approve. Runs as a background job (annotation_jobs): the answer carries job_id, follow it with {{tool:annotation_job}}.`,
 	Params: []Param{
 		{Name: "dataset_id", Type: "integer", Desc: "id of your own dataset of type AgriImageDataResource with classes and a CVAT task (not needed for mode verify: it comes from the source)"},
-		{Name: "function", Type: "string", Desc: "id of the pre-annotation function (platform_annotation_functions); required for calibrate and uncertain, refused for verify"},
+		{Name: "function", Type: "string", Desc: "id of the pre-annotation function ({{tool:annotation_functions}}); required for calibrate and uncertain, refused for verify"},
 		{Name: "mode", Type: "string", Desc: "calibrate (measure on the calibration set), uncertain (list the images with the weakest answers) or verify (judge the result of a run or a fill)", Required: true},
-		{Name: "source_id", Type: "string", Desc: "the run_id of pre_annotate or the job_id of annotation_fill whose result is judged; only for mode verify"},
+		{Name: "source_id", Type: "string", Desc: "the run_id of {{tool:pre_annotate}} or the job_id of {{tool:annotation_fill}} whose result is judged; only for mode verify"},
 		{Name: "final", Type: "string", Desc: "true: measure on the held-out images of the task and give a final verdict (once per task and chat); false (default): measure on the validation images and give an interim figure"},
 		{Name: "limit", Type: "integer", Desc: "how many images to measure, 1 to 1000 (default 50 for calibrate, 200 for uncertain)"},
 		{Name: "mapping", Type: "object", Desc: `function label to dataset class, e.g. {"cow": "Rind"}; with one the check measures through it, without one it reads the classes the function answers`},
@@ -345,10 +345,10 @@ func buildAnnotationCheck(a Args) (Request, error) {
 
 var annotationFill = Tool{
 	Name: "annotation_fill", CLI: "annotation-fill",
-	Desc: `Asks a pre-annotation function about the images of the CVAT task of the dataset that carry no annotation at all and writes what it answers into exactly those images (source "auto", in batches of 20). Images that already carry an annotation stay untouched, also when the user annotates one while the job runs; nothing is deleted. min_confidence in percent (default 50). mapping maps function labels to dataset classes ({"cow": "Rind"}); without one only equal names are used. limit 1 to 1000 images (default 1000). Effect compute; the user must approve. Runs as a background job (annotation_jobs): the answer carries job_id, follow it with annotation-job.`,
+	Desc: `Asks a pre-annotation function about the images of the CVAT task of the dataset that carry no annotation at all and writes what it answers into exactly those images (source "auto", in batches of 20). Images that already carry an annotation stay untouched, also when the user annotates one while the job runs; nothing is deleted. min_confidence in percent (default 50). mapping maps function labels to dataset classes ({"cow": "Rind"}); without one only equal names are used. limit 1 to 1000 images (default 1000). Effect compute; the user must approve. Runs as a background job (annotation_jobs): the answer carries job_id, follow it with {{tool:annotation_job}}.`,
 	Params: []Param{
 		{Name: "dataset_id", Type: "integer", Desc: "id of your own dataset of type AgriImageDataResource with classes and a CVAT task", Required: true},
-		{Name: "function", Type: "string", Desc: "id of the pre-annotation function (platform_annotation_functions)", Required: true},
+		{Name: "function", Type: "string", Desc: "id of the pre-annotation function ({{tool:annotation_functions}})", Required: true},
 		{Name: "min_confidence", Type: "integer", Desc: "confidence threshold in percent, 1 to 99 (default 50)"},
 		{Name: "mapping", Type: "object", Desc: `function label to dataset class, e.g. {"cow": "Rind"}`},
 		{Name: "limit", Type: "integer", Desc: "at most this many images, 1 to 1000 (default 1000)"},
@@ -403,7 +403,7 @@ var annotationJob = Tool{
 	Name: "annotation_job", CLI: "annotation-job",
 	Desc: `State of a background job of the pre-annotation of this chat (a check or a fill): queued, running, finished or failed, with done and total images and the result of a finished job. The result of mode=uncertain is a list of images and is answered page by page (50 images per page; page is the argument).`,
 	Params: []Param{
-		{Name: "job_id", Type: "string", Desc: "job_id from platform_annotation_check or platform_annotation_fill", Required: true},
+		{Name: "job_id", Type: "string", Desc: "job_id from {{tool:annotation_check}} or {{tool:annotation_fill}}", Required: true},
 		{Name: "page", Type: "integer", Desc: "page of the list of uncertain images, 50 per page (default 1)"},
 	},
 	build: func(a Args) (Request, error) {
@@ -485,9 +485,9 @@ func annotationFinal(a Args) (bool, error) {
 // annotationRollback is the tool that takes back what a run or a fill wrote (V3b, E21).
 var annotationRollback = Tool{
 	Name: "annotation_rollback", CLI: "annotation-rollback",
-	Desc: `Takes back the annotations a pre-annotation run or a fill wrote into the CVAT task (source "auto") and leaves everything the user annotated or corrected himself in place. source_id is the run_id of pre_annotate or the job_id of annotation_fill; scope all (default) takes back everything that source wrote, scope suspicious only what stands on the images the last annotation-check mode=verify named as suspicious (that verification has to run first). An annotation the user changed in CVAT since is not touched and is reported as changed_kept. What was taken back comes again through a new fill with the corrected setting. Effect write; the user must approve.`,
+	Desc: `Takes back the annotations a pre-annotation run or a fill wrote into the CVAT task (source "auto") and leaves everything the user annotated or corrected himself in place. source_id is the run_id of {{tool:pre_annotate}} or the job_id of {{tool:annotation_fill}}; scope all (default) takes back everything that source wrote, scope suspicious only what stands on the images the last {{tool:annotation_check}} mode=verify named as suspicious (that verification has to run first). An annotation the user changed in CVAT since is not touched and is reported as changed_kept. What was taken back comes again through a new fill with the corrected setting. Effect write; the user must approve.`,
 	Params: []Param{
-		{Name: "source_id", Type: "string", Desc: "run_id of pre_annotate or job_id of annotation_fill whose annotations are taken back", Required: true},
+		{Name: "source_id", Type: "string", Desc: "run_id of {{tool:pre_annotate}} or job_id of {{tool:annotation_fill}} whose annotations are taken back", Required: true},
 		{Name: "scope", Type: "string", Desc: "all (default) or suspicious (only the images the last verification of this source named)"},
 	},
 	Write: true,
