@@ -156,7 +156,7 @@ func (h *fakeHub) handler() http.Handler {
 				if h.pendingReads == 0 {
 					defer func() {
 						h.mu.Lock()
-						h.server, h.pending, h.ready = "", "", false
+						h.server, h.pending = "", "" // ready stays: the next start comes up ready
 						h.mu.Unlock()
 					}()
 				}
