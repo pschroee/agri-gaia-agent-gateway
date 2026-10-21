@@ -264,3 +264,43 @@ func TestApprovalSearchData(t *testing.T) {
 		t.Errorf("an ordinary approval carries no search data: %s", plain.Search)
 	}
 }
+
+// Issue #194: the schema removes the ended notebook trials without an epoch and nothing else.
+func TestSchemaRemovesEmptyNotebookTrials(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	c := newPlanChat(t, s)
+	mk := func(path, state string, withEpoch bool) Trial {
+		tr, err := s.DeclareTrial(ctx, Trial{ChatID: c.ID, Path: path, State: state})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if withEpoch {
+			if err := s.AddTrialEpochs(ctx, tr.ID, []TrialEpoch{{Epoch: 0, At: time.Now(), Data: json.RawMessage(`{}`)}}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return tr
+	}
+	empty := mk(SearchPathNotebook, TrialDone, false)
+	withEpoch := mk(SearchPathNotebook, TrialDone, true)
+	template := mk(SearchPathTemplate, TrialFailed, false)
+	running := mk(SearchPathNotebook, TrialRunning, false)
+	x := newSearch(t, s, c.ID)
+	inSearch, err := s.DeclareTrial(ctx, Trial{ChatID: c.ID, SearchID: x.ID, Path: SearchPathNotebook, State: TrialDone})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.pool.Exec(ctx, searchSchemaSQL); err != nil {
+		t.Fatal(err)
+	}
+	for _, c2 := range []struct {
+		tr   Trial
+		want bool
+	}{{empty, false}, {withEpoch, true}, {template, true}, {running, true}, {inSearch, true}} {
+		_, err := s.GetTrial(ctx, c.ID, c2.tr.ID)
+		if (err == nil) != c2.want {
+			t.Errorf("trial %s (%s/%s): kept=%v, want %v", c2.tr.ID, c2.tr.Path, c2.tr.State, err == nil, c2.want)
+		}
+	}
+}

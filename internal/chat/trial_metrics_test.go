@@ -10,7 +10,9 @@ import (
 	"testing"
 	"time"
 
+	"agw/internal/search"
 	"agw/internal/store"
+	"agw/internal/watch"
 )
 
 func trialMetricsBody(epochs int, saved bool) string {
@@ -162,5 +164,117 @@ func TestDeclaredTrialTakesTheJob(t *testing.T) {
 	}
 	if n, _ := e.st.ListTrials(ctx, c.ID); len(n) != 1 {
 		t.Errorf("no second trial for the same run: %d", len(n))
+	}
+}
+
+// notebookJobSetup makes a chat with a notebook run and the job that watches it.
+func notebookJobSetup(t *testing.T) (*env, ChatView, store.WatchJob) {
+	t.Helper()
+	e := setup(t)
+	ctx := context.Background()
+	c, err := e.m.Create(ctx, NewChat{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.st.CreateNotebookRun(ctx, store.NotebookRun{ID: "run1", ChatID: c.ID, HubUser: "u", Server: "s", Entry: "gpu_check.py",
+		TimeoutMin: 5, StartedAt: time.Now().Add(-10 * time.Second)}); err != nil {
+		t.Fatal(err)
+	}
+	id, err := e.st.AddWatchJob(ctx, store.WatchJob{ChatID: c.ID, Kind: trialKindNotebook, Ref: "run1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	j, err := e.st.GetWatchJob(ctx, c.ID, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return e, c, j
+}
+
+func notebookProgress(epochs int) watch.Progress {
+	m := &watch.Metrics{Supported: true, GPUAvailable: true}
+	for i := 0; i < epochs; i++ {
+		m.Epochs = append(m.Epochs, search.Epoch{Epoch: i, Epochs: 3, At: time.Now(), Values: map[string]float64{"val_acc": 0.5}})
+	}
+	return watch.Progress{Metrics: m}
+}
+
+// Issue #194: a notebook run that wrote no epoch (a GPU check) is no trial.
+func TestNotebookRunWithoutEpochsIsNoTrial(t *testing.T) {
+	e, c, j := notebookJobSetup(t)
+	ctx := context.Background()
+	recordTrialProgress(ctx, e.m, j, notebookProgress(0))
+	if n, _ := e.st.ListTrials(ctx, c.ID); len(n) != 0 {
+		t.Fatalf("a run without epochs made %d trials", len(n))
+	}
+	if singleRunIsTrial(store.SearchPathNotebook, watch.Progress{}) {
+		t.Error("a poll without figures is no trial")
+	}
+	if !singleRunIsTrial(store.SearchPathTemplate, watch.Progress{}) {
+		t.Error("a template run is always a trial")
+	}
+}
+
+// The run becomes a trial at the first poll with an epoch, and it starts when the job did.
+func TestNotebookRunBecomesTrialAtFirstEpoch(t *testing.T) {
+	e, c, j := notebookJobSetup(t)
+	ctx := context.Background()
+	recordTrialProgress(ctx, e.m, j, notebookProgress(0))
+	recordTrialProgress(ctx, e.m, j, notebookProgress(2))
+	list, _ := e.st.ListTrials(ctx, c.ID)
+	if len(list) != 1 {
+		t.Fatalf("trials: %d", len(list))
+	}
+	tr := list[0]
+	if tr.StartedAt == nil || !tr.StartedAt.Equal(j.StartedAt) {
+		t.Errorf("started_at %v, job started %v", tr.StartedAt, j.StartedAt)
+	}
+	if epochs, _, _ := e.st.TrialSeries(ctx, tr.ID); len(epochs) != 2 {
+		t.Errorf("epochs: %d", len(epochs))
+	}
+}
+
+// The duration of a single trial is the run time of its job, however late the trial was made.
+func TestSingleTrialDurationFromJob(t *testing.T) {
+	e, c, j := notebookJobSetup(t)
+	ctx := context.Background()
+	start := time.Now().Add(-time.Minute)
+	end := start.Add(10 * time.Second)
+	j.StartedAt, j.EndedAt = start, &end
+	tr, err := e.st.DeclareTrial(ctx, store.Trial{ChatID: c.ID, Path: store.SearchPathNotebook, Ref: "run1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.st.StartTrialAt(ctx, tr.ID, "run1", j.ID, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.st.FinishTrial(ctx, tr.ID, store.TrialDone, ""); err != nil {
+		t.Fatal(err)
+	}
+	tr, _ = e.st.GetTrial(ctx, c.ID, tr.ID)
+	v := e.m.trialView(ctx, tr, map[string]store.WatchJob{j.ID: j})
+	if v.DurationS < 9.5 || v.DurationS > 10.5 {
+		t.Errorf("duration %v, want about 10", v.DurationS)
+	}
+}
+
+// The view names what ran and links the notebook run; the template run has a name and no link.
+func TestTrialViewNameAndLink(t *testing.T) {
+	e, c, j := notebookJobSetup(t)
+	ctx := context.Background()
+	j.Link = "https://hub.example/user/u/lab/tree/run1"
+	nb, _ := e.st.DeclareTrial(ctx, store.Trial{ChatID: c.ID, Path: store.SearchPathNotebook, Ref: "run1"})
+	if _, err := e.st.StartTrialAt(ctx, nb.ID, "run1", j.ID, j.StartedAt); err != nil {
+		t.Fatal(err)
+	}
+	nb, _ = e.st.GetTrial(ctx, c.ID, nb.ID)
+	v := e.m.trialView(ctx, nb, map[string]store.WatchJob{j.ID: j})
+	if v.Name != "gpu_check.py" || v.Link != j.Link {
+		t.Errorf("notebook view: name %q link %q", v.Name, v.Link)
+	}
+	tp, _ := e.st.DeclareTrial(ctx, store.Trial{ChatID: c.ID, Path: store.SearchPathTemplate, Ref: "9"})
+	v = e.m.trialView(ctx, tp, nil)
+	if v.Name != "training container 9" || v.Link != "" {
+		t.Errorf("template view: name %q link %q", v.Name, v.Link)
 	}
 }

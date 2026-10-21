@@ -34,6 +34,10 @@ type TrialView struct {
 	store.Trial
 	DurationS float64    `json:"duration_s,omitempty"`
 	ETA       *time.Time `json:"eta,omitempty"`
+	// Name says what ran (the entry file of a notebook run, the training container of the template); Link is the
+	// address of the run, as the job gives it (issue #194).
+	Name string `json:"name,omitempty"`
+	Link string `json:"link,omitempty"`
 }
 
 // SearchEventData is the payload of the event "search".
@@ -153,7 +157,8 @@ func (m *Manager) publishTrial(ctx context.Context, chatID, trialID string) {
 	m.publish(chatID, Event{Kind: "trial", Data: m.trialView(ctx, t, nil)})
 }
 
-// trialView adds the duration and the expected end (from the observed job) to a trial.
+// trialView adds the duration, the expected end (from the observed job), the name and the link to a trial. The
+// duration of a single trial is the run time of its job, the figure the run card shows too.
 func (m *Manager) trialView(ctx context.Context, t store.Trial, jobs map[string]store.WatchJob) TrialView {
 	v := TrialView{Trial: t}
 	if t.StartedAt != nil {
@@ -163,11 +168,39 @@ func (m *Manager) trialView(ctx context.Context, t store.Trial, jobs map[string]
 		}
 		v.DurationS = end.Sub(*t.StartedAt).Seconds()
 	}
-	if t.JobID != "" && t.State == store.TrialRunning {
+	var job *store.WatchJob
+	if t.JobID != "" {
 		if j, ok := jobs[t.JobID]; ok {
-			v.ETA = j.ETA
-		} else if j, err := m.st.GetWatchJob(ctx, t.ChatID, t.JobID); err == nil && j.State == watch.StateRunning {
-			v.ETA = j.ETA
+			job = &j
+		} else if j, err := m.st.GetWatchJob(ctx, t.ChatID, t.JobID); err == nil {
+			job = &j
+		}
+	}
+	if job != nil {
+		if t.State == store.TrialRunning && job.State == watch.StateRunning {
+			v.ETA = job.ETA
+		}
+		if t.SearchID == "" && !job.StartedAt.IsZero() {
+			end := time.Now()
+			if job.EndedAt != nil {
+				end = *job.EndedAt
+			}
+			v.DurationS = end.Sub(job.StartedAt).Seconds()
+		}
+		if t.Path == store.SearchPathNotebook {
+			v.Link = job.Link
+		}
+	}
+	switch t.Path {
+	case store.SearchPathNotebook:
+		if t.Ref != "" {
+			if r, err := m.st.GetNotebookRun(ctx, t.ChatID, t.Ref); err == nil {
+				v.Name = r.Entry
+			}
+		}
+	case store.SearchPathTemplate:
+		if t.Ref != "" {
+			v.Name = "training container " + t.Ref
 		}
 	}
 	return v

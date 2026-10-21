@@ -2377,7 +2377,7 @@ without it every path answers `unavailable: training search is not available in 
 
 | Route | Answer |
 |---|---|
-| `GET /api/chats/{id}/experiments` | `{"searches":[Search],"trials":[Trial]}`; `Search` = row + `used:{runs,compute_minutes,since_improvement}` (`runs` counts running trials), `best_idx`, `compute_left`, `running_trial`, `end_note` (the agent's closing note when it ended the search itself; not verified); `holdout.result` = `{state, accuracy?, images?, verdict?}` once the final test's check has ended; `Trial` = row + `duration_s`, `eta`, `figures` (`""`, `none`, `ok`), `gpu_available` |
+| `GET /api/chats/{id}/experiments` | `{"searches":[Search],"trials":[Trial]}`; `Search` = row + `used:{runs,compute_minutes,since_improvement}` (`runs` counts running trials), `best_idx`, `compute_left`, `running_trial`, `end_note` (the agent's closing note when it ended the search itself; not verified); `holdout.result` = `{state, accuracy?, images?, verdict?}` once the final test's check has ended; `Trial` = row + `duration_s` (a single trial: the run time of its job), `eta`, `name` (notebook entry file or `training container <id>`), `link` (notebook runs: the job's address), `figures` (`""`, `none`, `ok`), `gpu_available`. A trial is a run a search declared, any training-template run, or a notebook run outside a search once it wrote an epoch to `outputs/metrics.jsonl` |
 | `GET /api/chats/{id}/experiments/trials/{trial}` | `{"trial","epochs":[{"epoch","at",<figures by name>}],"gpu":[…],"log_tail"}` |
 | `GET /api/chats/{id}/searches/{search}/export?format=json\|csv` | JSON: search, trials with `series`, events; CSV: one row per trial |
 | `POST …/searches/{search}/stop` | `{"scope":"trial"\|"search"}` |
