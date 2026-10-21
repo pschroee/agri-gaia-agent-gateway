@@ -122,3 +122,11 @@ func TestApplyMarkersNotebook(t *testing.T) {
 		t.Errorf("info: %+v", info)
 	}
 }
+
+// The starter is also installed as a command in the exec image (agw-run-notebook): without a shebang the shell would
+// read the docstring as shell code (found in phase B of #193).
+func TestLauncherHasShebang(t *testing.T) {
+	if !bytes.HasPrefix(launcherPy, []byte("#!/usr/bin/env python3\n")) {
+		t.Fatalf("the starter must begin with a python3 shebang, it begins with %q", launcherPy[:min(40, len(launcherPy))])
+	}
+}

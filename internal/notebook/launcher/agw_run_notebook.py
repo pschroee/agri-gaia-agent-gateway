@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Philipp Schröer
 #
 # SPDX-License-Identifier: MIT
