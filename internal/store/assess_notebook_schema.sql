@@ -27,3 +27,6 @@ CREATE TABLE IF NOT EXISTS notebook_fetches (
     PRIMARY KEY (chat_id, sha256, run_id)
 );
 CREATE INDEX IF NOT EXISTS notebook_fetches_chat ON notebook_fetches (chat_id, fetched_at DESC);
+
+-- model_meta (#181): outputs/model.json of the run, read when a .onnx file is fetched.
+ALTER TABLE notebook_fetches ADD COLUMN IF NOT EXISTS model_meta jsonb;

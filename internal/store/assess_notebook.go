@@ -7,6 +7,7 @@ package store
 import (
 	"context"
 	_ "embed"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -34,15 +35,21 @@ type NotebookFetch struct {
 	SHA256    string    `json:"sha256"`
 	Size      int64     `json:"size"`
 	FetchedAt time.Time `json:"fetched_at"`
+	// ModelMeta: validated outputs/model.json of the run, read with a fetched .onnx file (#181); nil: none.
+	ModelMeta json.RawMessage `json:"model_meta,omitempty"`
 }
 
 // RecordNotebookFetch remembers a fetched file. A file fetched twice from the same run keeps one row;
 // the newest size wins.
 func (s *Store) RecordNotebookFetch(ctx context.Context, f NotebookFetch) error {
-	_, err := s.pool.Exec(ctx, `INSERT INTO notebook_fetches (chat_id, run_id, path, sha256, size)
-VALUES ($1,$2,$3,$4,$5)
-ON CONFLICT (chat_id, sha256, run_id) DO UPDATE SET path = EXCLUDED.path, size = EXCLUDED.size`,
-		f.ChatID, f.RunID, f.Path, f.SHA256, f.Size)
+	var meta any
+	if len(f.ModelMeta) > 0 {
+		meta = []byte(f.ModelMeta)
+	}
+	_, err := s.pool.Exec(ctx, `INSERT INTO notebook_fetches (chat_id, run_id, path, sha256, size, model_meta)
+VALUES ($1,$2,$3,$4,$5,$6::jsonb)
+ON CONFLICT (chat_id, sha256, run_id) DO UPDATE SET path = EXCLUDED.path, size = EXCLUDED.size, model_meta = EXCLUDED.model_meta`,
+		f.ChatID, f.RunID, f.Path, f.SHA256, f.Size, meta)
 	return err
 }
 
@@ -54,9 +61,9 @@ func (s *Store) NotebookFetchOf(ctx context.Context, chatID, sha256 string) (Not
 		return NotebookFetch{}, false, nil
 	}
 	var f NotebookFetch
-	err := s.pool.QueryRow(ctx, `SELECT chat_id::text, run_id, path, sha256, size, fetched_at
+	err := s.pool.QueryRow(ctx, `SELECT chat_id::text, run_id, path, sha256, size, fetched_at, model_meta
 FROM notebook_fetches WHERE chat_id=$1 AND sha256=$2 ORDER BY fetched_at DESC LIMIT 1`, chatID, sha256).
-		Scan(&f.ChatID, &f.RunID, &f.Path, &f.SHA256, &f.Size, &f.FetchedAt)
+		Scan(&f.ChatID, &f.RunID, &f.Path, &f.SHA256, &f.Size, &f.FetchedAt, &f.ModelMeta)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return NotebookFetch{}, false, nil
 	}
