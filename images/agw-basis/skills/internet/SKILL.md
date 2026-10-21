@@ -90,7 +90,7 @@ you know a later step needs the network, do that step first. Packages you instal
 Ask `packages` with the packages you install: `pip:name[==version]` and `npm:name[@version]`,
 at most 20, comma separated. The packages they declare as dependencies are taken along, and the
 access ends by itself once the listed packages are installed. `pip install` and `npm install` then
-go through the package caches; packages loaded once come faster the next time. Do not ask for
+go through the package gate and its caches; packages loaded once come faster the next time. A package that is neither listed nor declared by a listed package, and a version other than the one you pinned, is refused with "blocked:"; ask for it with another `packages` request. Do not ask for
 `domains` just to run `pip`. For CPU-only PyTorch ask `domains download.pytorch.org` and install
 with `pip install --index-url https://download.pytorch.org/whl/cpu torch`. Packages installed
 later are lost when the chat is idle and resumed in a fresh sandbox; install them again then.

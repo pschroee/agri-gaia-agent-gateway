@@ -640,3 +640,18 @@ refer to this repository.
 
 Further pitfalls (Docker Desktop on macOS, pi, pi-subagents, token exchange, Agri-Gaia backend quirks) are
 collected in `docs/design.md`, section *Pitfalls found while building*.
+
+## Internet relay and package gate (issue #175, stage 2)
+
+- **The execution sandbox has no network of its own** (apart from a `full` grant's egress network). `agw-exec serve`
+  listens on `127.0.0.1:3128` and copies each connection to the slot socket; `sock.WithRelay` routes it to the web proxy
+  (`CONNECT`, absolute URL) or the package gate (`/index/`, `/npm/`). If a command cannot reach anything, check the relay
+  first (`agw-exec serve` logs `relay: cannot listen …` on a busy port and retries every 5 s).
+- **Verdaccio builds `dist.tarball` from the request's `Host` header** (`http://localhost:4873/...`), so the gate
+  rewrites every tarball link of a packument to the relay address. proxpi answers 406 without an `Accept` header, so the
+  gate passes `Accept` on and drops `Accept-Encoding` (it reads the bodies).
+- **The caches and the orchestrator share the network `agwpoc_pkg` with ICC on**; with `enable_icc=false` the gate could
+  not reach them. `AGW_PIP_CACHE_URL`/`AGW_NPM_CACHE_URL` replace the old `AGW_PIP_CACHE`/`AGW_NPM_CACHE` container names.
+- **Relay and gate go out together**: the sandbox variables (`sandbox.RelayEnv`) point at the relay, so an old
+  `agent_exec_image` with a new gateway (or the reverse) installs nothing. Roll out gateway, `agent_exec_image` and the
+  Compose change at once.
