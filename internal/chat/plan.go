@@ -402,7 +402,7 @@ func (m *Manager) publishPlan(ctx context.Context, planID string) {
 func redactPlanText(p store.Plan) store.Plan {
 	for i := range p.Steps {
 		p.Steps[i].ProgressMsg = platform.RedactText(p.Steps[i].ProgressMsg)
-		p.Steps[i].LogTail = platform.RedactText(p.Steps[i].LogTail)
+		p.Steps[i].LogTail = watch.Tail(platform.RedactText(p.Steps[i].LogTail))
 		p.Steps[i].Result = platform.RedactText(p.Steps[i].Result)
 	}
 	return plan.WithUploads(p)
