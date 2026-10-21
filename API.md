@@ -1075,7 +1075,7 @@ closed when its grant ends or its data limit is reached.
   "show N more"), `grants` = `{<id>: {kind, domains[], packages[]}}` for the grants the rows refer to, `unlisted` =
   `[{grant_id, chat_id, bytes}]`: data a `full` grant moved that no listed connection accounts for.
 - **Rows and refusal codes (stage 2):** a `WebRequest` carries `reason` (code of a refusal: `not_listed`, `https_only`,
-  `sni_mismatch`, `ip_literal`, `search_only`, `access_ended`, `internet_off`, `package_not_listed`, `version_mismatch`, `too_large` (a package file over 256 MB, HTTP 413),
+  `sni_mismatch`, `ip_literal`, `search_only`, `access_ended`, `internet_off`, `package_not_listed`, `version_mismatch`, `too_large` (a package file or download over 256 MB; HTTP 413, in a tunnel the connection is closed),
   plus `not_public`, `port_not_allowed`, `upstream`, `unassigned`, `cache_redirect`, `bad_request`) next to the text
   `denied`, and `service` (`search` for the gateway's SearXNG, `index` for the collapsed index/metadata row of the
   package gate; pip rows show host `pypi.org`, npm rows `registry.npmjs.org`). A refusal that no grant covers (not listed,
