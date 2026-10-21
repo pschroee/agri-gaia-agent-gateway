@@ -97,6 +97,9 @@ func (g *gate) FinishWeb(id int64, r Request) {
 func (g *gate) last() Request {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	if len(g.recs) == 0 {
+		return Request{}
+	}
 	return g.recs[len(g.recs)-1]
 }
 
