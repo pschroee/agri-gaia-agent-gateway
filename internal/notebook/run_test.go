@@ -645,6 +645,34 @@ func (h *fakeHub) requestCount(method string) int {
 	return c
 }
 
+// A server the user works in (last activity in the hub newer than the idle time) is not stopped and not
+// marked; once the activity is older than the idle time it is stopped.
+func TestReaperKeepsActiveServer(t *testing.T) {
+	n, hub, st, chat := reaperFixture(t)
+	ctx := context.Background()
+	hub.lastActivity = time.Now().Add(-5 * time.Minute).UTC().Format(time.RFC3339Nano)
+	if err := n.StopIdle(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if d := hub.deleted(); len(d) != 0 {
+		t.Fatalf("an active server was stopped: %v", d)
+	}
+	if idle, err := st.NotebookServerIdle(ctx, chat, "r20260101120000-aaaa", time.Now().Add(-time.Hour)); err != nil || !idle {
+		t.Fatalf("the run was marked as stopped: idle %v, err %v", idle, err)
+	}
+}
+
+func TestReaperStopsAfterActivityAges(t *testing.T) {
+	n, hub, _, chat := reaperFixture(t)
+	hub.lastActivity = time.Now().Add(-61 * time.Minute).UTC().Format(time.RFC3339Nano)
+	if err := n.StopIdle(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if d := hub.deleted(); len(d) != 1 || d[0] != n.Server(chat) {
+		t.Fatalf("servers stopped: %v", d)
+	}
+}
+
 // An idle server is stopped in one round and left alone afterwards: no DELETE and no GET.
 func TestReaperStopsOnce(t *testing.T) {
 	n, hub, _, _ := reaperFixture(t)
@@ -967,6 +995,9 @@ func TestNotebookRunStop(t *testing.T) {
 	}
 	if !strings.Contains(info.Note, "a new run starts it again") {
 		t.Errorf("note of a run that ended: %q", info.Note)
+	}
+	if !strings.Contains(info.Note, "its files stay") || strings.Contains(info.Note, "is gone") {
+		t.Errorf("note of a run that ended must say the files stay: %q", info.Note)
 	}
 }
 
