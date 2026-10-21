@@ -204,7 +204,8 @@ func TestMCPRequestInternetKind(t *testing.T) {
 	pi := listenHandler(t, NewPiHandler("p-test", b, 1<<20, &fakeRunner{}, &fakeRecorder{}))
 	res := mcpCall(t, pi, "tools/call", map[string]any{"name": "request_internet", "arguments": map[string]any{"reason": "x"}})
 	txt := res["content"].([]any)[0].(map[string]any)["text"].(string)
-	if res["isError"] != true || !strings.HasPrefix(txt, "refused:") {
+	// The tool's schema requires kind, so the call is rejected before it reaches the handler.
+	if res["isError"] != true || !strings.Contains(txt, "kind") {
 		t.Fatalf("no kind: %v", res)
 	}
 	res = mcpCall(t, pi, "tools/call", map[string]any{"name": "request_internet", "arguments": map[string]any{"kind": "domains", "reason": "x", "domains": []string{"a.example.org"}}})

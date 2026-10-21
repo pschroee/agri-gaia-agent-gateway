@@ -135,7 +135,7 @@ func TestInternetSkillFile(t *testing.T) {
 	if !regexp.MustCompile(`(?s)\A---\nname: internet\ndescription: [^\n]*web-research[^\n]*\n---\n`).MatchString(s) {
 		t.Fatalf("front matter missing or without pointer to web-research:\n%.400s", s)
 	}
-	for _, w := range []string{"agw-internet domains", "agw-internet packages", "agw-internet off", "agw-internet status", "already_off", "Exit code 3", "Exit code 2", "agw-internet full -- ", "`web-research`", "package caches"} {
+	for _, w := range []string{"agw-internet domains", "agw-internet packages", "agw-internet off", "agw-internet status", "already_off", "Exit code 3", "Exit code 2", "agw-internet full -- ", "`web-research`", "package gate"} {
 		if !strings.Contains(s, w) {
 			t.Errorf("skill without %q", w)
 		}

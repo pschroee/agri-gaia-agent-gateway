@@ -169,7 +169,10 @@ func parsePackage(e string) (PkgRoot, error) {
 			name = name[:i]
 		}
 		name = strings.TrimSpace(name)
-		if strings.ContainsAny(name, "<>~!;/ ") || !pipNameRe.MatchString(name) {
+		if strings.ContainsAny(name, "<>~!") {
+			return r, fmt.Errorf("a version must be exact: name==1.2.3 (no ranges)")
+		}
+		if strings.ContainsAny(name, ";/ ") || !pipNameRe.MatchString(name) {
 			return r, fmt.Errorf("not a valid pip package name")
 		}
 		r.Name = NormalizePip(name)

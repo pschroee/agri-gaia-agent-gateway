@@ -44,7 +44,8 @@ func TestFetchReadsModelMeta(t *testing.T) {
 		t.Fatalf("fetch: %v %q", err, note)
 	}
 	f, ok, err := st.NotebookFetchOf(ctx, chatID, shaOf(data))
-	if err != nil || !ok || !strings.Contains(string(f.ModelMeta), `"class_names":["0","1"]`) {
+	// jsonb stores its own spacing, so the content is compared without whitespace.
+	if err != nil || !ok || !strings.Contains(strings.ReplaceAll(string(f.ModelMeta), " ", ""), `"class_names":["0","1"]`) {
 		t.Fatalf("the fetch did not keep model.json: %+v %v %v", f, ok, err)
 	}
 	if _, ok := docker.call("bash", "-c", headScript); !ok {

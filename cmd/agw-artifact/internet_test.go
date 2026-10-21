@@ -28,7 +28,8 @@ func TestParseInternetArgs(t *testing.T) {
 		{[]string{"domains", "a.example.org,b.example.org", "download the archive", "--minutes", "45", "--mb=800"},
 			internetCmd{Action: internetRequest, Kind: "domains", Domains: []string{"a.example.org", "b.example.org"}, Reason: "download the archive", Minutes: 45, MB: 800}},
 		{[]string{"domains", "--mb", "5", "a.example.org", "download"}, internetCmd{Action: internetRequest, Kind: "domains", Domains: []string{"a.example.org"}, Reason: "download", MB: 5}},
-		{[]string{"packages", "pip:torch==2.5.1,npm:left-pad", "train a model"}, internetCmd{Action: internetRequest, Kind: "packages", Packages: []string{"pip:torch==2.5.1", "npm:left-pad"}, Reason: "train a model"}},
+		// the gateway splits the list itself (extras may hold commas)
+		{[]string{"packages", "pip:torch==2.5.1,npm:left-pad", "train a model"}, internetCmd{Action: internetRequest, Kind: "packages", Packages: []string{"pip:torch==2.5.1,npm:left-pad"}, Reason: "train a model"}},
 		{[]string{"full", "--", "-v output needed"}, internetCmd{Action: internetRequest, Kind: "full", Reason: "-v output needed"}},
 		{[]string{"full", "clone over ssh", "--minutes", "90"}, internetCmd{Action: internetRequest, Kind: "full", Reason: "clone over ssh", Minutes: 90}},
 		{[]string{"off"}, internetCmd{Action: internetOff}},

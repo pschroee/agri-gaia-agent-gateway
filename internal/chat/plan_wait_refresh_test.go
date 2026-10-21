@@ -40,6 +40,22 @@ func earlyRunCall(t *testing.T) platform.Request {
 	return req
 }
 
+// jobEndNotes counts the notes about the end of the watched job: those still queued plus those already
+// delivered to pi (a live chat that is not working gets the note at once). It waits for the first one.
+func jobEndNotes(t *testing.T, e *env, chatID string) int {
+	t.Helper()
+	count := func() int {
+		n := len(queueNotes(t, e, chatID, store.NotePlanStep))
+		for _, p := range e.agent(0).prompts() {
+			n += strings.Count(p, "finished (platform_task)")
+		}
+		return n
+	}
+	waitFor(t, func() bool { return count() > 0 })
+	time.Sleep(300 * time.Millisecond) // a second note, if there were one, has arrived by now
+	return count()
+}
+
 // guardOn runs the guards on a call without a tool invocation (as the REST binding does).
 func guardOn(t *testing.T, e *env, ctx context.Context, chatID string, req platform.Request) (platform.Result, bool) {
 	t.Helper()
@@ -80,8 +96,8 @@ func TestEarlyCallRunsInPlanAfterRefresh(t *testing.T) {
 	if st := e.m.planMatch(ctx, c.ID, earlyRunCall(t)); st == nil || st.Idx != 2 {
 		t.Fatalf("the call must be claimed by step 2: %+v", st)
 	}
-	if notes := queueNotes(t, e, c.ID, store.NotePlanStep); len(notes) != 1 {
-		t.Fatalf("exactly one end-of-job note expected: %+v", notes)
+	if n := jobEndNotes(t, e, c.ID); n != 1 {
+		t.Fatalf("exactly one end-of-job note expected, got %d", n)
 	}
 }
 
@@ -142,8 +158,8 @@ func TestJobFinishedOnceGuardAndWatcher(t *testing.T) {
 	// The watcher comes after with the row it read before: it must neither note nor finish a second time.
 	e.m.pollJob(ctx, job, kind)
 	runWatchersOnce(t, e)
-	if notes := queueNotes(t, e, c.ID, store.NotePlanStep); len(notes) != 1 {
-		t.Fatalf("the end of the job must be noted once: %+v", notes)
+	if n := jobEndNotes(t, e, c.ID); n != 1 {
+		t.Fatalf("the end of the job must be noted once, got %d", n)
 	}
 	if steps := stepsOfPlan(t, e, p.ID); steps[0].State != plan.StepDone || steps[0].CreatedID != "63" {
 		t.Fatalf("step 1: %+v", steps[0])
