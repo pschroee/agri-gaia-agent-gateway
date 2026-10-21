@@ -65,7 +65,7 @@ func TestPiArgsWebResearch(t *testing.T) {
 // lists them. No text of the former note is left.
 func TestSystemNoteInternetPerBinding(t *testing.T) {
 	for _, ts := range toolset.All() {
-		note := SystemNoteFor(ts.Key(), 4, nil)
+		note := SystemNoteFor(ts.Key(), 4, nil, "")
 		for _, b := range []toolset.Binding{toolset.CLI, toolset.MCP, toolset.API} {
 			for _, name := range switchNames[b] {
 				if got := strings.Contains(note, name); got != ts.Has(b) {
@@ -98,7 +98,7 @@ func TestSystemNoteInternetPerBinding(t *testing.T) {
 		}
 	}
 	// A pure-api combination joins nothing; a combination of all three joins with "or".
-	if n := SystemNoteFor("cli,mcp,api", 4, nil); !strings.Contains(n, `(agw-internet search|domains|packages|full "<reason>" in bash or the tool mcp_request_internet (kind search or domains) or the tool request_internet (kind search or domains))`) {
+	if n := SystemNoteFor("cli,mcp,api", 4, nil, ""); !strings.Contains(n, `(agw-internet search|domains|packages|full "<reason>" in bash or the tool mcp_request_internet (kind search or domains) or the tool request_internet (kind search or domains))`) {
 		t.Errorf("all three: %s", n)
 	}
 }

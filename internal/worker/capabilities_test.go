@@ -21,7 +21,7 @@ func TestSystemNoteCapabilities(t *testing.T) {
 		"mcp": "the tool mcp_platform_capabilities",
 		"api": "GET /_agw/capabilities",
 	} {
-		note := SystemNoteFor(v, 4, caps)
+		note := SystemNoteFor(v, 4, caps, "")
 		for _, want := range []string{
 			"This setup offers vision: the model DeepSeek Flash reads text only; bindings: the chat works through cli.",
 			"This is fixed for this chat",
@@ -42,12 +42,12 @@ func TestSystemNoteCapabilities(t *testing.T) {
 		}
 	}
 	// A combination names the tools of its bindings.
-	note := SystemNoteFor("cli,api", 4, caps)
+	note := SystemNoteFor("cli,api", 4, caps, "")
 	if !strings.Contains(note, "agw-platform capabilities or GET /_agw/capabilities") {
 		t.Errorf("cli,api: %q", note)
 	}
 	// Without static lines nothing of the paragraph appears, and no empty line is left behind.
-	plain := SystemNoteFor("cli", 4, nil)
+	plain := SystemNoteFor("cli", 4, nil, "")
 	if strings.Contains(plain, "This setup offers") {
 		t.Error("the note names capabilities that nobody registered")
 	}
@@ -55,7 +55,7 @@ func TestSystemNoteCapabilities(t *testing.T) {
 		t.Errorf("an empty capability line was left behind: %q", plain)
 	}
 	// The note of a slot is the same every time: nothing in it depends on a turn.
-	if SystemNoteFor("cli", 4, caps) != SystemNoteFor("cli", 4, caps) {
+	if SystemNoteFor("cli", 4, caps, "") != SystemNoteFor("cli", 4, caps, "") {
 		t.Error("the note is not fixed per slot")
 	}
 }

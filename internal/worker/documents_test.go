@@ -36,7 +36,7 @@ func TestPiArgsDocumentsSkill(t *testing.T) {
 // with bash, refuse honestly without it. Exactly one of the three texts per combination.
 func TestSystemNoteAttachmentsPerBinding(t *testing.T) {
 	for _, ts := range toolset.All() {
-		note := SystemNoteFor(ts.Key(), 4, nil)
+		note := SystemNoteFor(ts.Key(), 4, nil, "")
 		want := inputsAPI
 		switch {
 		case ts.Has(toolset.CLI):

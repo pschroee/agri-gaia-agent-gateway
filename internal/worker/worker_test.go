@@ -213,11 +213,11 @@ func TestBackgroundTasksConfigured(t *testing.T) {
 			t.Errorf("system note without %q", want)
 		}
 	}
-	if n := SystemNoteFor("both", 3, nil); !strings.Contains(n, "At most 3 run") || strings.Contains(n, "{{") {
+	if n := SystemNoteFor("both", 3, nil, ""); !strings.Contains(n, "At most 3 run") || strings.Contains(n, "{{") {
 		t.Errorf("limit in the system note: %q", n)
 	}
 	for _, v := range []string{"mcp", "api"} {
-		if n := SystemNoteFor(v, 3, nil); strings.Contains(n, "Background tasks") || strings.Contains(n, "{{") || strings.Contains(n, "bash") {
+		if n := SystemNoteFor(v, 3, nil, ""); strings.Contains(n, "Background tasks") || strings.Contains(n, "{{") || strings.Contains(n, "bash") {
 			t.Errorf("variant %s (without bash) with background tasks: %q", v, n)
 		}
 	}
@@ -260,10 +260,10 @@ func TestBackgroundTasksConfigured(t *testing.T) {
 // mmdc is only in the note of the variants with bash.
 func TestSystemNoteMmdc(t *testing.T) {
 	for v, want := range map[string]bool{"cli": true, "both": true, "mcp": false} {
-		if got := strings.Contains(SystemNoteFor(v, 4, nil), "mmdc -i diagram.mmd"); got != want {
+		if got := strings.Contains(SystemNoteFor(v, 4, nil, ""), "mmdc -i diagram.mmd"); got != want {
 			t.Errorf("%s: mmdc in the note = %v", v, got)
 		}
-		if strings.Contains(SystemNoteFor(v, 4, nil), "{{") {
+		if strings.Contains(SystemNoteFor(v, 4, nil, ""), "{{") {
 			t.Errorf("%s: placeholder left over", v)
 		}
 	}
@@ -273,7 +273,7 @@ func TestSystemNoteMmdc(t *testing.T) {
 // fixed German anymore. It is in all variants.
 func TestSystemNoteLanguageRule(t *testing.T) {
 	for _, v := range []string{"cli", "mcp", "api", "both"} {
-		n := SystemNoteFor(v, 2, nil)
+		n := SystemNoteFor(v, 2, nil, "")
 		for _, want := range []string{"language of the user's latest message", "If the user switches language", "preferred language from an orchestrator note", chat.SystemHeader, "code and identifiers stay"} {
 			if !strings.Contains(n, want) {
 				t.Errorf("%s: system note without %q", v, want)
@@ -303,7 +303,7 @@ func TestInternetOffInEveryBinding(t *testing.T) {
 	}
 	// The note names the switch of each binding of the combination (since issue #44 only those; per binding in
 	// TestSystemNoteInternetPerBinding); agw-internet off is also described in the skills.
-	note := SystemNoteFor("cli,mcp,api", 4, nil)
+	note := SystemNoteFor("cli,mcp,api", 4, nil, "")
 	for _, want := range []string{"agw-internet off", "mcp_disable_internet", "the tool disable_internet", "switch it off yourself", "needs no approval"} {
 		if !strings.Contains(note, want) {
 			t.Errorf("system note lacks %q", want)

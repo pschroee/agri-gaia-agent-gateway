@@ -110,7 +110,7 @@ func TestExperimentAPIHasNoInternetTools(t *testing.T) {
 // X0.6: the system note has no paragraph on subagents and no line on requesting internet; both stay
 // in the product note.
 func TestExperimentNoteHasNoSubagentParagraph(t *testing.T) {
-	note := SystemNoteFor("exp:cli", 4, nil)
+	note := SystemNoteFor("exp:cli", 4, nil, "")
 	if strings.Contains(note, "start subagents") {
 		t.Errorf("experiment note still describes subagents:\n%s", note)
 	}
@@ -120,7 +120,7 @@ func TestExperimentNoteHasNoSubagentParagraph(t *testing.T) {
 	if !strings.Contains(note, "- Task list:") {
 		t.Errorf("experiment note lost the task list:\n%s", note)
 	}
-	product := SystemNoteFor("cli", 4, nil)
+	product := SystemNoteFor("cli", 4, nil, "")
 	if !strings.Contains(product, "start subagents") || !strings.Contains(product, "request it with a short reason") {
 		t.Errorf("product note lost its paragraphs")
 	}
