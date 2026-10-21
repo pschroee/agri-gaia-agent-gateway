@@ -61,6 +61,7 @@ func (b *bgBackend) BackgroundCreate(_ context.Context, t store.BackgroundTask) 
 	return t, nil
 }
 func (b *bgBackend) BackgroundProgress(store.BackgroundTask) {}
+func (b *bgBackend) BackgroundEndSeen(string, int)           {}
 func (b *bgBackend) BackgroundEnded(t store.BackgroundTask, notify bool) {
 	b.bmu.Lock()
 	defer b.bmu.Unlock()
