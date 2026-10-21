@@ -158,7 +158,7 @@ func TestBgWaitHidden(t *testing.T) {
 
 // Foreground or background by need of the next step; no tool waits for background tasks (#201).
 func TestSystemNoteBackground(t *testing.T) {
-	n := SystemNoteFor("cli", 5, nil)
+	n := SystemNoteFor("cli", 5, nil, "")
 	for _, want := range []string{"run it in the foreground instead", "No tool waits for a background task", "works only with bg_output", "At most 5", "there is no tool for waiting"} {
 		if !strings.Contains(n, want) {
 			t.Errorf("cli note without %q", want)
@@ -167,12 +167,12 @@ func TestSystemNoteBackground(t *testing.T) {
 	if strings.Contains(n, "bg_wait") {
 		t.Error("cli note names bg_wait")
 	}
-	e := SystemNoteFor("exp:cli", 5, nil)
+	e := SystemNoteFor("exp:cli", 5, nil, "")
 	if !strings.Contains(e, "run it in the foreground instead") || strings.Contains(e, "there is no tool for waiting") || strings.Contains(e, "bg_wait") {
 		t.Errorf("exp:cli note: %q", e)
 	}
 	for _, v := range []string{"mcp", "api"} {
-		if strings.Contains(SystemNoteFor(v, 5, nil), "Background tasks:") {
+		if strings.Contains(SystemNoteFor(v, 5, nil, ""), "Background tasks:") {
 			t.Errorf("%s note with background tasks", v)
 		}
 	}
