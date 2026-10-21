@@ -103,3 +103,13 @@ with open("outputs/metrics.jsonl", "a") as log:
 
 Keys are exactly these six; numbers must be finite. Read `params.json` for **every** searched value - a value
 hard-coded in the script makes the trial meaningless.
+
+Write next to the model how your script feeds an image to it, so the check feeds it the same way (the gateway reads
+the file when you fetch the `.onnx` file of this run):
+
+```python
+json.dump({"class_names": classes, "preprocess": {"color": "gray", "size": [IMG, IMG], "scale": 1/255}},
+          open("outputs/model.json", "w"))
+```
+
+Write exactly what the script does to an image; no mean or std unless the script subtracts them.

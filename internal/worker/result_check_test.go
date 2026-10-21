@@ -53,6 +53,8 @@ func TestResultCheckSkillBody(t *testing.T) {
 		"## Budget",
 		"## After a training",
 		"## Own models",
+		"A run that wrote `outputs/model.json` needs no `--preprocess`",
+		"the hold-out set was not used",
 		"## Edge deployments",
 		"statistics only, no image review",
 		"## After a training\n",

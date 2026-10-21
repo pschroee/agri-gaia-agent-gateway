@@ -242,8 +242,8 @@ var assessModel = Tool{
 		{Name: "path", Type: "string", Desc: "model file in the sandbox that notebook_fetch brought out of a run of this chat (either this or model_id)", Path: true},
 		{Name: "eval_dataset_id", Type: "integer", Desc: "dataset to measure on (default: the dataset the seen training dataset was split from)"},
 		{Name: "final", Type: "boolean", Desc: "true: measure the hold-out set (once per dataset and chat), default false"},
-		{Name: "class_names", Type: "array", Desc: "for path: the class names in the order the outputs of your model mean them, e.g. [\"0\",\"1\"]; the gateway compares this order with the order it derives from images the model saw"},
-		{Name: "preprocess", Type: "object", Desc: "for path: how your model expects an image: {color: rgb|gray, size: [h,w], scale, mean, std, layout: nchw|nhwc}; default the platform template (rgb, 1/255, nchw, no mean/std)"},
+		{Name: "class_names", Type: "array", Desc: "for path: the class names in the order the outputs of your model mean them, e.g. [\"0\",\"1\"] (taken from outputs/model.json of the run when it wrote one); the gateway compares this order with the order it derives from images the model saw"},
+		{Name: "preprocess", Type: "object", Desc: "for path: how your model expects an image: {color: rgb|gray, size: [h,w], scale, mean, std, layout: nchw|nhwc}; default the platform template (rgb, 1/255, nchw, no mean/std); taken from outputs/model.json of the run when it wrote one"},
 	},
 	build: func(a Args) (Request, error) {
 		id, ok, err := a.int("model_id")
