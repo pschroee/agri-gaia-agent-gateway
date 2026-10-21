@@ -21,8 +21,8 @@ import (
 	"agw/internal/watch"
 )
 
-// The book of trials, fed by the watcher (issue #168): every training run and every notebook run of a chat is a
-// trial, declared by a search or not. The hooks below carry what the watcher read — the figures of each epoch, the
+// The book of trials, fed by the watcher (issue #168): every training run of a chat is a trial, declared by a search
+// or not; a notebook run outside a search is a trial once it writes an epoch to outputs/metrics.jsonl (issue #194). The hooks below carry what the watcher read — the figures of each epoch, the
 // GPU samples, the number of epochs, the score of the objective — into the tables of the search, and tell the
 // browser about it ("trial_progress", at most every progressThrottle per trial). A run that no search declared
 // becomes a single trial (no search_id, idx 0). The end of a trial of a search is not decided here (the search
@@ -266,7 +266,19 @@ func (m *Manager) trialForJob(ctx context.Context, j store.WatchJob, path string
 		slog.Error("trial of a run not read", "job", j.ID, "ref", j.Ref, "error", err)
 		return store.Trial{}, false
 	}
+	if !singleRunIsTrial(path, p) {
+		return store.Trial{}, false
+	}
 	return m.declareSingleTrial(ctx, j, path, p)
+}
+
+// singleRunIsTrial tells whether a run that no search declared belongs in the book (issue #194): a training run
+// always does (the template trains, a failed run is a trial too); a notebook run only once it wrote an epoch.
+func singleRunIsTrial(path string, p watch.Progress) bool {
+	if path == store.SearchPathNotebook {
+		return p.Metrics != nil && len(p.Metrics.Epochs) > 0
+	}
+	return true
 }
 
 // declareSingleTrial makes the trial of a run that no search declared and starts it with the job.
@@ -277,7 +289,11 @@ func (m *Manager) declareSingleTrial(ctx context.Context, j store.WatchJob, path
 		slog.Error("single trial not declared", "job", j.ID, "ref", j.Ref, "error", err)
 		return store.Trial{}, false
 	}
-	if _, err := m.st.StartTrial(ctx, t.ID, j.Ref, j.ID); err != nil {
+	at := j.StartedAt
+	if at.IsZero() {
+		at = time.Now()
+	}
+	if _, err := m.st.StartTrialAt(ctx, t.ID, j.Ref, j.ID, at); err != nil {
 		slog.Error("single trial not started", "trial", t.ID, "job", j.ID, "error", err)
 		return store.Trial{}, false
 	}

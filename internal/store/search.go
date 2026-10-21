@@ -443,8 +443,13 @@ func (s *Store) GetTrial(ctx context.Context, chatID, id string) (Trial, error) 
 // StartTrial moves a declared trial to "running" and records the run (ref) and the observed job. ok is false when
 // the trial is not "declared" any more.
 func (s *Store) StartTrial(ctx context.Context, id, ref, jobID string) (bool, error) {
-	tag, err := s.pool.Exec(ctx, `UPDATE experiment_trials SET state='running', ref=$2, job_id=$3, started_at=now()
-WHERE id=$1 AND state='declared'`, id, ref, jobID)
+	return s.StartTrialAt(ctx, id, ref, jobID, time.Now())
+}
+
+// StartTrialAt is StartTrial with the start given (issue #194: a single trial starts when its job did).
+func (s *Store) StartTrialAt(ctx context.Context, id, ref, jobID string, at time.Time) (bool, error) {
+	tag, err := s.pool.Exec(ctx, `UPDATE experiment_trials SET state='running', ref=$2, job_id=$3, started_at=$4
+WHERE id=$1 AND state='declared'`, id, ref, jobID, at)
 	if err != nil {
 		return false, err
 	}
