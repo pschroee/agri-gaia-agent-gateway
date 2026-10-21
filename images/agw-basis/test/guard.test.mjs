@@ -7,7 +7,7 @@ import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { bgStatus, bgTailLines, checkSubagentCall, checkWorkflowMessage, formatDuration, REMOTE_WORKER, relayCommand, relayCall, relayRef, relayRequest, workflowRuntimeRedirected } from "../ext/exec-bridge.ts";
+import { bgChildNote, bgMainNote, bgStatus, bgTailLines, checkSubagentCall, checkWorkflowMessage, formatDuration, REMOTE_WORKER, relayCommand, relayCall, relayRef, relayRequest, workflowRuntimeRedirected } from "../ext/exec-bridge.ts";
 
 test("single subagents and read-only actions pass", () => {
 	for (const input of [
@@ -251,4 +251,10 @@ test("relay: no reply from pi-subagents within the time limit is a timeout", asy
 	const bus = { on: () => undefined, emit: () => undefined };
 	const r = await relayCall(bus, { ref: REF, method: "resume", params: { id: "p", message: "m" } }, 5);
 	assert.deepEqual(r, { ok: false, code: "timeout", message: "no reply from pi-subagents" });
+});
+
+test("start notes of background tasks (#201)", () => {
+	assert.match(bgMainNote, /end your reply/);
+	assert.match(bgChildNote, /main agent is notified/);
+	assert.match(`Background task bg-1 started. ${bgMainNote}.`, /\bBackground task (bg-\d+) started\b/);
 });

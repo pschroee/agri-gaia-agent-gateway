@@ -24,13 +24,13 @@ func oldPiArgs(variant, provider, model, note string) []string {
 	skills := append([]string{"--skill", artifactSkil, "--skill", internetSkil, "--skill", webSkill, "--skill", platformSkil, "--skill", typstSkill, "--skill", diagramSkill, "--skill", mermaidSkill, "--skill", documentSkil, "--skill", trainingAdviceSkill, "--skill", modelCardSkill}, registeredSkillArgs()...)
 	switch variant {
 	case "cli":
-		args = append(append(args, "-e", subagentsExt, "-e", intercomExt, "--exclude-tools", noLazySubagent), skills...)
+		args = append(append(args, "-e", subagentsExt, "-e", intercomExt, "--exclude-tools", hiddenSubagentTools), skills...)
 	case "mcp":
 		args = append(args, "-e", mcpExt, "--skill", webSkill, "--tools", "read,write,ls,mcp_ping,mcp_list_artifacts,mcp_upload_artifact,mcp_request_internet,mcp_disable_internet,"+strings.Join(platformMCPTools(), ",")+",todo,web_search,web_extract")
 	case "api":
 		args = append(args, "-e", apiExt, "--tools", "platform_http,request_internet,disable_internet,todo,web_search,web_extract")
 	case "both":
-		args = append(append(args, "-e", subagentsExt, "-e", intercomExt, "--exclude-tools", noLazySubagent, "-e", mcpExt), skills...)
+		args = append(append(args, "-e", subagentsExt, "-e", intercomExt, "--exclude-tools", hiddenSubagentTools, "-e", mcpExt), skills...)
 	}
 	return args
 }

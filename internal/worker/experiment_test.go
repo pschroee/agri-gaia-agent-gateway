@@ -76,7 +76,7 @@ func TestExperimentCLIHasNoSubagents(t *testing.T) {
 	if !slices.Contains(args, "subagent,intercom") {
 		t.Errorf("experiment CLI does not exclude subagent and intercom: %v", args)
 	}
-	if !slices.Contains(args, noLazySubagent) {
+	if !slices.Contains(args, hiddenSubagentTools) {
 		t.Errorf("experiment CLI lost the lazy-subagent switch: %v", args)
 	}
 	// The product slot still has both extensions.

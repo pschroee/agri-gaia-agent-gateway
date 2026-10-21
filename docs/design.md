@@ -283,7 +283,8 @@ note in the history. Demonstrated by `TestSlotSubagentTalk` (question, answer, s
 `TestSlotSubagentIntercom` (subagent A finds B with `list` and writes to it, B sees the message while
 working); for this, `fakellm` substitutes `{{replyTo}}`, `{{runId}}` and `{{peer}}`.
 
-**The tool `subagent` is active from the start** (`--exclude-tools subagents_enable`).
+**The tool `subagent` is active from the start** (`--exclude-tools subagents_enable,bg_wait`). `bg_wait` is hidden too: it waits only for
+subagent runs, which notify the main agent anyway, and never knows bash tasks (#201: 11 of 11 calls returned at once).
 Otherwise pi-subagents hides it behind a switch `subagents_enable`; calling it changes the
 tool list in the middle of the chat, costs a model call and invalidates the prefix cache.
 Measured on the same E2E test (2026-09-29): before, 8 model calls and 2 874 µ$, including a single
@@ -780,7 +781,7 @@ background tasks in the execution sandbox and logs them.
 
 | Tool | Parameters | Result |
 |---|---|---|
-| `bash` | additionally `run_in_background: boolean` | "Background task bg-3 started. You will be notified when it ends; do not poll or sleep. Output so far: bg_output bg-3 (full log /tmp/agw-bg/bg-3.log); stop it with bg_stop bg-3." |
+| `bash` | additionally `run_in_background: boolean` | "Background task bg-3 started. You will be notified when it ends; keep working or end your reply, do not poll or sleep. Output so far: bg_output bg-3 (full log /tmp/agw-bg/bg-3.log); stop it with bg_stop bg-3." |
 | `bg_output` | `id`, `tail_lines?` (default 2,000) | one line on the state (running since …, exit code, stopped …), then the tail of the output, truncated like `bash` (2,000 lines, 50 KiB) with a pointer to the full output |
 | `bg_stop` | `id` | state after the stop; terminates the whole process group |
 
