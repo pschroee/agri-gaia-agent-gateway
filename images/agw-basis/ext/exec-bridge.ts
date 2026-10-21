@@ -62,6 +62,7 @@ type Frame = {
 	fullOutputPath?: string;
 	spillError?: string;
 	background?: string;
+	cliExits?: { cli: string; exit: number }[];
 };
 
 class ToolError extends Error {
@@ -534,6 +535,28 @@ async function bgPost(path: string, body: unknown, signal?: AbortSignal): Promis
 	return r;
 }
 
+const CLI_EXIT_LABELS: Record<number, string> = {
+	1: "error",
+	2: "refused or wrong usage",
+	3: "rejected by the user",
+	4: "outside the delegated rights",
+	5: "not part of this setup",
+};
+
+// cliExitNote (#202): lines for the agent when a gateway CLI (agw-internet, agw-platform, agw-artifact) failed inside
+// the command. The CLI reports its own exit code to the gateway because the shell exit code can belong to another
+// command of a pipe (`agw-internet … | tail`).
+export function cliExitNote(exitCode: number, exits: { cli: string; exit: number }[]): string {
+	if (!exits.length) return "";
+	const lines = exits.map((e) => `${e.cli} exited with code ${e.exit} (${CLI_EXIT_LABELS[e.exit] ?? "failed"}) inside this command.`);
+	if (exitCode === 0) {
+		lines.push(
+			"The command itself exited with 0: that is the exit code of the last command of a pipe or list. Run it on its own to act on its result.",
+		);
+	}
+	return lines.join("\n");
+}
+
 export function formatDuration(ms: number): string {
 	const s = Math.max(0, Math.round(ms / 1000));
 	if (s < 60) return `${s}s`;
@@ -735,7 +758,11 @@ async function runBash(toolCallId: string, params: any, signal: AbortSignal | un
 		const snapshot = finishOutput();
 		const { text: outputText, details } = formatOutput(snapshot);
 		if (exitCode === null) throw new Error(appendStatus(outputText, "Command terminated without an exit code"));
-		if (exitCode !== 0) throw new Error(appendStatus(outputText, `Command exited with code ${exitCode}`));
+		const cliNote = cliExitNote(exitCode, last?.cliExits ?? []);
+		if (exitCode !== 0) {
+			throw new Error(appendStatus(outputText, `${cliNote ? `${cliNote}\n` : ""}Command exited with code ${exitCode}`));
+		}
+		if (cliNote) throw new Error(appendStatus(outputText, cliNote));
 		return { content: [{ type: "text", text: outputText }], details };
 	} finally {
 		clearUpdateTimer();
