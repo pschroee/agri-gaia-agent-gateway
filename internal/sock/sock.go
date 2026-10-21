@@ -24,6 +24,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -1106,6 +1107,9 @@ func (h *handler) platformAPI(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 	} else {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	}
+	if res.Note != "" { // the gateway's note to the agent, as CLI and MCP get it in Result.Text() (#198)
+		w.Header().Set("X-Agw-Note", url.PathEscape(res.Note))
 	}
 	w.WriteHeader(res.HTTPStatus)
 	_, _ = io.WriteString(w, res.Body)

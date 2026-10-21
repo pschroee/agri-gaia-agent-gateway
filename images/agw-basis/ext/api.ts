@@ -173,7 +173,17 @@ export default function (pi: ExtensionAPI) {
 			let text = r.text;
 			if (text.length > MAX_SHOWN) text = text.slice(0, MAX_SHOWN) + "\n[… truncated; ask again with skip/limit or a narrower call]";
 			const loc = r.headers?.location ? ` · Location: ${r.headers.location}` : "";
-			return { content: [{ type: "text", text: `HTTP ${r.status}${loc}\n${text}` }], details: { status: r.status } };
+			// The gateway's note to the agent (X-Agw-Note, URL-encoded) comes last, as in the other bindings.
+			let note = "";
+			const rawNote = r.headers?.["x-agw-note"];
+			if (typeof rawNote === "string" && rawNote !== "") {
+				try {
+					note = "\n" + decodeURIComponent(rawNote);
+				} catch {
+					note = "\n" + rawNote;
+				}
+			}
+			return { content: [{ type: "text", text: `HTTP ${r.status}${loc}\n${text}${note}` }], details: { status: r.status } };
 		},
 	});
 }
