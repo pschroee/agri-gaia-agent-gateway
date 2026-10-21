@@ -188,18 +188,26 @@ func (s *Store) ChatWatchJobs(ctx context.Context, chatID string) ([]WatchJob, e
 	return out, rows.Err()
 }
 
-// SetJobProgress writes what a poll found and marks the row as checked. A failed reading call counts
-// up fail_reads and touches nothing else; a successful one clears the counter.
+// SetJobProgress writes what a poll found and marks the row as checked (see UpdateJobProgress).
 func (s *Store) SetJobProgress(ctx context.Context, jobID string, p WatchProgress) error {
+	_, err := s.UpdateJobProgress(ctx, jobID, p)
+	return err
+}
+
+// UpdateJobProgress writes what a poll found and marks the row as checked. A failed reading call counts
+// up fail_reads and touches nothing else; a successful one clears the counter. changed tells whether the
+// row was still running and was written: of two polls of one job that end it, only the first sees true
+// (issue #180).
+func (s *Store) UpdateJobProgress(ctx context.Context, jobID string, p WatchProgress) (bool, error) {
 	if p.ReadFail {
-		_, err := s.pool.Exec(ctx, `UPDATE watch_jobs SET fail_reads=fail_reads+1, checked_at=now() WHERE id=$1 AND state='running'`, jobID)
-		return err
+		tag, err := s.pool.Exec(ctx, `UPDATE watch_jobs SET fail_reads=fail_reads+1, checked_at=now() WHERE id=$1 AND state='running'`, jobID)
+		return err == nil && tag.RowsAffected() > 0, err
 	}
 	outputs := "[]"
 	if len(p.Outputs) > 0 {
 		b, err := json.Marshal(p.Outputs)
 		if err != nil {
-			return err
+			return false, err
 		}
 		outputs = string(b)
 	}
@@ -211,10 +219,10 @@ func (s *Store) SetJobProgress(ctx context.Context, jobID string, p WatchProgres
 	if state != JobRunning {
 		ended = time.Now()
 	}
-	_, err := s.pool.Exec(ctx, `UPDATE watch_jobs SET state=$2, progress=$3, message=$4, eta=$5, log_tail=$6, outputs=$7,
+	tag, err := s.pool.Exec(ctx, `UPDATE watch_jobs SET state=$2, progress=$3, message=$4, eta=$5, log_tail=$6, outputs=$7,
 fail_reads=0, checked_at=now(), ended_at=$8, link=$9 WHERE id=$1 AND state='running'`,
 		jobID, state, p.Percent, p.Message, p.ETA, p.LogTail, outputs, ended, p.Link)
-	return err
+	return err == nil && tag.RowsAffected() > 0, err
 }
 
 // SetJobMessage writes a message of the watcher itself (a failure it found, D2.3), without touching

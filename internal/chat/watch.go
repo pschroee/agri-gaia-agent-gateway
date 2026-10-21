@@ -26,6 +26,8 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/sync/singleflight"
+
 	"agw/internal/artifacts"
 	"agw/internal/delegation"
 	"agw/internal/notebook"
@@ -146,10 +148,19 @@ func (m *Manager) watchOnce(ctx context.Context, sem chan struct{}) {
 		go func(j store.WatchJob, kind watch.Kind) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			m.pollJob(ctx, j, kind)
+			<-m.pollJobShared(ctx, j, kind)
 		}(j, kind)
 	}
 	wg.Wait()
+}
+
+// pollJobShared runs pollJob for a job unless a poll of the same job is already on its way, and then waits
+// for that one: two polls of a job never run side by side (issue #180).
+func (m *Manager) pollJobShared(ctx context.Context, j store.WatchJob, kind watch.Kind) <-chan singleflight.Result {
+	return m.jobPolls.DoChan(j.ID, func() (any, error) {
+		m.pollJob(ctx, j, kind)
+		return nil, nil
+	})
 }
 
 // pollJob makes one reading call for a job and writes down what it found. A reading that fails does not
@@ -201,9 +212,13 @@ func (m *Manager) pollJob(ctx context.Context, j store.WatchJob, kind watch.Kind
 		Link:    p.Link,
 		ETA:     m.jobETA(j, p, time.Now()),
 	}
-	if err := m.st.SetJobProgress(ctx, j.ID, prog); err != nil {
+	changed, err := m.st.UpdateJobProgress(ctx, j.ID, prog)
+	if err != nil {
 		slog.Error("job progress not stored", "job", j.ID, "error", err)
 		return
+	}
+	if !changed {
+		return // another poll closed the row meanwhile: it ran the hooks and the finish (issue #180)
 	}
 	j.Progress, j.Message, j.LogTail, j.ETA = prog.Percent, prog.Message, prog.LogTail, prog.ETA
 	j.Outputs = prog.Outputs

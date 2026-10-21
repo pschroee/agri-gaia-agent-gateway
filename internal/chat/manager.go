@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"golang.org/x/sync/singleflight"
 
 	"agw/internal/artifacts"
 	"agw/internal/config"
@@ -316,6 +317,8 @@ type Manager struct {
 	// stopRefs: refs of stops of subagents on their way, mapped to the chat they belong to (under mu; issue #120).
 	// A stop has no stored message that could vouch for its ref (DL3.3); the socket call subagent_stop is its record.
 	stopRefs map[string]string
+	// jobPolls: one poll per observed job at a time; the watcher and the plan wait guard share it (issue #180).
+	jobPolls singleflight.Group
 
 	mu   sync.Mutex
 	live map[string]*live

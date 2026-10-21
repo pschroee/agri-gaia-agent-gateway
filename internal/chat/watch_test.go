@@ -31,6 +31,8 @@ type fakeJobs struct {
 	status   map[string]int
 	location string
 	writes   []string
+	// onRead, when set, is called with the key of every reading call (issue #180).
+	onRead func(key string)
 }
 
 func newFakeJobs(t *testing.T, e *env, location string) *fakeJobs {
@@ -47,11 +49,14 @@ func newFakeJobs(t *testing.T, e *env, location string) *fakeJobs {
 		}
 		f.mu.Lock()
 		body, known := f.answers[key]
-		st, location := f.status[key], f.location
+		st, location, onRead := f.status[key], f.location, f.onRead
 		if r.Method != http.MethodGet {
 			f.writes = append(f.writes, key)
 		}
 		f.mu.Unlock()
+		if onRead != nil && r.Method == http.MethodGet {
+			onRead(key)
+		}
 		w.Header().Set("Content-Type", "application/json")
 		if r.Method != http.MethodGet {
 			w.Header().Set("Location", location)

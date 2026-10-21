@@ -322,3 +322,23 @@ func TestParkApprovalOnlyOpenStep(t *testing.T) {
 		t.Fatalf("parking a finished step: ok=%v err=%v", ok, err)
 	}
 }
+
+// #180: of two polls that end a job only the first sees that it changed the row.
+func TestUpdateJobProgressReportsClose(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	c := newPlanChat(t, s)
+	jobID, err := s.AddWatchJob(ctx, WatchJob{ChatID: c.ID, Kind: "platform_task", Ref: "task:5"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed, err := s.UpdateJobProgress(ctx, jobID, WatchProgress{State: JobRunning, Message: "x"}); err != nil || !changed {
+		t.Fatalf("running on an open row: changed=%v err=%v", changed, err)
+	}
+	if changed, err := s.UpdateJobProgress(ctx, jobID, WatchProgress{State: JobDone}); err != nil || !changed {
+		t.Fatalf("first close: changed=%v err=%v", changed, err)
+	}
+	if changed, err := s.UpdateJobProgress(ctx, jobID, WatchProgress{State: JobDone}); err != nil || changed {
+		t.Fatalf("second close must report no change: changed=%v err=%v", changed, err)
+	}
+}
