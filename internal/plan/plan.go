@@ -461,11 +461,12 @@ func Referenced(steps []store.PlanStep, n int) int {
 	return 0
 }
 
-// SameShape tells whether a call looks like the step: the same tool for a tool step, otherwise the same
-// method and path segments, where a placeholder segment fits any non-empty segment. It is no match (the
-// parameters are not compared) but is used to recognise a call made too early.
+// SameShape tells whether a call looks like the step: the same tool for a tool step whose call carries a
+// tool invocation, otherwise the same method and path segments, where a placeholder segment fits any
+// non-empty segment. A tool with one request is compared on its call, which carries no invocation. It is no
+// match (the parameters are not compared) but is used to recognise a call made too early.
 func SameShape(st store.PlanStep, tool string, r platform.Request) bool {
-	if st.Tool != "" {
+	if IsToolStep(st) && tool != "" {
 		return tool == st.Tool
 	}
 	if r.Method != st.Method {
