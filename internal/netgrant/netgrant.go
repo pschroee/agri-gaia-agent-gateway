@@ -323,12 +323,35 @@ func MsgTooLarge(eco, name, file string, size, max, tmpMB, homeMB, grant int64) 
 		has = fmt.Sprintf("has %d MB", size>>20)
 	}
 	msg := fmt.Sprintf("blocked: %s package %s is too large for this sandbox: %s %s, package files may have at most %d MB "+
-		"(/tmp holds %d MB, the home directory %s). Large ML libraries such as torch and torchvision are preinstalled in "+
-		"notebook runs: use the skill notebook.", eco, name, file, has, max>>20, tmpMB, mbOrGB(homeMB))
+		"(/tmp holds %d MB, the home directory %s).", eco, name, file, has, max>>20, tmpMB, mbOrGB(homeMB))
+	return msg + tooLargeTail(grant)
+}
+
+// tooLargeTail is the shared end of the too-large messages: the hint to notebook runs and, for grant > 0, to end the access.
+func tooLargeTail(grant int64) string {
+	msg := " Large ML libraries such as torch and torchvision are preinstalled in notebook runs: use the skill notebook."
 	if grant > 0 {
 		msg += fmt.Sprintf(" If this access is no longer needed, end it with agw-internet off %d", grant)
 	}
 	return msg
+}
+
+// MsgDownloadTooLarge: a download through the web proxy passed the limit. what is the path (http) or empty (tunnel);
+// size < 0: no length known, the connection was cut after max.
+func MsgDownloadTooLarge(host, what string, size, max, tmpMB, homeMB, grant int64) string {
+	limits := fmt.Sprintf("(/tmp holds %d MB, the home directory %s)", tmpMB, mbOrGB(homeMB))
+	var msg string
+	if what != "" && size >= 0 {
+		msg = fmt.Sprintf("blocked: the download from %s is too large for this sandbox: %s has %d MB, downloads may have at most %d MB %s.",
+			host, what, size>>20, max>>20, limits)
+	} else if what != "" {
+		msg = fmt.Sprintf("blocked: the download from %s is too large for this sandbox: %s has more than %d MB, downloads may have at most %d MB %s.",
+			host, what, max>>20, max>>20, limits)
+	} else {
+		msg = fmt.Sprintf("blocked: the connection to %s was closed after %d MB: downloads may have at most %d MB per connection %s.",
+			host, max>>20, max>>20, limits)
+	}
+	return msg + tooLargeTail(grant)
 }
 
 func mbOrGB(mb int64) string {
