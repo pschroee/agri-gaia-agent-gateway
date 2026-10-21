@@ -6,7 +6,9 @@ package watch
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
+	"os"
 	"strings"
 	"testing"
 
@@ -54,8 +56,8 @@ func TestTrainingRunChain(t *testing.T) {
 func TestTrainingRunStates(t *testing.T) {
 	answers := func(status, score, logs string) map[string]string {
 		return map[string]string{
-			"GET /train/containers/9/status":       `{"status":"` + status + `","score":` + score + `}`,
-			"GET /train/containers/9/logs?tail=20": `{"logs":` + logs + `}`,
+			"GET /train/containers/9/status":        `{"status":"` + status + `","score":` + score + `}`,
+			"GET /train/containers/9/logs?tail=100": `{"logs":` + logs + `}`,
 		}
 	}
 	cases := []struct {
@@ -88,6 +90,32 @@ func TestTrainingRunStates(t *testing.T) {
 		}
 		if len(calls()) != 3 { // status, logs, metrics (issue #168)
 			t.Errorf("%s: calls %v", c.name, calls())
+		}
+	}
+	{
+		// A traceback above many redrawn progress bars is still found, and the stored tail keeps it (issue #178).
+		bars, err := os.ReadFile("testdata/traceback-under-bars.log")
+		if err != nil {
+			t.Fatal(err)
+		}
+		enc, _ := json.Marshal(string(bars))
+		read, _ := recorded(t, answers("exited", "null", string(enc)))
+		p, err := pollTrainingRun(context.Background(), Job{ID: "w1", Kind: kindTrainingRun, Ref: "9"}, read)
+		if err != nil || p.State != StateFailed {
+			t.Fatalf("traceback under bars: %+v %v", p, err)
+		}
+		if !strings.Contains(p.LogTail, "RuntimeError") || strings.Count(p.LogTail, "Epoch ") > 1 || strings.Contains(p.LogTail, "\r") {
+			t.Errorf("log tail: %q", p.LogTail)
+		}
+		// The real end of a clean test run: exited without a score and without an error counts as done.
+		clean, err := os.ReadFile("testdata/lightning-test-tail.log")
+		if err != nil {
+			t.Fatal(err)
+		}
+		enc, _ = json.Marshal(string(clean))
+		read, _ = recorded(t, answers("exited", "null", string(enc)))
+		if p, err = pollTrainingRun(context.Background(), Job{ID: "w1", Kind: kindTrainingRun, Ref: "9"}, read); err != nil || p.State != StateDone {
+			t.Fatalf("real tail: %+v %v", p, err)
 		}
 	}
 	// A container whose logs are not readable is still polled: the status decides.
@@ -132,9 +160,9 @@ func TestPollTrainingRunPercentFromEpochs(t *testing.T) {
 		`"gpu":[{"at":"2026-10-20T10:00:05Z","util":80,"mem_used_mb":1000,"mem_total_mb":8000},` +
 		`{"at":"2026-10-20T10:00:10Z","util":120,"mem_used_mb":1000,"mem_total_mb":8000}]}`
 	read, _ := recorded(t, map[string]string{
-		"GET /train/containers/9/status":       `{"status":"running","score":null}`,
-		"GET /train/containers/9/logs?tail=20": `{"logs":""}`,
-		"GET /train/containers/9/metrics":      metrics,
+		"GET /train/containers/9/status":        `{"status":"running","score":null}`,
+		"GET /train/containers/9/logs?tail=100": `{"logs":""}`,
+		"GET /train/containers/9/metrics":       metrics,
 	})
 	p, err := pollTrainingRun(context.Background(), Job{ID: "w1", Ref: "9"}, read)
 	if err != nil || p.State != StateRunning {
@@ -156,9 +184,9 @@ func TestPollTrainingRunPercentFromEpochs(t *testing.T) {
 	}
 	// A finished run is 100; a failed one is not.
 	read, _ = recorded(t, map[string]string{
-		"GET /train/containers/9/status":       `{"status":"exited","score":0.9}`,
-		"GET /train/containers/9/logs?tail=20": `{"logs":""}`,
-		"GET /train/containers/9/metrics":      metrics,
+		"GET /train/containers/9/status":        `{"status":"exited","score":0.9}`,
+		"GET /train/containers/9/logs?tail=100": `{"logs":""}`,
+		"GET /train/containers/9/metrics":       metrics,
 	})
 	if p, _ = pollTrainingRun(context.Background(), Job{ID: "w1", Ref: "9"}, read); p.State != StateDone || p.Percent == nil || *p.Percent != 100 {
 		t.Errorf("done: %+v", p)

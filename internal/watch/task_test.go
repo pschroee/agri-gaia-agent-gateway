@@ -21,7 +21,7 @@ func recorded(t *testing.T, answers map[string]string) (Reader, func() []string)
 	t.Helper()
 	var got []string
 	read := func(_ context.Context, r platform.Request) (platform.Result, error) {
-		key := r.String() // "GET /train/containers/9/logs?tail=20"
+		key := r.String() // "GET /train/containers/9/logs?tail=100"
 		got = append(got, key)
 		body, ok := answers[key]
 		if !ok {

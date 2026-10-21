@@ -82,12 +82,12 @@ func pollTrainingRun(ctx context.Context, j Job, read Reader) (Progress, error) 
 	if err := json.Unmarshal([]byte(res.Body), &doc); err != nil {
 		return Progress{}, Decidedf("training container %s: %v", j.Ref, err)
 	}
-	tail, terr := trainingLogTail(ctx, read, j.Ref)
-	p := Progress{State: StateRunning, Message: oneLine(trainingMessage(doc)), LogTail: tail}
+	collapsed, terr := trainingLogTail(ctx, read, j.Ref)
+	p := Progress{State: StateRunning, Message: oneLine(trainingMessage(doc)), LogTail: Tail(collapsed)}
 	p.Metrics = trainingMetrics(ctx, read, j.Ref)
 	switch doc.Status {
 	case "exited":
-		if doc.Score != nil || (terr == nil && !logShowsError(tail)) {
+		if doc.Score != nil || (terr == nil && !logShowsError(collapsed)) {
 			p.State = StateDone
 		} else {
 			p.State = StateFailed
@@ -189,11 +189,15 @@ func logShowsError(tail string) bool {
 	return regexp.MustCompile(`(?i)\b(error|traceback|exception|failed)\b`).MatchString(tail)
 }
 
-// trainingLogTail reads the last lines of the container's log; a failure is not fatal, the status
-// decides.
+// trainingLogReadLines is how many log lines the watcher reads: a traceback may sit above many progress
+// lines, and the error check runs on the collapsed whole (issue #178).
+const trainingLogReadLines = 100
+
+// trainingLogTail reads the last lines of the container's log and collapses progress bars; a failure is
+// not fatal, the status decides.
 func trainingLogTail(ctx context.Context, read Reader, containerID string) (string, error) {
 	res, err := read(ctx, platform.Request{Method: http.MethodGet, Path: "/train/containers/" + containerID + "/logs",
-		Query: map[string]string{"tail": strconv.Itoa(MaxLogLines)}})
+		Query: map[string]string{"tail": strconv.Itoa(trainingLogReadLines)}})
 	if err != nil {
 		return "", err
 	}
@@ -206,7 +210,7 @@ func trainingLogTail(ctx context.Context, read Reader, containerID string) (stri
 	if err := json.Unmarshal([]byte(res.Body), &doc); err != nil {
 		return "", err
 	}
-	return Tail(doc.Logs), nil
+	return CollapseProgress(doc.Logs), nil
 }
 
 // stopTrainingRun is the call that stops the container (POST /train/containers/<id>/stop); the platform
