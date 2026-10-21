@@ -46,6 +46,9 @@ const MAX_GREP_LIMIT = 1000;
 const MAX_FIND_LIMIT = 100000;
 // like pi (bash.js): setTimeout takes at most 2^31-1 ms
 const MAX_TIMEOUT_MS = 2_147_483_647;
+// Start notes of a background task (#201): the main agent is told to keep working or end its reply.
+export const bgMainNote = "You will be notified when it ends; keep working or end your reply, do not poll or sleep";
+export const bgChildNote = "The main agent is notified when it ends";
 const BASH_UPDATE_THROTTLE_MS = 100;
 
 type Meta = { toolCallId: string; tool: string; sessionFile: string };
@@ -570,7 +573,7 @@ async function runBashBackground(toolCallId: string, params: any, signal: AbortS
 	const meta = metaOf("bash", toolCallId, ctx);
 	const r = await bgPost("/tool/bg/start", { ...meta, req: { op: "bg", command, cwd: ctx?.cwd || CWD, env: piEnv(ctx), timeout: timeout ?? 0 } }, signal);
 	const t = r.task!;
-	const who = isChildSession(ctx) ? "The main agent is notified when it ends" : "You will be notified when it ends; do not poll or sleep";
+	const who = isChildSession(ctx) ? bgChildNote : bgMainNote;
 	const text = `Background task ${t.id} started. ${who}. Output so far: bg_output ${t.id} (full log ${t.log_path}); stop it with bg_stop ${t.id}.`;
 	return { content: [{ type: "text", text }], details: { background: { id: t.id, logPath: t.log_path } } };
 }
@@ -705,7 +708,7 @@ async function runBash(toolCallId: string, params: any, signal: AbortSignal | un
 				// The user turned the command into a background task; it keeps running.
 				const snapshot = finishOutput();
 				const { text } = formatOutput(snapshot, "");
-				const who = isChildSession(ctx) ? "The main agent is notified when it ends" : "You will be notified when it ends; do not poll or sleep";
+				const who = isChildSession(ctx) ? bgChildNote : bgMainNote;
 				const note = `The user moved this command to the background as ${last.background}; it keeps running. ${who}. Later output: bg_output ${last.background}; stop it with bg_stop ${last.background}.`;
 				return { content: [{ type: "text", text: appendStatus(text, note) }], details: { background: { id: last.background } } };
 			}
