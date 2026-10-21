@@ -268,8 +268,10 @@ func ClipRunes(s string, n int) string {
 }
 
 // Tail keeps the end of a text: at most MaxLogLines lines and MaxLogRunes runes (D2.5). What a job
-// stores is bounded, whatever the platform answers.
+// stores is bounded, whatever the platform answers. Progress bars are collapsed first (CollapseProgress,
+// issue #178), so that one redrawn bar does not fill the tail.
 func Tail(s string) string {
+	s = CollapseProgress(s)
 	s = strings.TrimRight(s, "\n")
 	if s == "" {
 		return ""

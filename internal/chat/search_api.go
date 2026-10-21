@@ -14,6 +14,7 @@ import (
 
 	"agw/internal/platform"
 	"agw/internal/store"
+	"agw/internal/watch"
 )
 
 // TrialDetail is the answer of GET .../experiments/trials/{trial}: the trial, its epochs and GPU samples and the
@@ -41,7 +42,7 @@ func (m *Manager) TrialDetail(ctx context.Context, chatID, trialID string) (Tria
 	}
 	if t.JobID != "" {
 		if j, err := m.st.GetWatchJob(ctx, chatID, t.JobID); err == nil {
-			d.LogTail = platform.RedactText(j.LogTail)
+			d.LogTail = watch.Tail(platform.RedactText(j.LogTail))
 		}
 	}
 	return d, nil

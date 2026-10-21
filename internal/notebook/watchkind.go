@@ -90,7 +90,7 @@ func (n *Notebooks) poll(ctx context.Context, j watch.Job, _ watch.Reader) (watc
 			p.Percent = &pct
 		}
 	}
-	if log, err := n.Log(ctx, j.ChatID, j.Ref, 20); err == nil {
+	if log, err := n.Log(ctx, j.ChatID, j.Ref, 100); err == nil {
 		p.LogTail = log
 	}
 	if m := n.runMetrics(ctx, j.ChatID, j.Ref); m != nil {

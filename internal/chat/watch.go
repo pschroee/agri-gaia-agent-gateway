@@ -943,7 +943,7 @@ func (m *Manager) Jobs(ctx context.Context, chatID string) ([]store.WatchJob, er
 // gateway redacted platform answers still carry them.
 func redactWatchText(j store.WatchJob) store.WatchJob {
 	j.Message = platform.RedactText(j.Message)
-	j.LogTail = platform.RedactText(j.LogTail)
+	j.LogTail = watch.Tail(platform.RedactText(j.LogTail))
 	return j
 }
 
