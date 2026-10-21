@@ -233,6 +233,9 @@ func (m *Manager) endText(s store.Search, obj search.Objective, reason string, w
 	} else {
 		fmt.Fprintf(&b, " Now run the final test once: notebook_fetch the model file of run %s, then assess_model with its path and final=true,%s.", wt.Ref, eval)
 	}
+	if s.Path != store.SearchPathTemplate {
+		b.WriteString(" The check takes class names and preprocessing from outputs/model.json of that run.")
+	}
 	return b.String()
 }
 

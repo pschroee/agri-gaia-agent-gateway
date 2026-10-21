@@ -56,6 +56,9 @@ type SearchHoldout struct {
 	FinalState string          `json:"final_state,omitempty"`
 	CheckID    string          `json:"check_id,omitempty"`
 	Result     json.RawMessage `json:"result,omitempty"`
+	// FinalRetries counts the final checks that ended without the hold-out images having run through the model
+	// (holdout_not_run, #181); each put the search back to "pending".
+	FinalRetries int `json:"final_retries,omitempty"`
 }
 
 // SearchApprovalData is what the card of a search proposal shows, written by the gateway from what it read. The
