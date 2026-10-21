@@ -123,7 +123,7 @@ var argsFor = map[string]string{
 	"create_model_from_training": `{"train_container_id":3}`, "list_tasks": `{}`, "task_status": `{"task_id":4}`,
 	"list_container_images":  `{}`,
 	"container_image_status": `{"repository":"test/mnist","tag":"v1"}`,
-	"build_inference_image":  `{"template_id":1,"model_id":7,"name":"mnist","tag":"v1","architecture":"x86"}`,
+	"build_inference_image":  `{"template_id":1,"model_id":7,"name":"mnist","tag":"v1","architecture":"amd64"}`,
 	"list_templates":         `{}`, "import_template": `{"name":"x"}`, "list_edge_devices": `{}`, "list_deployments": `{}`,
 	"create_deployment": `{"device_id":1,"repository":"test/mnist","tag":"v1","name":"d","host_port":18100}`,
 	"start_deployment":  `{"deployment_id":9}`, "undeploy": `{"deployment_id":9}`, "delete_deployment": `{"deployment_id":9}`,
