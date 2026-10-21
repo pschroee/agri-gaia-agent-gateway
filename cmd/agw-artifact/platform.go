@@ -39,12 +39,12 @@ func platformCmd(hc *http.Client, args []string) (int, error) {
 		return 1, fmt.Errorf("unknown command %q", args[0])
 	}
 	if len(args) > 1 && (args[1] == "-h" || args[1] == "--help") {
-		toolUsage(os.Stdout, tool.RenderedFor(toolset.CLI, toolset.Of(toolset.CLI)))
+		toolUsage(os.Stdout, tool)
 		return 0, nil
 	}
 	in, err := parseToolArgs(tool, args[1:], os.Stdin)
 	if err != nil {
-		toolUsage(os.Stderr, tool.RenderedFor(toolset.CLI, toolset.Of(toolset.CLI)))
+		toolUsage(os.Stderr, tool)
 		return 1, err
 	}
 	body, _ := json.Marshal(in)
@@ -209,6 +209,7 @@ func platformUsage(w io.Writer) {
 }
 
 func toolUsage(w io.Writer, t platform.Tool) {
+	t = t.RenderedFor(toolset.CLI, toolset.Of(toolset.CLI)) // tool references in the command line forms (#200)
 	fmt.Fprintf(w, "agw-platform %s%s\n\n%s\n", t.CLI, t.Synopsis(), t.Desc)
 	for _, p := range t.Params {
 		req := ""

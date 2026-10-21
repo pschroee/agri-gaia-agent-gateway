@@ -163,7 +163,7 @@ func (m *Manager) nextAnswer(s store.Search, t store.Trial) (platform.Result, er
 			return searchErr(err.Error())
 		}
 		return platform.Result{Status: "ok", HTTPStatus: 200, Body: fmt.Sprintf(
-			"trial %d declared. Now call {{tool:clone_training}} with container_id=%d and train_config=%s, then {{tool:start_training}} with the new container id. Both run without approval.",
+			"trial %d declared. Now call {{tool:clone_training}} with container_id=%d and train_config=%s, then {{tool:start_training}} with the new container id as train_container_id. Both run without approval.",
 			t.Idx, b.ContainerID, merged)}, nil
 	default:
 		return platform.Result{Status: "ok", HTTPStatus: 200, Body: fmt.Sprintf(
