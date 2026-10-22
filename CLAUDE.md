@@ -632,6 +632,12 @@ refer to this repository.
   `.dev/test-logs/<run>/<n>-<stage>.log` (ignored, last 10 runs kept), and a failing stage prints its log path.
   Read the failure message there instead of re-running with `tail` (issue #26: a slot test failed once and its
   message was lost).
+- **A sleeping Mac stops the test time limit (issue #216):** on macOS Go measures time with a monotonic clock that
+  stands still during sleep, so `-timeout` does not fire while the Mac sleeps. A test run that "hangs" with almost no
+  CPU time: check `pmset -g log | grep -E 'Sleep|Wake'` first (on 22.10.2026 a run "hung" for 16 min during a
+  Maintenance Sleep and went on after the wake-up). `dev.sh test` and `dev.sh e2e` keep the Mac awake with
+  `caffeinate -i -w $$`; the Go stage has `-timeout 5m` (`--full`: 15m) and a failed stage names the log with the
+  goroutine dump when the limit was hit.
 - **No fixed sleep before asserting something asynchronous:** poll up to a generous deadline instead. A
   `time.Sleep(1600ms)` before checking a marker written after `sleep 1.5` failed once in 20 plain runs
   (`TestServeBgLimitAndStop`, issue #26); the abort was not at fault, the other process groups stay alive. A

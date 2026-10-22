@@ -256,6 +256,9 @@ stage() {
   local rc=$?
   if [[ $rc -ne 0 ]]; then
     warn "$name failed ($((SECONDS - t0)) s)"
+    if [[ "$STAGE_LOG" != /dev/null ]] && grep -q 'panic: test timed out' "$STAGE_LOG"; then
+      warn "a test ran into the time limit; the goroutine dump is in $STAGE_LOG"
+    fi
     [[ "$STAGE_LOG" != /dev/null ]] && warn "complete output of the stage: $STAGE_LOG"
     return $rc
   fi
@@ -271,6 +274,8 @@ new_test_logs() {
 
 # GO_UNIT_FLAGS: empty for ./dev.sh test (Go's test cache, no -race), "-race -count=1" for --full.
 GO_UNIT_FLAGS=""
+# GO_UNIT_TIMEOUT: the time limit of the Go stage (go test's default is 10 min); --full runs with -race and gets more.
+GO_UNIT_TIMEOUT=5m
 go_unit() {
   # gofmt check first: unformatted files make later diffs noisy (#174).
   local unformatted; unformatted="$(gofmt -l internal cmd 2>/dev/null)"
@@ -281,7 +286,15 @@ go_unit() {
   # log directory. The path is part of the cache key, so the two tests writing it run instead of coming from the cache.
   AGW_CONFORMANCE_REPORT="$TEST_LOG_DIR/conformance.md" \
   AGW_TEST_DATABASE_URL="postgres://agwpoc:${POSTGRES_PASSWORD}@127.0.0.1:${AGW_PG_PORT:-18482}/agwpoc?sslmode=disable" \
-    go test $GO_UNIT_FLAGS ./... 2>&1 | tee -a "$STAGE_LOG" | grep --line-buffered -vE '^(ok|\?) ' ; return "${PIPESTATUS[0]}"
+    go test $GO_UNIT_FLAGS -timeout "$GO_UNIT_TIMEOUT" ./... 2>&1 | tee -a "$STAGE_LOG" | grep --line-buffered -vE '^(ok|\?) ' ; return "${PIPESTATUS[0]}"
+}
+
+# keep_awake: macOS sleep stops Go's monotonic clock, so a sleeping Mac neither fails nor times out a test run (#216).
+# caffeinate -i prevents idle sleep and ends by itself when this script (its parent, $$) exits.
+keep_awake() {
+  command -v caffeinate >/dev/null 2>&1 || return 0
+  info "keeping the Mac awake during the tests (caffeinate)"
+  caffeinate -i -w $$ >/dev/null 2>&1 &
 }
 
 go_docker() {
@@ -328,7 +341,7 @@ cmd_test() {
     esac
   done
   local go_name="Go tests (unit, Postgres, cached, without -race; without Docker)"
-  if $full; then GO_UNIT_FLAGS="-race -count=1"; go_name="Go tests (unit, Postgres, -race, uncached; without Docker)"; fi
+  if $full; then GO_UNIT_FLAGS="-race -count=1"; GO_UNIT_TIMEOUT=15m; go_name="Go tests (unit, Postgres, -race, uncached; without Docker)"; fi
   local run=("$go_name" "web tests") skipped=()
   if $docker; then
     run+=("Docker integration (sandbox, workspace)" "S3 integration (in the Docker network)"
@@ -338,10 +351,13 @@ cmd_test() {
   fi
   if $dry; then
     info "stages that would run:"; printf '   %s\n' "${run[@]}"
+    info "go test flags: $GO_UNIT_FLAGS -timeout $GO_UNIT_TIMEOUT"
+    if command -v caffeinate >/dev/null 2>&1; then info "caffeinate: yes"; else info "caffeinate: no"; fi
     [[ ${#skipped[@]} -gt 0 ]] && { info "skipped:"; printf '   %s\n' "${skipped[@]}"; }
     return 0
   fi
   ensure_env
+  keep_awake
   set -a; . ./.env; set +a
   local t0=$SECONDS
   if $docker && [[ "$(mode)" == hot ]]; then
@@ -375,6 +391,7 @@ cmd_e2e() {
     dc up -d $(build_flag) --wait >/dev/null
   wait_api
   local rc=0
+  keep_awake
   set -a; . ./.env; set +a
   AGW_E2E=1 go test -count=1 -v -timeout 45m ./e2e/ "$@" || rc=$?
   dc logs --no-color orchestrator > e2e/last-run.log 2>&1 || true
