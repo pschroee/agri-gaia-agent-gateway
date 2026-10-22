@@ -393,25 +393,30 @@ func (m *Manager) watchNote(ctx context.Context, st *store.PlanStep, jobID strin
 		return fmt.Sprintf("The gateway observes this platform job (job %s) for step %d and wakes you when it ends; "+
 			"do not poll the job yourself — end your turn.", jobID, st.Idx) + extra
 	}
-	return fmt.Sprintf("The gateway observes this platform job (job %s) for step %d; its state and the step's are in "+
-		"GET /api/chats/<chat>/jobs. This plan does not wake you, so keep an eye on it yourself.", jobID, st.Idx) + extra
+	return fmt.Sprintf("The gateway observes this platform job (job %s) for step %d and tells you when it ends while this chat is open; "+
+		"do not poll the job yourself — end your turn. Its state and the step's are in GET /api/chats/<chat>/jobs.", jobID, st.Idx) + extra
 }
 
 // recordJobOutsidePlan observes a call that started a job without a plan (A-E2.2): the row is there for
-// the cards and the activity, the agent gets no note and no wake-up.
-func (m *Manager) recordJobOutsidePlan(ctx context.Context, chatID string, access delegation.Access, req platform.Request, res platform.Result) string {
+// the cards and the activity. The agent is told about the kinds of watch.AnnouncedOutsidePlan by the caller (#212).
+// It returns the id and the kind of the job, or "" for both.
+func (m *Manager) recordJobOutsidePlan(ctx context.Context, chatID string, access delegation.Access, req platform.Request, res platform.Result) (id, kind string) {
 	kind, ref, ok := watch.For(access, req, res)
 	if !ok {
-		return ""
+		return "", ""
 	}
 	id, err := m.st.AddWatchJob(ctx, store.WatchJob{ChatID: chatID, ToolCallID: store.ToolCallFrom(ctx), Kind: kind, Ref: ref})
 	if err != nil {
 		slog.Error("started job not observed", "chat", chatID, "kind", kind, "error", err)
-		return ""
+		return "", ""
 	}
 	slog.Info("job observed without a plan", "chat", chatID, "job", id, "kind", kind, "ref", ref)
-	return id
+	return id, kind
 }
+
+// outsidePlanNote is the sentence the answer of a call adds when it started an observed job without a plan (#212).
+const outsidePlanNote = "The gateway observes this platform job (job %s) and tells you when it ends while this chat is open; " +
+	"do not poll the job yourself — end your turn."
 
 // stopJobByTheAgent records that a call of the agent's own tools stopped a job (own code C-E4): the job of the
 // run says so (watch_jobs.stopped_by, the words of the aborts of issue #120/L3), and the card shows it. The
@@ -435,7 +440,9 @@ func (m *Manager) finishWatched(ctx context.Context, j store.WatchJob, p watch.P
 	m.recordJobObject(ctx, j, p)
 	// Hooks of features that follow a job outside of plans too (the trials of a training search, issue #168).
 	m.runJobEnded(ctx, j, p)
+	m.forgetObservedReads(j.ChatID, j.ID)
 	if j.PlanID == "" {
+		m.noteJobEnd(ctx, j, nil, p, time.Since(j.StartedAt), false)
 		return
 	}
 	dur := time.Since(j.StartedAt)
@@ -602,16 +609,24 @@ func countLines(s string) int {
 // false for a plan that was not approved while the step ran: its note stays in the queue and goes with
 // the next message.
 func (m *Manager) noteJobEnd(ctx context.Context, j store.WatchJob, st *store.PlanStep, p watch.Progress, dur time.Duration, wake bool) {
+	var note systemNote
 	if j.PlanID == "" {
-		return
+		// A job outside a plan (#212): the kinds of watch.AnnouncedOutsidePlan, never the trials of a search
+		// (their notes are the search's).
+		if !watch.AnnouncedOutsidePlan(j.Kind) || isTrialJob(j.ID) {
+			return
+		}
+		note = JobNote(j, nil, p.State, dur, nil)
+		note.Type = store.NoteJob
+	} else {
+		note = JobNote(j, st, p.State, dur, p.Created)
 	}
-	note := JobNote(j, st, p.State, dur, p.Created)
 	if _, err := m.st.EnqueueSystem(ctx, j.ChatID, note.Type, note.Refs, note.Text()); err != nil {
 		slog.Error("note about the end of a job not queued", "chat", j.ChatID, "job", j.ID, "error", err)
 		return
 	}
 	m.publishQueue(ctx, j.ChatID, "queued", nil, "")
-	if !wake {
+	if !wake || j.PlanID == "" {
 		m.wakeIfLive(j.ChatID)
 		return
 	}

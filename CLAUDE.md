@@ -315,7 +315,12 @@ refer to this repository.
 - **The end of a step wakes a resting chat** (`ensureLive` + `deliverQueue`) only for an autonomous plan that was
   approved while the step ran, and the wake-up counts against the plan's `max_auto_turns` (`planWakeLimit`) instead of
   `AGW_AUTO_TURNS_MAX`/`AGW_BG_WAKES_PER_HOUR`; over the budget the plan is paused with `budget_turns` and the note stays
-  queued. A job outside a plan is only observed for the cards: no note, no wake-up.
+  queued. A job outside a plan (kinds `platform_task`, `training_run`, `image_build`; not a search's trials) is observed
+  too since #212: the answer carries a note ("tells you when it ends while this chat is open"), the end is queued as a
+  note of the type `job` and handed to a live chat at once (`wakeIfLive`, within `AGW_AUTO_TURNS_MAX`); a resting chat
+  is not woken. A running observed job keeps its chat awake like a background task (`hasRunningJob`), and equal reads of
+  an observed job (`GET /tasks/{id}`, `/train/containers/{id}/status|logs|metrics`) get a note and are spaced 15 s
+  apart (`observed_reads.go`).
 - **Parked approvals (D2.8) hold no turn:** a non-covered step of an autonomous plan answers `pending_user` at once, and
   a goroutine of the gateway repeats the stored call through `PlatformCall` when the user decides. The marker
   `WithParkedApproval` is set only there and counts only for the call that matches that step (`parkedHere`); a step

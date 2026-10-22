@@ -13,6 +13,7 @@ package watch
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"regexp"
 	"sync"
 	"time"
@@ -159,4 +160,53 @@ func For(access delegation.Access, req platform.Request, res platform.Result) (k
 		}
 	}
 	return "", "", false
+}
+
+// outsidePlanKinds are the kinds whose end the gateway tells the agent when no plan step waits for them (#212).
+// A search's trials and the notebook and edge jobs have notes of their own.
+var outsidePlanKinds = map[string]bool{kindPlatformTask: true, kindTrainingRun: true, kindImageBuild: true}
+
+// AnnouncedOutsidePlan reports whether a job of this kind outside a plan gets a note in the answer of the call
+// that started it and a note at its end (#212).
+func AnnouncedOutsidePlan(kind string) bool { return outsidePlanKinds[kind] }
+
+var (
+	taskReadRe     = regexp.MustCompile(`^/tasks/([0-9]+)$`)
+	trainingReadRe = regexp.MustCompile(`^/train/containers/([0-9]+)/(?:status|logs|metrics)$`)
+)
+
+// ReadOf recognises a read of a job the agent might poll: GET /tasks/{id} gives (platform_task, id), GET
+// /train/containers/{id}/status, /logs or /metrics gives (training_run, id).
+func ReadOf(req platform.Request) (kind, id string, ok bool) {
+	if req.Method != http.MethodGet {
+		return "", "", false
+	}
+	if m := taskReadRe.FindStringSubmatch(req.Path); m != nil {
+		return kindPlatformTask, m[1], true
+	}
+	if m := trainingReadRe.FindStringSubmatch(req.Path); m != nil {
+		return kindTrainingRun, m[1], true
+	}
+	return "", "", false
+}
+
+// TaskIDOf is the platform task a job's reference names ("task:12|train:7" gives "12"; a plain id is its own).
+func TaskIDOf(ref string) string {
+	id, _, _ := splitTaskRef(ref)
+	return id
+}
+
+// ReadMatches reports whether a read recognised by ReadOf (readKind, id) polls the job of this kind and
+// reference: a task read matches the jobs that follow a task (platform_task, image_build), a training read the
+// run of that container, also while the job still follows the task that starts it ("task:12|train:7").
+func ReadMatches(jobKind, jobRef, readKind, id string) bool {
+	task, chain, target := splitTaskRef(jobRef)
+	switch readKind {
+	case kindPlatformTask:
+		return (jobKind == kindPlatformTask || jobKind == kindImageBuild) && task == id
+	case kindTrainingRun:
+		return (jobKind == kindTrainingRun && jobRef == id) ||
+			(jobKind == kindPlatformTask && chain == chainTraining && target == id)
+	}
+	return false
 }

@@ -132,6 +132,9 @@ const (
 	// NoteSearch: a trial of a training search ended, the search ended, or the user intervened in it (issue #168).
 	// Such a note wakes a resting chat like the end of a plan step, within the wake limit of the search.
 	NoteSearch = "search"
+	// NoteJob: an observed platform job outside a plan ended (#212). Delivered like the end of an interactive plan step:
+	// a live chat gets it at once, a resting chat only with the next message.
+	NoteJob = "job"
 )
 
 const queueCols = `id::text, chat_id::text, text, attachments, created_at, kind, note, refs, context, search_hint`
