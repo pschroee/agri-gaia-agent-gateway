@@ -447,8 +447,8 @@ func TestWatcherDoesNotWakeCancelledPlan(t *testing.T) {
 	}
 }
 
-// A-E2 (S4): the end of a job outside a plan is recorded and distributed, and no note wakes the agent.
-func TestWatcherJobOutsidePlanNoNote(t *testing.T) {
+// A-E2 (S4), #212: the end of a job outside a plan is recorded and distributed, and a note reaches the agent.
+func TestWatcherJobOutsidePlanNote(t *testing.T) {
 	e := setup(t)
 	ctx := context.Background()
 	f := newFakeJobs(t, e, "/tasks/7")
@@ -471,16 +471,15 @@ func TestWatcherJobOutsidePlanNoNote(t *testing.T) {
 	if got, err := e.st.GetWatchJob(ctx, c.ID, jobs[0].ID); err != nil || got.State != store.JobDone {
 		t.Fatalf("job: %+v %v", got, err)
 	}
-	ev := waitEvent(t, events, "job", "")
-	if ev.Kind != "job" {
+	if ev := waitEvent(t, events, "job", ""); ev.Kind != "job" {
 		t.Fatalf("no job event: %+v", ev)
 	}
+	// #212: the end of a job outside a plan reaches the agent (a live, resting-in-turns chat takes it at once);
+	// it is no note of a plan step.
 	if notes := queueNotes(t, e, c.ID, store.NotePlanStep); len(notes) != 0 {
-		t.Fatalf("no note for a job outside a plan: %+v", notes)
+		t.Fatalf("a plan-step note for a job outside a plan: %+v", notes)
 	}
-	if e.agent(0).prompts(); len(e.agent(0).prompts()) != 0 {
-		t.Fatalf("the agent was woken by a job outside a plan: %v", e.agent(0).prompts())
-	}
+	waitFor(t, func() bool { return len(e.agent(0).prompts()) != 0 })
 }
 
 // A-E2 (Sicherheitsfragen): the watcher never writes. A kind that asks for a writing call gets a refusal
