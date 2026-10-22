@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -435,6 +436,51 @@ type fakeExpAPI struct {
 	envSlot agwclient.ExpEnvironmentSlot
 	// #161: what the plan has consumed so far; tests raise it above the plan's limit.
 	usage agwclient.ExpUsage
+	// #207: the order of the calls that matter for the fixtures, and what the fixture routes answer.
+	events        []string
+	seeds         []fakeSeedCall
+	seedStatus    int // 409 answers a fixture_mismatch
+	seedMismatch  []agwclient.ExpMismatch
+	seedErr       error
+	unseedCalls   int
+	unseedFailAt  int // the n-th unseed call fails (1-based); 0 never
+	unseedRemoved int // what the first unseed reports as removed
+}
+
+type fakeSeedCall struct {
+	Cell, Run string
+	IDs       []string
+}
+
+func (f *fakeExpAPI) ExpSeed(_ context.Context, plan, cell, run string, specs []exp.FixtureSpec) (agwclient.ExpFixtureAnswer, int, error) {
+	f.events = append(f.events, "seed")
+	call := fakeSeedCall{Cell: cell, Run: run}
+	var out agwclient.ExpFixtureAnswer
+	for _, sp := range specs {
+		call.IDs = append(call.IDs, sp.ID)
+		out.Fixtures = append(out.Fixtures, agwclient.ExpFixture{ManifestID: sp.ID, Kind: sp.Kind, ObjectID: "obj-" + sp.ID, RunKey: run})
+	}
+	f.seeds = append(f.seeds, call)
+	if f.seedErr != nil {
+		return agwclient.ExpFixtureAnswer{}, 0, f.seedErr
+	}
+	if f.seedStatus == 409 {
+		out.Mismatches = f.seedMismatch
+		return out, 409, nil
+	}
+	return out, 201, nil
+}
+
+func (f *fakeExpAPI) ExpUnseed(_ context.Context, plan, cell string) (agwclient.ExpFixtureAnswer, error) {
+	f.events = append(f.events, "unseed")
+	f.unseedCalls++
+	if f.unseedFailAt == f.unseedCalls {
+		return agwclient.ExpFixtureAnswer{}, errors.New("backend down")
+	}
+	if f.unseedCalls == 1 {
+		return agwclient.ExpFixtureAnswer{Removed: f.unseedRemoved}, nil
+	}
+	return agwclient.ExpFixtureAnswer{}, nil
 }
 
 func newFakeExpAPI() *fakeExpAPI {
@@ -459,6 +505,7 @@ func (f *fakeExpAPI) CreateChat(_ context.Context, req agwclient.CreateChatReque
 		return agwclient.Chat{}, f.createErr
 	}
 	f.creates = append(f.creates, req)
+	f.events = append(f.events, "chat")
 	f.seq++
 	id := fmt.Sprintf("c%d", f.seq)
 	det := agwclient.ChatDetail{
@@ -516,6 +563,7 @@ func (f *fakeExpAPI) ExpStartRun(_ context.Context, run agwclient.ExpRun) error 
 		return fmt.Errorf("run %s exists", run.ID)
 	}
 	f.starts = append(f.starts, run)
+	f.events = append(f.events, "start")
 	f.runs[run.ID] = run
 	return nil
 }
@@ -529,6 +577,7 @@ func (f *fakeExpAPI) ExpSetRunChat(_ context.Context, id, chatID string) error {
 
 func (f *fakeExpAPI) ExpEndRun(_ context.Context, end agwclient.ExpRunEnd) error {
 	f.ends = append(f.ends, end)
+	f.events = append(f.events, "end")
 	run := f.runs[end.ID]
 	run.Status, run.EndReason, run.Pass = end.Status, end.EndReason, end.Pass
 	if end.CheckEvidence != nil {
@@ -1136,5 +1185,199 @@ func TestRunSendsLimitsWithChat(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "run limits sent to the gateway: 0.5 USD, 40000 tokens (input + output without cache reads), 7m") {
 		t.Fatalf("start line missing: %s", out.String())
+	}
+}
+
+// writeRunnerFixtures adds to the runner material a task with fixtures: list-datasets names fx-ds (a
+// dataset with one file) and may update exactly that dataset; fx-other belongs to no task.
+func writeRunnerFixtures(t *testing.T, dir string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(dir, "fixtures", "inhalte"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write := func(path, content string) {
+		if err := os.WriteFile(filepath.Join(dir, path), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("fixtures/inhalte/a.txt", "placeholder")
+	write("fixtures/fx-ds.yaml", "id: fx-ds\nkind: dataset\nowner: primary\nfields:\n  name: fx-dataset\n")
+	write("fixtures/fx-file.yaml", "id: fx-file\nkind: dataset_file\nowner: primary\nfields:\n  dataset: fx-ds\n  name: a.txt\nfiles:\n  - fixtures/inhalte/a.txt\n")
+	write("fixtures/fx-other.yaml", "id: fx-other\nkind: dataset\nowner: primary\nfields:\n  name: fx-unused\n")
+	write("aufgaben/list-datasets.yaml", `id: list-datasets
+title: List my datasets
+prompt: List my datasets.
+delegation:
+  rules:
+    - action: read
+      resource: dataset
+    - action: update
+      resource: dataset
+      ids: ["fixture:fx-ds"]
+  enforce: false
+  confirm: none
+fixtures:
+  - fx-ds
+check:
+  conditions:
+    - request:
+        method: GET
+        path: /datasets
+      expect:
+        - path: "$.datasets[*].id"
+          op: exists
+kind: allowed
+`)
+}
+
+func newFixtureRunner(t *testing.T, api *fakeExpAPI, dry bool) (*expRunner, *strings.Builder, *strings.Builder) {
+	t.Helper()
+	dir := writeRunnerMaterial(t)
+	writeRunnerFixtures(t, dir)
+	var out, errw strings.Builder
+	r, err := newExpRunner(api, expRunOptions{PlanPath: dir, DryRun: dry, Poll: time.Millisecond,
+		StartGrace: 20 * time.Millisecond, Heartbeat: time.Hour}, &out, &errw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r, &out, &errw
+}
+
+// #207: every run of a task with fixtures starts with fresh ones and removes them afterwards, around
+// the record of the run: unseed (leftovers), seed, start … end, unseed.
+func TestRunSeedsTaskFixturesBeforeEachRun(t *testing.T) {
+	api := newFakeExpAPI()
+	api.unseedRemoved = 2
+	r, out, _ := newFixtureRunner(t, api, false)
+	if err := r.run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(api.seeds) != 4 {
+		t.Fatalf("%d seeds, want 4 (list-datasets: 2 cells x k=2)", len(api.seeds))
+	}
+	for i, ev := range api.events {
+		if ev != "seed" {
+			continue
+		}
+		window := strings.Join(api.events[i-1:i+5], " ")
+		if window != "unseed seed start chat end unseed" {
+			t.Fatalf("around seed %d: %s", i, window)
+		}
+	}
+	for _, s := range api.seeds {
+		if s.Run == "" || !strings.Contains(s.Run, "list-datasets") {
+			t.Fatalf("seed without the run: %+v", s)
+		}
+	}
+	if !strings.Contains(out.String(), "removed 2 leftover fixtures of cell") ||
+		!strings.Contains(out.String(), "fixtures fx-ds, fx-file seeded (") {
+		t.Fatalf("output: %s", out.String())
+	}
+}
+
+// #207: only the fixtures the task names are seeded, and the files of a listed dataset go with it.
+func TestRunSeedsOnlyTaskFixtures(t *testing.T) {
+	api := newFakeExpAPI()
+	r, _, _ := newFixtureRunner(t, api, false)
+	if err := r.run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range api.seeds {
+		if strings.Join(s.IDs, ",") != "fx-ds,fx-file" {
+			t.Fatalf("seeded %v", s.IDs)
+		}
+	}
+}
+
+// #207: a fixture_mismatch stops the plan before the run exists; what was created is removed.
+func TestRunStopsOnFixtureMismatch(t *testing.T) {
+	api := newFakeExpAPI()
+	api.seedStatus = 409
+	api.seedMismatch = []agwclient.ExpMismatch{{ManifestID: "fx-ds", Kind: "dataset", ObjectID: "7",
+		Fields: []agwclient.ExpFieldMismatch{{Field: "name", Expected: "abc", Actual: "def"}}}}
+	r, _, _ := newFixtureRunner(t, api, false)
+	err := r.run(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "fixture_mismatch") || !strings.Contains(err.Error(), "fx-ds") ||
+		!strings.Contains(err.Error(), "the plan stops before this run") {
+		t.Fatalf("error: %v", err)
+	}
+	if len(api.starts) != 0 || len(api.creates) != 0 {
+		t.Fatalf("the run went on: %d starts, %d chats", len(api.starts), len(api.creates))
+	}
+	if got := strings.Join(api.events, " "); got != "unseed seed unseed" {
+		t.Fatalf("events: %s", got)
+	}
+}
+
+// #207: a seed that fails for another reason stops the plan the same way.
+func TestRunStopsWhenSeedFails(t *testing.T) {
+	api := newFakeExpAPI()
+	api.seedErr = errors.New("backend down")
+	r, _, _ := newFixtureRunner(t, api, false)
+	err := r.run(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "could not be seeded") || len(api.starts) != 0 {
+		t.Fatalf("error %v, starts %d", err, len(api.starts))
+	}
+}
+
+// #207: fixtures that cannot be removed after a run stop the plan; the run itself is closed.
+func TestRunStopsWhenUnseedFails(t *testing.T) {
+	api := newFakeExpAPI()
+	api.unseedFailAt = 2 // the removal after the first run
+	r, _, _ := newFixtureRunner(t, api, false)
+	err := r.run(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "could not be removed") {
+		t.Fatalf("error: %v", err)
+	}
+	if len(api.ends) != 1 || len(api.starts) != 1 {
+		t.Fatalf("%d starts, %d ends; want 1 and 1", len(api.starts), len(api.ends))
+	}
+}
+
+// #207: fixture:<id> in a rule becomes the object identifier of the seeded fixture.
+func TestRunResolvesFixtureRefs(t *testing.T) {
+	api := newFakeExpAPI()
+	r, _, _ := newFixtureRunner(t, api, false)
+	if err := r.run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	resolved := 0
+	for _, c := range api.creates {
+		if strings.Contains(string(c.Delegation), "fixture:") {
+			t.Fatalf("unresolved reference: %s", c.Delegation)
+		}
+		if strings.Contains(string(c.Delegation), `"obj-fx-ds"`) {
+			resolved++
+		}
+	}
+	if resolved != 4 {
+		t.Fatalf("%d chats with the object id, want 4", resolved)
+	}
+}
+
+// #207: a plan whose tasks have no fixtures never calls the fixture routes.
+func TestRunWithoutFixtures(t *testing.T) {
+	api := newFakeExpAPI()
+	r, _, _ := newTestRunner(t, api)
+	if err := r.run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(api.seeds) != 0 || api.unseedCalls != 0 {
+		t.Fatalf("%d seeds, %d unseeds", len(api.seeds), api.unseedCalls)
+	}
+}
+
+// #207: the dry run names the fixtures of each run and creates nothing.
+func TestDryRunListsFixtures(t *testing.T) {
+	api := newFakeExpAPI()
+	r, out, _ := newFixtureRunner(t, api, true)
+	if err := r.run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "fixtures: fx-ds, fx-file") {
+		t.Fatalf("output: %s", out.String())
+	}
+	if len(api.seeds) != 0 || api.unseedCalls != 0 || len(api.creates) != 0 {
+		t.Fatalf("the dry run changed something: %d seeds, %d unseeds, %d chats", len(api.seeds), api.unseedCalls, len(api.creates))
 	}
 }

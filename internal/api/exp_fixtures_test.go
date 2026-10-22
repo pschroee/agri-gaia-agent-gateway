@@ -25,11 +25,12 @@ type fakeExpFixtures struct {
 	err      error
 	plan     string
 	cell     string
+	run      string
 	specs    []exp.FixtureSpec
 }
 
-func (f *fakeExpFixtures) Seed(_ context.Context, plan, cell string, specs []exp.FixtureSpec) ([]store.Fixture, error) {
-	f.plan, f.cell, f.specs = plan, cell, specs
+func (f *fakeExpFixtures) Seed(_ context.Context, plan, cell, run string, specs []exp.FixtureSpec) ([]store.Fixture, error) {
+	f.plan, f.cell, f.run, f.specs = plan, cell, run, specs
 	if f.err != nil {
 		return f.rows, f.err
 	}
@@ -122,6 +123,19 @@ func TestExpSeedReturnsIdentifiersAndHashes(t *testing.T) {
 	}
 	if len(out.Fixtures) != 1 || out.Fixtures[0].ObjectID != "7" || out.Fixtures[0].FieldSHA256["name"] != "abc" {
 		t.Fatalf("answer: %+v", out)
+	}
+}
+
+// #207: the run a seed is made for reaches the service.
+func TestSeedPassesRun(t *testing.T) {
+	svc := &fakeExpFixtures{}
+	body := `{"plan":"pilot","cell":"c1","run":"pilot/c1/t1/1","fixtures":[{"id":"dataset-1","kind":"dataset","owner":"primary",` +
+		`"fields":{"name":"placeholder-dataset"}}]}`
+	if w := doExp(t, expServer(svc), "POST", "/api/exp/fixtures/seed", expToken, body); w.Code != http.StatusCreated {
+		t.Fatalf("seed: %d %s", w.Code, w.Body.String())
+	}
+	if svc.run != "pilot/c1/t1/1" {
+		t.Fatalf("run: %q", svc.run)
 	}
 }
 

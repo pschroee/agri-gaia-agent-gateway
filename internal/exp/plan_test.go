@@ -5,6 +5,7 @@
 package exp
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -304,5 +305,103 @@ func TestValidateModels(t *testing.T) {
 	}
 	if ps := ValidateModels(p, nil); len(ps) != 0 {
 		t.Fatalf("without a catalogue: %v", ps)
+	}
+}
+
+// taskWith builds a task whose delegation has the given rules, as the YAML loader produces them.
+func taskWith(fixtures []string, rules ...map[string]any) Task {
+	list := make([]any, len(rules))
+	for i, r := range rules {
+		list[i] = r
+	}
+	return Task{ID: "t", Title: "t", Prompt: "p", Kind: KindAllowed, Fixtures: fixtures,
+		Delegation: map[string]any{"rules": list}}
+}
+
+func problemText(ps []Problem) string {
+	var b strings.Builder
+	for _, p := range ps {
+		b.WriteString(p.String() + "\n")
+	}
+	return b.String()
+}
+
+var testPlan = &Plan{Purpose: PurposePilot, Cells: []Cell{{ID: "c1"}, {ID: "c2"}}}
+
+// #207: the error of the pilot run of 22.10.2026, found before the first chat.
+func TestValidateRejectsUpdateWithoutIDs(t *testing.T) {
+	task := taskWith(nil, map[string]any{"action": "update", "resource": "dataset"})
+	got := problemText(validateTask(task, testPlan, nil))
+	if !strings.Contains(got, "rule 1 (update dataset) has no ids and covers no call") {
+		t.Fatalf("problems: %s", got)
+	}
+}
+
+func TestValidateAllowsReadWithoutIDs(t *testing.T) {
+	task := taskWith(nil, map[string]any{"action": "read", "resource": "dataset"},
+		map[string]any{"action": "create", "resource": "dataset"})
+	if got := problemText(validateTask(task, testPlan, nil)); strings.Contains(got, "no ids") {
+		t.Fatalf("problems: %s", got)
+	}
+}
+
+func TestValidateFixtureRefMustBeListed(t *testing.T) {
+	ms := map[string]Manifest{"fx": {ID: "fx", Kind: KindDataset}}
+	task := taskWith(nil, map[string]any{"action": "update", "resource": "dataset", "ids": []any{"fixture:fx"}})
+	got := problemText(validateTask(task, testPlan, ms))
+	if !strings.Contains(got, `rule 1 names fixture "fx", which the task does not list`) {
+		t.Fatalf("problems: %s", got)
+	}
+	task.Fixtures = []string{"fx"}
+	if got := problemText(validateTask(task, testPlan, ms)); strings.Contains(got, "rule 1") {
+		t.Fatalf("problems: %s", got)
+	}
+}
+
+func TestValidateFixtureRefKind(t *testing.T) {
+	ms := map[string]Manifest{"fx": {ID: "fx", Kind: KindModel}}
+	task := taskWith([]string{"fx"}, map[string]any{"action": "update", "resource": "dataset", "ids": []any{"fixture:fx"}})
+	got := problemText(validateTask(task, testPlan, ms))
+	if !strings.Contains(got, `rule 1 names fixture "fx" of kind model for resource dataset`) {
+		t.Fatalf("problems: %s", got)
+	}
+}
+
+func TestValidateFixtureNotInCell(t *testing.T) {
+	ms := map[string]Manifest{"fx": {ID: "fx", Kind: KindDataset, Cells: []string{"c1"}}}
+	task := taskWith([]string{"fx"})
+	got := problemText(validateTask(task, testPlan, ms))
+	if !strings.Contains(got, `fixture "fx" is not seeded in cell c2`) || strings.Contains(got, "in cell c1") {
+		t.Fatalf("problems: %s", got)
+	}
+}
+
+func TestResolveFixtureRefs(t *testing.T) {
+	del := map[string]any{"rules": []any{
+		map[string]any{"action": "update", "resource": "dataset", "ids": []any{"fixture:fx", "own", "*", "7"}},
+		map[string]any{"action": "read", "resource": "dataset"},
+	}, "confirm": "none"}
+	raw, err := ResolveFixtureRefs(del, map[string]string{"fx": "42"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var back struct {
+		Rules []struct {
+			IDs []string `json:"ids"`
+		} `json:"rules"`
+		Confirm string `json:"confirm"`
+	}
+	if err := json.Unmarshal(raw, &back); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(back.Rules[0].IDs, ","); got != "42,own,*,7" || back.Confirm != "none" {
+		t.Fatalf("ids %s, confirm %s", got, back.Confirm)
+	}
+	// The task's own map keeps the reference.
+	if del["rules"].([]any)[0].(map[string]any)["ids"].([]any)[0] != "fixture:fx" {
+		t.Fatal("the task's delegation was changed")
+	}
+	if _, err := ResolveFixtureRefs(del, map[string]string{}); err == nil || !strings.Contains(err.Error(), `fixture "fx" has no object`) {
+		t.Fatalf("missing object: %v", err)
 	}
 }
