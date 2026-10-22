@@ -289,6 +289,14 @@ go_unit() {
     go test $GO_UNIT_FLAGS -timeout "$GO_UNIT_TIMEOUT" ./... 2>&1 | tee -a "$STAGE_LOG" | grep --line-buffered -vE '^(ok|\?) ' ; return "${PIPESTATUS[0]}"
 }
 
+# keep_awake: macOS sleep stops Go's monotonic clock, so a sleeping Mac neither fails nor times out a test run (#216).
+# caffeinate -i prevents idle sleep and ends by itself when this script (its parent, $$) exits.
+keep_awake() {
+  command -v caffeinate >/dev/null 2>&1 || return 0
+  info "keeping the Mac awake during the tests (caffeinate)"
+  caffeinate -i -w $$ >/dev/null 2>&1 &
+}
+
 go_docker() {
   # Only the packages with Docker tests, so they do not compete with all the others for Docker.
   AGW_DOCKER_TESTS=1 \
@@ -344,10 +352,12 @@ cmd_test() {
   if $dry; then
     info "stages that would run:"; printf '   %s\n' "${run[@]}"
     info "go test flags: $GO_UNIT_FLAGS -timeout $GO_UNIT_TIMEOUT"
+    if command -v caffeinate >/dev/null 2>&1; then info "caffeinate: yes"; else info "caffeinate: no"; fi
     [[ ${#skipped[@]} -gt 0 ]] && { info "skipped:"; printf '   %s\n' "${skipped[@]}"; }
     return 0
   fi
   ensure_env
+  keep_awake
   set -a; . ./.env; set +a
   local t0=$SECONDS
   if $docker && [[ "$(mode)" == hot ]]; then
@@ -381,6 +391,7 @@ cmd_e2e() {
     dc up -d $(build_flag) --wait >/dev/null
   wait_api
   local rc=0
+  keep_awake
   set -a; . ./.env; set +a
   AGW_E2E=1 go test -count=1 -v -timeout 45m ./e2e/ "$@" || rc=$?
   dc logs --no-color orchestrator > e2e/last-run.log 2>&1 || true
