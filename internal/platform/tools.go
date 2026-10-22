@@ -579,7 +579,123 @@ func Lookup(name string) (Tool, bool) {
 	return Tool{}, false
 }
 
-// openAPIDigest condenses an OpenAPI description into one line per operation.
+// oaSchema is the part of a JSON Schema the digest reads: one level of properties, references resolved.
+type oaSchema struct {
+	Ref         string              `json:"$ref"`
+	Type        string              `json:"type"`
+	Description string              `json:"description"`
+	Properties  map[string]oaSchema `json:"properties"`
+	Required    []string            `json:"required"`
+}
+
+// bodyField is one field of a JSON body as the index names it.
+type bodyField struct {
+	Name, Type, Desc string
+	Required         bool
+}
+
+// toolParamInfo gives type and description of a parameter of a tool (set by init in index.go: Tools
+// refers to openAPIDigest, so the digest cannot refer to Tools directly).
+var toolParamInfo func(tool, param string) (typ, desc string, ok bool)
+
+// resolveSchema follows references (at most a few levels) to the schema they name.
+func resolveSchema(s oaSchema, schemas map[string]oaSchema) oaSchema {
+	for i := 0; i < 4 && s.Ref != ""; i++ {
+		name := s.Ref[strings.LastIndex(s.Ref, "/")+1:]
+		next, ok := schemas[name]
+		if !ok {
+			return oaSchema{}
+		}
+		s = next
+	}
+	return s
+}
+
+// bodyFields lists the fields of an object schema: the required ones first in the order of required, then
+// the others alphabetically (a Go map has no order).
+func bodyFields(s oaSchema, schemas map[string]oaSchema) []bodyField {
+	s = resolveSchema(s, schemas)
+	var out []bodyField
+	seen := map[string]bool{}
+	add := func(name string, req bool) {
+		p, ok := s.Properties[name]
+		if !ok || seen[name] {
+			return
+		}
+		seen[name] = true
+		rp := resolveSchema(p, schemas)
+		desc := p.Description
+		if desc == "" {
+			desc = rp.Description
+		}
+		out = append(out, bodyField{Name: name, Type: rp.Type, Desc: desc, Required: req})
+	}
+	for _, name := range s.Required {
+		add(name, true)
+	}
+	rest := make([]string, 0, len(s.Properties))
+	for name := range s.Properties {
+		rest = append(rest, name)
+	}
+	sort.Strings(rest)
+	for _, name := range rest {
+		add(name, false)
+	}
+	return out
+}
+
+// noteFields turns the body text of a note ("a*, b") into fields; type and description come from the
+// tool of the note, if it has one.
+func noteFields(n apiPathNote) []bodyField {
+	var out []bodyField
+	for _, part := range strings.Split(n.Body, ",") {
+		name := strings.TrimSpace(part)
+		f := bodyField{Name: strings.TrimSuffix(name, "*"), Required: strings.HasSuffix(name, "*")}
+		if f.Name == "" || strings.ContainsAny(f.Name, " (") {
+			return nil // "none (…)" is no field list
+		}
+		if n.Tool != "" && toolParamInfo != nil {
+			if typ, desc, ok := toolParamInfo(n.Tool, f.Name); ok {
+				f.Type, f.Desc = typ, desc
+			}
+		}
+		out = append(out, f)
+	}
+	return out
+}
+
+func fieldText(fs []bodyField) string {
+	parts := make([]string, len(fs))
+	for i, f := range fs {
+		parts[i] = f.Name
+		if f.Required {
+			parts[i] += "*"
+		}
+	}
+	return strings.Join(parts, ", ")
+}
+
+// detailLine is the line below an operation line for one field (only with a prefix, the counterpart of --help).
+func detailLine(f bodyField) string {
+	s := "    " + f.Name
+	if f.Required {
+		s += "*"
+	}
+	if f.Type != "" {
+		s += " (" + f.Type + ")"
+	}
+	if d := strings.Join(strings.Fields(f.Desc), " "); d != "" {
+		if r := []rune(d); len(r) > 240 {
+			d = string(r[:239]) + "…"
+		}
+		s += " — " + d
+	}
+	return s
+}
+
+// openAPIDigest condenses an OpenAPI description into one line per operation. The line names the fields of
+// a JSON body (* = required); apiPathNotes adds the bodies the description leaves out and notes of the gateway.
+// With a prefix the fields follow in lines of their own, with type and description.
 func openAPIDigest(raw []byte, prefix string) ([]byte, error) {
 	var doc struct {
 		Paths map[string]map[string]struct {
@@ -590,9 +706,14 @@ func openAPIDigest(raw []byte, prefix string) ([]byte, error) {
 				Required bool   `json:"required"`
 			} `json:"parameters"`
 			RequestBody *struct {
-				Content map[string]json.RawMessage `json:"content"`
+				Content map[string]struct {
+					Schema oaSchema `json:"schema"`
+				} `json:"content"`
 			} `json:"requestBody"`
 		} `json:"paths"`
+		Components struct {
+			Schemas map[string]oaSchema `json:"schemas"`
+		} `json:"components"`
 	}
 	if err := json.Unmarshal(raw, &doc); err != nil {
 		return nil, fmt.Errorf("OpenAPI description unreadable: %w", err)
@@ -628,15 +749,42 @@ func openAPIDigest(raw []byte, prefix string) ([]byte, error) {
 			if len(q) > 0 {
 				fmt.Fprintf(&b, " · query: %s", strings.Join(q, ", "))
 			}
-			if op.RequestBody != nil {
-				ct := make([]string, 0, len(op.RequestBody.Content))
-				for k := range op.RequestBody.Content {
-					ct = append(ct, k)
+			note, hasNote := apiPathNotes[strings.ToUpper(m)+" "+p]
+			var fields []bodyField
+			bodyText := ""
+			switch {
+			case hasNote && note.Body != "":
+				bodyText = note.Body
+				fields = noteFields(note)
+			case op.RequestBody != nil:
+				if js, ok := op.RequestBody.Content["application/json"]; ok {
+					fields = bodyFields(js.Schema, doc.Components.Schemas)
+					bodyText = fieldText(fields)
 				}
-				sort.Strings(ct)
-				fmt.Fprintf(&b, " · body: %s", strings.Join(ct, ", "))
+				if bodyText == "" {
+					ct := make([]string, 0, len(op.RequestBody.Content))
+					for k := range op.RequestBody.Content {
+						ct = append(ct, k)
+					}
+					sort.Strings(ct)
+					bodyText = strings.Join(ct, ", ")
+				}
+			}
+			if bodyText != "" {
+				fmt.Fprintf(&b, " · body: %s", bodyText)
+			}
+			if hasNote && note.Note != "" {
+				fmt.Fprintf(&b, " · gateway: %s", note.Note)
 			}
 			b.WriteString("\n")
+			if prefix != "" {
+				for _, f := range fields {
+					if f.Type == "" && f.Desc == "" {
+						continue
+					}
+					b.WriteString(detailLine(f) + "\n")
+				}
+			}
 		}
 	}
 	fmt.Fprintf(&b, "(%d operations; * = required; multipart/form-data bodies cannot be sent as JSON)\n", n)

@@ -34,6 +34,9 @@ func TestSystemNotePlatformIndex(t *testing.T) {
 	if !strings.Contains(api, apiIndexSent) || !strings.Contains(api, "  PATCH /datasets/{dataset_id} — Update Dataset") {
 		t.Errorf("api: index missing:\n%s", api)
 	}
+	if !strings.Contains(api, "query parameters and JSON body fields with * = required, the gateway's notes on a path") {
+		t.Errorf("api: wording of the index missing:\n%s", api)
+	}
 	if strings.Contains(api, apiFallback) || strings.Contains(api, "agw-platform rename-dataset") {
 		t.Error("api: wrong text")
 	}
