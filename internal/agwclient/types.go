@@ -357,6 +357,15 @@ type ExperimentProfile struct {
 	Trace string `json:"trace,omitempty"`
 	// Limit: the limit that ended the run (X3.5: cost, tokens or duration), set by the gateway only.
 	Limit string `json:"limit,omitempty"`
+	// Limits: the run's limits from the plan (#206); zero values mean the gateway's defaults.
+	Limits *ExpRunLimits `json:"limits,omitempty"`
+}
+
+// ExpRunLimits mirrors store.RunLimits (#206): tokens are input + output without cache reads (X3.3).
+type ExpRunLimits struct {
+	MaxCostUSD  float64 `json:"max_cost_usd"`
+	MaxTokens   int64   `json:"max_tokens"`
+	MaxDuration string  `json:"max_duration"`
 }
 
 // WatchJob is an observed platform job of a chat (GET /api/chats/{id}/jobs, A-E2).

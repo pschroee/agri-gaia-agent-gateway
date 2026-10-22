@@ -404,9 +404,9 @@ type Env struct {
 	// X3: limits of an experiment run at the model pass-through. The model, the provider and the upstream
 	// address stay per run (the chat's model and the catalog), so a self hosted model can come later without
 	// a change here. The values below are placeholders until the pilot runs fix them (XE5).
-	ExpMaxCostUSD  float64       // AGW_EXP_MAX_COST_USD, default 0.50
-	ExpMaxTokens   int64         // AGW_EXP_MAX_TOKENS, default 2 000 000 (input + output, without cache reads)
-	ExpMaxDuration time.Duration // AGW_EXP_MAX_DURATION, default 90m, counted from the chat's creation
+	ExpMaxCostUSD  float64       // AGW_EXP_MAX_COST_USD, default 0.02; used for experiment chats whose profile carries no limits (#206)
+	ExpMaxTokens   int64         // AGW_EXP_MAX_TOKENS, default 50 000 (input + output, without cache reads)
+	ExpMaxDuration time.Duration // AGW_EXP_MAX_DURATION, default 5m, counted from the chat's creation
 	ExpTemperature float64       // AGW_EXP_TEMPERATURE, default 0; sent where the catalog says the model takes it
 	// ExpPlaceholderLimits: none of the limit variables was set, the defaults apply. The start logs a warning.
 	ExpPlaceholderLimits bool

@@ -6,6 +6,8 @@ package chat
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -147,5 +149,94 @@ func TestAttributeExperimentRun(t *testing.T) {
 	p := e.m.Attribute(ipOf(product.ID))
 	if p.ChatID != product.ID || p.Model != "" || p.Experiment {
 		t.Fatalf("product attribution: %+v", p)
+	}
+}
+
+// createLimited makes an experiment chat whose profile carries the run's limits (#206).
+func createLimited(t *testing.T, e *env, l *store.RunLimits) ChatView {
+	t.Helper()
+	p := experimentProfile("none")
+	p.Limits = l
+	return createExperimentWith(t, e, p)
+}
+
+func createExperimentWith(t *testing.T, e *env, p *store.Experiment) ChatView {
+	t.Helper()
+	c, err := e.m.Create(context.Background(), NewChat{Experiment: p, Delegation: json.RawMessage(experimentDelegation),
+		Owner: "sub-1", OwnerName: experimentUser})
+	if err != nil {
+		t.Fatalf("experiment chat: %v", err)
+	}
+	return c
+}
+
+// #206: the token limit of the profile wins over the gateway's default.
+func TestLimitTokensFromProfile(t *testing.T) {
+	e := setup(t)
+	allowExperiment(e)
+	e.m.opt.ExpMaxCostUSD, e.m.opt.ExpMaxTokens, e.m.opt.ExpMaxDuration = 0, 50000, 0
+	c := createLimited(t, e, &store.RunLimits{MaxTokens: 1000})
+	addRunCall(t, e, c.ID, 0, 1200)
+	if err := e.m.chatBudget(c.ID); err == nil || !strings.Contains(err.Error(), "experiment run limit reached: tokens") {
+		t.Fatalf("over the profile's token limit: %v", err)
+	}
+}
+
+func TestLimitTokensProfileAboveEnv(t *testing.T) {
+	e := setup(t)
+	allowExperiment(e)
+	e.m.opt.ExpMaxCostUSD, e.m.opt.ExpMaxTokens, e.m.opt.ExpMaxDuration = 0, 50000, 0
+	c := createLimited(t, e, &store.RunLimits{MaxTokens: 400000})
+	addRunCall(t, e, c.ID, 0, 60000)
+	if err := e.m.chatBudget(c.ID); err != nil {
+		t.Fatalf("under the profile's limit, above the default: %v", err)
+	}
+}
+
+func TestLimitDurationFromProfile(t *testing.T) {
+	e := setup(t)
+	allowExperiment(e)
+	e.m.opt.ExpMaxCostUSD, e.m.opt.ExpMaxTokens, e.m.opt.ExpMaxDuration = 0, 0, time.Hour
+	c := createLimited(t, e, &store.RunLimits{MaxDuration: "1ms"})
+	time.Sleep(5 * time.Millisecond)
+	if err := e.m.chatBudget(c.ID); err == nil || !strings.Contains(err.Error(), "experiment run limit reached: duration") {
+		t.Fatalf("over the profile's duration: %v", err)
+	}
+}
+
+func TestLimitCostFromProfile(t *testing.T) {
+	e := setup(t)
+	allowExperiment(e)
+	e.m.opt.ExpMaxCostUSD, e.m.opt.ExpMaxTokens, e.m.opt.ExpMaxDuration = 100, 0, 0
+	c := createLimited(t, e, &store.RunLimits{MaxCostUSD: 0.10})
+	addRunCall(t, e, c.ID, 0.20, 10)
+	if err := e.m.chatBudget(c.ID); err == nil || !strings.Contains(err.Error(), "experiment run limit reached: cost") {
+		t.Fatalf("over the profile's cost: %v", err)
+	}
+}
+
+// A profile without limits (or with zero values) keeps the gateway's defaults.
+func TestLimitFallsBackToEnv(t *testing.T) {
+	e := setup(t)
+	allowExperiment(e)
+	e.m.opt.ExpMaxCostUSD, e.m.opt.ExpMaxTokens, e.m.opt.ExpMaxDuration = 0, 1000, 0
+	c := createLimited(t, e, &store.RunLimits{})
+	addRunCall(t, e, c.ID, 0, 1500)
+	if err := e.m.chatBudget(c.ID); err == nil || !strings.Contains(err.Error(), "experiment run limit reached: tokens") {
+		t.Fatalf("the default must apply: %v", err)
+	}
+}
+
+func TestCreateChatRejectsBadLimits(t *testing.T) {
+	e := setup(t)
+	allowExperiment(e)
+	for _, l := range []*store.RunLimits{{MaxDuration: "x"}, {MaxDuration: "-5m"}, {MaxTokens: -1}, {MaxCostUSD: -0.1}} {
+		p := experimentProfile("none")
+		p.Limits = l
+		_, err := e.m.Create(context.Background(), NewChat{Experiment: p, Delegation: json.RawMessage(experimentDelegation),
+			Owner: "sub-1", OwnerName: experimentUser})
+		if !errors.Is(err, ErrInvalid) {
+			t.Fatalf("limits %+v: want ErrInvalid, got %v", l, err)
+		}
 	}
 }

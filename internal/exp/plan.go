@@ -109,7 +109,9 @@ const (
 	DefaultDurationTotal       = 10 * time.Hour
 )
 
-// Limits are the bounds of the plan (X3, #161): Max* bound one run, TokensTotal and DurationTotal
+// Limits are the bounds of the plan (X3, #161): Max* bound one run (they go to the gateway with each
+// experiment chat, which enforces them before every model call, #206; tokens are input + output without
+// cache reads, X3.3), TokensTotal and DurationTotal
 // bound the whole plan. The durations are Go durations such as 90m. An empty DurationTotal and a
 // zero TokensTotal mean the defaults above.
 type Limits struct {

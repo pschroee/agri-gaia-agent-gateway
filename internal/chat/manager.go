@@ -742,6 +742,16 @@ func (m *Manager) Create(ctx context.Context, req NewChat) (ChatView, error) {
 			d.Confirm = "none"
 			stored := *experiment
 			stored.Limit = "" // X3: the gateway sets the limit when it runs the chat
+			if l := stored.Limits; l != nil {
+				if l.MaxCostUSD < 0 || l.MaxTokens < 0 {
+					return ChatView{}, fmt.Errorf("%w: experiment limits: negative value", ErrInvalid)
+				}
+				if l.MaxDuration != "" {
+					if d, err := time.ParseDuration(l.MaxDuration); err != nil || d < 0 {
+						return ChatView{}, fmt.Errorf("%w: experiment limits: unreadable duration %q", ErrInvalid, l.MaxDuration)
+					}
+				}
+			}
 			exp = &stored
 		}
 		del, _ = json.Marshal(d) // the checked, normalized form is stored

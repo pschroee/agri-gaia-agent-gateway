@@ -305,6 +305,8 @@ func (r *expRunner) run(ctx context.Context) error {
 				orDefault(usage.DurationTotal, "0s"), r.plan.Limits.PlanTokens(), roundDuration(r.plan.Limits.PlanDuration()))
 		}
 	}
+	fmt.Fprintf(r.out, "run limits sent to the gateway: %s USD, %d tokens (input + output without cache reads), %s\n",
+		strconv.FormatFloat(r.plan.Limits.MaxCostUSD, 'f', -1, 64), r.plan.Limits.MaxTokens, orDefault(r.plan.Limits.MaxDuration, "default"))
 	if r.lock != nil && !r.dryRun {
 		// X8.5: the material matches the lock; now the environment must as well. A dry run prints the order
 		// without touching the gateway.
@@ -529,7 +531,8 @@ func (r *expRunner) runOne(ctx context.Context, pr expPlannedRun, prev agwclient
 		Pass: &pass, CheckEvidence: evidence}); err != nil {
 		return expOutcome{}, fmt.Errorf("%s: ending the run failed: %w", pr.Key, err)
 	}
-	fmt.Fprintf(r.out, "run %s %s pass=%s chat=%s %s\n", pr.Key, status, yesNo(pass), shortID(chat.ID), roundDuration(r.now().Sub(started)))
+	fmt.Fprintf(r.out, "run %s %s pass=%s chat=%s %s tokens %d (+%d cache reads)\n", pr.Key, status, yesNo(pass), shortID(chat.ID),
+		roundDuration(r.now().Sub(started)), det.Chat.Tokens.Input+det.Chat.Tokens.Output, det.Chat.Tokens.CacheRead)
 	if reason != "" && status != "done" {
 		fmt.Fprintf(r.errw, "  %s\n", reason)
 	}
@@ -572,6 +575,9 @@ func (r *expRunner) createChat(ctx context.Context, pr expPlannedRun, task exp.T
 			Seed:       pr.Seed,
 			// X7.6/#152: on unless the cell turns it off; the plan's field is per cell.
 			Trace: exp.TraceValue(cell.Trace),
+			// #206: the gateway enforces the plan's run limits, not its own defaults.
+			Limits: &agwclient.ExpRunLimits{MaxCostUSD: r.plan.Limits.MaxCostUSD, MaxTokens: r.plan.Limits.MaxTokens,
+				MaxDuration: r.plan.Limits.MaxDuration},
 		},
 	}
 	for attempt := 0; ; attempt++ {
@@ -634,9 +640,11 @@ func (r *expRunner) waitEnd(ctx context.Context, chatID string) (status, reason 
 		case lim.MaxCostUSD > 0 && c.Cost >= lim.MaxCostUSD:
 			r.abort(ctx, chatID)
 			return "limit_cost", fmt.Sprintf("cost reached %.4f USD", c.Cost), det, nil
-		case lim.MaxTokens > 0 && c.Tokens.Total >= lim.MaxTokens:
+		case lim.MaxTokens > 0 && c.Tokens.Input+c.Tokens.Output >= lim.MaxTokens:
+			// #206: input + output without cache reads, the gateway's counter (X3.3).
 			r.abort(ctx, chatID)
-			return "limit_tokens", fmt.Sprintf("tokens reached %d", c.Tokens.Total), det, nil
+			return "limit_tokens", fmt.Sprintf("tokens reached %d (input + output without cache reads; cache reads %d)",
+				c.Tokens.Input+c.Tokens.Output, c.Tokens.CacheRead), det, nil
 		case maxDur > 0 && !now.Before(deadline):
 			r.abort(ctx, chatID)
 			return "limit_duration", fmt.Sprintf("duration reached %s", roundDuration(now.Sub(startedAt))), det, nil
@@ -651,8 +659,8 @@ func (r *expRunner) waitEnd(ctx context.Context, chatID string) (status, reason 
 			}
 		}
 		if now.Sub(lastBeat) >= r.heartbeat {
-			fmt.Fprintf(r.errw, "run still going: %s, tokens %d, %s\n", roundDuration(now.Sub(startedAt)),
-				c.Tokens.Total, fmtCost(c.Cost))
+			fmt.Fprintf(r.errw, "run still going: %s, tokens %d (+%d cache reads), %s\n", roundDuration(now.Sub(startedAt)),
+				c.Tokens.Input+c.Tokens.Output, c.Tokens.CacheRead, fmtCost(c.Cost))
 			lastBeat = now
 		}
 		select {
