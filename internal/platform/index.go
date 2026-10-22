@@ -57,10 +57,54 @@ func CLIIndex() string {
 	return b.String()
 }
 
+// apiPathNote completes the line of an operation in the REST index (#210): Body names the JSON fields where the
+// OpenAPI description names none (the backend reads the body itself) or where the gateway allows fewer, Tool
+// names the tool whose parameters the fields come from (a test keeps both equal), Note is a short hint of the
+// gateway for the path. The key is "METHOD /path" in the spelling of the OpenAPI description.
+type apiPathNote struct{ Body, Tool, Note string }
+
+var apiPathNotes = map[string]apiPathNote{
+	"POST /train/config": {
+		Body: "provider*, architecture*, category*, dataset_id*, train_config*, export_config", Tool: "create_training",
+		Note: "train_config values are numbers, true/false, null or short text of letters, digits and _.,:/+-; options from GET /train/config/{provider}/{architecture}"},
+	"PUT /train/config":           {Body: "container_id*, dataset_id*, train_config*, export_config*"},
+	"POST /train/config/download": {Body: "provider*, architecture*, train_config*"},
+	"DELETE /train/template":      {Body: "provider*, architecture*"},
+	"POST /train/containers/{train_container_id}/clone": {
+		Body: "train_config*", Tool: "clone_training", Note: "the complete configuration of the copy; nothing else is accepted"},
+	"PATCH /datasets/{dataset_id}":                 {Body: "name*", Tool: "rename_dataset", Note: "the gateway allows only name"},
+	"PATCH /train/containers/{train_container_id}": {Body: "none (the gateway allows no field)"},
+	"PATCH /models/{model_id}": {
+		Note: "sets every field: a field left out becomes null (tensor metadata included); send all fields with their current values"},
+	"GET /train/containers/{train_container_id}": {
+		Note: "answers HTTP 500 on this platform; read GET /train/containers instead"},
+}
+
+// APIPathBody is the body text of the note for an operation; ok is false without a note.
+func APIPathBody(method, path string) (string, bool) {
+	n, ok := apiPathNotes[strings.ToUpper(method)+" "+path]
+	return n.Body, ok
+}
+
+func init() {
+	toolParamInfo = func(tool, param string) (string, string, bool) {
+		t, ok := Lookup(tool)
+		if !ok {
+			return "", "", false
+		}
+		for _, p := range t.Params {
+			if p.Name == param {
+				return p.Type, p.Desc, true
+			}
+		}
+		return "", "", false
+	}
+}
+
 // Limits of the REST operation index: the text comes from the platform and goes into the system
 // prompt, so it is masked and bounded.
 const (
-	apiIndexLine     = 240
+	apiIndexLine     = 320
 	apiIndexMax      = 16 << 10
 	apiIndexBodyMax  = 2 << 20
 	apiIndexRetry    = 60 * time.Second
