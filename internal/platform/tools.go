@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"path"
 	"regexp"
@@ -108,6 +109,11 @@ type Args map[string]any
 
 var segRe = regexp.MustCompile(`^[A-Za-z0-9_\-.:~ ]+$`)
 
+// integral reports whether f is a finite whole number within +-2^53 (exactly representable).
+func integral(f float64) bool {
+	return !math.IsNaN(f) && !math.IsInf(f, 0) && f == math.Trunc(f) && math.Abs(f) <= 1<<53
+}
+
 func (a Args) int(name string) (int64, bool, error) {
 	v, ok := a[name]
 	if !ok || v == nil {
@@ -117,11 +123,16 @@ func (a Args) int(name string) (int64, bool, error) {
 	case json.Number:
 		n, err := x.Int64()
 		if err != nil {
-			return 0, false, fmt.Errorf("%s must be an integer", name)
+			// 70.0 and 7e1 are whole numbers too (same as the float64 branch)
+			f, ferr := x.Float64()
+			if ferr != nil || !integral(f) {
+				return 0, false, fmt.Errorf("%s must be an integer", name)
+			}
+			return int64(f), true, nil
 		}
 		return n, true, nil
 	case float64:
-		if x != float64(int64(x)) {
+		if !integral(x) {
 			return 0, false, fmt.Errorf("%s must be an integer", name)
 		}
 		return int64(x), true, nil
