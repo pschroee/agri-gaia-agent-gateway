@@ -59,6 +59,13 @@ type Rule struct {
 	IDs      []string `json:"ids,omitempty"`
 }
 
+// RuleNeedsIDs reports whether a rule for the action covers a call only when it names objects:
+// update, delete and run always name an object in the route table, so a rule without ids for them
+// covers nothing (see the comment on Rule). Experiment material uses it to reject such rules (#207).
+func RuleNeedsIDs(action string) bool {
+	return action == Update || action == Delete || action == Run
+}
+
 // Delegation holds a chat's delegated rights.
 type Delegation struct {
 	Rules     []Rule     `json:"rules"`

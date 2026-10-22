@@ -159,7 +159,7 @@ func loadManifests(dir string) ([]Manifest, error) {
 	return out, nil
 }
 
-func validateTask(t Task, p *Plan, fixtures map[string]bool) []Problem {
+func validateTask(t Task, p *Plan, fixtures map[string]Manifest) []Problem {
 	where := "task " + t.ID
 	if where == "task " {
 		where = "task"
@@ -191,12 +191,105 @@ func validateTask(t Task, p *Plan, fixtures map[string]bool) []Problem {
 		add("delegation is invalid: %v", err)
 	}
 	for _, id := range t.Fixtures {
-		if !fixtures[id] {
+		m, ok := fixtures[id]
+		if !ok {
 			add("fixture %q has no manifest in fixtures/", id)
+			continue
 		}
+		// The runner seeds the fixture for every cell of the plan (#207); a manifest limited to other cells
+		// would leave a run without its starting point.
+		for _, c := range p.Cells {
+			if !inCell(m, c.ID) {
+				add("fixture %q is not seeded in cell %s (cells of its manifest)", id, c.ID)
+			}
+		}
+	}
+	if t.Delegation != nil {
+		out = append(out, validateRules(t, where, fixtures)...)
 	}
 	out = append(out, validateCheck(t.Check, where)...)
 	return out
+}
+
+// inCell reports whether the manifest belongs to a cell; no cells means every cell (X9.1).
+func inCell(m Manifest, cell string) bool {
+	return len(ForCell([]Manifest{m}, cell)) == 1
+}
+
+// FixtureRef is the prefix of an identifier in a rule that names the object of a fixture of the task:
+// "fixture:<manifest id>". The runner replaces it by the object identifier once the fixture exists (#207).
+const FixtureRef = "fixture:"
+
+// fixtureResource maps the kind of a manifest to the resource of a rule.
+var fixtureResource = map[string]string{KindDataset: delegation.Dataset, KindDatasetFile: delegation.Dataset, KindModel: delegation.Model}
+
+// validateRules checks the rules of a task against its fixtures: a write rule needs ids (else it
+// covers nothing), and a fixture: reference needs a listed fixture of the matching kind.
+func validateRules(t Task, where string, fixtures map[string]Manifest) []Problem {
+	var out []Problem
+	add := func(format string, a ...any) { out = append(out, Problem{where, fmt.Sprintf(format, a...)}) }
+	rules, _ := t.Delegation["rules"].([]any)
+	for i, raw := range rules {
+		r, _ := raw.(map[string]any)
+		action, _ := r["action"].(string)
+		resource, _ := r["resource"].(string)
+		ids, _ := r["ids"].([]any)
+		if len(ids) == 0 && delegation.RuleNeedsIDs(action) {
+			add("rule %d (%s %s) has no ids and covers no call: %s always names an object; use ids [\"fixture:<id>\"], [\"own\"], [\"*\"] or an identifier",
+				i+1, action, resource, action)
+		}
+		for _, v := range ids {
+			ref, _ := v.(string)
+			if !strings.HasPrefix(ref, FixtureRef) {
+				continue
+			}
+			id := strings.TrimPrefix(ref, FixtureRef)
+			listed := false
+			for _, f := range t.Fixtures {
+				listed = listed || f == id
+			}
+			m, known := fixtures[id]
+			switch {
+			case !listed || !known:
+				add("rule %d names fixture %q, which the task does not list", i+1, id)
+			case fixtureResource[m.Kind] != resource:
+				add("rule %d names fixture %q of kind %s for resource %s", i+1, id, m.Kind, resource)
+			}
+		}
+	}
+	return out
+}
+
+// ResolveFixtureRefs replaces every "fixture:<id>" in the ids of the rules by the object identifier
+// of that fixture (objects maps manifest id to object id). Other identifiers stay as they are. The
+// task's own map is not changed. A reference without an object is an error (#207).
+func ResolveFixtureRefs(del map[string]any, objects map[string]string) (json.RawMessage, error) {
+	raw, err := json.Marshal(del)
+	if err != nil {
+		return nil, err
+	}
+	var copyOf map[string]any
+	if err := json.Unmarshal(raw, &copyOf); err != nil {
+		return nil, err
+	}
+	rules, _ := copyOf["rules"].([]any)
+	for _, rr := range rules {
+		r, _ := rr.(map[string]any)
+		ids, _ := r["ids"].([]any)
+		for j, v := range ids {
+			ref, _ := v.(string)
+			if !strings.HasPrefix(ref, FixtureRef) {
+				continue
+			}
+			id := strings.TrimPrefix(ref, FixtureRef)
+			obj, ok := objects[id]
+			if !ok || obj == "" {
+				return nil, fmt.Errorf("fixture %q has no object", id)
+			}
+			ids[j] = obj
+		}
+	}
+	return json.Marshal(copyOf)
 }
 
 func validateCheck(c CheckSpec, where string) []Problem {
