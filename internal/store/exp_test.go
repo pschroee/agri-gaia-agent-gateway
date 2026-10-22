@@ -152,3 +152,40 @@ func TestSupersedeKeepsOldRun(t *testing.T) {
 		t.Fatalf("unknown attempt: %v", err)
 	}
 }
+
+// #213: only runs that are going, not superseded and without a limit reason are checked by the gateway.
+func TestExpOpenRunChats(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	mk := func(key string) string {
+		c, err := s.CreateChat(ctx, NewChat{Title: key, Model: "m", Variant: "api",
+			Experiment: &Experiment{Protection: "none", Cell: "c", Run: key}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.StartExpRun(ctx, ExpRun{ID: key, Key: key, Plan: "p", Cell: "c", Task: "t", Rep: 1, ChatID: c.ID, Model: "m"}); err != nil {
+			t.Fatal(err)
+		}
+		return c.ID
+	}
+	open1 := mk("p/c/t/1")
+	ended := mk("p/c/t/2")
+	if err := s.EndExpRun(ctx, "p/c/t/2", ExpRunEnd{Status: ExpDone}); err != nil {
+		t.Fatal(err)
+	}
+	old := mk("p/c/t/3")
+	if err := s.SupersedeExpRun(ctx, "p/c/t/3", "p/c/t/3b"); err != nil {
+		t.Fatal(err)
+	}
+	limited := mk("p/c/t/4")
+	if ok, err := s.SetExperimentLimit(ctx, limited, "tokens"); err != nil || !ok {
+		t.Fatalf("set limit: %v %v", ok, err)
+	}
+	ids, err := s.ExpOpenRunChats(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ids) != 1 || ids[0] != open1 {
+		t.Fatalf("open run chats: %v (ended %s, superseded %s, limited %s)", ids, ended, old, limited)
+	}
+}
