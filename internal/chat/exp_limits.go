@@ -83,7 +83,7 @@ func (m *Manager) experimentLimit(chatID string) error {
 	if exp.Limit != "" {
 		return fmt.Errorf("experiment run limit reached: %s", exp.Limit)
 	}
-	if d := m.opt.ExpMaxDuration; d > 0 && !created.IsZero() && time.Since(created) >= d {
+	if d := m.expDurationLimit(exp); d > 0 && !created.IsZero() && time.Since(created) >= d {
 		return m.hitExperimentLimit(ctx, chatID, ExpLimitDuration)
 	}
 	cost, tokens, err := m.st.ChatLLMUsage(ctx, chatID)
@@ -92,13 +92,39 @@ func (m *Manager) experimentLimit(chatID string) error {
 		slog.Error("experiment run usage not readable", "chat", chatID, "error", err)
 		return nil
 	}
-	if lim := m.opt.ExpMaxCostUSD; lim > 0 && cost >= lim {
+	if lim := m.expCostLimit(exp); lim > 0 && cost >= lim {
 		return m.hitExperimentLimit(ctx, chatID, ExpLimitCost)
 	}
-	if lim := m.opt.ExpMaxTokens; lim > 0 && tokens >= lim {
+	// tokens are input + output without cache reads (X3.3, #206)
+	if lim := m.expTokenLimit(exp); lim > 0 && tokens >= lim {
 		return m.hitExperimentLimit(ctx, chatID, ExpLimitTokens)
 	}
 	return nil
+}
+
+// expCostLimit, expTokenLimit and expDurationLimit give the limit of the run's profile (#206), else the gateway's
+// default from AGW_EXP_MAX_*.
+func (m *Manager) expCostLimit(exp *store.Experiment) float64 {
+	if exp.Limits != nil && exp.Limits.MaxCostUSD > 0 {
+		return exp.Limits.MaxCostUSD
+	}
+	return m.opt.ExpMaxCostUSD
+}
+
+func (m *Manager) expTokenLimit(exp *store.Experiment) int64 {
+	if exp.Limits != nil && exp.Limits.MaxTokens > 0 {
+		return exp.Limits.MaxTokens
+	}
+	return m.opt.ExpMaxTokens
+}
+
+func (m *Manager) expDurationLimit(exp *store.Experiment) time.Duration {
+	if exp.Limits != nil && exp.Limits.MaxDuration != "" {
+		if d, err := time.ParseDuration(exp.Limits.MaxDuration); err == nil && d > 0 {
+			return d
+		}
+	}
+	return m.opt.ExpMaxDuration
 }
 
 // hitExperimentLimit records the reason at the chat and aborts it (X3.5). The first reason wins; a second call

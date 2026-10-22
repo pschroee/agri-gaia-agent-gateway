@@ -137,6 +137,15 @@ type Experiment struct {
 	// which is on for experiment slots.
 	Trace string `json:"trace,omitempty"`
 	Limit string `json:"limit,omitempty"`
+	// Limits: the run's limits from the plan (#206); zero values mean the gateway's defaults (AGW_EXP_MAX_*).
+	Limits *RunLimits `json:"limits,omitempty"`
+}
+
+// RunLimits are the limits of one experiment run (#206). Tokens are input + output without cache reads (X3.3).
+type RunLimits struct {
+	MaxCostUSD  float64 `json:"max_cost_usd"`
+	MaxTokens   int64   `json:"max_tokens"`
+	MaxDuration string  `json:"max_duration"` // Go duration, e.g. "5m"; empty: the gateway's default
 }
 
 type NewChat struct {
