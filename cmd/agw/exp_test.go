@@ -1074,3 +1074,67 @@ func TestMainPlanRunsWithMatchingLock(t *testing.T) {
 		t.Fatalf("runs: %d", len(api.starts))
 	}
 }
+
+// tokenHook gives every chat the token counts of a finished run (#206).
+func tokenHook(tok agwclient.Tokens) func(string, agwclient.ChatDetail) agwclient.ChatDetail {
+	return func(_ string, det agwclient.ChatDetail) agwclient.ChatDetail {
+		det.Chat.Tokens = tok
+		return det
+	}
+}
+
+// #206: cache reads do not count against max_tokens (X3.3: input + output without cache reads).
+func TestRunTokenLimitIgnoresCacheReads(t *testing.T) {
+	api := newFakeExpAPI()
+	api.detailHook = tokenHook(agwclient.Tokens{Input: 200, Output: 100, CacheRead: 90000, Total: 90300})
+	r, out, errw := newTestRunner(t, api)
+	r.plan.Limits.MaxTokens = 30000
+	if err := r.run(context.Background()); err != nil {
+		t.Fatalf("run: %v (%s)", err, errw.String())
+	}
+	for _, end := range api.ends {
+		if end.Status != "done" {
+			t.Fatalf("run ended %q (%s), want done", end.Status, end.EndReason)
+		}
+	}
+	if !strings.Contains(out.String(), "tokens 300 (+90000 cache reads)") {
+		t.Fatalf("both numbers missing in the run line: %s", out.String())
+	}
+}
+
+// #206: uncached input + output end the run at the limit; the text names both numbers.
+func TestRunTokenLimitCountsUncached(t *testing.T) {
+	api := newFakeExpAPI()
+	api.detailHook = tokenHook(agwclient.Tokens{Input: 25000, Output: 6000, CacheRead: 1234, Total: 32234})
+	r, _, _ := newTestRunner(t, api)
+	r.plan.Limits.MaxTokens = 30000
+	if err := r.run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(api.ends) == 0 || api.ends[0].Status != "limit_tokens" {
+		t.Fatalf("ends: %+v", api.ends)
+	}
+	if reason := api.ends[0].EndReason; !strings.Contains(reason, "31000") || !strings.Contains(reason, "cache reads 1234") {
+		t.Fatalf("reason: %s", reason)
+	}
+}
+
+// #206: the plan's run limits go to the gateway with the chat.
+func TestRunSendsLimitsWithChat(t *testing.T) {
+	api := newFakeExpAPI()
+	r, out, _ := newTestRunner(t, api)
+	r.plan.Limits.MaxCostUSD, r.plan.Limits.MaxTokens, r.plan.Limits.MaxDuration = 0.5, 40000, "7m"
+	if err := r.run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(api.creates) == 0 {
+		t.Fatal("no chat created")
+	}
+	got := api.creates[0].Experiment.Limits
+	if got == nil || got.MaxCostUSD != 0.5 || got.MaxTokens != 40000 || got.MaxDuration != "7m" {
+		t.Fatalf("limits sent: %+v", got)
+	}
+	if !strings.Contains(out.String(), "run limits sent to the gateway: 0.5 USD, 40000 tokens (input + output without cache reads), 7m") {
+		t.Fatalf("start line missing: %s", out.String())
+	}
+}
