@@ -18,9 +18,11 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 	"unicode"
 
@@ -36,7 +38,12 @@ const exitRejected = 3
 // exitUsage: wrong usage, or a request the gateway refused (issue #175).
 const exitUsage = 2
 
+// ignoreSIGPIPE keeps the CLI alive when the reader of a pipe (`| head -3`) closes it early: without it the first
+// write after that kills the process before it reports its exit code (#202, found live on `agw-platform nope 2>&1 | head -3`).
+func ignoreSIGPIPE() { signal.Ignore(syscall.SIGPIPE) }
+
 func main() {
+	ignoreSIGPIPE()
 	socket := os.Getenv("AGW_SOCKET")
 	if socket == "" {
 		socket = defaultSocket
