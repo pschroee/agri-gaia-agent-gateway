@@ -83,6 +83,7 @@ func (m *Manager) Record(c llmproxy.Call) {
 		slog.Error("model call not stored", "chat", c.ChatID, "err", err)
 		return
 	}
+	m.checkExperimentAfterCall(c.ChatID) // #213
 	m.publish(c.ChatID, Event{Kind: "llm_call", Data: rec})
 	m.publishChat(ctx, c.ChatID)
 }
