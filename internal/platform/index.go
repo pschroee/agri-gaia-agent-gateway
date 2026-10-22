@@ -66,7 +66,9 @@ type apiPathNote struct{ Body, Tool, Note string }
 var apiPathNotes = map[string]apiPathNote{
 	"POST /train/config": {
 		Body: "provider*, architecture*, category*, dataset_id*, train_config*, export_config", Tool: "create_training",
-		Note: "train_config values are numbers, true/false, null or short text of letters, digits and _.,:/+-; options from GET /train/config/{provider}/{architecture}"},
+		Note: "train_config values are numbers, true/false, null or short text of letters, digits and _.,:/+-; options from GET /train/config/{provider}/{architecture}. " +
+			"Always send the key export_config: without it the platform answers HTTP 500; null gives model.pt without tensor metadata, so send the export settings " +
+			"(img-size H x W of train_config): {\"model_type\":\"pytorch\",\"input_names\":[],\"output_names\":[],\"input_shapes\":[[1,3,H,W]],\"input_types\":[\"float32\"],\"verbose\":false,\"dynamo\":false,\"opset_version\":18}"},
 	"PUT /train/config":           {Body: "container_id*, dataset_id*, train_config*, export_config*"},
 	"POST /train/config/download": {Body: "provider*, architecture*, train_config*"},
 	"DELETE /train/template":      {Body: "provider*, architecture*"},
@@ -106,7 +108,7 @@ func init() {
 // Limits of the REST operation index: the text comes from the platform and goes into the system
 // prompt, so it is masked and bounded.
 const (
-	apiIndexLine     = 320
+	apiIndexLine     = 640
 	apiIndexMax      = 16 << 10
 	apiIndexBodyMax  = 2 << 20
 	apiIndexRetry    = 60 * time.Second

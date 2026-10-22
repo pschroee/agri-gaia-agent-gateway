@@ -235,3 +235,26 @@ func TestAPIPathNoteModelFromTraining(t *testing.T) {
 		t.Errorf("line %q", l)
 	}
 }
+
+// The platform answers HTTP 500 to POST /train/config without the key export_config (live run, 22.10.2026): the index line
+// says so, gives the export settings and is not cut off by the line limit.
+func TestIndexLineTrainConfigNamesExportConfig(t *testing.T) {
+	raw, err := os.ReadFile("testdata/openapi-2026-10-21.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	idx, err := APIIndexFrom(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l := lineOf(idx, "POST /train/config")
+	for _, want := range []string{"Always send the key export_config", "HTTP 500", `"input_shapes":[[1,3,H,W]]`, `"opset_version":18}`} {
+		if !strings.Contains(l, want) {
+			t.Errorf("POST /train/config lacks %q: %q", want, l)
+		}
+	}
+	if strings.HasSuffix(l, "…") {
+		t.Errorf("line is cut off: %q", l)
+	}
+	t.Logf("api index: %d bytes", len(idx))
+}
