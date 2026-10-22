@@ -10,8 +10,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/signal"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -93,5 +95,12 @@ func TestUsageErrorReports(t *testing.T) {
 	defer mu.Unlock()
 	if got != 1 {
 		t.Fatalf("reports: %d", got)
+	}
+}
+
+func TestIgnoreSIGPIPE(t *testing.T) {
+	ignoreSIGPIPE()
+	if !signal.Ignored(syscall.SIGPIPE) {
+		t.Fatal("SIGPIPE is not ignored")
 	}
 }
