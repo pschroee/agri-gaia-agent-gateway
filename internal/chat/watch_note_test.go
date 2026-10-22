@@ -71,15 +71,17 @@ func TestWatchedStepAnswerWithoutAPromise(t *testing.T) {
 		t.Fatalf("the interactive plan's step does not wait for its job: %+v", steps[0])
 	}
 	if strings.Contains(res.Note, "wakes you") {
-		t.Fatalf("an interactive plan must not promise a wake-up: %+v", res)
+		t.Fatalf("an interactive plan must not promise a wake-up of a resting chat: %+v", res)
 	}
-	if !strings.Contains(res.Note, "keep an eye on it yourself") || !strings.Contains(res.Note, steps[0].WatchJob) {
-		t.Fatalf("the answer does not tell the agent what to do instead: %+v", res)
+	if strings.Contains(res.Note, "keep an eye") || !strings.Contains(res.Note, "end your turn") ||
+		!strings.Contains(res.Note, "while this chat is open") || !strings.Contains(res.Note, steps[0].WatchJob) {
+		t.Fatalf("the answer does not tell the agent to end its turn: %+v", res)
 	}
 }
 
-// A-E2.2: a job outside a plan is observed for the cards only — no note, no promise, no wake-up.
-func TestJobOutsidePlanAnswerHasNoNote(t *testing.T) {
+// #212 (was A-E2.2: no note): a job outside a plan is observed for the cards, and the answer says the gateway
+// tells the agent when it ends while the chat is open (no promise to wake a resting chat).
+func TestJobOutsidePlanAnswerHasNote(t *testing.T) {
 	e := setup(t)
 	ctx := context.Background()
 	newFakeJobs(t, e, "/tasks/7")
@@ -92,12 +94,12 @@ func TestJobOutsidePlanAnswerHasNoNote(t *testing.T) {
 	if res.Status != "ok" {
 		t.Fatalf("call: %+v", res)
 	}
-	if res.Note != "" {
-		t.Fatalf("a job outside a plan must not promise anything: %+v", res)
-	}
 	jobs, err := e.m.Jobs(ctx, c.ID)
 	if err != nil || len(jobs) != 1 {
 		t.Fatalf("the job is not observed for the cards: %+v %v", jobs, err)
+	}
+	if !strings.Contains(res.Note, jobs[0].ID) || !strings.Contains(res.Note, "while this chat is open") || strings.Contains(res.Note, "wakes you") {
+		t.Fatalf("the note of a job outside a plan: %+v", res)
 	}
 }
 

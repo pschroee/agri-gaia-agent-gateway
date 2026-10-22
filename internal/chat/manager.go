@@ -379,6 +379,9 @@ type Manager struct {
 	// inst: installed checks of packages grants per chat (issue #175).
 	instMu sync.Mutex
 	inst   map[string]*instState
+
+	// obsReads spaces equal reads of an observed platform job (#212).
+	obsReads observedReads
 }
 
 func NewManager(st *store.Store, p *pool.Pool[Agent], cat *config.Catalog, blobs Blobs, broker *artifacts.Broker, opt Options) *Manager {
@@ -2583,10 +2586,27 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 			Decision: platform.DecisionDeniedFixed, Reason: "trial_unavailable", Rule: rule, WithinDelegation: within,
 			ApprovalID: approvalID, ApprovalDecision: approvalBy, PlanStep: planStep(step)}, nil
 	}
+	// A read of a job the gateway observes for this chat gets a note and waits its turn (#212); the wait is not
+	// part of the duration of the call.
+	obsJob, observed := "", false
+	if step == nil && claim == nil {
+		obsJob, observed = m.observedRead(ctx, chatID, req)
+	}
+	var waitErr error
+	if observed {
+		waitErr = m.spaceObservedRead(ctx, chatID, obsJob, req)
+	}
 	// Duration of the round trip to the platform (token exchange included), without the approval's waiting time.
 	t0 := time.Now()
-	res, err = m.platformDo(ctx, chatID, req)
+	if waitErr != nil {
+		err = waitErr
+	} else {
+		res, err = m.platformDo(ctx, chatID, req)
+	}
 	took := time.Since(t0)
+	if observed && err == nil {
+		res.Note = joinNote(res.Note, fmt.Sprintf(observedReadNote, obsJob))
+	}
 	stepFinished = true
 	// nil step: nothing to record. A step that waits for an observed platform job from here on says so in
 	// the answer (A-E2, D2.1): the gateway watches the job and wakes the agent, so the agent ends its turn
@@ -2594,10 +2614,12 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 	if jobID := m.planFinish(ctx, chatID, step, access, req, res, err); jobID != "" && step != nil {
 		res.Note = m.watchNote(ctx, step, jobID)
 	}
-	jobID := ""
+	jobID, outsideKind := "", ""
 	if step == nil && err == nil {
 		// No plan step: a started job is only observed for the cards (A-E2.2, no note, no wake-up).
-		jobID = m.recordJobOutsidePlan(ctx, chatID, access, req, res)
+		var jobKind string
+		jobID, jobKind = m.recordJobOutsidePlan(ctx, chatID, access, req, res)
+		outsideKind = jobKind
 	}
 	// A model taken over from a training keeps its origin on every path that creates it (issue #211).
 	if err == nil {
@@ -2608,6 +2630,11 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 	// The outcome of a call of a search's trial: after the job of a started run is observed, so that the trial can
 	// name it (issue #168). A nil claim does nothing.
 	m.searchFinish(ctx, chatID, claim, access, req, res, err, jobID)
+	// A job outside a plan tells the agent that the gateway watches it and will say when it ends (#212); the trials
+	// of a search have notes of their own.
+	if jobID != "" && claim == nil && watch.AnnouncedOutsidePlan(outsideKind) && !isTrialJob(jobID) {
+		res.Note = joinNote(res.Note, fmt.Sprintf(outsidePlanNote, jobID))
+	}
 	// A call that stops a job (own code C-E4): the job records the agent as the one who stopped it, and the
 	// user's own route does the same in StopJob.
 	m.stopJobByTheAgent(ctx, chatID, req, res)

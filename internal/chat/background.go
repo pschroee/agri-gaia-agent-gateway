@@ -491,12 +491,27 @@ func (m *Manager) StopBackground(ctx context.Context, chatID, id string) (store.
 	return ba.StopBackground(ctx, chatID, id, "user")
 }
 
+// hasRunningJob: does the gateway observe a platform job of this chat that has not ended? Such a job keeps the chat
+// awake like a background task, so that the note about its end reaches the agent (#212).
+func (m *Manager) hasRunningJob(chatID string) bool {
+	jobs, err := m.st.ChatWatchJobs(context.Background(), chatID)
+	if err != nil {
+		return false
+	}
+	for _, j := range jobs {
+		if j.State == store.JobRunning {
+			return true
+		}
+	}
+	return false
+}
+
 // keepAliveForBackground: should the idle timer postpone idling because tasks are running? Only up
 // to Options.BgKeepAlive after the user's last action (Review 3, M1: wake-ups do not extend the
 // postponement); after that the chat idles and the tasks end.
 func (m *Manager) keepAliveForBackground(chatID string, l *live) (time.Duration, bool) {
 	c, err := m.st.GetChat(context.Background(), chatID)
-	if err != nil || c.BackgroundRunning == 0 {
+	if err != nil || (c.BackgroundRunning == 0 && !m.hasRunningJob(chatID)) {
 		return 0, false
 	}
 	m.mu.Lock()
