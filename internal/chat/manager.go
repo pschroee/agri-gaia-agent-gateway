@@ -2599,6 +2599,12 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 		// No plan step: a started job is only observed for the cards (A-E2.2, no note, no wake-up).
 		jobID = m.recordJobOutsidePlan(ctx, chatID, access, req, res)
 	}
+	// A model taken over from a training keeps its origin on every path that creates it (issue #211).
+	if err == nil {
+		if note := m.recordModelFromTraining(ctx, chatID, req, res); note != "" {
+			res.Note = joinNote(res.Note, note)
+		}
+	}
 	// The outcome of a call of a search's trial: after the job of a started run is observed, so that the trial can
 	// name it (issue #168). A nil claim does nothing.
 	m.searchFinish(ctx, chatID, claim, access, req, res, err, jobID)
