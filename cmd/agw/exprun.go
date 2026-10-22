@@ -424,6 +424,10 @@ func (r *expRunner) runAll(ctx context.Context, counts map[string]int) error {
 		}
 		existing = expLatestByKey(runs)
 	}
+	// #214: say up front how many runs ended in an earlier start of this plan and are not run again.
+	if ended := r.endedBefore(existing); ended > 0 {
+		fmt.Fprintf(r.out, "plan %s: %d of %d runs ended before and are skipped\n", r.planName, ended, len(r.order))
+	}
 	executed, skipped := 0, 0
 	for _, pr := range r.order {
 		if err := ctx.Err(); err != nil {
@@ -452,7 +456,22 @@ func (r *expRunner) runAll(ctx context.Context, counts map[string]int) error {
 	fmt.Fprintf(r.out, "%d runs: %d executed, %d skipped, %d done, %d error, %d aborted, %d limits\n",
 		len(r.order), executed, skipped, counts["done"], counts["error"], counts["aborted"],
 		counts["limit_cost"]+counts["limit_tokens"]+counts["limit_duration"])
+	if skipped > 0 {
+		fmt.Fprintf(r.out, "%d runs had ended before; a plan runs every run once. To run them again, copy the plan "+
+			"under a new file name (the plan id is the file name).\n", skipped)
+	}
 	return nil
+}
+
+// endedBefore counts the runs of the plan whose latest attempt is over: runOne skips them (X1.5).
+func (r *expRunner) endedBefore(existing map[string]agwclient.ExpRun) int {
+	n := 0
+	for _, pr := range r.order {
+		if prev, ok := existing[pr.Key]; ok && prev.Status != expStarted {
+			n++
+		}
+	}
+	return n
 }
 
 type expOutcome struct {
@@ -472,7 +491,7 @@ func (r *expRunner) runOne(ctx context.Context, pr expPlannedRun, prev agwclient
 		return expOutcome{}, fmt.Errorf("cell %q is not loaded", pr.Cell)
 	}
 	if hasPrev && prev.Status != expStarted {
-		fmt.Fprintf(r.out, "run %s skipped (%s)\n", pr.Key, prev.Status)
+		fmt.Fprintf(r.out, "run %s skipped (already ended in plan %s as %s)\n", pr.Key, r.planName, prev.Status)
 		return expOutcome{status: prev.Status, skipped: true}, nil
 	}
 	// #161: the plan-wide limits are checked against what the plan has consumed so far, before the
