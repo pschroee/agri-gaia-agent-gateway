@@ -228,3 +228,10 @@ func TestIndexSizeWithBodies(t *testing.T) {
 		t.Error("index truncated")
 	}
 }
+
+func TestAPIPathNoteModelFromTraining(t *testing.T) {
+	l := lineOf(digestOf(t, ""), "GET /train/containers/{train_container_id}/model")
+	if !strings.Contains(l, " · gateway: creates a NEW model on every call") {
+		t.Errorf("line %q", l)
+	}
+}
