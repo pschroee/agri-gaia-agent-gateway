@@ -422,7 +422,8 @@ func run() error {
 	p.Start(poolCtx)
 	// Chats in the trash past AGW_TRASH_RETENTION_DAYS are deleted for good (off by default; issue #76).
 	go m.RunTrashRetention(poolCtx)
-	go m.RunInternetGrants(poolCtx) // limits of internet grants, byte counts (issue #175)
+	go m.RunInternetGrants(poolCtx)   // limits of internet grants, byte counts (issue #175)
+	go m.RunExperimentLimits(poolCtx) // run limits between model calls (#213)
 	// A-E3: the endurance loop of autonomous plans. It renews the login of plan owners ahead of time and
 	// continues their plans when a login comes back. Without a login through the platform (AGW_AUTH_MODE
 	// != oidc) there is no session to keep, and the loop says so and returns.

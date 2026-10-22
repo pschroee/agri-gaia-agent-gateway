@@ -66,15 +66,57 @@ func (m *Manager) invalidateChatGate(chatID string) {
 // every other chat to the model-cost budget of its autonomous plan (A-E1, D1.9).
 func (m *Manager) chatBudget(chatID string) error {
 	if _, exp, _ := m.chatGate(chatID); exp != nil {
-		return m.experimentLimit(chatID)
+		return m.experimentLimit(chatID, "before_call")
 	}
 	return m.planBudget(chatID)
 }
 
-// experimentLimit enforces the limits of an experiment run before a model call is forwarded (X3.2–X3.5). The
-// order is duration, cost, tokens; on the first hit the reason is stored at the chat and the chat is aborted.
-// Checked before the call: a single call may take the run over the limit, and that is reported as it is.
-func (m *Manager) experimentLimit(chatID string) error {
+// expLimitTick is the interval at which the gateway checks the open experiment runs (#213).
+const expLimitTick = 2 * time.Second
+
+// checkExperimentAfterCall checks the limits right after a model call was recorded, so that a call that takes
+// the run over a limit ends it at once, whether or not another call follows (#213).
+func (m *Manager) checkExperimentAfterCall(chatID string) {
+	if _, exp, _ := m.chatGate(chatID); exp == nil {
+		return
+	}
+	m.invalidateChatGate(chatID)
+	_ = m.experimentLimit(chatID, "after_call")
+}
+
+// RunExperimentLimits checks the open experiment runs every expLimitTick, so that the duration limit also
+// holds between model calls (#213). It returns when ctx ends.
+func (m *Manager) RunExperimentLimits(ctx context.Context) {
+	t := time.NewTicker(expLimitTick)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		m.checkOpenExperiments(ctx)
+	}
+}
+
+// checkOpenExperiments checks the limits of every run that is still going (#213).
+func (m *Manager) checkOpenExperiments(ctx context.Context) {
+	ids, err := m.st.ExpOpenRunChats(ctx)
+	if err != nil {
+		slog.Warn("open experiment runs not readable", "error", err)
+		return
+	}
+	for _, id := range ids {
+		m.invalidateChatGate(id)
+		_ = m.experimentLimit(id, "tick")
+	}
+}
+
+// experimentLimit enforces the limits of an experiment run (X3.2–X3.5): before a model call is forwarded, right
+// after one was recorded and every expLimitTick (#213); at names the check in the log. The order is duration,
+// cost, tokens; on the first hit the reason is stored at the chat and the chat is aborted. A single call may
+// take the run over the limit, and that is reported as it is.
+func (m *Manager) experimentLimit(chatID, at string) error {
 	ctx := context.Background()
 	_, exp, created := m.chatGate(chatID)
 	if exp == nil {
@@ -84,7 +126,7 @@ func (m *Manager) experimentLimit(chatID string) error {
 		return fmt.Errorf("experiment run limit reached: %s", exp.Limit)
 	}
 	if d := m.expDurationLimit(exp); d > 0 && !created.IsZero() && time.Since(created) >= d {
-		return m.hitExperimentLimit(ctx, chatID, ExpLimitDuration)
+		return m.hitExperimentLimit(ctx, chatID, at, ExpLimitDuration)
 	}
 	cost, tokens, err := m.st.ChatLLMUsage(ctx, chatID)
 	if err != nil {
@@ -93,11 +135,11 @@ func (m *Manager) experimentLimit(chatID string) error {
 		return nil
 	}
 	if lim := m.expCostLimit(exp); lim > 0 && cost >= lim {
-		return m.hitExperimentLimit(ctx, chatID, ExpLimitCost)
+		return m.hitExperimentLimit(ctx, chatID, at, ExpLimitCost)
 	}
 	// tokens are input + output without cache reads (X3.3, #206)
 	if lim := m.expTokenLimit(exp); lim > 0 && tokens >= lim {
-		return m.hitExperimentLimit(ctx, chatID, ExpLimitTokens)
+		return m.hitExperimentLimit(ctx, chatID, at, ExpLimitTokens)
 	}
 	return nil
 }
@@ -129,7 +171,7 @@ func (m *Manager) expDurationLimit(exp *store.Experiment) time.Duration {
 
 // hitExperimentLimit records the reason at the chat and aborts it (X3.5). The first reason wins; a second call
 // after the abort reports the stored one.
-func (m *Manager) hitExperimentLimit(ctx context.Context, chatID, reason string) error {
+func (m *Manager) hitExperimentLimit(ctx context.Context, chatID, at, reason string) error {
 	ok, err := m.st.SetExperimentLimit(ctx, chatID, reason)
 	switch {
 	case err != nil:
@@ -137,7 +179,7 @@ func (m *Manager) hitExperimentLimit(ctx context.Context, chatID, reason string)
 	case ok:
 		m.invalidateChatGate(chatID)
 		m.publishChat(ctx, chatID)
-		slog.Info("experiment run limit reached", "chat", chatID, "limit", reason)
+		slog.Info("experiment run limit reached", "chat", chatID, "limit", reason, "at", at)
 		go func() {
 			actx, cancel := context.WithTimeout(context.Background(), callTimeout)
 			defer cancel()

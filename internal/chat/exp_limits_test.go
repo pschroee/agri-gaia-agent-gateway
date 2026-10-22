@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"agw/internal/config"
+	"agw/internal/llmproxy"
 	"agw/internal/store"
 )
 
@@ -96,7 +98,7 @@ func TestLimitNotForNormalChats(t *testing.T) {
 	if err := e.m.chatBudget(c.ID); err != nil {
 		t.Fatalf("a product chat must not be held to the run limits: %v", err)
 	}
-	if err := e.m.experimentLimit(c.ID); err != nil {
+	if err := e.m.experimentLimit(c.ID, "before_call"); err != nil {
 		t.Fatalf("experimentLimit on a product chat: %v", err)
 	}
 }
@@ -238,5 +240,100 @@ func TestCreateChatRejectsBadLimits(t *testing.T) {
 		if !errors.Is(err, ErrInvalid) {
 			t.Fatalf("limits %+v: want ErrInvalid, got %v", l, err)
 		}
+	}
+}
+
+// recordRunCall hands a finished model call to Record, as the proxy does.
+func recordRunCall(e *env, chatID string, input, output int64) {
+	e.m.Record(llmproxy.Call{ChatID: chatID, SlotID: "s", SourceIP: "10.0.0.2", Model: "deepseek/deepseek-flash",
+		Status: 200, Usage: config.Usage{Input: input, Output: output}, StartedAt: time.Now()})
+}
+
+// #213: a call that takes the run over the limit ends it at once, without a further call.
+func TestLimitAfterCallSetsReason(t *testing.T) {
+	e := setup(t)
+	allowExperiment(e)
+	e.m.opt.ExpMaxCostUSD, e.m.opt.ExpMaxTokens, e.m.opt.ExpMaxDuration = 0, 0, 0
+	c := createLimited(t, e, &store.RunLimits{MaxTokens: 500})
+	recordRunCall(e, c.ID, 400, 200)
+	got, _ := e.st.GetChat(context.Background(), c.ID)
+	if got.Experiment == nil || got.Experiment.Limit != ExpLimitTokens {
+		t.Fatalf("stored limit after the call: %+v", got.Experiment)
+	}
+}
+
+func TestLimitAfterCallBelowLimit(t *testing.T) {
+	e := setup(t)
+	allowExperiment(e)
+	e.m.opt.ExpMaxCostUSD, e.m.opt.ExpMaxTokens, e.m.opt.ExpMaxDuration = 0, 0, 0
+	c := createLimited(t, e, &store.RunLimits{MaxTokens: 500})
+	recordRunCall(e, c.ID, 200, 100)
+	got, _ := e.st.GetChat(context.Background(), c.ID)
+	if got.Experiment == nil || got.Experiment.Limit != "" {
+		t.Fatalf("no limit expected: %+v", got.Experiment)
+	}
+}
+
+func TestLimitAfterCallProductChat(t *testing.T) {
+	e := setup(t)
+	e.m.opt.ExpMaxCostUSD, e.m.opt.ExpMaxTokens, e.m.opt.ExpMaxDuration = 0.01, 10, time.Microsecond
+	c, err := e.m.Create(context.Background(), NewChat{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recordRunCall(e, c.ID, 5000, 5000)
+	got, _ := e.st.GetChat(context.Background(), c.ID)
+	if got.Experiment != nil {
+		t.Fatalf("a product chat has no profile: %+v", got.Experiment)
+	}
+}
+
+func startRunOf(t *testing.T, e *env, chatID, key string) {
+	t.Helper()
+	if err := e.st.StartExpRun(context.Background(), store.ExpRun{ID: key, Key: key, Plan: "p", Cell: "c", Task: "t",
+		Rep: 1, ChatID: chatID, Model: "m"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// #213: the tick ends a run by duration although no model call is under way.
+func TestLimitTickEndsDuration(t *testing.T) {
+	e := setup(t)
+	allowExperiment(e)
+	e.m.opt.ExpMaxCostUSD, e.m.opt.ExpMaxTokens, e.m.opt.ExpMaxDuration = 0, 0, 0
+	c := createLimited(t, e, &store.RunLimits{MaxDuration: "1ms"})
+	startRunOf(t, e, c.ID, "p/c/t/1")
+	time.Sleep(5 * time.Millisecond)
+	e.m.checkOpenExperiments(context.Background())
+	got, _ := e.st.GetChat(context.Background(), c.ID)
+	if got.Experiment == nil || got.Experiment.Limit != ExpLimitDuration {
+		t.Fatalf("stored limit after the tick: %+v", got.Experiment)
+	}
+}
+
+// #213: an ended run and a run that already carries a reason are left alone (the first reason wins).
+func TestLimitTickSkipsEnded(t *testing.T) {
+	e := setup(t)
+	allowExperiment(e)
+	e.m.opt.ExpMaxCostUSD, e.m.opt.ExpMaxTokens, e.m.opt.ExpMaxDuration = 0, 0, 0
+	ended := createLimited(t, e, &store.RunLimits{MaxDuration: "1ms"})
+	startRunOf(t, e, ended.ID, "p/c/t/1")
+	if err := e.st.EndExpRun(context.Background(), "p/c/t/1", store.ExpRunEnd{Status: store.ExpDone}); err != nil {
+		t.Fatal(err)
+	}
+	withReason := createLimited(t, e, &store.RunLimits{MaxDuration: "1ms"})
+	startRunOf(t, e, withReason.ID, "p/c/t/2")
+	if _, err := e.st.SetExperimentLimit(context.Background(), withReason.ID, ExpLimitCost); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(5 * time.Millisecond)
+	e.m.checkOpenExperiments(context.Background())
+	got, _ := e.st.GetChat(context.Background(), ended.ID)
+	if got.Experiment == nil || got.Experiment.Limit != "" {
+		t.Fatalf("an ended run must not get a reason: %+v", got.Experiment)
+	}
+	got, _ = e.st.GetChat(context.Background(), withReason.ID)
+	if got.Experiment == nil || got.Experiment.Limit != ExpLimitCost {
+		t.Fatalf("the first reason must stay: %+v", got.Experiment)
 	}
 }

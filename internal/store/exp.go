@@ -255,3 +255,24 @@ func pgErrUnique(err error) bool {
 	var pe *pgconn.PgError
 	return errors.As(err, &pe) && pe.Code == "23505"
 }
+
+// ExpOpenRunChats gives the chats of the runs that are still going and whose chat carries no limit reason yet
+// (#213): the runs the gateway checks every few seconds.
+func (s *Store) ExpOpenRunChats(ctx context.Context) ([]string, error) {
+	rows, err := s.pool.Query(ctx, `SELECT r.chat_id::text FROM exp_runs r JOIN chats c ON c.id = r.chat_id
+		WHERE r.status='started' AND r.superseded_by=''
+		AND c.experiment IS NOT NULL AND COALESCE(c.experiment->>'limit','')=''`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}

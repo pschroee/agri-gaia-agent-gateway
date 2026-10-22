@@ -65,7 +65,9 @@ type expRunOptions struct {
 	DryRun   bool
 
 	// Poll, StartGrace and Heartbeat are the waiting intervals (tests shorten them).
-	Poll       time.Duration
+	Poll time.Duration
+	// LimitGrace is how long a limit may stay exceeded before the runner reports that the gateway did not enforce it (#213).
+	LimitGrace time.Duration
 	StartGrace time.Duration
 	Heartbeat  time.Duration
 	Now        func() time.Time
@@ -104,6 +106,7 @@ type expRunner struct {
 	seed       int64
 	dryRun     bool
 	poll       time.Duration
+	limitGrace time.Duration
 	startGrace time.Duration
 	heartbeat  time.Duration
 	now        func() time.Time
@@ -176,13 +179,16 @@ func newExpRunner(api expAPI, opts expRunOptions, out, errw io.Writer) (*expRunn
 		order:    expRunOrder(name, tasks, cells, k, seed),
 		taskByID: map[string]exp.Task{}, cellByID: map[string]exp.Cell{}, models: map[string]string{},
 		k: k, seed: seed, dryRun: opts.DryRun,
-		poll: opts.Poll, startGrace: opts.StartGrace, heartbeat: opts.Heartbeat,
+		poll: opts.Poll, limitGrace: opts.LimitGrace, startGrace: opts.StartGrace, heartbeat: opts.Heartbeat,
 		now:           opts.Now,
 		noSlotWait:    30 * time.Second,
 		noSlotRetries: 20,
 	}
 	if r.poll <= 0 {
 		r.poll = 10 * time.Second
+	}
+	if r.limitGrace <= 0 {
+		r.limitGrace = 30 * time.Second
 	}
 	if r.startGrace <= 0 {
 		r.startGrace = 2 * time.Minute
@@ -627,7 +633,8 @@ func (r *expRunner) createChat(ctx context.Context, pr expPlannedRun, task exp.T
 }
 
 // waitEnd follows a run until it is over (X1.8): the chat is quiet, no observed job is running, and
-// no limit of the plan applies. It returns the end reason of the chat's last turn, the reason text
+// no limit of the plan applies. The gateway is the only place that enforces a run limit (#213); the runner
+// reads its reason and only reports a limit the gateway did not enforce. It returns the end reason of the chat's last turn, the reason text
 // and the last view of the chat.
 func (r *expRunner) waitEnd(ctx context.Context, chatID string) (status, reason string, det agwclient.ChatDetail, err error) {
 	maxDur, err := time.ParseDuration(r.plan.Limits.MaxDuration)
@@ -637,6 +644,7 @@ func (r *expRunner) waitEnd(ctx context.Context, chatID string) (status, reason 
 	startedAt := r.now()
 	deadline := startedAt.Add(maxDur)
 	seenActive := false
+	var overSince time.Time
 	lastBeat := startedAt
 	for {
 		det, err = r.api.Chat(ctx, chatID)
@@ -658,25 +666,25 @@ func (r *expRunner) waitEnd(ctx context.Context, chatID string) (status, reason 
 			seenActive = true
 		}
 		now := r.now()
-		// X3: the gateway enforces the run's limits itself (chatBudget, #128) and stores the reason at
-		// the chat; that reason is the run's end.
+		// X3, #213: the gateway enforces the run's limits and stores the reason at the chat; that reason is
+		// the run's end. The runner never sets a limit_* status itself.
 		if c.Experiment != nil && c.Experiment.Limit != "" {
 			return expLimitStatus(c.Experiment.Limit),
-				"the gateway ended the run at its limit (" + c.Experiment.Limit + ")", det, nil
+				expLimitReason(c.Experiment.Limit, r.plan.Limits, c, now.Sub(startedAt)), det, nil
 		}
-		lim := r.plan.Limits
-		switch {
-		case lim.MaxCostUSD > 0 && c.Cost >= lim.MaxCostUSD:
-			r.abort(ctx, chatID)
-			return "limit_cost", fmt.Sprintf("cost reached %.4f USD", c.Cost), det, nil
-		case lim.MaxTokens > 0 && c.Tokens.Input+c.Tokens.Output >= lim.MaxTokens:
-			// #206: input + output without cache reads, the gateway's counter (X3.3).
-			r.abort(ctx, chatID)
-			return "limit_tokens", fmt.Sprintf("tokens reached %d (input + output without cache reads; cache reads %d)",
-				c.Tokens.Input+c.Tokens.Output, c.Tokens.CacheRead), det, nil
-		case maxDur > 0 && !now.Before(deadline):
-			r.abort(ctx, chatID)
-			return "limit_duration", fmt.Sprintf("duration reached %s", roundDuration(now.Sub(startedAt))), det, nil
+		// Watch only: a limit that stays exceeded although the gateway should have ended the run is a defect
+		// of the gateway, reported as an error and not as a limit.
+		if kind, value, bound := expOverLimit(r.plan.Limits, c, now, startedAt, deadline); kind != "" {
+			if overSince.IsZero() {
+				overSince = now
+			}
+			if now.Sub(overSince) >= r.limitGrace {
+				r.abort(ctx, chatID)
+				return "error", fmt.Sprintf("run limit not enforced by the gateway: %s %s of %s after %s",
+					kind, value, bound, roundDuration(r.limitGrace)), det, nil
+			}
+		} else {
+			overSince = time.Time{}
 		}
 		if !c.Running && !c.Resuming && c.Queued == 0 && open == 0 {
 			if seenActive {
@@ -701,6 +709,34 @@ func (r *expRunner) waitEnd(ctx context.Context, chatID string) (status, reason 
 }
 
 // expLimitStatus maps the reason the gateway stored (X3.5) to the run's status.
+// expOverLimit names the first limit of the plan that the chat has passed (kind, measured value, limit), else "".
+func expOverLimit(lim exp.Limits, c agwclient.Chat, now, startedAt, deadline time.Time) (kind, value, bound string) {
+	switch {
+	case lim.MaxCostUSD > 0 && c.Cost >= lim.MaxCostUSD:
+		return "cost", fmt.Sprintf("%.4f USD", c.Cost), fmt.Sprintf("%.4f USD", lim.MaxCostUSD)
+	case lim.MaxTokens > 0 && c.Tokens.Input+c.Tokens.Output >= lim.MaxTokens:
+		return "tokens", fmt.Sprintf("%d", c.Tokens.Input+c.Tokens.Output), fmt.Sprintf("%d", lim.MaxTokens)
+	case !deadline.Equal(startedAt) && !now.Before(deadline):
+		return "duration", roundDuration(now.Sub(startedAt)), lim.MaxDuration
+	}
+	return "", "", ""
+}
+
+// expLimitReason is the uniform end reason of a run the gateway ended at a limit (#213).
+func expLimitReason(limit string, lim exp.Limits, c agwclient.Chat, elapsed time.Duration) string {
+	bound := ""
+	switch limit {
+	case "cost":
+		bound = fmt.Sprintf("%.4f USD", lim.MaxCostUSD)
+	case "tokens":
+		bound = fmt.Sprintf("%d tokens", lim.MaxTokens)
+	case "duration":
+		bound = lim.MaxDuration
+	}
+	return fmt.Sprintf("gateway limit %s (%s): tokens %d (+%d cache reads), %.4f USD, %s", limit, bound,
+		c.Tokens.Input+c.Tokens.Output, c.Tokens.CacheRead, c.Cost, roundDuration(elapsed))
+}
+
 func expLimitStatus(limit string) string {
 	switch limit {
 	case "cost":

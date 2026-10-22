@@ -429,6 +429,8 @@ type fakeExpAPI struct {
 	models     []agwclient.Model
 	createErr  error
 	detailHook func(id string, det agwclient.ChatDetail) agwclient.ChatDetail
+	// pollHook changes what the n-th read of a chat returns (#213).
+	pollHook   func(id string, n int, det agwclient.ChatDetail) agwclient.ChatDetail
 	jobsScript func(chat string, poll int) []agwclient.WatchJob
 	// X8.5: the environment the runner checks a main plan against; a chat created by this fake gets a
 	// slot with the image IDs of envSlot.
@@ -524,6 +526,9 @@ func (f *fakeExpAPI) CreateChat(_ context.Context, req agwclient.CreateChatReque
 
 func (f *fakeExpAPI) Chat(_ context.Context, id string) (agwclient.ChatDetail, error) {
 	f.chatPolled[id]++
+	if f.pollHook != nil {
+		return f.pollHook(id, f.chatPolled[id], f.chats[id]), nil
+	}
 	return f.chats[id], nil
 }
 
@@ -1151,10 +1156,14 @@ func TestRunTokenLimitIgnoresCacheReads(t *testing.T) {
 	}
 }
 
-// #206: uncached input + output end the run at the limit; the text names both numbers.
-func TestRunTokenLimitCountsUncached(t *testing.T) {
+// #213: the gateway's reason is the run's end, with the uniform wording; the runner sets no limit itself.
+func TestRunTakesGatewayLimit(t *testing.T) {
 	api := newFakeExpAPI()
-	api.detailHook = tokenHook(agwclient.Tokens{Input: 25000, Output: 6000, CacheRead: 1234, Total: 32234})
+	api.detailHook = func(_ string, det agwclient.ChatDetail) agwclient.ChatDetail {
+		det.Chat.Tokens = agwclient.Tokens{Input: 25000, Output: 6000, CacheRead: 1234, Total: 32234}
+		det.Chat.Experiment = &agwclient.ExperimentProfile{Limit: "tokens"}
+		return det
+	}
 	r, _, _ := newTestRunner(t, api)
 	r.plan.Limits.MaxTokens = 30000
 	if err := r.run(context.Background()); err != nil {
@@ -1163,8 +1172,79 @@ func TestRunTokenLimitCountsUncached(t *testing.T) {
 	if len(api.ends) == 0 || api.ends[0].Status != "limit_tokens" {
 		t.Fatalf("ends: %+v", api.ends)
 	}
-	if reason := api.ends[0].EndReason; !strings.Contains(reason, "31000") || !strings.Contains(reason, "cache reads 1234") {
+	if reason := api.ends[0].EndReason; !strings.HasPrefix(reason, "gateway limit tokens (30000 tokens): tokens 31000 (+1234 cache reads)") {
 		t.Fatalf("reason: %s", reason)
+	}
+	if len(api.aborted) != 0 {
+		t.Fatalf("the runner must not abort a run the gateway ended: %v", api.aborted)
+	}
+}
+
+// overLimitHook gives a running chat that is over the token limit and never quiet.
+func overLimitHook(_ string, det agwclient.ChatDetail) agwclient.ChatDetail {
+	det.Chat.Running = true
+	det.Chat.Tokens = agwclient.Tokens{Input: 25000, Output: 6000}
+	return det
+}
+
+// #213: the gateway sets the reason at the second read; the runner does not end the run before.
+func TestRunDoesNotEnforceLimitItself(t *testing.T) {
+	api := newFakeExpAPI()
+	api.detailHook = overLimitHook
+	api.pollHook = func(_ string, n int, det agwclient.ChatDetail) agwclient.ChatDetail {
+		if n >= 2 {
+			det.Chat.Experiment = &agwclient.ExperimentProfile{Limit: "tokens"}
+		}
+		return det
+	}
+	r, _, _ := newTestRunner(t, api)
+	r.plan.Limits.MaxTokens = 30000
+	r.limitGrace = time.Hour
+	if err := r.run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(api.ends) == 0 || api.ends[0].Status != "limit_tokens" || !strings.HasPrefix(api.ends[0].EndReason, "gateway limit tokens") {
+		t.Fatalf("ends: %+v", api.ends)
+	}
+	if len(api.aborted) != 0 {
+		t.Fatalf("aborted by the runner: %v", api.aborted)
+	}
+}
+
+// #213: a limit that stays exceeded without a reason from the gateway is an error, not a limit.
+func TestRunReportsUnenforcedLimit(t *testing.T) {
+	api := newFakeExpAPI()
+	api.detailHook = overLimitHook
+	r, _, _ := newTestRunner(t, api)
+	r.plan.Limits.MaxTokens = 30000
+	r.limitGrace = time.Millisecond
+	if err := r.run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(api.ends) == 0 || api.ends[0].Status != "error" ||
+		!strings.HasPrefix(api.ends[0].EndReason, "run limit not enforced by the gateway: tokens 31000 of 30000") {
+		t.Fatalf("ends: %+v", api.ends)
+	}
+	if len(api.aborted) == 0 {
+		t.Fatal("the run was not aborted")
+	}
+}
+
+func TestRunUnenforcedDuration(t *testing.T) {
+	api := newFakeExpAPI()
+	api.detailHook = func(_ string, det agwclient.ChatDetail) agwclient.ChatDetail {
+		det.Chat.Running = true
+		return det
+	}
+	r, _, _ := newTestRunner(t, api)
+	r.plan.Limits.MaxDuration = "1ms"
+	r.limitGrace = time.Millisecond
+	if err := r.run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(api.ends) == 0 || api.ends[0].Status != "error" ||
+		!strings.Contains(api.ends[0].EndReason, "run limit not enforced by the gateway: duration") {
+		t.Fatalf("ends: %+v", api.ends)
 	}
 }
 
