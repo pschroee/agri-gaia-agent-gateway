@@ -103,45 +103,13 @@ func (a *app) expToken() {
 	}
 }
 
-// fixtureRow is one recorded fixture as the API returns it. FieldSHA256 carries hashes only, never
-// contents (X4.7).
-type fixtureRow struct {
-	ID           string            `json:"id"`
-	Plan         string            `json:"plan"`
-	Cell         string            `json:"cell"`
-	ManifestID   string            `json:"manifest_id"`
-	Kind         string            `json:"kind"`
-	Owner        string            `json:"owner"`
-	ObjectID     string            `json:"object_id"`
-	FieldSHA256  map[string]string `json:"field_sha256"`
-	CreatedAt    time.Time         `json:"created_at"`
-	RemovedAt    *time.Time        `json:"removed_at,omitempty"`
-	RemoveResult string            `json:"remove_result,omitempty"`
-}
-
-type fixtureAnswer struct {
-	Fixtures   []fixtureRow  `json:"fixtures"`
-	Removed    int           `json:"removed"`
-	Checked    int           `json:"checked"`
-	State      string        `json:"state"`
-	Error      string        `json:"error"`
-	Mismatches []mismatchRow `json:"mismatches"`
-}
-
-// mismatchRow is one finding of a fixture_mismatch. It carries hashes, not values (X4.7).
-type mismatchRow struct {
-	ManifestID string             `json:"manifest_id"`
-	Kind       string             `json:"kind"`
-	ObjectID   string             `json:"object_id"`
-	Missing    bool               `json:"missing"`
-	Fields     []fieldMismatchRow `json:"fields"`
-}
-
-type fieldMismatchRow struct {
-	Field    string `json:"field"`
-	Expected string `json:"expected"`
-	Actual   string `json:"actual"`
-}
+// The fixture answers are shared with the runner and live in agwclient (#207).
+type (
+	fixtureRow       = agwclient.ExpFixture
+	fixtureAnswer    = agwclient.ExpFixtureAnswer
+	mismatchRow      = agwclient.ExpMismatch
+	fieldMismatchRow = agwclient.ExpFieldMismatch
+)
 
 // cmdExpSeed creates the fixtures of one cell from the material and prints their identifiers and
 // checksums. On fixture_mismatch it prints the differing fields (hash only) and exits 1 (X4.4).

@@ -152,7 +152,7 @@ func (s *fakeStore) AddFixture(_ context.Context, f store.NewFixture) (store.Fix
 	s.n++
 	row := store.Fixture{
 		ID: fmt.Sprintf("row-%d", s.n), Plan: f.Plan, Cell: f.Cell, ManifestID: f.ManifestID,
-		Kind: f.Kind, Owner: f.Owner, ObjectID: f.ObjectID, FieldSHA256: f.FieldSHA256, CreatedAt: time.Now(),
+		Kind: f.Kind, Owner: f.Owner, ObjectID: f.ObjectID, FieldSHA256: f.FieldSHA256, CreatedAt: time.Now(), RunKey: f.RunKey,
 	}
 	if row.FieldSHA256 == nil {
 		row.FieldSHA256 = map[string]string{}
@@ -214,7 +214,7 @@ func newFixtures(log *slog.Logger) (*Fixtures, *fakeCaller, *fakeCaller, *fakeSt
 
 func TestSeedCreatesAndVerifies(t *testing.T) {
 	f, primary, secondary, st := newFixtures(nil)
-	rows, err := f.Seed(context.Background(), "pilot", "cli-none-no-main", fixtureSpecs())
+	rows, err := f.Seed(context.Background(), "pilot", "cli-none-no-main", "", fixtureSpecs())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -268,7 +268,7 @@ func TestSeedCreatesAndVerifies(t *testing.T) {
 func TestSeedRefusesUnknownKind(t *testing.T) {
 	f, primary, _, st := newFixtures(nil)
 	spec := FixtureSpec{ID: "x", Kind: "bucket", Owner: OwnerPrimary}
-	if _, err := f.Seed(context.Background(), "pilot", "c1", []FixtureSpec{spec}); err == nil || !strings.Contains(err.Error(), "kind") {
+	if _, err := f.Seed(context.Background(), "pilot", "c1", "", []FixtureSpec{spec}); err == nil || !strings.Contains(err.Error(), "kind") {
 		t.Fatalf("unknown kind: %v", err)
 	}
 	if len(primary.reqs) != 0 || len(st.rows) != 0 {
@@ -280,7 +280,7 @@ func TestSeedRefusesUnknownField(t *testing.T) {
 	f, primary, _, st := newFixtures(nil)
 	spec := fixtureSpecs()[0]
 	spec.Fields["shell"] = "rm -rf /"
-	if _, err := f.Seed(context.Background(), "pilot", "c1", []FixtureSpec{spec}); err == nil || !strings.Contains(err.Error(), "field \"shell\"") {
+	if _, err := f.Seed(context.Background(), "pilot", "c1", "", []FixtureSpec{spec}); err == nil || !strings.Contains(err.Error(), "field \"shell\"") {
 		t.Fatalf("unknown field: %v", err)
 	}
 	if len(primary.reqs) != 0 || len(st.rows) != 0 {
@@ -292,7 +292,7 @@ func TestSeedRefusesUnknownField(t *testing.T) {
 func TestSeedDetectsTruncatedField(t *testing.T) {
 	f, primary, _, _ := newFixtures(nil)
 	primary.truncate = "name"
-	rows, err := f.Seed(context.Background(), "pilot", "c1", fixtureSpecs()[:1])
+	rows, err := f.Seed(context.Background(), "pilot", "c1", "", fixtureSpecs()[:1])
 	var mismatch *MismatchError
 	if !errors.As(err, &mismatch) {
 		t.Fatalf("expected a MismatchError, got %v", err)
@@ -339,7 +339,7 @@ func TestUnseedOnlyRecordedIDs(t *testing.T) {
 func TestVerifyFindsMissingObject(t *testing.T) {
 	f, primary, _, _ := newFixtures(nil)
 	ctx := context.Background()
-	if _, err := f.Seed(ctx, "pilot", "c1", fixtureSpecs()[:1]); err != nil {
+	if _, err := f.Seed(ctx, "pilot", "c1", "", fixtureSpecs()[:1]); err != nil {
 		t.Fatal(err)
 	}
 	delete(primary.objects, "datasets/1") // deleted by a run inside the cell
@@ -355,18 +355,18 @@ func TestVerifyFindsMissingObject(t *testing.T) {
 func TestSeedRefusesLiveFixtures(t *testing.T) {
 	f, _, _, _ := newFixtures(nil)
 	ctx := context.Background()
-	if _, err := f.Seed(ctx, "pilot", "c1", fixtureSpecs()[:1]); err != nil {
+	if _, err := f.Seed(ctx, "pilot", "c1", "", fixtureSpecs()[:1]); err != nil {
 		t.Fatal(err)
 	}
 	// A second seed without an unseed would create a second set with a suffixed name.
-	if _, err := f.Seed(ctx, "pilot", "c1", fixtureSpecs()[:1]); err == nil || !strings.Contains(err.Error(), "unseed") {
+	if _, err := f.Seed(ctx, "pilot", "c1", "", fixtureSpecs()[:1]); err == nil || !strings.Contains(err.Error(), "unseed") {
 		t.Fatalf("second seed: %v", err)
 	}
 	// After the removal a new seed is allowed.
 	if _, err := f.Unseed(ctx, "pilot", "c1"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.Seed(ctx, "pilot", "c1", fixtureSpecs()[:1]); err != nil {
+	if _, err := f.Seed(ctx, "pilot", "c1", "", fixtureSpecs()[:1]); err != nil {
 		t.Fatalf("seed after unseed: %v", err)
 	}
 }
@@ -400,7 +400,7 @@ func TestUnseedEmptyCell(t *testing.T) {
 func TestVerifyDetectsChangedField(t *testing.T) {
 	f, primary, _, _ := newFixtures(nil)
 	ctx := context.Background()
-	if _, err := f.Seed(ctx, "pilot", "c1", fixtureSpecs()[:1]); err != nil {
+	if _, err := f.Seed(ctx, "pilot", "c1", "", fixtureSpecs()[:1]); err != nil {
 		t.Fatal(err)
 	}
 	primary.mu.Lock()
@@ -420,7 +420,7 @@ func TestVerifyDetectsChangedField(t *testing.T) {
 func TestVerifyComparesDescriptionAndMetadata(t *testing.T) {
 	f, primary, _, _ := newFixtures(nil)
 	ctx := context.Background()
-	if _, err := f.Seed(ctx, "pilot", "c1", fixtureSpecs()[:1]); err != nil {
+	if _, err := f.Seed(ctx, "pilot", "c1", "", fixtureSpecs()[:1]); err != nil {
 		t.Fatal(err)
 	}
 	if res, err := f.Verify(ctx, "pilot", "c1"); err != nil {
@@ -465,7 +465,7 @@ func TestVerifySkipsMetadataOnOlderBackend(t *testing.T) {
 	f, primary, _, _ := newFixtures(nil)
 	primary.noMetadataRoute = true
 	ctx := context.Background()
-	if _, err := f.Seed(ctx, "pilot", "c1", fixtureSpecs()[:1]); err != nil {
+	if _, err := f.Seed(ctx, "pilot", "c1", "", fixtureSpecs()[:1]); err != nil {
 		t.Fatalf("seed without the metadata route: %v", err)
 	}
 	if res, err := f.Verify(ctx, "pilot", "c1"); err != nil {
@@ -490,7 +490,7 @@ func TestDatasetFileFoldedIntoDataset(t *testing.T) {
 		Fields: map[string]any{"dataset": "dataset-1", "name": "notes.txt"},
 		Files:  []FixtureFile{{Field: "files", Name: "notes.txt", Data: []byte("placeholder-3")}},
 	})
-	rows, err := f.Seed(ctx, "pilot", "c1", specs)
+	rows, err := f.Seed(ctx, "pilot", "c1", "", specs)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -528,7 +528,7 @@ func TestContentNeverLogged(t *testing.T) {
 	var buf bytes.Buffer
 	log := slog.New(slog.NewTextHandler(&buf, nil))
 	f, _, _, _ := newFixtures(log)
-	if _, err := f.Seed(context.Background(), "pilot", "c1", fixtureSpecs()); err != nil {
+	if _, err := f.Seed(context.Background(), "pilot", "c1", "", fixtureSpecs()); err != nil {
 		t.Fatal(err)
 	}
 	out := buf.String()
@@ -588,5 +588,40 @@ func TestForCellEmptyCellsMeansAll(t *testing.T) {
 	got := ForCell(ms, "c1")
 	if len(got) != 2 || got[0].ID != "a" || got[1].ID != "b" {
 		t.Fatalf("for cell c1: %+v", got)
+	}
+}
+
+// #207: a run gets the fixtures its task names, plus the files of a listed dataset, and nothing else of the cell.
+func TestForTask(t *testing.T) {
+	ms := []Manifest{
+		{ID: "ds-a", Kind: KindDataset},
+		{ID: "ds-b", Kind: KindDataset},
+		{ID: "file-a", Kind: KindDatasetFile, Fields: map[string]FieldValue{"dataset": {Literal: "ds-a"}}},
+		{ID: "file-b", Kind: KindDatasetFile, Fields: map[string]FieldValue{"dataset": {Literal: "ds-b"}}},
+		{ID: "ds-c1", Kind: KindDataset, Cells: []string{"c1"}},
+	}
+	got := ForTask(ms, Task{Fixtures: []string{"ds-a", "ds-c1"}}, "c2")
+	if len(got) != 2 || got[0].ID != "ds-a" || got[1].ID != "file-a" {
+		t.Fatalf("for c2: %+v", got)
+	}
+	got = ForTask(ms, Task{Fixtures: []string{"ds-a", "ds-c1"}}, "c1")
+	if len(got) != 3 || got[2].ID != "ds-c1" {
+		t.Fatalf("for c1: %+v", got)
+	}
+	if got := ForTask(ms, Task{}, "c1"); len(got) != 0 {
+		t.Fatalf("task without fixtures: %+v", got)
+	}
+}
+
+// #207: the run key is recorded with the fixture rows.
+func TestSeedRecordsRunKey(t *testing.T) {
+	ctx := context.Background()
+	f, _, _, st := newFixtures(nil)
+	if _, err := f.Seed(ctx, "pilot", "c1", "pilot/c1/t1/1", fixtureSpecs()[:1]); err != nil {
+		t.Fatal(err)
+	}
+	rows, _ := st.ListFixtures(ctx, "pilot", "c1")
+	if len(rows) == 0 || rows[0].RunKey != "pilot/c1/t1/1" {
+		t.Fatalf("rows: %+v", rows)
 	}
 }

@@ -218,9 +218,9 @@ func Validate(p *Plan, ts []Task, ms []Manifest) []Problem {
 		return []Problem{{"plan", "missing"}}
 	}
 	problems := validatePlan(p)
-	fixtures := make(map[string]bool, len(ms))
+	fixtures := make(map[string]Manifest, len(ms))
 	for _, m := range ms {
-		fixtures[m.ID] = true
+		fixtures[m.ID] = m
 	}
 	for _, t := range ts {
 		problems = append(problems, validateTask(t, p, fixtures)...)

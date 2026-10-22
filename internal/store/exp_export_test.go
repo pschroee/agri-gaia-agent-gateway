@@ -7,6 +7,7 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 )
@@ -119,5 +120,57 @@ func TestExportLLMCallTokens(t *testing.T) {
 	}
 	if cols["tokens_in"] != int64(10) || cols["tokens_out"] != int64(20) || cols["run_id"] == "" {
 		t.Fatalf("tokens: %+v", cols)
+	}
+}
+
+// #207: a fixture seeded for a run belongs to that run only; an older row without run_key still
+// belongs to every run of its cell.
+func TestExportFixturesByRunKey(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	cell := "api-service-none-model-a"
+	keys := []string{"pilot/" + cell + "/t1/1", "pilot/" + cell + "/t1/2"}
+	for i, key := range keys {
+		c, err := s.CreateChat(ctx, NewChat{Title: key, Model: "model-a", Variant: "api",
+			Experiment: &Experiment{Protection: "service", Cell: cell, Run: key}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.StartExpRun(ctx, ExpRun{ID: key, Key: key, Plan: "pilot", Cell: cell, Task: "t1", Rep: i + 1,
+			ChatID: c.ID, Model: "model-a"}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.AddFixture(ctx, NewFixture{Plan: "pilot", Cell: cell, ManifestID: fmt.Sprintf("own-%d", i+1),
+			Kind: "dataset", Owner: FixturePrimary, ObjectID: "1", RunKey: key}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := s.AddFixture(ctx, NewFixture{Plan: "pilot", Cell: cell, ManifestID: "by-hand", Kind: "dataset",
+		Owner: FixturePrimary, ObjectID: "9"}); err != nil {
+		t.Fatal(err)
+	}
+	tbl, err := s.ExportTable(ctx, "pilot", "fixtures")
+	if err != nil {
+		t.Fatal(err)
+	}
+	col := map[string]int{}
+	for i, c := range tbl.Columns {
+		col[c] = i
+	}
+	pairs := map[string]bool{}
+	for _, row := range tbl.Rows {
+		pairs[fmt.Sprintf("%s|%s", row[col["manifest_id"]], row[col["run_id"]])] = true
+	}
+	want := []string{"own-1|" + keys[0], "own-2|" + keys[1], "by-hand|" + keys[0], "by-hand|" + keys[1]}
+	if len(pairs) != len(want) || len(tbl.Rows) != len(want) {
+		t.Fatalf("rows: %v", pairs)
+	}
+	for _, w := range want {
+		if !pairs[w] {
+			t.Fatalf("missing %s in %v", w, pairs)
+		}
+	}
+	if _, ok := col["run_key"]; !ok {
+		t.Fatal("column run_key missing")
 	}
 }
