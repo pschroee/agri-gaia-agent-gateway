@@ -175,13 +175,33 @@ func (s *summarizer) datasetForSplit(id string) (name string, images int, classe
 	return name, images, classes, err
 }
 
+// MsgTrainShareFraction is the answer to a train_share given as a fraction such as 0.7.
+const MsgTrainShareFraction = "train_share is a whole percentage: 50, 60, 70, 80 or 90 (70 means 70 %), not a fraction such as 0.7"
+
+// isFraction reports whether v reads as a number strictly between 0 and 1.
+func isFraction(v any) bool {
+	var f float64
+	var err error
+	switch x := v.(type) {
+	case json.Number:
+		f, err = x.Float64()
+	case float64:
+		f = x
+	case string:
+		f, err = strconv.ParseFloat(strings.TrimSpace(x), 64)
+	default:
+		return false
+	}
+	return err == nil && f > 0 && f < 1
+}
+
 // splitDataset is the tool of R1.1: it creates a training dataset and keeps about a third of the
 // annotated images back for a check.
 var splitDataset = Tool{
 	Name: "split_dataset", CLI: "split-dataset",
 	Desc: "Splits an annotated classification dataset into a training dataset and images that are kept back for a check " +
-		"(70 % of the images per class go into a new dataset, by default named <dataset>-train; the rest is kept back and " +
-		"the gateway alone decides which). Train on the training dataset afterwards: only then can {{tool:assess_model}} measure " +
+		"(train_share is a whole percentage — 50, 60, 70, 80 or 90, default 70 — of the images per class that go into a new " +
+		"dataset, by default named <dataset>-train; the rest is kept back and the gateway alone decides which). Train on the training dataset afterwards: only then can {{tool:assess_model}} measure " +
 		"the model on images it did not see. Needs approval: it creates a dataset and downloads the source, which also " +
 		"syncs its CVAT annotations. The answer names both counts.",
 	Write: true,
@@ -201,6 +221,9 @@ var splitDataset = Tool{
 		name, _, err := a.str("name")
 		if err != nil {
 			return Request{}, err
+		}
+		if isFraction(a["train_share"]) {
+			return Request{}, errors.New(MsgTrainShareFraction)
 		}
 		share, hasShare, err := a.int("train_share")
 		if err != nil {
