@@ -7,6 +7,7 @@ package platform
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -76,13 +77,7 @@ func modelFromTrainingSteps(ctx context.Context, a Args, final Request, do Doer)
 	res, err = do(ctx, final)
 	if err == nil && res.Status == "ok" && res.HTTPStatus >= 200 && res.HTTPStatus < 300 {
 		res = modelSummary(res)
-		// R1.6: the gateway notes where this model came from (which training, which dataset), so that a
-		// later check knows which images the model saw. The agent cannot write this.
-		var dsID int64
-		if n, cerr := tc.DatasetID.Int64(); cerr == nil {
-			dsID = n
-		}
-		notifyModelCreated(ctx, modelIDOf(res), id, dsID)
+		// The origin of the model (R1.6) is recorded by the gateway after the call, on every path that creates one.
 	}
 	return res, "", err
 }
@@ -174,4 +169,28 @@ func init() {
 			Tools[i].Desc = "Returns a training container (read from the list of training containers, because GET /train/containers/{id} fails on the platform)."
 		}
 	}
+}
+
+// TrainingDatasetID reads the dataset a training container was made from out of the platform's list of training
+// containers (the answer that creates the model names none). 0 without an error: the container is listed but
+// names no dataset.
+func TrainingDatasetID(ctx context.Context, do Doer, id int64) (int64, error) {
+	entry, res, _, stop, err := trainingEntry(ctx, do, id)
+	if stop {
+		if err != nil {
+			return 0, err
+		}
+		return 0, errors.New(res.Message)
+	}
+	var tc struct {
+		DatasetID json.Number `json:"dataset_id"`
+	}
+	if err := json.Unmarshal(entry, &tc); err != nil {
+		return 0, err
+	}
+	n, err := tc.DatasetID.Int64()
+	if err != nil {
+		return 0, nil
+	}
+	return n, nil
 }

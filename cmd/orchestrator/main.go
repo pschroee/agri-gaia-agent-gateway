@@ -400,18 +400,6 @@ func run() error {
 		checks.LogCall = func(ctx context.Context, chatID, detail, result string) {
 			m.LogCallBy(ctx, m.SlotOf(chatID), chatID, "platform", "platform", detail, result)
 		}
-		platform.SetOnModelCreated(func(ctx context.Context, chatID string, modelID, trainID, datasetID int64) {
-			seen := []int64{}
-			if datasetID > 0 {
-				seen = append(seen, datasetID)
-			}
-			if err := st.RecordModelOrigin(ctx, store.ModelOrigin{
-				ModelID: modelID, ChatID: chatID, Source: store.OriginTraining,
-				TrainContainerID: trainID, SeenDatasetIDs: seen,
-			}); err != nil {
-				slog.Error("model origin not recorded", "chat", chatID, "model", modelID, "error", err)
-			}
-		})
 		// R2 — a model uploaded from a file of the sandbox keeps its origin when the gateway had handed
 		// that file out of a notebook run of this chat (R2.6): so the check of the file stays the check of
 		// the model, and the approval of an image build names either of them. A file the agent brought

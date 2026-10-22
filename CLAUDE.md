@@ -450,10 +450,10 @@ refer to this repository.
   new dataset), `assess_model` measures afterwards. The rules are in `internal/assess/training.go`
   (`JudgeClassification` is a pure function: verdict, reasons, hints and suggestions come from there and
   nowhere else), the log parsing in `trainlog.go`, the split in `split_dataset.go`.
-- **The gateway alone says what is "seen"** (`model_origins`, written through `platform.OnModelCreated`
-  when a model is created from a training container). The chat of a tool call reaches that callback through
-  `platform.WithChat`, which the socket sets when it runs a tool with steps; a raw call carries no chat and
-  records nothing. Without an origin row every check answers `not measured – origin unknown`.
+- **The gateway alone says what is "seen"** (`model_origins`, written by `Manager.recordModelFromTraining` after
+  every successful `GET /train/containers/{id}/model`, whichever tool, binding or plan step made the call; the dataset
+  comes from a read of the list of training containers, none means no row). Without an origin row every check
+  answers `not measured – origin unknown`.
 - **The agent never names the measured set:** the check downloads the datasets itself (with the user's
   token through `Client.Stream`, temp file, `AGW_ASSESS_DOWNLOAD_MAX_MB`) and decides the split. The report
   carries figures, the mapping and the baseline, never a file name or a SHA-256 of the measured set.

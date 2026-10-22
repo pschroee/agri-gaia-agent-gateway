@@ -396,30 +396,9 @@ func (s *summarizer) modelCheckLine(modelID string) (string, bool) {
 
 // --- where a model came from (R1.6) ---
 
-// OnModelCreated is what the gateway does when a model was created from a training container in a chat
-// (R1.6): it records where the model came from, so that a later check knows which images the model saw.
-// The platform package does not know the store, so main.go wires it.
-type OnModelCreated func(ctx context.Context, chatID string, modelID, trainID, datasetID int64)
-
-var onModelCreated OnModelCreated
-
-// SetOnModelCreated wires the callback that records the origin of a model (main.go). Not wired: no
-// origin is recorded, and every check on such a model answers "origin unknown".
-func SetOnModelCreated(f OnModelCreated) { onModelCreated = f }
-
-// notifyModelCreated reports a model that was created from a training container of this chat.
-func notifyModelCreated(ctx context.Context, modelID, trainID, datasetID int64) {
-	if onModelCreated == nil || modelID <= 0 {
-		return
-	}
-	if chatID := ChatIDFrom(ctx); chatID != "" {
-		onModelCreated(ctx, chatID, modelID, trainID, datasetID)
-	}
-}
-
-// modelIDOf reads the id of the model out of an answer of the platform (the model that was just
+// ModelIDOf reads the id of the model out of an answer of the platform (the model that was just
 // created): modelSummary keeps the platform's answer under "model" and repeats id and name next to it.
-func modelIDOf(res Result) int64 {
+func ModelIDOf(res Result) int64 {
 	var doc struct {
 		ID json.Number `json:"id"`
 	}

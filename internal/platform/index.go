@@ -78,6 +78,8 @@ var apiPathNotes = map[string]apiPathNote{
 		Note: "sets every field: a field left out becomes null (tensor metadata included); send all fields with their current values"},
 	"GET /train/containers/{train_container_id}": {
 		Note: "answers HTTP 500 on this platform; read GET /train/containers instead"},
+	"GET /train/containers/{train_container_id}/model": {
+		Note: "creates a NEW model on every call although it is a GET; take a model over once per training"},
 }
 
 // APIPathBody is the body text of the note for an operation; ok is false without a note.

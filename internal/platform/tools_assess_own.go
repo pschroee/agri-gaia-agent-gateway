@@ -25,7 +25,7 @@ import (
 
 // OnModelUploaded is what the gateway does when a model was uploaded to the platform: if the file came out
 // of a notebook run of the chat, the model keeps that origin, so that a later check of the model names the
-// check of its file. The platform package knows no store, so main.go wires it (like OnModelCreated, R1).
+// check of its file. The platform package knows no store, so main.go wires it (R1).
 type OnModelUploaded func(ctx context.Context, chatID string, modelID int64, sha256 string)
 
 var onModelUploaded OnModelUploaded
@@ -42,7 +42,7 @@ func NotifyModelUploaded(ctx context.Context, chatID string, res Result, uploads
 	if onModelUploaded == nil || len(uploads) == 0 {
 		return
 	}
-	if modelID := modelIDOf(res); modelID > 0 {
+	if modelID := ModelIDOf(res); modelID > 0 {
 		onModelUploaded(ctx, chatID, modelID, uploads[0].SHA256)
 	}
 }
