@@ -51,6 +51,8 @@ type expAPI interface {
 	ExpObjects(ctx context.Context, chatID string) ([]agwclient.ExpObject, error)
 	ExpCall(ctx context.Context, req agwclient.ExpCallRequest) (agwclient.ExpCallResult, error)
 	ExpAbortChat(ctx context.Context, chatID string) error
+	ExpSeed(ctx context.Context, plan, cell, run string, specs []exp.FixtureSpec) (agwclient.ExpFixtureAnswer, int, error)
+	ExpUnseed(ctx context.Context, plan, cell string) (agwclient.ExpFixtureAnswer, error)
 }
 
 // expRunOptions are the switches of agw exp run.
@@ -88,6 +90,7 @@ type expRunner struct {
 	plan      *exp.Plan
 	tasks     []exp.Task
 	manifests []exp.Manifest
+	specsDir  string // the material directory, for the content files of the fixtures
 	planName  string
 	planSHA   string
 	lock      *exp.Lock // set for a main plan (X8.5); nil for a pilot
@@ -169,7 +172,7 @@ func newExpRunner(api expAPI, opts expRunOptions, out, errw io.Writer) (*expRunn
 	name := m.PlanID
 	r := &expRunner{
 		api: api, out: out, errw: errw,
-		plan: p, tasks: tasks, manifests: manifests, planName: name, planSHA: digest, lock: lock,
+		plan: p, tasks: tasks, manifests: manifests, specsDir: dir, planName: name, planSHA: digest, lock: lock,
 		order:    expRunOrder(name, tasks, cells, k, seed),
 		taskByID: map[string]exp.Task{}, cellByID: map[string]exp.Cell{}, models: map[string]string{},
 		k: k, seed: seed, dryRun: opts.DryRun,
@@ -421,7 +424,11 @@ func (r *expRunner) runAll(ctx context.Context, counts map[string]int) error {
 			return err
 		}
 		if r.dryRun {
-			fmt.Fprintf(r.out, "run %s (%s, task %s, rep %d)\n", pr.Key, pr.Cell, pr.Task, pr.Rep)
+			line := fmt.Sprintf("run %s (%s, task %s, rep %d)", pr.Key, pr.Cell, pr.Task, pr.Rep)
+			if ids := r.fixtureIDs(pr); len(ids) > 0 {
+				line += " fixtures: " + strings.Join(ids, ", ")
+			}
+			fmt.Fprintln(r.out, line)
 			continue
 		}
 		prev, hasPrev := existing[pr.Key]
@@ -470,6 +477,28 @@ func (r *expRunner) runOne(ctx context.Context, pr expPlannedRun, prev agwclient
 	id := pr.Key
 	if hasPrev {
 		id = fmt.Sprintf("%s#%d", pr.Key, expAttempt(prev.ID, pr.Key)+1)
+	}
+	// #207: the fixtures of the task are made fresh for every run and removed after it. This happens before the
+	// run exists, so that a failing seed leaves no record and the plan can be started again.
+	objects, release, err := r.seedRun(ctx, pr, id, task)
+	if err != nil {
+		return expOutcome{}, err
+	}
+	out, err := r.execute(ctx, pr, id, prev, hasPrev, task, cell, objects)
+	if rerr := release(); rerr != nil {
+		if err == nil {
+			err = rerr
+		} else {
+			fmt.Fprintf(r.errw, "%v\n", rerr)
+		}
+	}
+	return out, err
+}
+
+// execute runs one attempt from the supersede of an interrupted one to the closed record.
+func (r *expRunner) execute(ctx context.Context, pr expPlannedRun, id string, prev agwclient.ExpRun, hasPrev bool,
+	task exp.Task, cell exp.Cell, objects map[string]string) (expOutcome, error) {
+	if hasPrev {
 		if err := r.api.ExpSupersedeRun(ctx, prev.ID, id); err != nil {
 			return expOutcome{}, fmt.Errorf("%s: supersede the interrupted attempt: %w", pr.Key, err)
 		}
@@ -492,7 +521,7 @@ func (r *expRunner) runOne(ctx context.Context, pr expPlannedRun, prev agwclient
 		return expOutcome{status: status}, nil
 	}
 
-	chat, err := r.createChat(ctx, pr, task, cell, model)
+	chat, err := r.createChat(ctx, pr, task, cell, model, objects)
 	if err != nil {
 		if ctx.Err() != nil {
 			return expOutcome{}, ctx.Err()
@@ -557,8 +586,8 @@ func experimentVariant(binding string) string {
 
 // createChat makes the run's experiment chat. The task text goes with the create request: the
 // experiment key may create and read chats, not post messages (X1.3).
-func (r *expRunner) createChat(ctx context.Context, pr expPlannedRun, task exp.Task, cell exp.Cell, model string) (agwclient.Chat, error) {
-	delegation, err := json.Marshal(task.Delegation)
+func (r *expRunner) createChat(ctx context.Context, pr expPlannedRun, task exp.Task, cell exp.Cell, model string, objects map[string]string) (agwclient.Chat, error) {
+	delegation, err := exp.ResolveFixtureRefs(task.Delegation, objects)
 	if err != nil {
 		return agwclient.Chat{}, fmt.Errorf("delegation: %w", err)
 	}
@@ -793,7 +822,7 @@ func (r *expRunner) createdObjects(ctx context.Context, chatID string) ([]exp.Ob
 // cleanup removes what the run created, in the order of CLAUDE.md (image, training container,
 // model, dataset) and only by identifiers from the provenance register or from the training
 // container ids in the chat's answers. A failure is reported and does not change the run's result;
-// the objects of the fixtures (X4) are removed at the end of a cell, not here.
+// the fixtures (X4) are removed by the runner after each run (#207), not here.
 func (r *expRunner) cleanup(ctx context.Context, chatID string, det agwclient.ChatDetail) {
 	objs, err := r.api.ExpObjects(ctx, chatID)
 	if err != nil {
@@ -914,4 +943,79 @@ func expMaterialDigest(dir string) (string, error) {
 		h.Write([]byte{0})
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// fixtureIDs lists the manifest ids a run seeds.
+func (r *expRunner) fixtureIDs(pr expPlannedRun) []string {
+	task, ok := r.taskByID[pr.Task]
+	if !ok {
+		return nil
+	}
+	var ids []string
+	for _, m := range exp.ForTask(r.manifests, task, pr.Cell) {
+		ids = append(ids, m.ID)
+	}
+	return ids
+}
+
+// seedRun makes the fixtures of a run: remove leftovers of the cell, create the task's fixtures for run id
+// and read them back. It returns the object identifier per manifest and the function that removes the
+// fixtures after the run. A failure is a failure of the environment, not a result of the run (#207).
+func (r *expRunner) seedRun(ctx context.Context, pr expPlannedRun, id string, task exp.Task) (map[string]string, func() error, error) {
+	noop := func() error { return nil }
+	manifests := exp.ForTask(r.manifests, task, pr.Cell)
+	if len(manifests) == 0 {
+		return nil, noop, nil
+	}
+	started := r.now()
+	left, err := r.api.ExpUnseed(ctx, pr.Plan, pr.Cell)
+	if err != nil {
+		return nil, noop, fmt.Errorf("run %s: fixtures of cell %s could not be removed: %w; the plan stops", id, pr.Cell, err)
+	}
+	if left.Removed > 0 {
+		fmt.Fprintf(r.out, "run %s: removed %d leftover fixtures of cell %s\n", id, left.Removed, pr.Cell)
+	}
+	specs, err := exp.Specs(r.specsDir, manifests)
+	if err != nil {
+		return nil, noop, fmt.Errorf("run %s: fixtures of cell %s could not be read: %w", id, pr.Cell, err)
+	}
+	ans, status, err := r.api.ExpSeed(ctx, pr.Plan, pr.Cell, id, specs)
+	if err != nil || status == 409 {
+		// Whatever was created stays recorded by identifier; remove it before stopping.
+		if _, uerr := r.api.ExpUnseed(context.WithoutCancel(ctx), pr.Plan, pr.Cell); uerr != nil {
+			fmt.Fprintf(r.errw, "run %s: removing the partly seeded fixtures failed: %v\n", id, uerr)
+		}
+		if status == 409 {
+			var b strings.Builder
+			for _, m := range ans.Mismatches {
+				if m.Missing {
+					fmt.Fprintf(&b, "\n  %s (%s %s): object is missing", m.ManifestID, m.Kind, m.ObjectID)
+				}
+				for _, f := range m.Fields {
+					fmt.Fprintf(&b, "\n  %s (%s %s): field %s expected sha256 %s, read back %s",
+						m.ManifestID, m.Kind, m.ObjectID, f.Field, f.Expected, f.Actual)
+				}
+			}
+			return nil, noop, fmt.Errorf("run %s: fixtures of cell %s could not be seeded: fixture_mismatch:%s; the plan stops before this run",
+				id, pr.Cell, b.String())
+		}
+		return nil, noop, fmt.Errorf("run %s: fixtures of cell %s could not be seeded: %w; the plan stops before this run", id, pr.Cell, err)
+	}
+	objects := map[string]string{}
+	var names []string
+	for _, f := range ans.Fixtures {
+		objects[f.ManifestID] = f.ObjectID
+		names = append(names, f.ManifestID)
+	}
+	fmt.Fprintf(r.out, "run %s: fixtures %s seeded (%s)\n", id, strings.Join(names, ", "), roundDuration(r.now().Sub(started)))
+	release := func() error {
+		// Also after an interrupt: the fixtures must not outlive the run.
+		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
+		defer cancel()
+		if _, err := r.api.ExpUnseed(rctx, pr.Plan, pr.Cell); err != nil {
+			return fmt.Errorf("run %s: fixtures of cell %s could not be removed: %w; the plan stops", id, pr.Cell, err)
+		}
+		return nil
+	}
+	return objects, release, nil
 }
