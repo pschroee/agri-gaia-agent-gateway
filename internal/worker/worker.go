@@ -265,7 +265,7 @@ func platformNote(ts toolset.Set, apiIndex string) string {
 	}
 	if ts.Has(toolset.API) {
 		if apiIndex != "" {
-			b.WriteString("- Platform API: every operation of the platform's REST API is listed below (method, path, purpose, query parameters with * = required, kind of body); blocked paths are left out. For a single platform action call the path directly with platform_http; do not call GET /_agw/paths first, it returns the same list. The gateway's own paths follow under Gateway paths.\n")
+			b.WriteString("- Platform API: every operation of the platform's REST API is listed below (method, path, purpose, query parameters and JSON body fields with * = required, the gateway's notes on a path); blocked paths are left out. For a single platform action call the path directly with platform_http; do not call GET /_agw/paths first, it returns the same list. The gateway's own paths follow under Gateway paths.\n")
 			b.WriteString(indent(apiIndex))
 		} else {
 			b.WriteString("- Platform API: GET /_agw/paths lists every operation of the platform's REST API, one per line; read it once before your first platform call. The gateway's own paths follow under Gateway paths.\n")
