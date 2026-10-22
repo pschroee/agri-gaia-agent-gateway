@@ -21,7 +21,7 @@ import (
 // ExpFixtures is the fixture service of the experiment infrastructure (X4, issue #129),
 // implemented by *exp.Fixtures.
 type ExpFixtures interface {
-	Seed(ctx context.Context, plan, cell string, specs []exp.FixtureSpec) ([]store.Fixture, error)
+	Seed(ctx context.Context, plan, cell, run string, specs []exp.FixtureSpec) ([]store.Fixture, error)
 	Unseed(ctx context.Context, plan, cell string) (exp.UnseedResult, error)
 	Verify(ctx context.Context, plan, cell string) (exp.VerifyResult, error)
 	List(ctx context.Context, plan, cell string) ([]store.Fixture, error)
@@ -36,6 +36,7 @@ const maxFixtureBody = int64(platform.MaxUploadBytes)*4/3 + 1<<20
 type fixtureRequest struct {
 	Plan     string            `json:"plan"`
 	Cell     string            `json:"cell"`
+	Run      string            `json:"run,omitempty"` // key of the run a seed is made for (#207)
 	Fixtures []exp.FixtureSpec `json:"fixtures,omitempty"`
 }
 
@@ -50,7 +51,7 @@ func (s *Server) expSeed(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusServiceUnavailable, "experiment fixtures are not configured on this instance")
 		return
 	}
-	rows, err := s.ExpFixtures.Seed(r.Context(), req.Plan, req.Cell, req.Fixtures)
+	rows, err := s.ExpFixtures.Seed(r.Context(), req.Plan, req.Cell, req.Run, req.Fixtures)
 	var mismatch *exp.MismatchError
 	if errors.As(err, &mismatch) {
 		// fixture_mismatch: the cell does not start (X4.4); the recorded identifiers let the caller

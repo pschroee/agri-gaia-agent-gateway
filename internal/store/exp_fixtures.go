@@ -46,6 +46,7 @@ type Fixture struct {
 	CreatedAt    time.Time         `json:"created_at"`
 	RemovedAt    *time.Time        `json:"removed_at,omitempty"`
 	RemoveResult string            `json:"remove_result,omitempty"`
+	RunKey       string            `json:"run_key,omitempty"`
 }
 
 // NewFixture is a fixture to record before its object is used.
@@ -57,9 +58,10 @@ type NewFixture struct {
 	Owner       string
 	ObjectID    string
 	FieldSHA256 map[string]string
+	RunKey      string
 }
 
-const fixtureCols = `id::text, plan, cell, manifest_id, kind, owner, object_id, field_sha256, created_at, removed_at, remove_result`
+const fixtureCols = `id::text, plan, cell, manifest_id, kind, owner, object_id, field_sha256, created_at, removed_at, remove_result, run_key`
 
 // AddFixture records a seeded object. It is written before the object is verified, so that a
 // mismatch or a crash still leaves the identifier for a removal by id.
@@ -68,9 +70,9 @@ func (s *Store) AddFixture(ctx context.Context, f NewFixture) (Fixture, error) {
 	if err != nil {
 		return Fixture{}, err
 	}
-	const q = `INSERT INTO exp_fixtures (plan, cell, manifest_id, kind, owner, object_id, field_sha256)
-VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb) RETURNING ` + fixtureCols
-	return scanFixture(s.pool.QueryRow(ctx, q, f.Plan, f.Cell, f.ManifestID, f.Kind, f.Owner, f.ObjectID, string(hashes)))
+	const q = `INSERT INTO exp_fixtures (plan, cell, manifest_id, kind, owner, object_id, field_sha256, run_key)
+VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8) RETURNING ` + fixtureCols
+	return scanFixture(s.pool.QueryRow(ctx, q, f.Plan, f.Cell, f.ManifestID, f.Kind, f.Owner, f.ObjectID, string(hashes), f.RunKey))
 }
 
 // ListFixtures returns the fixtures of a cell in creation order. Removed fixtures are included; a
@@ -116,7 +118,7 @@ func scanFixture(row interface {
 		hashes []byte
 	)
 	if err := row.Scan(&f.ID, &f.Plan, &f.Cell, &f.ManifestID, &f.Kind, &f.Owner, &f.ObjectID,
-		&hashes, &f.CreatedAt, &f.RemovedAt, &f.RemoveResult); err != nil {
+		&hashes, &f.CreatedAt, &f.RemovedAt, &f.RemoveResult, &f.RunKey); err != nil {
 		return Fixture{}, err
 	}
 	if len(hashes) > 0 {

@@ -129,14 +129,15 @@ FROM llm_calls x JOIN plan_chats r ON r.chat_id = x.chat_id ORDER BY x.id`)
   t.created_at, COALESCE(t.abort_reason,'')
 FROM chat_turns t JOIN plan_chats r ON r.chat_id = t.chat_id ORDER BY t.id`)
 	case "fixtures":
-		// X4 records the seeded platform objects per cell. The same set belongs to every run of that cell, so the
-		// export repeats each fixture once per run; the evaluation can group by run.
+		// X4 records the seeded platform objects. A fixture seeded by the runner carries its run_key (#207) and
+		// belongs to that run only; an older row without run_key belongs to the whole cell, so the export repeats
+		// it once per run of the cell.
 		return s.exportQuery(ctx, plan, table,
 			[]string{"run_id", "cell", "task", "rep", "fixture_id", "manifest_id", "kind", "owner", "object_id",
-				"field_sha256", "created_at", "removed_at", "remove_result"},
+				"field_sha256", "created_at", "removed_at", "remove_result", "run_key"},
 			`SELECT r.run_id, r.cell, r.task, r.rep, f.id, f.manifest_id, f.kind, f.owner, f.object_id, f.field_sha256,
-  f.created_at, f.removed_at, f.remove_result
-FROM exp_fixtures f JOIN plan_chats r ON r.cell = f.cell WHERE f.plan = $1 ORDER BY f.created_at, f.id, r.run_id`)
+  f.created_at, f.removed_at, f.remove_result, f.run_key
+FROM exp_fixtures f JOIN plan_chats r ON (f.run_key <> '' AND f.run_key = r.run_id) OR (f.run_key = '' AND r.cell = f.cell) WHERE f.plan = $1 ORDER BY f.created_at, f.id, r.run_id`)
 	case "syscalls":
 		// X6: failed syscalls per execution; the chat assigns them to the run.
 		return s.exportQuery(ctx, plan, table,

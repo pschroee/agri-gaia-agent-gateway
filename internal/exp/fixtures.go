@@ -143,8 +143,9 @@ var modelFormats = map[string]bool{"onnx": true, "pytorch": true, "tensorflow": 
 // Seed creates the objects of the given manifests for one cell, records them by identifier and
 // reads every readable field back. If a read-back deviates, the created rows stay and the returned
 // *MismatchError names the fields; the caller removes them with Unseed before trying again (X4.4,
-// X4.6). No error text contains a field value or a file's content (X4.7).
-func (f *Fixtures) Seed(ctx context.Context, plan, cell string, specs []FixtureSpec) ([]store.Fixture, error) {
+// X4.6). run is the key of the run the objects are seeded for; it stays empty for a hand-made seed of a
+// cell (#207). No error text contains a field value or a file's content (X4.7).
+func (f *Fixtures) Seed(ctx context.Context, plan, cell, run string, specs []FixtureSpec) ([]store.Fixture, error) {
 	if strings.TrimSpace(plan) == "" || strings.TrimSpace(cell) == "" {
 		return nil, errors.New("plan and cell are required")
 	}
@@ -194,7 +195,7 @@ func (f *Fixtures) Seed(ctx context.Context, plan, cell string, specs []FixtureS
 			}
 			row, err := f.Store.AddFixture(ctx, store.NewFixture{
 				Plan: plan, Cell: cell, ManifestID: spec.ID, Kind: spec.Kind, Owner: spec.Owner,
-				ObjectID: parent.ObjectID, FieldSHA256: hashes,
+				ObjectID: parent.ObjectID, FieldSHA256: hashes, RunKey: run,
 			})
 			if err != nil {
 				return rows, err
@@ -202,7 +203,7 @@ func (f *Fixtures) Seed(ctx context.Context, plan, cell string, specs []FixtureS
 			rows = append(rows, row)
 			continue
 		}
-		row, obj, metadataRead, err := f.seedOne(ctx, plan, cell, spec, datasetFiles[spec.ID])
+		row, obj, metadataRead, err := f.seedOne(ctx, plan, cell, run, spec, datasetFiles[spec.ID])
 		if row.ID != "" {
 			rows = append(rows, row)
 			parents[spec.ID] = row
@@ -221,7 +222,7 @@ func (f *Fixtures) Seed(ctx context.Context, plan, cell string, specs []FixtureS
 }
 
 // seedOne creates one object and records it before it is read back.
-func (f *Fixtures) seedOne(ctx context.Context, plan, cell string, spec FixtureSpec, files []FixtureSpec) (store.Fixture, map[string]any, bool, error) {
+func (f *Fixtures) seedOne(ctx context.Context, plan, cell, run string, spec FixtureSpec, files []FixtureSpec) (store.Fixture, map[string]any, bool, error) {
 	c, err := f.caller(spec.Owner)
 	if err != nil {
 		return store.Fixture{}, nil, false, fmt.Errorf("manifest %s: %w", spec.ID, err)
@@ -286,7 +287,7 @@ func (f *Fixtures) seedOne(ctx context.Context, plan, cell string, spec FixtureS
 	}
 	row, err := f.Store.AddFixture(ctx, store.NewFixture{
 		Plan: plan, Cell: cell, ManifestID: spec.ID, Kind: spec.Kind, Owner: spec.Owner,
-		ObjectID: objectID, FieldSHA256: hashes,
+		ObjectID: objectID, FieldSHA256: hashes, RunKey: run,
 	})
 	if err != nil {
 		return store.Fixture{}, nil, false, err
@@ -969,6 +970,23 @@ func ForCell(ms []Manifest, cell string) []Manifest {
 				out = append(out, m)
 				break
 			}
+		}
+	}
+	return out
+}
+
+// ForTask selects, from the manifests of a cell, the fixtures a task names and the dataset_file
+// manifests whose dataset is among them, in the order of ms (#207). Nothing else belongs to a run.
+func ForTask(ms []Manifest, t Task, cell string) []Manifest {
+	listed := map[string]bool{}
+	for _, id := range t.Fixtures {
+		listed[id] = true
+	}
+	var out []Manifest
+	for _, m := range ForCell(ms, cell) {
+		parent, _ := m.Fields["dataset"].Literal.(string)
+		if listed[m.ID] || (m.Kind == KindDatasetFile && listed[parent]) {
+			out = append(out, m)
 		}
 	}
 	return out

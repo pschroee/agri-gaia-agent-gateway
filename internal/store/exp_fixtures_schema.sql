@@ -20,3 +20,6 @@ CREATE TABLE IF NOT EXISTS exp_fixtures (
     remove_result text NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS exp_fixtures_plan_cell ON exp_fixtures (plan, cell);
+
+-- The run a fixture was seeded for (#207). Empty for fixtures seeded by hand per cell.
+ALTER TABLE exp_fixtures ADD COLUMN IF NOT EXISTS run_key text NOT NULL DEFAULT '';
