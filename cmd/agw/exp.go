@@ -307,7 +307,7 @@ func (m *multiFlag) Set(v string) error {
 
 func (a *app) cmdExpRun(args []string) error {
 	fs := a.flags("exp run")
-	path := fs.String("plan", "", "material directory with plan.yaml, or a plan file")
+	path := fs.String("plan", "", "material directory with plan.yaml, or a plan file; the plan id is the file name, and runs that ended before are skipped")
 	k := fs.Int("k", 0, "repetitions per task (default: the plan's k)")
 	seed := fs.Int64("seed", 0, "seed of the order (default: the plan's seed)")
 	dry := fs.Bool("dry-run", false, "print the order and change nothing")

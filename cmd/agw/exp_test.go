@@ -683,12 +683,16 @@ func TestRunOrderIsSeeded(t *testing.T) {
 // X1.5: a run that ended is not repeated.
 func TestRunSkipsFinished(t *testing.T) {
 	api := newFakeExpAPI()
-	r, _, _ := newTestRunner(t, api)
+	r, out, _ := newTestRunner(t, api)
 	first := r.order[0]
 	api.runs[first.Key] = agwclient.ExpRun{ID: first.Key, Key: first.Key, Cell: first.Cell,
 		Task: first.Task, Rep: first.Rep, Status: "done", Position: first.Position}
 	if err := r.run(context.Background()); err != nil {
 		t.Fatal(err)
+	}
+	if want := "skipped (already ended in plan " + r.planName + " as done)"; !strings.Contains(out.String(), want) ||
+		strings.Contains(out.String(), "skipped (done)") {
+		t.Fatalf("skip line: %s", out.String())
 	}
 	if len(api.starts) != len(r.order)-1 {
 		t.Fatalf("%d runs started, want %d", len(api.starts), len(r.order)-1)
@@ -697,6 +701,73 @@ func TestRunSkipsFinished(t *testing.T) {
 		if run.Key == first.Key {
 			t.Fatalf("finished run %s started again", first.Key)
 		}
+	}
+}
+
+// endRuns marks the first n runs of the order as ended with the status.
+func endRuns(api *fakeExpAPI, r *expRunner, n int, status string) {
+	for _, pr := range r.order[:n] {
+		api.runs[pr.Key] = agwclient.ExpRun{ID: pr.Key, Key: pr.Key, Cell: pr.Cell, Task: pr.Task, Rep: pr.Rep,
+			Status: status, Position: pr.Position}
+	}
+}
+
+// #214: the skip line names the old status; the old record stays untouched.
+func TestRunSkipMessageNamesOldStatus(t *testing.T) {
+	api := newFakeExpAPI()
+	r, out, _ := newTestRunner(t, api)
+	endRuns(api, r, 1, "limit_tokens")
+	if err := r.run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "already ended in plan "+r.planName+" as limit_tokens") {
+		t.Fatalf("skip line: %s", out.String())
+	}
+	for _, end := range api.ends {
+		if end.ID == r.order[0].Key {
+			t.Fatalf("the old record was ended again: %+v", end)
+		}
+	}
+}
+
+// #214: a preview before the first run and a hint at the end.
+func TestRunSkipPreviewAndHint(t *testing.T) {
+	api := newFakeExpAPI()
+	r, out, _ := newTestRunner(t, api)
+	endRuns(api, r, 2, "done")
+	if err := r.run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if want := fmt.Sprintf("plan %s: 2 of %d runs ended before and are skipped", r.planName, len(r.order)); !strings.Contains(out.String(), want) {
+		t.Fatalf("preview missing: %s", out.String())
+	}
+	if !strings.Contains(out.String(), "2 runs had ended before") || !strings.Contains(out.String(), "copy the plan under a new file name") {
+		t.Fatalf("hint missing: %s", out.String())
+	}
+}
+
+// #214: a plan that has ended completely is no error and creates no chat.
+func TestRunAllSkippedIsNoError(t *testing.T) {
+	api := newFakeExpAPI()
+	r, out, _ := newTestRunner(t, api)
+	endRuns(api, r, len(r.order), "done")
+	if err := r.run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(api.creates) != 0 || !strings.Contains(out.String(), "copy the plan under a new file name") {
+		t.Fatalf("chats %d, output %s", len(api.creates), out.String())
+	}
+}
+
+// #214: a fresh plan prints neither preview nor hint.
+func TestRunNoSkipNoHint(t *testing.T) {
+	api := newFakeExpAPI()
+	r, out, _ := newTestRunner(t, api)
+	if err := r.run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out.String(), "ended before") || strings.Contains(out.String(), "new file name") {
+		t.Fatalf("unexpected hint: %s", out.String())
 	}
 }
 
