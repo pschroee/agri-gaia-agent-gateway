@@ -454,7 +454,8 @@ refer to this repository.
   `split_dataset` creates the training dataset before the training (per class, by SHA-256, 70 % into the
   new dataset), `assess_model` measures afterwards. The rules are in `internal/assess/training.go`
   (`JudgeClassification` is a pure function: verdict, reasons, hints and suggestions come from there and
-  nowhere else), the log parsing in `trainlog.go`, the split in `split_dataset.go`.
+  nowhere else), the log parsing in `trainlog.go`, the split in `split_dataset.go`. The split predicts the check sets (`check_images`, `check_warning`)
+  with the same functions, so a too small check is announced before the training.
 - **The gateway alone says what is "seen"** (`model_origins`, written by `Manager.recordModelFromTraining` after
   every successful `GET /train/containers/{id}/model`, whichever tool, binding or plan step made the call; the dataset
   comes from a read of the list of training containers, none means no row). Without an origin row every check
