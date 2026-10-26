@@ -551,8 +551,11 @@ alike; the class decides whether the user is asked and is shown in approvals, th
 | `compute` | uses compute time (builds or starts a training, runs the agent's own code) | as `write`; counted against the compute limit of the chat |
 | `irreversible` | cannot be undone (deleting, publishing in the dataspace) | always the user, also with `confirm: "none"` |
 
-A call on a route marked **confirm each** asks the user on its own, also with `confirm: "none"`, and no plan covers it
-(G1.1): `POST /_agw/notebook/runs` (own code in the notebook server, C-E3).
+A call on a route marked **confirm each** asks the user on its own, also with `confirm: "none"` (G1.1): `POST
+/_agw/notebook/runs` (own code in the notebook server, C-E3) and `PUT /container-deployments/{id}/deploy` (a start on an
+edge device). A plan covers such a step in one case only (#219): a deployment start whose image the gateway traced to a
+build (see *Confirm each* under plans). Code of unknown origin always asks. Called on its own, outside a plan, a
+confirm-each call always asks.
 
 - **Own classes of routes:** `POST /train/config` is `compute`, `POST /train/containers/{id}/run` is `compute`
   (its action is `run`), `POST /train/containers/{id}/stop` is `write` (it frees compute time), and
@@ -1365,9 +1368,23 @@ covers the whole run instead of one question per writing call.
   budget the plan is paused (`pause_reason` `budget_cost`) and the proxy answers 429.
 - **Retries (D1.7):** a step may set `max_attempts` (1 to 3, default 1). `plan_steps.attempts` counts the claims; a
   failed step with attempts left goes back to `open` and the plan stays `approved`, otherwise the plan fails.
-- **Confirm each (D1.15):** a step on a route the gateway cannot check (`delegation.Access.ConfirmEach`: notebook runs,
-  edge deployments) is never covered by the plan (`covered: false`) and asks for every single call, also with
-  `confirm: none`; irreversible steps ask as well.
+- **Confirm each (D1.15, refined by #219):** a step on a route the gateway cannot check
+  (`delegation.Access.ConfirmEach`: notebook runs, edge deployment starts) asks for every single call, also with
+  `confirm: none`; irreversible steps ask as well. The one exception: a start `PUT /container-deployments/{{stepM.id}}/deploy`
+  is covered (`covered: true`) when the chain is complete: step M is `POST /container-deployments` whose
+  `container_image_id` is `{{stepN.id}}`, step N is `POST /container-images/build`, and the template of that build is the
+  official one (`platform.AllowedTemplateGitURL`: a literal template id is looked up once in
+  `GET /inference-container-templates`; a placeholder must point at an import step of the same plan with the allowed
+  `git_url`; a read error means not covered). With `"replaces"` naming a plan of the **same chat**, a literal
+  `container_image_id` is also known when that plan has a `done` build step with `created_resource = container_image`
+  and that `created_id` (and a known template). Not supported, so the start asks on its own: a literal deployment id in
+  the start path, chains over more than one replaced plan, `replaces` on a plan of another chat. Notebook runs always
+  ask. Autonomous plans use the same rule: a covered start runs in the budget (compute calls still count), an uncovered
+  one is parked (D2.8). One function decides, `store.StepCovered`; `plan.Build`, `plan.ImageOrigins` and `scanPlanStep`
+  call it. Step fields: `image_origin` `{"plan_id"?: string, "step": int}` (absent without a traced origin; `plan_id`
+  absent = this plan) and `uncovered_reason` (absent on a covered step): `irreversible`, `image_origin` (a start whose
+  image the plan does not build), `runs_code` (any other confirm-each route). The reason is derived, not stored; the
+  origin is stored (`plan_steps.image_origin_plan`, `image_origin_step`).
 - **Controls (D1.10):** `POST …/plans/{plan}/pause|resume|cancel`. `Abort` (the stop button) pauses a running autonomous
   plan (`pause_reason` `abort`); `cancel` ends it (`cancelled`) and marks its open steps `skipped`. Platform jobs (a
   training) keep running in every case. Only the user's API moves `paused → approved`; there is no tool for it.

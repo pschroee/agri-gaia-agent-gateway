@@ -428,3 +428,77 @@ func TestPreviewAutonomousBlock(t *testing.T) {
 		}
 	}
 }
+
+// deployClassify marks every deployment start as a confirm-each route, as delegation.Classify does.
+func deployClassify(r platform.Request) (string, string, bool) {
+	a := delegation.Classify(r)
+	return FallbackEffect(r), a.Action, a.ConfirmEach || store.IsDeployCall(r.Method, r.Path)
+}
+
+func TestBuildUncoveredReason(t *testing.T) {
+	steps, err := Build(proposal(t, `{"title":"t","steps":[
+ {"method":"DELETE","path":"/models/5"},
+ {"method":"PUT","path":"/container-deployments/4/deploy"},
+ {"method":"PATCH","path":"/models/5","body":{"name":"x"}}]}`), deployClassify)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if steps[0].UncoveredReason != "irreversible" || steps[0].Covered {
+		t.Fatalf("delete: %+v", steps[0])
+	}
+	if steps[1].UncoveredReason != "image_origin" || steps[1].Covered || steps[1].ImageOrigin != nil {
+		t.Fatalf("deploy: %+v", steps[1])
+	}
+	if steps[2].UncoveredReason != "" || !steps[2].Covered {
+		t.Fatalf("patch: %+v", steps[2])
+	}
+}
+
+func TestPreviewOwnApprovalAndImageLine(t *testing.T) {
+	steps := []store.PlanStep{
+		{Idx: 1, Method: "PUT", Path: "/container-deployments/4/deploy", Effect: "compute", ConfirmEach: true},
+		{Idx: 2, Method: "PUT", Path: "/container-deployments/{{step9.id}}/deploy", Effect: "compute", ConfirmEach: true,
+			ImageOrigin: &store.ImageOrigin{Step: 1}},
+		{Idx: 3, Method: "PUT", Path: "/container-deployments/{{step9.id}}/deploy", Effect: "compute", ConfirmEach: true,
+			ImageOrigin: &store.ImageOrigin{PlanID: "abc", Step: 8}},
+	}
+	for i := range steps {
+		steps[i].Covered = store.StepCovered(steps[i])
+		steps[i].UncoveredReason = store.UncoveredReason(steps[i])
+	}
+	for _, auto := range []*Autonomy{nil} {
+		text := Preview("t", steps, auto)
+		for _, want := range []string{
+			"Steps marked IRREVERSIBLE or OWN APPROVAL still ask for their own approval.",
+			"1. COMPUTE · OWN APPROVAL · ",
+			"   Asks again: it starts an image on an edge device that this plan does not build\n",
+			"   Image: built by step 1 of this plan; this start is covered\n",
+			"   Image: built by step 8 of the replaced plan abc; this start is covered\n",
+		} {
+			if !strings.Contains(text, want) {
+				t.Errorf("preview misses %q in:\n%s", want, text)
+			}
+		}
+		if strings.Contains(text, "2. COMPUTE · OWN APPROVAL") {
+			t.Errorf("covered start must not say OWN APPROVAL:\n%s", text)
+		}
+	}
+}
+
+func TestApprovedTextUncoveredReason(t *testing.T) {
+	steps := []store.PlanStep{
+		{Idx: 1, Method: "PUT", Path: "/container-deployments/4/deploy", Effect: "compute", ConfirmEach: true},
+		{Idx: 2, Method: "PATCH", Path: "/models/5", Effect: "write"},
+	}
+	for i := range steps {
+		steps[i].Covered = store.StepCovered(steps[i])
+		steps[i].UncoveredReason = store.UncoveredReason(steps[i])
+	}
+	text := ApprovedText(store.Plan{ID: "p", Steps: steps})
+	if !strings.Contains(text, `"uncovered_reason":"image_origin"`) {
+		t.Fatalf("answer lacks the reason:\n%s", text)
+	}
+	if strings.Count(text, "uncovered_reason") != 1 {
+		t.Fatalf("a covered step carries no reason:\n%s", text)
+	}
+}

@@ -91,3 +91,9 @@ ALTER TABLE plan_steps ADD COLUMN IF NOT EXISTS watch_job text NOT NULL DEFAULT 
 ALTER TABLE plan_steps ADD COLUMN IF NOT EXISTS parked_approval text NOT NULL DEFAULT '';
 -- When the step was last claimed for execution (issue #221); started_at of the joined job stays the job start.
 ALTER TABLE plan_steps ADD COLUMN IF NOT EXISTS claimed_at timestamptz;
+
+-- image_origin_plan / image_origin_step (#219): the build step whose image a deployment start runs, traced by
+-- plan.ImageOrigins at proposal time. image_origin_plan is empty for a step of the same plan; step 0 means no
+-- origin. Stored so that a plan that is loaded again decides "covered" the same way (see StepCovered).
+ALTER TABLE plan_steps ADD COLUMN IF NOT EXISTS image_origin_plan text NOT NULL DEFAULT '';
+ALTER TABLE plan_steps ADD COLUMN IF NOT EXISTS image_origin_step integer NOT NULL DEFAULT 0;

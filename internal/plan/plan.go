@@ -452,7 +452,8 @@ func Build(p Proposal, classify Classify) ([]store.PlanStep, error) {
 		// The confirm-each trait is stored with the step (A-E2): a step that is loaded again has to be
 		// classified the same way, or a reloaded plan would cover a call that asks for every single call.
 		st.ConfirmEach = confirmEach
-		st.Covered = effect != EffectIrreversible && !confirmEach
+		st.Covered = store.StepCovered(st)
+		st.UncoveredReason = store.UncoveredReason(st)
 		st.MaxAttempts = spec.MaxAttempts
 		if st.MaxAttempts < MinPlanAttempts {
 			st.MaxAttempts = MinPlanAttempts
@@ -624,7 +625,7 @@ func Preview(title string, steps []store.PlanStep, auto *Autonomy) string {
 	fmt.Fprintf(&b, "%s\n", ApprovalName(len(steps)))
 	fmt.Fprintf(&b, "Title by the agent (not verified): %s\n", strconv.Quote(title))
 	if auto == nil {
-		fmt.Fprintf(&b, "Approving runs the steps in this order with exactly these parameters, for %d minutes (counted again from the end of each step that waits for a platform job), in this chat and this agent session only. Steps marked IRREVERSIBLE still ask for their own approval.\n\n",
+		fmt.Fprintf(&b, "Approving runs the steps in this order with exactly these parameters, for %d minutes (counted again from the end of each step that waits for a platform job), in this chat and this agent session only. Steps marked IRREVERSIBLE or OWN APPROVAL still ask for their own approval.\n\n",
 			int(ValidFor/time.Minute))
 	} else {
 		fmt.Fprintf(&b, "Autonomous: runs without asking you for up to %s, or until you pause or cancel it.\n", DurationText(time.Duration(auto.Budget.MaxDurationMinutes)*time.Minute))
@@ -644,12 +645,14 @@ func Preview(title string, steps []store.PlanStep, auto *Autonomy) string {
 			fmt.Fprintf(&b, "Replaces the running plan %s (its model calls cost %.2f USD so far).\n", auto.Replaces, auto.ReplacedCostUSD)
 		}
 		fmt.Fprintf(&b, "Approving runs the steps in this order with exactly these parameters, from any session of this chat. "+
-			"Steps marked IRREVERSIBLE and steps that run code still ask for their own approval.\n\n")
+			"Steps marked IRREVERSIBLE or OWN APPROVAL still ask for their own approval.\n\n")
 	}
 	for _, st := range steps {
 		label := strings.ToUpper(st.Effect)
 		if st.Effect == EffectIrreversible {
 			label = "IRREVERSIBLE (own approval)"
+		} else if !st.Covered {
+			label += " · OWN APPROVAL"
 		}
 		attempts := ""
 		if st.MaxAttempts > 1 {
@@ -666,6 +669,18 @@ func Preview(title string, steps []store.PlanStep, auto *Autonomy) string {
 			}
 		}
 		fmt.Fprintf(&b, "   Call: %s %s\n", st.Method, st.Path+queryText(st.Query))
+		if !st.Covered && st.Effect != EffectIrreversible {
+			if text := UncoveredText(st.UncoveredReason); text != "" {
+				fmt.Fprintf(&b, "   Asks again: %s\n", text)
+			}
+		}
+		if o := st.ImageOrigin; o != nil && st.Covered {
+			if o.PlanID == "" {
+				fmt.Fprintf(&b, "   Image: built by step %d of this plan; this start is covered\n", o.Step)
+			} else {
+				fmt.Fprintf(&b, "   Image: built by step %d of the replaced plan %s; this start is covered\n", o.Step, o.PlanID)
+			}
+		}
 		if IsToolStep(st) {
 			var ind bytes.Buffer
 			_ = json.Indent(&ind, st.Args, "", "  ")
@@ -759,11 +774,26 @@ func queryText(raw json.RawMessage) string {
 
 // approvedStep is one step of the answer after an approval; Attempts is set for an autonomous plan (A-E1).
 type approvedStep struct {
-	Step     int    `json:"step"`
-	Call     string `json:"call"`
-	Effect   string `json:"effect"`
-	Covered  bool   `json:"covered"`
-	Attempts int    `json:"max_attempts,omitempty"`
+	Step    int    `json:"step"`
+	Call    string `json:"call"`
+	Effect  string `json:"effect"`
+	Covered bool   `json:"covered"`
+	// UncoveredReason names why a step asks on its own: irreversible, image_origin or runs_code (#219).
+	UncoveredReason string `json:"uncovered_reason,omitempty"`
+	Attempts        int    `json:"max_attempts,omitempty"`
+}
+
+// UncoveredText is the English text for an uncovered-reason code of store.UncoveredReason.
+func UncoveredText(code string) string {
+	switch code {
+	case "image_origin":
+		return "it starts an image on an edge device that this plan does not build"
+	case "runs_code":
+		return "it runs code the gateway cannot check"
+	case "irreversible":
+		return "it cannot be undone"
+	}
+	return ""
 }
 
 // ApprovedText is the answer to the agent after an approval. An autonomous plan (p.Mode) additionally
@@ -772,7 +802,7 @@ type approvedStep struct {
 func ApprovedText(p store.Plan) string {
 	steps := make([]approvedStep, 0, len(p.Steps))
 	for _, st := range p.Steps {
-		a := approvedStep{Step: st.Idx, Call: st.Method + " " + st.Path, Effect: st.Effect, Covered: st.Covered}
+		a := approvedStep{Step: st.Idx, Call: st.Method + " " + st.Path, Effect: st.Effect, Covered: st.Covered, UncoveredReason: st.UncoveredReason}
 		if p.Mode == ModeAutonomous && st.MaxAttempts > 1 {
 			a.Attempts = st.MaxAttempts
 		}

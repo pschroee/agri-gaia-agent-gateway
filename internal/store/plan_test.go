@@ -497,3 +497,82 @@ func TestPlanLLMCost(t *testing.T) {
 		t.Fatalf("cost since: %v %v", got, err)
 	}
 }
+
+func TestStepCoveredRule(t *testing.T) {
+	origin := &ImageOrigin{Step: 1}
+	cases := []struct {
+		name string
+		st   PlanStep
+		want bool
+	}{
+		{"write", PlanStep{Effect: "write"}, true},
+		{"irreversible", PlanStep{Effect: "irreversible"}, false},
+		{"irreversible deploy with origin", PlanStep{Effect: "irreversible", ConfirmEach: true, Method: "PUT", Path: "/container-deployments/{{step2.id}}/deploy", ImageOrigin: origin}, false},
+		{"deploy without origin", PlanStep{Effect: "compute", ConfirmEach: true, Method: "PUT", Path: "/container-deployments/{{step2.id}}/deploy"}, false},
+		{"deploy with origin", PlanStep{Effect: "compute", ConfirmEach: true, Method: "PUT", Path: "/container-deployments/{{step2.id}}/deploy", ImageOrigin: origin}, true},
+		{"deploy with empty origin", PlanStep{Effect: "compute", ConfirmEach: true, Method: "PUT", Path: "/container-deployments/{{step2.id}}/deploy", ImageOrigin: &ImageOrigin{}}, false},
+		{"notebook run with planted origin", PlanStep{Effect: "compute", ConfirmEach: true, Method: "POST", Path: "/_agw/notebook/runs", ImageOrigin: origin}, false},
+		{"other confirm-each with planted origin", PlanStep{Effect: "compute", ConfirmEach: true, Method: "POST", Path: "/container-deployments", ImageOrigin: origin}, false},
+	}
+	for _, c := range cases {
+		if got := StepCovered(c.st); got != c.want {
+			t.Errorf("%s: StepCovered = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+func TestUncoveredReason(t *testing.T) {
+	origin := &ImageOrigin{Step: 1}
+	deploy := PlanStep{Effect: "compute", ConfirmEach: true, Method: "PUT", Path: "/container-deployments/5/deploy"}
+	covered := deploy
+	covered.ImageOrigin = origin
+	cases := []struct {
+		name string
+		st   PlanStep
+		want string
+	}{
+		{"covered write", PlanStep{Effect: "write"}, ""},
+		{"covered deploy", covered, ""},
+		{"irreversible", PlanStep{Effect: "irreversible"}, "irreversible"},
+		{"deploy without origin", deploy, "image_origin"},
+		{"notebook", PlanStep{Effect: "compute", ConfirmEach: true, Method: "POST", Path: "/_agw/notebook/runs"}, "runs_code"},
+	}
+	for _, c := range cases {
+		if got := UncoveredReason(c.st); got != c.want {
+			t.Errorf("%s: UncoveredReason = %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+func TestPlanStepImageOriginRoundTrip(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	c := newPlanChat(t, s)
+	path := "/container-deployments/{{step2.id}}/deploy"
+	p, err := s.CreatePlan(ctx, Plan{ChatID: c.ID, Title: "Deploy", Session: "main", Via: "cli", Steps: []PlanStep{
+		{Idx: 1, Method: "POST", Path: "/container-images/build", Effect: "compute"},
+		{Idx: 2, Method: "PUT", Path: path, Effect: "compute", ConfirmEach: true, ImageOrigin: &ImageOrigin{Step: 1}},
+		{Idx: 3, Method: "PUT", Path: "/container-deployments/9/deploy", Effect: "compute", ConfirmEach: true},
+		{Idx: 4, Method: "PUT", Path: path, Effect: "compute", ConfirmEach: true, ImageOrigin: &ImageOrigin{PlanID: "7c1f231f-0000-0000-0000-000000000000", Step: 8}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.GetPlan(ctx, p.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := got.Steps
+	if st[1].ImageOrigin == nil || st[1].ImageOrigin.Step != 1 || st[1].ImageOrigin.PlanID != "" || !st[1].Covered || st[1].UncoveredReason != "" {
+		t.Fatalf("step 2: %+v", st[1])
+	}
+	if st[2].ImageOrigin != nil || st[2].Covered || st[2].UncoveredReason != "image_origin" {
+		t.Fatalf("step 3: %+v", st[2])
+	}
+	if st[3].ImageOrigin == nil || st[3].ImageOrigin.PlanID != "7c1f231f-0000-0000-0000-000000000000" || st[3].ImageOrigin.Step != 8 || !st[3].Covered {
+		t.Fatalf("step 4: %+v", st[3])
+	}
+	if st[0].ImageOrigin != nil || !st[0].Covered {
+		t.Fatalf("step 1: %+v", st[0])
+	}
+}
