@@ -266,7 +266,7 @@ func (s *Service) runDeploymentCheck(ctx context.Context, chatID string, depID, 
 		return in.report(NotMeasured, []string{why}), nil
 	}
 	if in.Port == 0 {
-		rep := in.report(Questionable, []string{"the deployment binds no host port to Triton's HTTP port 8000"})
+		rep := in.report(Questionable, []string{"the deployment binds no host port to the inference server's HTTP port 8000"})
 		rep.Suggestions = append(rep.Suggestions, suggestionUndeploy)
 		return rep, nil
 	}
@@ -436,14 +436,14 @@ func (s *Service) deviceReady(ctx context.Context, in *deploymentRun) (bool, err
 func (s *Service) readDeviceModel(ctx context.Context, in *deploymentRun) (string, error) {
 	served := in.servedName()
 	if !platform.TritonNameRe.MatchString(served) {
-		return fmt.Sprintf("the name %q of the model cannot be addressed by Triton over HTTP", served), nil
+		return fmt.Sprintf("the name %q of the model cannot be addressed by the inference server over HTTP", served), nil
 	}
 	data, ok, detail, err := s.deviceCall(ctx, in, "/v2/models/"+served, "")
 	if err != nil {
 		return "", err
 	}
 	if !ok {
-		return fmt.Sprintf("the device does not serve a model named %s (Triton refused its metadata%s)",
+		return fmt.Sprintf("the device does not serve a model named %s (the inference server refused its metadata%s)",
 			served, reasonDetail(detail)), nil
 	}
 	var meta tritonModel

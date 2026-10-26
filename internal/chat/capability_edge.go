@@ -104,7 +104,8 @@ func capabilityEdge(ctx context.Context, m *Manager, chatID string) Capability {
 			return c
 		}
 		c.Available = true
-		c.Detail = edgeDeviceSummary(online)
+		c.Detail = edgeDeviceSummary(online) + "; inference runtime: " + platform.DefaultRuntime() +
+			" by default, " + platform.RuntimeOVMS + " for devices tagged " + platform.IntelCPUTag
 		return c
 	}), m)
 }
@@ -120,6 +121,9 @@ func edgeDeviceSummary(online []edgeDeviceState) string {
 		}
 		if d.Arch != "" {
 			kinds = append(kinds, d.Arch)
+		}
+		if slices.Contains(d.Tags, platform.IntelCPUTag) {
+			kinds = append(kinds, platform.IntelCPUTag)
 		}
 		if len(kinds) > 0 {
 			parts = append(parts, fmt.Sprintf("%s (%s)", d.Name, strings.Join(kinds, ", ")))

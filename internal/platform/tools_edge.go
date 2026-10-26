@@ -216,7 +216,7 @@ var createDeploymentTool = Tool{
 	Name: "create_deployment", CLI: "create-deployment",
 	Desc: "Creates a deployment of an inference image on an edge device; nothing runs yet (start it with {{tool:start_deployment}}). " +
 		"Checks first: device registered and online, image in the registry with the device's architecture and not a training image, host ports 18100-18199 not used by another deployment on the device. " +
-		"The container is named agw-<name> and exposes Triton's HTTP port 8000 on host_port (grpc 8001 and metrics 8002 optional). " +
+		"The container is named agw-<name> and exposes the inference server's HTTP port 8000 (Triton or OVMS) on host_port (grpc 8001 optional; Triton's metrics port 8002 optional, Triton only). " +
 		"Only images built in this chat or from the user's own repository can be deployed. " +
 		"In a plan that also builds the image, give image_id \"{{stepN.id}}\" of the build step instead of repository and tag. Writes; the user must approve.",
 	Write: true,
@@ -225,9 +225,9 @@ var createDeploymentTool = Tool{
 		{Name: "repository", Type: "string", Desc: "repository of the image, <owner>/<name>, e.g. agent-test/mnist-triton; with tag, or leave both out and give image_id"},
 		{Name: "tag", Type: "string", Desc: "tag of the image, e.g. v1; with repository, or leave both out and give image_id"},
 		{Name: "name", Type: "string", Desc: "name of the deployment without the agw- prefix; lowercase letters, digits and . _ -, e.g. mnist", Required: true},
-		{Name: "host_port", Type: "integer", Desc: "host port on the device for Triton's HTTP port 8000 (18100-18199)", Required: true},
-		{Name: "grpc_host_port", Type: "integer", Desc: "host port for Triton's gRPC port 8001 (18100-18199, optional)"},
-		{Name: "metrics_host_port", Type: "integer", Desc: "host port for Triton's metrics port 8002 (18100-18199, optional)"},
+		{Name: "host_port", Type: "integer", Desc: "host port on the device for the inference server's HTTP port 8000 (Triton or OVMS; 18100-18199)", Required: true},
+		{Name: "grpc_host_port", Type: "integer", Desc: "host port for the inference server's gRPC port 8001 (18100-18199, optional)"},
+		{Name: "metrics_host_port", Type: "integer", Desc: "host port for Triton's metrics port 8002 (Triton only; 18100-18199, optional)"},
 		{Name: "image_id", Type: "integer", Desc: "identifier of the image as {{tool:container_image_status}} shows it; in a plan that builds the image, \"{{stepN.id}}\" of that build step, and then leave out repository and tag"},
 	},
 	build: func(a Args) (Request, error) {
