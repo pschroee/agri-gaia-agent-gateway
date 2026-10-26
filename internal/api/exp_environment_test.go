@@ -11,6 +11,7 @@ import (
 
 	"agw/internal/chat"
 	"agw/internal/exp"
+	"agw/internal/platform"
 	"agw/internal/version"
 )
 
@@ -67,6 +68,32 @@ func TestExpEnvironmentFillsIdentity(t *testing.T) {
 	}
 	if env.InstructionSHA256 != chat.RightsInstructionSHA256() {
 		t.Fatalf("instruction checksum: %s", env.InstructionSHA256)
+	}
+}
+
+// #230: the default runtime of inference images is in the config.
+func TestConfigInferenceRuntime(t *testing.T) {
+	t.Cleanup(func() { _ = platform.SetDefaultRuntime(platform.RuntimeTriton) })
+	read := func() string {
+		s := &Server{M: chat.NewManager(nil, nil, nil, nil, nil, chat.Options{})}
+		w := httptest.NewRecorder()
+		s.config(w, httptest.NewRequest("GET", "/api/config", nil))
+		var cfg struct {
+			Runtime string `json:"inference_runtime"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &cfg); err != nil {
+			t.Fatal(err)
+		}
+		return cfg.Runtime
+	}
+	if got := read(); got != "triton" {
+		t.Fatalf("default: %q", got)
+	}
+	if err := platform.SetDefaultRuntime("ovms"); err != nil {
+		t.Fatal(err)
+	}
+	if got := read(); got != "ovms" {
+		t.Fatalf("ovms: %q", got)
 	}
 }
 

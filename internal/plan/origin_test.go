@@ -207,6 +207,21 @@ func TestImageOriginsImportTemplateStep(t *testing.T) {
 	}
 }
 
+// The import of the OpenVINO template of the fork covers the start like the Triton import (#230).
+func TestImageOriginsOVMSImportStep(t *testing.T) {
+	const forkURL = "https://github.com/pschroee/agri-gaia-inference-container-template"
+	steps := []store.PlanStep{importStep(1, forkURL), buildStepWith(2, `"{{step1.id}}"`), createStepWith(3, `"{{step2.id}}"`), startStep(4, 3)}
+	ImageOrigins(steps, nil, nil)
+	if !steps[3].Covered || steps[3].ImageOrigin == nil || steps[3].ImageOrigin.Step != 2 {
+		t.Fatalf("fork import: %+v", steps[3])
+	}
+	other := []store.PlanStep{importStep(1, forkURL+".git"), buildStepWith(2, `"{{step1.id}}"`), createStepWith(3, `"{{step2.id}}"`), startStep(4, 3)}
+	ImageOrigins(other, nil, nil)
+	if other[3].Covered {
+		t.Fatalf("fork URL with .git: %+v", other[3])
+	}
+}
+
 func TestImageOriginsLiteralDeploymentPath(t *testing.T) {
 	steps := chainSteps("4", `"{{step1.id}}"`)
 	steps[2].Path = "/container-deployments/55/deploy"

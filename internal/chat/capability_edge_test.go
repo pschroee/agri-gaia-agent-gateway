@@ -93,7 +93,7 @@ func TestEdgeCapability(t *testing.T) {
 	online := edgeDeviceStateJSON("sim-edge-01", "amd64", []string{"simulated"}, time.Now().UTC().Add(-2*time.Minute).Format(edgeHeartbeatLayout), true)
 	withEdgeDevicePlatform(t, e, "["+online+"]")
 	cap = byName(e.m.Capabilities(ctx, "edge-online"))["edge"]
-	if !cap.Available || cap.Detail != "1 device online: sim-edge-01 (simulated, amd64); test requests: "+noneToTest {
+	if !cap.Available || cap.Detail != "1 device online: sim-edge-01 (simulated, amd64); inference runtime: triton by default, ovms for devices tagged intel-cpu; test requests: "+noneToTest {
 		t.Fatalf("online: %+v", cap)
 	}
 	// An unregistered device with a fresh heartbeat does not count (D2.3).
@@ -187,5 +187,38 @@ func TestDeployToolsUnavailable(t *testing.T) {
 		if strings.HasPrefix(call, "POST /container-deployments") || strings.HasPrefix(call, "PUT /container-deployments") {
 			t.Fatalf("a deploy call reached the platform: %v", call)
 		}
+	}
+}
+
+// A device tagged intel-cpu is named with the tag (#230).
+func TestEdgeSummaryIntelCPU(t *testing.T) {
+	online := []edgeDeviceState{
+		{Name: "sim-edge-01", Arch: "amd64", Tags: []string{"simulated", platform.IntelCPUTag}},
+		{Name: "jetson-01", Arch: "arm64"},
+	}
+	got := edgeDeviceSummary(online)
+	if got != "2 devices online: sim-edge-01 (simulated, amd64, intel-cpu), jetson-01 (arm64)" {
+		t.Fatalf("summary = %q", got)
+	}
+}
+
+// The entry edge names the default runtime and the tag that points to ovms (#230).
+func TestCapabilityEdgeNamesRuntime(t *testing.T) {
+	t.Cleanup(func() { _ = platform.SetDefaultRuntime(platform.RuntimeTriton) })
+	e := setup(t)
+	ctx := context.Background()
+	online := edgeDeviceStateJSON("sim-edge-01", "amd64", []string{"simulated", "intel-cpu"}, time.Now().UTC().Add(-time.Minute).Format(edgeHeartbeatLayout), true)
+	withEdgeDevicePlatform(t, e, "["+online+"]")
+	cap := byName(e.m.Capabilities(ctx, "edge-runtime-1"))["edge"]
+	if !cap.Available || !strings.Contains(cap.Detail, "sim-edge-01 (simulated, amd64, intel-cpu)") ||
+		!strings.Contains(cap.Detail, "inference runtime: triton by default, ovms for devices tagged intel-cpu") {
+		t.Fatalf("triton default: %+v", cap)
+	}
+	if err := platform.SetDefaultRuntime("ovms"); err != nil {
+		t.Fatal(err)
+	}
+	cap = byName(e.m.Capabilities(ctx, "edge-runtime-2"))["edge"]
+	if !strings.Contains(cap.Detail, "inference runtime: ovms by default") {
+		t.Fatalf("ovms default: %+v", cap)
 	}
 }

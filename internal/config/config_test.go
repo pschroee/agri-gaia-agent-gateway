@@ -126,6 +126,18 @@ func TestEnvDefaults(t *testing.T) {
 	}
 }
 
+// #230: AGW_INFERENCE_RUNTIME defaults to triton and is passed on as it is (platform.SetDefaultRuntime checks it).
+func TestInferenceRuntimeEnv(t *testing.T) {
+	os.Unsetenv("AGW_INFERENCE_RUNTIME")
+	if e := FromEnv(); e.InferenceRuntime != "triton" {
+		t.Fatalf("default: %q", e.InferenceRuntime)
+	}
+	t.Setenv("AGW_INFERENCE_RUNTIME", "ovms")
+	if e := FromEnv(); e.InferenceRuntime != "ovms" {
+		t.Fatalf("ovms: %q", e.InferenceRuntime)
+	}
+}
+
 const builtinCatalog = `{
   "default": "deepseek/deepseek-flash",
   "providers": [{
