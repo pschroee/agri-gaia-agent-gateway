@@ -130,7 +130,7 @@ type Chat = {
   starting?: boolean;     // a new chat created with async waits for its first sandbox (resuming is true as well)
   queued: number;         // queued messages not yet delivered
   queue_held: boolean;    // queued entries are not sent on their own (after an abort, for a dormant chat, above a limit on turns without the user) but with the next message or via POST …/queue/send
-  hold_reason?: "abort" | "wake_limit" | "auto_turns"; // why held (only for an active chat with queue_held)
+  hold_reason?: "abort" | "wake_limit" | "auto_turns" | "failed_calls"; // why held (only for an active chat with queue_held)
   background_running: number; // running background tasks
   delegation?: object;        // delegated rights, structure in docs/plan-delegation-rest-platform.md (missing: no delegation)
   owner?: string;             // sub of the owner (oidc mode); missing in token mode
@@ -231,8 +231,9 @@ type StoredMessage = {
   trigger?: "user" | "queue" | "wake";      // trigger of the turn, on all messages of a turn
   origin?: "user" | "system" | "mixed";    // user message only: origin of the instruction to pi
   sources?: MessageSource[];               // user message only: parts in order
-  abort_reason?: "user" | "trash" | "time_limit" | "turn_limit" | "subagent_limit";
+  abort_reason?: "user" | "trash" | "time_limit" | "turn_limit" | "subagent_limit" | "failed_calls";
                                            // on every message of an aborted turn (issue #120); missing: not aborted
+  abort_detail?: string;                   // what exactly stopped the turn, in a sentence (failed_calls, #217); missing: none
 };
 // Part of an instruction to pi. kind "user": text of the user (queue_id, if queued); kind "system":
 // orchestrator note (type "background" | "sandbox" | "language" | "page_context", refs, queue_id, marker: marker of
@@ -379,7 +380,7 @@ type ActivityPage = { calls: ActivityCall[]; chats: Record<string, { id: string;
 |---|---|---|
 | `GET /api/models` | `Model[]` | selectable models |
 | `GET /api/variants` | `Variant[]` | every combination of bindings; `active` marks the one new chats get (`AGW_TOOLSETS`) |
-| `GET /api/config` | `{internet_default: boolean, approval_timeout_s: number, artifact_max_mb: number, idle_timeout_s: number, auto_compact_default: boolean, compact_reserve_tokens: number, compact_keep_recent_tokens: number, max_subagents: number /* at the same time per chat, fixed */, max_subagents_default: number /* deprecated, = max_subagents */, max_subagents_limit: number /* deprecated, = max_subagents */, workspace_max_mb: number /* 0 = workspace is not backed up */, bg_wakes_per_hour: number /* 0 = never wake */, bg_keepalive_s: number, auto_turns_max: number /* consecutive turns without the user, 0 = none */, search_max_hours: number /* the longest a training search runs (#168) */, executed_tools: string[] /* tools whose execution is proven at the socket, sorted */, toolsets: Variant /* bindings of every new chat (AGW_TOOLSETS) */, gateway_version: string, gateway_commit: string, gateway_describe: string /* identity of this build, X8.1 */}` | defaults for the UI |
+| `GET /api/config` | `{internet_default: boolean, approval_timeout_s: number, artifact_max_mb: number, idle_timeout_s: number, auto_compact_default: boolean, compact_reserve_tokens: number, compact_keep_recent_tokens: number, max_subagents: number /* at the same time per chat, fixed */, max_subagents_default: number /* deprecated, = max_subagents */, max_subagents_limit: number /* deprecated, = max_subagents */, workspace_max_mb: number /* 0 = workspace is not backed up */, bg_wakes_per_hour: number /* 0 = never wake */, bg_keepalive_s: number, auto_turns_max: number /* consecutive turns without the user, 0 = none */, max_failed_tool_calls: number /* failed tool calls in a row, all tools, 0 = off (#217) */, max_failed_same_tool: number /* the same for one tool, 0 = off (#217) */, search_max_hours: number /* the longest a training search runs (#168) */, executed_tools: string[] /* tools whose execution is proven at the socket, sorted */, toolsets: Variant /* bindings of every new chat (AGW_TOOLSETS) */, gateway_version: string, gateway_commit: string, gateway_describe: string /* identity of this build, X8.1 */}` | defaults for the UI |
 | `GET /api/pool` | `Pool` | pool status (the UI polls every second) |
 | `GET /api/platform` | `{configured: boolean, api_url?, login?: "user" \| "account", account?: string /* login account only */, client_id?, token_exchange?: boolean, probe?: {reachable, http_status?, latency_ms, error?, checked_at}, last_exchange?: {chat_id, at, ok, error?}}` | binding to the platform, read-only. `probe`: unauthenticated `GET` on the API base, any HTTP answer counts as reachable, cached 10 s. `last_exchange`: newest token exchange among the user's own chats, also a failed one (e.g. the user's login expired); in memory only, empty after a restart until the next platform call. `{configured: false}` without `AGW_PLATFORM_API_URL` |
 | `GET /api/exp/usage?plan=<plan>` | `{tokens_total, duration_total, runs}` | what the plan has consumed so far (#161): `input + output` of its chats from `llm_calls` without cache reads, the wall-clock time of its attempts (`duration_total`, Go duration such as `1h2m3s`) and their number. The runner checks the plan's `tokens_total` and `duration_total` before every run; `agw exp export` puts the sums into `manifest.json` |
@@ -620,6 +621,7 @@ Each event is a `data:` line with JSON `{"kind": …, "data": …}`. Every 15 s 
 | `queue` | `{entries: QueueEntry[], change: "queued" \| "removed" \| "delivered" \| "restored" \| "dropped", ids?: string[], text?: string, origin?, sources?}`: new state of the queue. `delivered`: handed to pi, `text` is the instruction as it goes to pi, with `origin` and `sources` as on `StoredMessage`; `restored`: delivery failed or aborted before delivery, open again; `dropped`: chat ended |
 | `user_meta` | `{turn_id, trigger, origin, sources}`: origin of the user message that follows as the next `pi` event (`message_end`, role user); the UI assigns it to that message |
 | `auto_held` | `{reason: "wake_limit" \| "auto_turns", limit, count}`: notes stay queued because a limit on turns without the user has been reached (wake-ups per hour or in a row); they go with the next message or via `POST …/queue/send` |
+| `failed_calls_limit` | `{scope: "tool" \| "total", tool, count, limit, last_error, detail}` (#217): the gateway stopped the chat after too many failed tool calls in a row; see *Failed calls in a row* |
 | `plan_alert` | `PlanAlert` (A-E4): an autonomous plan of this chat reached a state the user has to know about. `kind` is `completed`, `failed`, `paused`, `needs_input` or `attention`; `step` and `reason` name the step and the cause where there is one. Also carried by *Events across chats* |
 | `platform_changed` | `PlatformChanged` (#167): the agent changed something on the platform or an observed job handed over or ended; same data as in *SSE `GET /api/events`*. Also carried by *Events across chats* |
 | `error` | `{message: string}`; also notes about the workspace: starts with "Workspace not saved" (above the limit, once per state; the UI shows a warning) or "Workspace could not be restored" |
@@ -962,10 +964,48 @@ other subagents keep running, and the stopped run's result stays where it is. Th
 Issue #120, F9. The gateway aborts a turn in five situations, and the UI names which one it was instead of always
 claiming that the user stopped: `user` (`POST …/abort`), `trash` (the chat moved to the trash),
 `time_limit` (longer than 30 minutes), `turn_limit` (too many turns in a row without the user) and
-`subagent_limit` (more subagents at the same time than allowed). The reason is stored on the turn
+`subagent_limit` (more subagents at the same time than allowed) and, since #217, `failed_calls` (too many failed
+tool calls in a row, see *Failed calls in a row*). The reason is stored on the turn
 (`chat_turns.abort_reason`, the first one wins) and travels with **every** stored message of that turn as
-`abort_reason`, so a reloaded chat still shows why a step was stopped. Rows from before this change and turns that
+`abort_reason`; a sentence that says what exactly happened (only `failed_calls` has one) is stored with it as
+`chat_turns.abort_detail` and travels as `abort_detail`, so a reloaded chat still shows why a step was stopped. Rows from before this change and turns that
 were not aborted carry nothing, and the UI then says just "stopped".
+
+### Failed calls in a row (#217)
+
+An agent that fails at the same call again and again is stopped instead of using up time and money. The gateway counts
+at the three entries of the socket (the command line `agw-platform`, the MCP tools and the REST binding), **one result
+per call of the agent**, so the count is the same in every binding and the agent cannot talk it away. The tool is
+the key of a counter: `get_dataset` in the command line and MCP, and `GET /datasets/5` in the REST binding are one
+counter (a REST call that is no tool's form counts as `METHOD /path` with numeric and UUID segments as `{id}`).
+
+- **Failed:** an error of the gateway's checks (`refused: …`, argument errors), HTTP 400 and above from the platform,
+  `denied` (delegation, fixed blocks), `unavailable`. **Success:** status `ok` with HTTP below 400 (also a violation
+  that was only logged). **Neutral** (neither counts nor resets): `rejected` and `pending_user`, because the decision
+  is the user's and the user can stop at any time. **Not counted:** bash commands without a gateway call (exit
+  codes), `read`/`edit`/`write`, internet requests, `upload_artifact`, usage errors of the command line before the
+  socket, the path directory (`api_paths`, `/_agw/paths`). An agent that runs a faulty script in the sandbox for
+  ever is not caught here; the turn's time limit (30 minutes), `AGW_AUTO_TURNS_MAX` and the budgets are for that.
+- **Two counters per chat**, over all sessions (main agent and subagents), in the gateway's memory: *total* (every
+  success resets it) and *per tool* (only a success of the same tool resets it, so reads in between do not break
+  a chain). `AGW_MAX_FAILED_TOOL_CALLS` (default 20) and `AGW_MAX_FAILED_SAME_TOOL` (default 5); 0 switches the limit
+  off, negative values count as 0. Both are in `GET /api/config` (`max_failed_tool_calls`, `max_failed_same_tool`).
+- **Warning** once per chain: two calls before the per-tool limit (limit 3 and above) and five before the total limit
+  (limit 10 and above), as a note to the agent on the answer (command line and MCP: in the text; REST: in the
+  `X-Agw-Note` header or, without an HTTP status, the error message).
+- **At the limit:** the answer of that call says so; the turn is aborted with `abort_reason: "failed_calls"` and
+  `abort_detail` (`5 failed calls of get_dataset in a row (limit 5). Last error: …`, the error redacted and cut to
+  300 characters); an autonomous plan is paused with `pause_reason: "failed_calls"`; the queue is held
+  (`hold_reason: "failed_calls"`); SSE `failed_calls_limit` is published; the Activity gets a row `op:
+  "failed_calls_limit"`, `via: "orchestrator"` with the tool call of the call that reached the limit (listed with the
+  platform kind, never in `summary`); a passive note (`failed_calls`) tells the agent with the next message why it
+  was stopped. Until the user writes (or resumes the plan) the gateway refuses **every** further socket call of
+  the chat with `refused: the gateway stopped this chat after …` (not counted) and the LLM proxy every model call,
+  so a subagent or a wake-up cannot go on.
+- **Reset:** a message that lifts the hold (any message that is not a wake-up) and the resume of a plan reset both
+  counters and the stop. Wake-ups, plan step notes and turn boundaries do not, or an autonomous plan would reset the
+  chain with every turn.
+- **Experiment chats are not counted:** the limits of a run are the experiment plan's (X3).
 
 ### Subagent entries are clipped
 

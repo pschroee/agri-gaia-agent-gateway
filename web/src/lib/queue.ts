@@ -49,6 +49,8 @@ export function holdReasonText(r: HoldReason | undefined): string | undefined {
       return "limit of wake-ups per hour reached"
     case "auto_turns":
       return "limit of turns without the user reached"
+    case "failed_calls":
+      return "held: the agent was stopped after failed tool calls; your next message lets it go on"
   }
   return undefined
 }

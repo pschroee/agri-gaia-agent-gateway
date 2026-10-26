@@ -330,6 +330,14 @@ refer to this repository.
   call the kind's `Stop` with the user's token and log it with `via: "user"`. Rules in `API.md`, *Long-running platform
   jobs*.
 
+## Failed calls in a row (#217)
+
+- `internal/chat/failed_calls.go` counts the result of every call of the agent at the three socket entries
+  (`sock.handler.counted`: `platform`, the MCP tools, `platformAPI`), one result per call, key = `Tool.Name` or
+  `platform.CallKey` for REST. Classification in `platform.OutcomeOf`. At the limit (`AGW_MAX_FAILED_TOOL_CALLS`,
+  `AGW_MAX_FAILED_SAME_TOOL`) the turn is aborted (`AbortFailedCalls` with `abort_detail`), and until the user writes
+  the socket and the LLM proxy (`chatBudget`) refuse. Experiment chats are not counted.
+
 ## Plans over hours (autonomy A-E3)
 
 - An autonomous plan outlives the browser, so the **login has to be kept alive**: `Manager.RunPlanEndurance` (ticker

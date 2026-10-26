@@ -448,10 +448,26 @@ func (a *app) cmdConfig(args []string) error {
 	fmt.Fprintf(tw, "Reserve until compaction\t%s tokens\n", fmtInt(c.CompactReserveTokens))
 	fmt.Fprintf(tw, "Kept when compacting\t%s tokens\n", fmtInt(c.CompactKeepRecentTokens))
 	fmt.Fprintf(tw, "Subagents per chat\tat most %d at the same time\n", c.MaxSubagents)
+	fmt.Fprintf(tw, "Failed tool calls in a row\t%s\n", failedCallsLimits(c.MaxFailedToolCalls, c.MaxFailedSameTool))
 	if c.Toolsets != nil {
 		fmt.Fprintf(tw, "Bindings of new chats\t%s (AGW_TOOLSETS)\n", c.Toolsets.ID)
 	}
 	return tw.Flush()
+}
+
+// failedCallsLimits phrases the limits for failed tool calls in a row (0 = off), for agw config.
+func failedCallsLimits(total, sameTool int) string {
+	if total == 0 && sameTool == 0 {
+		return "off"
+	}
+	one := "off"
+	if sameTool > 0 {
+		one = fmt.Sprint(sameTool)
+	}
+	if total == 0 {
+		return fmt.Sprintf("no limit over all tools (one tool: %s)", one)
+	}
+	return fmt.Sprintf("stop at %d (one tool: %s)", total, one)
 }
 
 func (a *app) cmdPool(args []string) error {
