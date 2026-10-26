@@ -440,7 +440,7 @@ func TestBuildUncoveredReason(t *testing.T) {
 	steps, err := Build(proposal(t, `{"title":"t","steps":[
  {"method":"DELETE","path":"/models/5"},
  {"method":"PUT","path":"/container-deployments/4/deploy"},
- {"method":"PATCH","path":"/models/5","body":{"name":"x"}}]}`), deployClassify)
+ {"tool":"update_model","args":{"model_id":5,"name":"x"}}]}`), deployClassify)
 	if err != nil {
 		t.Fatal(err)
 	}
