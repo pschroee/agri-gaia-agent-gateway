@@ -152,22 +152,31 @@ do not ask again unless the user wants it.
 
 ## Inference containers
 
-An inference image is built from a model and an installed template, in this order:
+An inference image is built from an ONNX model and an installed template. Two runtimes serve the same KServe v2
+HTTP API on port 8000 and pass the same checks:
+- `triton` — NVIDIA Triton, about 9 GB, amd64 and arm64.
+- `ovms` — OpenVINO Model Server, CPU only, about 0.3 GB, amd64 only; tags end in `-ovms`.
 
-1. `agw-platform validate-model <model_id>` lists what keeps the model from becoming an inference container
-   (`problems`) and what to look at (`warnings`). Fix the problems first: a name with spaces or brackets
-   cannot be addressed by Triton, so rename it with `agw-platform update-model` (only letters, digits, `_ . -`).
-2. `agw-platform templates` lists the installed templates. If the official one (branch `triton`) is missing,
-   `agw-platform import-template triton-inference` imports it (approval needed).
-3. `agw-platform build-image <template_id> <model_id> <name> <tag> amd64` builds the image into the registry
-   (approval needed; several minutes, about 9 GB). The build refuses a tag that is in the registry already,
-   because the platform would overwrite it without asking, and a build that is still running.
-4. Follow the build with `agw-platform task <id>` (not in a tight loop, as with trainings), then check
+Which one: the user's explicit wish (OpenVINO, a small image) decides. Otherwise look at the target device in
+`agw-platform edge-devices`: tag `intel-cpu` → `ovms`; arm64, an NVIDIA GPU or no device yet → the setup's default
+(`agw-platform capabilities` names it under `edge`). If the target is unclear, ask the user once before you build.
+
+1. `agw-platform validate-model <model_id>` lists `problems` and `warnings`. Fix the problems first: a name with
+   spaces or brackets cannot be addressed by the inference server, so rename it with `agw-platform update-model`
+   (only letters, digits, `_ . -`).
+2. `agw-platform templates` lists the installed templates with their `runtime`. If the one you need is missing,
+   `agw-platform import-template triton-inference --runtime triton` or
+   `agw-platform import-template ovms-inference --runtime ovms` imports it (approval needed).
+3. `agw-platform build-image <template_id> <model_id> <name> <tag> amd64 --runtime <runtime>` builds the image into
+   the registry (approval needed; several minutes). Always give `--runtime`. For `ovms` use the same name and the
+   tag with `-ovms` (e.g. `v1-ovms`), so both images of one model stand side by side. The build refuses a template
+   of another runtime, a tag that is in the registry already and a build that is still running.
+4. Follow the build with `agw-platform task <id>` (not in a tight loop), then check
    `agw-platform image-status <repository> <tag>` until `present` is `true`.
 
 An image cannot be started without an edge device, and `/triton` checks the model on the Triton server,
 not the image: do not use it to test an image. Templates cannot be changed or deleted; the agent imports
-only the official one.
+only the official ones.
 
 ## Deploying an inference image to an edge device
 
@@ -175,7 +184,7 @@ only the official one.
 online. Without it the way ends at the built image — say that and invent no device. With it:
 
 1. `agw-platform edge-devices` lists the devices with `arch` and `online`; pick an online device whose
-   arch matches the image.
+   arch matches the image (an `-ovms` image needs amd64).
 2. `agw-platform image-status <repository> <tag>` gives the image's `entries[].id`, the `image_id`.
 3. Propose the writing steps as one plan. If the plan also builds the image, skip step 2: give
    `create-deployment --image_id "{{stepN.id}}"` of the build step and no repository or tag (the gateway takes
