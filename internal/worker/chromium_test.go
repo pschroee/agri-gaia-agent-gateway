@@ -95,17 +95,17 @@ func TestDockerfileChromiumOffline(t *testing.T) {
 			t.Errorf("netcheck call %d lacks %q: %s", n+1, w, run[n])
 		}
 	}
-	// Hosts that end at the dead port (H1, measured in Chromium 155): update.googleapis.com on every start; MathJax
-	// and Debian's default search only from kaleido's page. Nothing else may be allowed.
+	// Hosts that end at the dead port (H1, measured in Chromium 155): Google's domains on every start (which hosts
+	// varies with load); MathJax and Debian's default search only from kaleido's page. Nothing else may be allowed.
 	for n, c := range run {
 		m := regexp.MustCompile(`--allow (\S+) --`).FindStringSubmatch(c)
 		if m == nil {
 			t.Errorf("netcheck call %d has no --allow list: %s", n+1, c)
 			continue
 		}
-		want := "update.googleapis.com"
+		want := ".google.com,.googleapis.com"
 		if n == 3 {
-			want = "update.googleapis.com,cdnjs.cloudflare.com,start.duckduckgo.com"
+			want = ".google.com,.googleapis.com,cdnjs.cloudflare.com,start.duckduckgo.com"
 		}
 		if m[1] != want {
 			t.Errorf("netcheck call %d allows %q, want %q", n+1, m[1], want)
@@ -141,6 +141,7 @@ func TestNetcheckScript(t *testing.T) {
 	for _, w := range []string{
 		"127.0.0.1", "Listener(9)", "http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY",
 		"netcheck: request bypassed --proxy-server: ", "netcheck: Chromium still calls out: ", "netcheck OK: ",
+		`a.startswith(".")`,
 	} {
 		if !strings.Contains(s, w) {
 			t.Errorf("netcheck.py lacks %q", w)

@@ -5,7 +5,9 @@
 
 """Build-time check (issue #229): Chromium must not reach the proxy from the environment.
 
-Usage: netcheck.py [--allow host,host] -- <cmd> [args...]
+Usage: netcheck.py [--allow host,.domain] -- <cmd> [args...]
+
+An --allow entry starting with a dot allows the domain and every host under it (".google.com").
 
 Two listeners are opened. "dead" is 127.0.0.1:9, where Chromium's fail-closed --proxy-server points: whatever it
 still tries ends there. "env" is a free local port set as http_proxy/https_proxy (the gateway relay in the sandbox):
@@ -73,6 +75,14 @@ def parse_host(line):
     return target.split("/", 1)[0].rsplit(":", 1)[0].lower()
 
 
+def allowed(host, allow):
+    """True if host is listed, or lies under a listed ".domain" (dead-port hosts only; the env proxy allows nothing)."""
+    for a in allow:
+        if host == a or (a.startswith(".") and (host.endswith(a) or host == a[1:])):
+            return True
+    return False
+
+
 def main(argv):
     allow = set()
     args = argv[1:]
@@ -80,7 +90,7 @@ def main(argv):
         allow = {h.strip().lower() for h in args[1].split(",") if h.strip()}
         args = args[2:]
     if args[:1] != ["--"] or len(args) < 2:
-        print("usage: netcheck.py [--allow host,host] -- <cmd> [args...]", file=sys.stderr)
+        print("usage: netcheck.py [--allow host,.domain] -- <cmd> [args...]", file=sys.stderr)
         return 2
     cmd = args[1:]
 
@@ -108,7 +118,7 @@ def main(argv):
     if bypassed:
         print("netcheck: request bypassed --proxy-server: %s" % ", ".join(bypassed), file=sys.stderr)
         return 1
-    extra = [h for h in dead.seen() if h not in allow]
+    extra = [h for h in dead.seen() if not allowed(h, allow)]
     if extra:
         print("netcheck: Chromium still calls out: %s" % ", ".join(extra), file=sys.stderr)
         return 1
