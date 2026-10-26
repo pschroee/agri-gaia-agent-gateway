@@ -74,7 +74,7 @@ func TestPlanSchemaInMCP(t *testing.T) {
 		return v
 	}
 	plan := at(s, "properties", "plan")
-	if at(plan, "type") != "object" || at(plan, "additionalProperties") != false {
+	if at(plan, "type") != "object" || at(plan, "additionalProperties") != nil {
 		t.Errorf("plan: %v", plan)
 	}
 	if at(plan, "properties", "steps", "items", "properties", "tool") == nil {
@@ -83,18 +83,19 @@ func TestPlanSchemaInMCP(t *testing.T) {
 	if at(plan, "properties", "steps", "items", "properties", "body") == nil || at(plan, "properties", "replaces") == nil {
 		t.Errorf("fields missing: %s", raw)
 	}
-	if got := at(plan, "properties", "budget", "properties", "max_auto_turns", "maximum"); got != float64(50) {
-		t.Errorf("max_auto_turns maximum: %v", got)
-	}
-	// pi checks MCP arguments against the schema before the gateway sees them: steps as JSON text must pass (#218).
+	// pi checks MCP arguments against the schema before the gateway sees them (#218, live): steps as JSON text
+	// must pass, and no limit keyword may answer alone where the gateway lists every problem at once.
 	if typ, _ := at(plan, "properties", "steps", "type").([]any); len(typ) != 2 || typ[0] != "array" || typ[1] != "string" {
 		t.Errorf("steps type: %v, want [array string]", at(plan, "properties", "steps", "type"))
 	}
-	if got := at(plan, "properties", "steps", "maxItems"); got != float64(10) {
-		t.Errorf("maxItems: %v", got)
+	planRaw, _ := json.Marshal(plan)
+	for _, kw := range []string{`"maximum"`, `"minimum"`, `"maxItems"`, `"minItems"`, `"maxLength"`, `"minLength"`, `"exclusiveMinimum"`, `"additionalProperties":false`} {
+		if strings.Contains(string(planRaw), kw) {
+			t.Errorf("limit keyword %s in the plan schema: %s", kw, planRaw)
+		}
 	}
-	if got := at(plan, "properties", "steps", "items", "properties", "max_attempts", "maximum"); got != float64(3) {
-		t.Errorf("max_attempts maximum: %v", got)
+	if d, _ := at(plan, "properties", "budget", "properties", "max_auto_turns", "description").(string); !strings.Contains(d, "1 to 50") {
+		t.Errorf("max_auto_turns description: %q", d)
 	}
 	for _, hidden := range []string{"file_sha256", "file_bytes", "file_error"} {
 		if strings.Contains(string(raw), hidden) {
