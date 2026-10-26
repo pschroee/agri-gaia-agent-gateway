@@ -125,6 +125,10 @@ type ActivityFilter struct {
 	ChatID string
 	// ToolCall limits to the calls of one tool call (the step details link to them, issue L6/#123).
 	ToolCall string
+	// PlanID limits to the platform calls of one plan, PlanStep (> 0) to one step of it (issue #221). Only
+	// calls logged with a plan_id match; older calls are not matched afterwards.
+	PlanID   string
+	PlanStep int
 	Since    time.Time // inclusive
 	Until    time.Time // exclusive
 	Outcome  string
@@ -234,6 +238,12 @@ func activityWhere(f ActivityFilter, t, owner string, args *[]any) []string {
 		// they keep counting, while the owner and the period apply to them as always.
 		w = append(w, "sc.tool_call_id = "+add(f.ToolCall))
 	}
+	if f.PlanID != "" && t == "sc" {
+		w = append(w, "sc.plan_id::text = "+add(f.PlanID))
+		if f.PlanStep > 0 {
+			w = append(w, "sc.plan_step = "+add(f.PlanStep))
+		}
+	}
 	if !f.Since.IsZero() {
 		w = append(w, t+".created_at >= "+add(f.Since))
 	}
@@ -288,7 +298,7 @@ func (s *Store) ListActivity(ctx context.Context, f ActivityFilter) (ActivityPag
 	// asked nobody.
 	q := `SELECT sc.id, COALESCE(sc.chat_id, sc.deleted_chat)::text, sc.slot_id, sc.via, sc.op, sc.detail, sc.result, sc.created_at, sc.session,
 		sc.tool_call_id, sc.duration_ms, COALESCE(sc.effect, ''), ` + outcomeSQL + `, ` + internetSQL + `,
-		ap.id::text, ap.state, ap.created_at, ap.decided_at
+		ap.id::text, ap.state, ap.created_at, ap.decided_at, COALESCE(sc.plan_id::text, ''), sc.plan_step
 	FROM socket_calls sc LEFT JOIN chats c ON c.id = sc.chat_id LEFT JOIN deleted_chats d ON d.id = sc.deleted_chat
 	LEFT JOIN LATERAL (
 		SELECT a.id, a.state, a.created_at, a.decided_at FROM approvals a
@@ -312,7 +322,7 @@ func (s *Store) ListActivity(ctx context.Context, f ActivityFilter) (ActivityPag
 		var apCreated, apDecided *time.Time
 		if err := rows.Scan(&c.ID, &c.ChatID, &c.SlotID, &c.Via, &c.Op, &c.Detail, &c.Result, &c.CreatedAt, &c.Session,
 			&c.ToolCallID, &c.DurationMs, &c.Effect, &c.Outcome, &in.Action, &in.Origin, &in.Result,
-			&apID, &apState, &apCreated, &apDecided); err != nil {
+			&apID, &apState, &apCreated, &apDecided, &c.PlanID, &c.PlanStep); err != nil {
 			return page, err
 		}
 		switch c.Op {

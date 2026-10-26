@@ -14,6 +14,7 @@ import (
 	"net"
 	"net/http"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -1675,6 +1676,25 @@ func (s *Server) activity(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "kind: one of "+strings.Join(store.ActivityKinds, ", "))
 		return
 	}
+	if v := q.Get("plan"); v != "" {
+		if !planIDRe.MatchString(v) {
+			writeErr(w, http.StatusBadRequest, "plan: a plan id (uuid)")
+			return
+		}
+		f.PlanID = strings.ToLower(v)
+	}
+	if v := q.Get("step"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 || n > 99 {
+			writeErr(w, http.StatusBadRequest, "step: a step number from 1 to 99")
+			return
+		}
+		if f.PlanID == "" {
+			writeErr(w, http.StatusBadRequest, "step: needs plan")
+			return
+		}
+		f.PlanStep = n
+	}
 	for name, dst := range map[string]*time.Time{"since": &f.Since, "until": &f.Until} {
 		if v := q.Get(name); v != "" {
 			t, err := time.Parse(time.RFC3339, v)
@@ -1723,6 +1743,9 @@ func (s *Server) activity(w http.ResponseWriter, r *http.Request) {
 
 // validToolCallParam mirrors sock.validToolCallID for the ?call= filter of the activity: a tool call id is
 // printable, valid UTF-8 and at most 256 bytes.
+// planIDRe is the shape of a plan id (a uuid) in the plan parameter of the Activity.
+var planIDRe = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+
 func validToolCallParam(id string) bool {
 	if id == "" || len(id) > 256 || !utf8.ValidString(id) {
 		return false
