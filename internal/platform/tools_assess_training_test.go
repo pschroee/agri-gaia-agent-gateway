@@ -211,3 +211,11 @@ func TestSummarizePlanUploadSplit(t *testing.T) {
 		t.Errorf("step 2: %q", got[1])
 	}
 }
+
+func TestSplitToolDescriptionNamesCheckImages(t *testing.T) {
+	for _, want := range []string{"check_images", "suggested_train_share", "check_warning"} {
+		if !strings.Contains(splitDataset.Desc, want) {
+			t.Errorf("split_dataset description lacks %q", want)
+		}
+	}
+}

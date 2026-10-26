@@ -92,6 +92,84 @@ func SelectTrain(items []Item, share int) (train, kept []Item) {
 	return train, kept
 }
 
+// CheckImages are the sets a later check will find on the kept-back images: the validation images (the
+// interim check), the held-out images (the final check) and the minimums both need. The split predicts
+// them with the very functions the check uses, so the numbers are not a second formula.
+type CheckImages struct {
+	Validation    int  `json:"validation"`
+	Holdout       int  `json:"holdout"`
+	MinValidation int  `json:"min_validation"`
+	MinHoldout    int  `json:"min_holdout"`
+	Measurable    bool `json:"measurable"`
+}
+
+// CheckSetsOf predicts the check sets of a split: the kept-back images without those whose SHA-256
+// occurs in the training part (the check counts them as seen, P1), partitioned like the check does.
+func CheckSetsOf(train, kept []Item) CheckImages {
+	seen := make(map[string]bool, len(train))
+	for _, it := range train {
+		seen[it.SHA] = true
+	}
+	var heldOut []Item
+	for _, it := range kept {
+		if !seen[it.SHA] {
+			heldOut = append(heldOut, it)
+		}
+	}
+	v, h := Partition(heldOut)
+	return CheckImages{
+		Validation: len(v), Holdout: len(h),
+		MinValidation: MinValidationImages, MinHoldout: MinHoldoutImages,
+		Measurable: len(v) >= MinValidationImages && len(h) >= MinHoldoutImages,
+	}
+}
+
+// SuggestShare looks for the largest train share below share (in steps of ShareStep, not below
+// MinTrainShare) at which the check sets reach both minimums. A larger share never keeps more back.
+func SuggestShare(items []Item, share int) (int, CheckImages, bool) {
+	for s := share - ShareStep; s >= MinTrainShare; s -= ShareStep {
+		train, kept := SelectTrain(items, s)
+		if ci := CheckSetsOf(train, kept); ci.Measurable {
+			return s, ci, true
+		}
+	}
+	return 0, CheckImages{}, false
+}
+
+// ImagesNeeded is the number of annotated images a dataset with this many classes in equal parts needs
+// for a measurable check at this train share.
+func ImagesNeeded(classes, share int) int {
+	if classes < 1 {
+		classes = 1
+	}
+	for n := 1; n < 100000; n++ {
+		k := 0
+		for i := 0; i < n; i++ {
+			if i%splitModulus >= share/splitModulus {
+				k++
+			}
+		}
+		v := (k + 2) / 3
+		h := k - v
+		if classes*v >= MinValidationImages && classes*h >= MinHoldoutImages {
+			return n * classes
+		}
+	}
+	return 0
+}
+
+// checkWarning is the text for the agent when the later check will not be measurable.
+func checkWarning(kept int, ci CheckImages, sugg int, sci CheckImages, ok bool, classes int) string {
+	w := fmt.Sprintf("The later check will not be measurable: of the %d kept-back images it will use %d as validation images (at least %d) and %d as held-out images (at least %d).",
+		kept, ci.Validation, ci.MinValidation, ci.Holdout, ci.MinHoldout)
+	if ok {
+		return w + fmt.Sprintf(" With train_share %d it would get %d validation and %d held-out images. Tell the user before the training starts and ask whether to split again with train_share %d (a new split creates another dataset and needs its own approval) or to train on this dataset with a check that will be reported as not measured.",
+			sugg, sci.Validation, sci.Holdout, sugg)
+	}
+	return w + fmt.Sprintf(" No train_share reaches that: with %d classes in equal parts the dataset needs about %d annotated images at train_share 50. Tell the user before the training starts: a model trained on this dataset will be reported as not measured, and more annotated images make the check possible.",
+		classes, ImagesNeeded(classes, MinTrainShare))
+}
+
 // cvatImage is one <image> of a CVAT annotation: its name, the labels of its <tag> elements and how many
 // shapes (boxes, polygons, polylines, masks) it carries.
 type cvatImage struct {
@@ -341,13 +419,16 @@ type splitRequest struct {
 
 // splitAnswer is what the split tool answers: the new dataset and the numbers of the real split.
 type splitAnswer struct {
-	TrainDatasetID int64    `json:"train_dataset_id"`
-	Name           string   `json:"name"`
-	TrainImages    int      `json:"train_images"`
-	KeptImages     int      `json:"kept_images"`
-	SkippedImages  int      `json:"skipped_images"`
-	Classes        []string `json:"classes"`
-	Note           string   `json:"note"`
+	TrainDatasetID      int64       `json:"train_dataset_id"`
+	Name                string      `json:"name"`
+	TrainImages         int         `json:"train_images"`
+	KeptImages          int         `json:"kept_images"`
+	SkippedImages       int         `json:"skipped_images"`
+	Classes             []string    `json:"classes"`
+	CheckImages         CheckImages `json:"check_images"`
+	CheckWarning        string      `json:"check_warning,omitempty"`
+	SuggestedTrainShare int         `json:"suggested_train_share,omitempty"`
+	Note                string      `json:"note"`
 }
 
 // splitDataset is POST /_agw/assess/splits (R1.1–R1.3): it reads the source dataset, picks the images of
@@ -393,6 +474,20 @@ func (s *Service) splitDataset(ctx context.Context, chatID string, req platform.
 	if len(train) == 0 {
 		return errResult("the training share leaves no image for the training dataset"), nil
 	}
+	ci := CheckSetsOf(train, kept)
+	var warning string
+	var suggested int
+	if !ci.Measurable {
+		classSet := map[string]bool{}
+		for _, it := range items {
+			classSet[it.Class] = true
+		}
+		sugg, sci, ok := SuggestShare(items, body.TrainShare)
+		warning = checkWarning(len(kept), ci, sugg, sci, ok, len(classSet))
+		if ok {
+			suggested = sugg
+		}
+	}
 	description := fmt.Sprintf("Training part of dataset %s (%d of %d images); created by the agent gateway for held-out checks",
 		source.Name, len(train), len(items))
 	trainID, err := s.createTrainingDataset(ctx, chatID, createSpec{
@@ -410,8 +505,12 @@ func (s *Service) splitDataset(ctx context.Context, chatID string, req platform.
 	answer := splitAnswer{
 		TrainDatasetID: trainID, Name: body.Name, TrainImages: len(train), KeptImages: len(kept),
 		SkippedImages: stats.Skipped, Classes: source.Classes,
+		CheckImages: ci, CheckWarning: warning, SuggestedTrainShare: suggested,
 		Note: fmt.Sprintf("Training dataset %d is ready; %d images of dataset %d are kept back for checks, and the gateway decides which. Train on the training dataset and check the model afterwards with {{tool:assess_model}}.",
 			trainID, len(kept), body.DatasetID),
+	}
+	if !ci.Measurable {
+		answer.Note += " Read check_warning before the training."
 	}
 	return jsonResult(answer)
 }

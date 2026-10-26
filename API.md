@@ -2099,7 +2099,14 @@ report form and the figures are those of the result checks (R0); this section na
   or with several are counted in `skipped_images`, and a dataset with boxes or polygons is refused
   (`split_dataset supports classification datasets (one tag per image); this dataset has boxes or polygons`,
   P8). The answer names `train_dataset_id`, both counts and the classes. Every image is identified by its
-  content, so a copy under another file name counts as seen (P1).
+  content, so a copy under another file name counts as seen (P1). The answer also predicts the later check:
+  `check_images` (`validation`, `holdout`, `min_validation` 5, `min_holdout` 20, `measurable`) is computed with
+  the functions the check uses (`SelectTrain`, the unseen kept-back images, `Partition`), so it is exact when the
+  training saw only the training part and the check measures on the source. When `measurable` is false the answer
+  carries `check_warning` (what the check will find, and what to tell the user before the training starts) and
+  `suggested_train_share`, the largest share below the chosen one at which both minimums are reached (missing if
+  none is; the warning then names about how many annotated images are needed at share 50), and the `note` ends
+  with `Read check_warning before the training.` The split still runs and creates the dataset.
 - **`assess_model`** (`model_id`, `eval_dataset_id` optional, `final` optional; R2 adds the source `path`
   and what the agent declares about its own model) starts a check in the background and answers
   `{"check_id", "state": "queued", "note"}`; `assess_status` and the wake-up follow it. The evaluation
@@ -2118,7 +2125,8 @@ report form and the figures are those of the result checks (R0); this section na
   also carries a sample of up to ten seen images per class for the class order (P9).
 - **The verdict** (`assess.JudgeClassification`, `internal/assess/training.go`) is `not measured` when the
   origin is unknown, the model is no ONNX model, the output is neither `[1, C]` nor `[C]`, the evaluation
-  dataset holds no held-out image, fewer than 5 validation images or fewer than 20 held-out images exist.
+  dataset holds no held-out image, fewer than 5 validation images or fewer than 20 held-out images exist (both
+  reasons are named when both are missed, validation first; the header reads the first).
   Otherwise it is `usable` only when the class order is clear, every prediction is finite, the model has as
   many outputs as there are classes, the accuracy is at least 0.10 above the majority baseline, the
   binomial test "better than the baseline" stays below 5 % and every class with at least three images has a

@@ -58,6 +58,7 @@ func TestTrainingAdviceSkillBody(t *testing.T) {
 		"<box>",
 		"Wait for consent",
 		"split-dataset",
+		"at least 5 validation and 20 held-out images",
 	} {
 		if !strings.Contains(content, want) {
 			t.Errorf("skill text lacks %q", want)

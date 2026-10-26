@@ -109,6 +109,16 @@ func TestJudgeClassRecall(t *testing.T) {
 	}
 }
 
+func TestJudgeTooFewBoth(t *testing.T) {
+	in := judgeInput()
+	in.ValidationImages, in.HoldoutImages = 2, 4
+	rep := JudgeClassification(in)
+	if rep.Verdict != NotMeasured || len(rep.Reasons) != 2 ||
+		rep.Reasons[0] != TooFewValidation(2) || rep.Reasons[1] != TooFewHoldout(4) {
+		t.Fatalf("%s %v", rep.Verdict, rep.Reasons)
+	}
+}
+
 // Too few images are not measured: fewer than 5 validation images and fewer than 20 held-out images
 // (R1.9, L15, L16).
 func TestJudgeTooFew(t *testing.T) {
