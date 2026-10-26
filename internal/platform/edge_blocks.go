@@ -37,9 +37,9 @@ const (
 	MsgEdgeReadOnly        = "edge groups, tags and edge devices can only be read by the agent"
 )
 
-// deploymentListRe matches the one reading path below /edge-devices/ that stays open: the deployments
-// of a device.
-var deploymentListRe = regexp.MustCompile(`^/edge-devices/[^/]+/deployments$`)
+// deploymentListRe matches the reading paths below /edge-devices/ that stay open: the deployments of a
+// device and the containers on it (#231).
+var deploymentListRe = regexp.MustCompile(`^/edge-devices/[^/]+/(deployments|containers)$`)
 
 // blockedEdgeCall returns the reason that keeps this call from the agent, or "" when it may go. The
 // path is compared in lower case, because the platform's paths are case sensitive but not uniformly
@@ -67,7 +67,7 @@ func blockedEdgeCall(r Request) string {
 		}
 		return MsgEdgeReadOnly
 	case strings.HasPrefix(p, "/edge-devices/"):
-		// GET /edge-devices/{id}/deployments lists what runs on the device and stays readable. The
+		// GET /edge-devices/{id}/deployments and /containers list what runs on the device and stay readable. The
 		// writing GET /edge-devices/{id} is not: the backend registers the device with Portainer
 		// there, under a name the agent can match (Review 5, W5).
 		if r.Method == http.MethodGet && deploymentListRe.MatchString(p) {
