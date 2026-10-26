@@ -107,6 +107,50 @@ type PlatformPrechecker interface {
 	PlatformPrecheck(ctx context.Context, chatID string, req platform.Request) (platform.Result, bool)
 }
 
+// FailedCallsCounter is the hard limit for failed tool calls in a row (chat.Manager, #217). A backend without it
+// counts nothing and refuses nothing.
+type FailedCallsCounter interface {
+	// FailedCallsStopped is the refusal text while the chat is stopped for failed calls, "" otherwise.
+	FailedCallsStopped(chatID string) string
+	// NoteCallOutcome counts the result of one call of the agent (key: the name of the tool) and returns what the
+	// gateway adds to the answer (warning or stop notice), "" if nothing.
+	NoteCallOutcome(ctx context.Context, chatID, slotID, key string, res platform.Result, err error) string
+}
+
+// failedCallsStopped is the refusal text for a chat the gateway stopped for failed calls, "" otherwise.
+func (h *handler) failedCallsStopped(chat string) string {
+	if fc, ok := h.b.(FailedCallsCounter); ok {
+		return fc.FailedCallsStopped(chat)
+	}
+	return ""
+}
+
+// counted runs one call of the agent and counts its result against the limit for failed tool calls in a row (#217):
+// one result per call, whatever the binding. A stopped chat is refused without running the call. The gateway's
+// warning or stop notice goes to the agent with the answer. The path directory (api_paths) is refused when the
+// chat is stopped but never counted.
+func (h *handler) counted(ctx context.Context, chat, via, key string, run func() (platform.Result, error)) (platform.Result, error) {
+	fc, ok := h.b.(FailedCallsCounter)
+	if !ok {
+		return run()
+	}
+	if s := fc.FailedCallsStopped(chat); s != "" {
+		h.logCall(ctx, chat, via, "platform", key, s)
+		return platform.Result{Status: "error", Message: s}, nil
+	}
+	res, err := run()
+	if key == "api_paths" {
+		return res, err
+	}
+	if note := fc.NoteCallOutcome(ctx, chat, h.slot, key, res, err); note != "" {
+		if err != nil {
+			return res, fmt.Errorf("%w\n%s", err, note)
+		}
+		res = platform.AppendAgentNote(res, note)
+	}
+	return res, err
+}
+
 // BindingsReader tells which bindings a chat has (chat.Manager). The references to tools in the texts for the
 // agent are rendered with them (#200); a backend without it renders for the binding of the call alone.
 type BindingsReader interface {
@@ -699,7 +743,10 @@ func (h *handler) platform(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "not assigned"})
 		return
 	}
-	res, err := h.doPlatform(h.callerCtx(r), chat, "cli", tool, raw)
+	ctx := h.callerCtx(r)
+	res, err := h.counted(ctx, chat, "cli", tool.Name, func() (platform.Result, error) {
+		return h.doPlatform(ctx, chat, "cli", tool, raw)
+	})
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -981,7 +1028,10 @@ func (h *handler) mcpServer() *mcp.Server {
 				if err != nil {
 					return textResult(true, "error: %v", err), nil
 				}
-				res, err := h.doPlatform(h.callerExtra(ctx, req), chat, "mcp", t, req.Params.Arguments)
+				cctx := h.callerExtra(ctx, req)
+				res, err := h.counted(cctx, chat, "mcp", t.Name, func() (platform.Result, error) {
+					return h.doPlatform(cctx, chat, "mcp", t, req.Params.Arguments)
+				})
 				if err != nil {
 					return textResult(true, "error: %v", err), nil
 				}
@@ -1098,6 +1148,11 @@ func (h *handler) platformAPI(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case path == "/_agw/paths" && strings.HasPrefix(q["prefix"], "/_agw"):
 		// The arguments of the gateway's own paths, answered inside the gateway (#199).
+		if s := h.failedCallsStopped(chat); s != "" { // stopped for failed calls (#217): nothing is answered
+			h.logCall(ctx, chat, via, "platform", "api_paths", s)
+			fail(http.StatusBadRequest, s)
+			return
+		}
 		body := h.render(ctx, chat, via, platform.GatewayIndexDetail(q["prefix"]))
 		h.logCall(ctx, chat, via, "platform", "api_paths", "ok")
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
@@ -1107,27 +1162,43 @@ func (h *handler) platformAPI(w http.ResponseWriter, r *http.Request) {
 		// Condensed path directory like the tool api_paths (the OpenAPI description is ~100 KB).
 		tool, _ := platform.Lookup("api_paths")
 		args, _ := json.Marshal(map[string]string{"prefix": q["prefix"]})
-		res, err = h.doPlatform(ctx, chat, via, tool, args)
+		res, err = h.counted(ctx, chat, via, tool.Name, func() (platform.Result, error) {
+			return h.doPlatform(ctx, chat, via, tool, args)
+		})
 	case strings.ToLower(path) == "/_agw" || strings.HasPrefix(strings.ToLower(path), "/_agw/"):
 		// A gateway path is the tool of the same name (#199): the call is built like the tool's, so the
 		// checks, the delegation and the approval are the same as in the other bindings. A path without a
 		// tool, the notebook paths and the reading paths of the gateway are refused here.
 		tool, args, why := platform.GatewayCall(r.Method, path, q, bytes.TrimSpace(raw))
+		key := tool.Name
+		if key == "" {
+			key = platform.CallKey(r.Method, path)
+		}
 		if why != "" {
-			h.logCall(ctx, chat, via, "platform", r.Method+" "+path, "refused: "+why)
-			fail(http.StatusBadRequest, why)
+			// A refusal of the gateway is a failed call like any other (#217).
+			res, err = h.counted(ctx, chat, via, key, func() (platform.Result, error) {
+				h.logCall(ctx, chat, via, "platform", r.Method+" "+path, "refused: "+why)
+				return platform.Result{Status: "error", Message: why}, nil
+			})
+			fail(http.StatusBadRequest, res.Message)
 			return
 		}
 		if args == nil { // rights, capabilities, plan: passed through
-			res, err = h.runGatewayRaw(ctx, chat, via, r.Method, path, q, raw)
+			res, err = h.counted(ctx, chat, via, key, func() (platform.Result, error) {
+				return h.runGatewayRaw(ctx, chat, via, r.Method, path, q, raw)
+			})
 			break
 		}
-		res, err = h.doPlatform(ctx, chat, via, tool, args)
+		res, err = h.counted(ctx, chat, via, key, func() (platform.Result, error) {
+			return h.doPlatform(ctx, chat, via, tool, args)
+		})
 		if err == nil && res.HTTPStatus == 0 && res.Status == "error" && strings.Contains(res.Message, "unknown argument") {
 			res.Message += platform.RESTHint
 		}
 	default:
-		res, err = h.runGatewayRaw(ctx, chat, via, r.Method, path, q, raw)
+		res, err = h.counted(ctx, chat, via, platform.CallKey(r.Method, path), func() (platform.Result, error) {
+			return h.runGatewayRaw(ctx, chat, via, r.Method, path, q, raw)
+		})
 	}
 	if err != nil {
 		fail(http.StatusInternalServerError, err.Error())

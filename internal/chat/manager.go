@@ -277,6 +277,11 @@ type Options struct {
 	// (0 = DefaultAutoTurnsMax, < 0 = none). Above that the manager stops (Review 3, H2).
 	AutoTurnsMax int
 
+	// MaxFailedCalls: the chat is stopped after this many failed tool calls in a row, of all tools together;
+	// MaxFailedSameTool: the same for the calls of one tool (0 = off for both; #217).
+	MaxFailedCalls    int
+	MaxFailedSameTool int
+
 	// SearchMaxHours: a training search ends after this many hours at the latest (0: config.DefaultSearchMaxHours).
 	SearchMaxHours int
 
@@ -371,6 +376,8 @@ type Manager struct {
 	// expCache: the model and experiment profile of a chat, held in memory for planCacheTTL so that the
 	// LLM proxy does not put a query behind every call (X3).
 	expCache map[string]expGateEntry
+	// failed: the failed tool calls in a row per chat, over all sessions of the chat (under mu; #217).
+	failed map[string]*failStreak
 	// planAlertMarks: the state each autonomous plan was last published in, so that its alert goes out
 	// once per state change (A-E4, D4.3); by plan id.
 	planAlertMarks map[string]string
@@ -406,6 +413,7 @@ func NewManager(st *store.Store, p *pool.Pool[Agent], cat *config.Catalog, blobs
 	case opt.AutoTurnsMax < 0:
 		opt.AutoTurnsMax = 0
 	}
+	opt.MaxFailedCalls, opt.MaxFailedSameTool = max(0, opt.MaxFailedCalls), max(0, opt.MaxFailedSameTool)
 	if opt.Toolsets.Empty() {
 		opt.Toolsets, _ = toolset.Parse(toolset.Default)
 	}
@@ -421,7 +429,7 @@ func NewManager(st *store.Store, p *pool.Pool[Agent], cat *config.Catalog, blobs
 		imgMu: map[string]*sync.Mutex{}, wsMu: map[string]*sync.Mutex{}, qMu: map[string]*sync.Mutex{},
 		sending: map[string]bool{}, delivering: map[string][]*turnMeta{}, resuming: map[string]bool{}, starting: map[string]bool{}, pendingModel: map[string]string{}, levels: map[string][]string{}, userAt: map[string]time.Time{}, endSeen: map[string]map[int]bool{}, aborts: map[string]uint64{},
 		rechecks: map[string]recheck{}, apMu: map[string]*sync.Mutex{}, planCache: map[string]planCacheEntry{},
-		expCache: map[string]expGateEntry{}, grants: newGrantBook()}
+		expCache: map[string]expGateEntry{}, grants: newGrantBook(), failed: map[string]*failStreak{}}
 }
 
 // userActive records an action of the user (postponement by background tasks, M1).
@@ -1098,6 +1106,12 @@ func (m *Manager) Abort(ctx context.Context, chatID string) (ChatView, error) {
 // abortWith stops the running turn of a chat. reason names what did it (AbortUser and the constants next to it) and
 // is recorded on the turn before pi is asked to stop.
 func (m *Manager) abortWith(ctx context.Context, chatID, reason string) (ChatView, error) {
+	return m.abortWithDetail(ctx, chatID, reason, "")
+}
+
+// abortWithDetail is abortWith with a sentence that says what exactly happened; it is recorded with the reason
+// (chat_turns.abort_detail) and shown under the stop line (#217).
+func (m *Manager) abortWithDetail(ctx context.Context, chatID, reason, detail string) (ChatView, error) {
 	m.mu.Lock()
 	m.userAt[chatID] = time.Now()
 	m.aborts[chatID]++ // a request currently on its way no longer goes to pi
@@ -1106,13 +1120,16 @@ func (m *Manager) abortWith(ctx context.Context, chatID, reason string) (ChatVie
 		// Do not hand over queued messages on their own after an abort: the user has stopped;
 		// they go with the next message or via "send now".
 		l.holdQueue, l.holdReason = true, HoldAbort
+		if reason == AbortFailedCalls {
+			l.holdReason = HoldFailedCalls
+		}
 	}
 	m.mu.Unlock()
-	m.markTurnAborted(chatID, l, reason)
+	m.markTurnAborted(chatID, l, reason, detail)
 	// Stop means "halt", not "throw away": a running autonomous plan is paused, not cancelled (A-E1, D1.10).
 	// Platform jobs (a training) keep running; stopping one is a separate action.
 	if ap, err := m.st.ActiveAutonomousPlan(ctx, chatID); err == nil && ap.State == plan.StateApproved {
-		if _, perr := m.pausePlan(ctx, chatID, ap.ID, "abort"); perr != nil {
+		if _, perr := m.pausePlan(ctx, chatID, ap.ID, pauseReasonFor(reason)); perr != nil {
 			slog.Error("plan not paused on abort", "chat", chatID, "plan", ap.ID, "error", perr)
 		}
 	}
@@ -1248,7 +1265,7 @@ func (m *Manager) armIdleAfter(chatID string, l *live, d time.Duration) {
 		m.mu.Unlock()
 		if stuck { // maximum duration exceeded: abort, then let it go idle
 			slog.Warn("turn too long, aborting", "chat", chatID)
-			m.markTurnAborted(chatID, l, AbortTimeLimit)
+			m.markTurnAborted(chatID, l, AbortTimeLimit, "")
 			_, _ = callT(l.slot.Worker, map[string]any{"type": "abort"}, 10*time.Second)
 			m.setRunning(l, false)
 		} else if wait, ok := m.keepAliveForBackground(chatID, l); ok {
@@ -1579,7 +1596,7 @@ func (m *Manager) startPiTurn(ctx context.Context, chatID string, l *live) {
 		m.mu.Unlock()
 		slog.Warn("limit for turns without the user reached, turn from pi aborted", "chat", chatID, "limit", ev.Limit)
 		m.publish(chatID, Event{Kind: "auto_held", Data: ev})
-		m.markTurnAborted(chatID, l, AbortTurnLimit)
+		m.markTurnAborted(chatID, l, AbortTurnLimit, "")
 		go func() { _, _ = callT(l.slot.Worker, map[string]any{"type": "abort"}, 10*time.Second) }()
 	}
 }

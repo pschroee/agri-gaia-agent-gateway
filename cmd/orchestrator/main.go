@@ -296,6 +296,7 @@ func run() error {
 		TrashRetentionDays: env.TrashRetentionDays,
 		AutoCompactDefault: env.AutoCompactDefault, CompactReserveTokens: env.CompactReserveTokens, CompactKeepRecent: env.CompactKeepRecent,
 		BgWakesPerHour: env.BgWakesPerHour, BgKeepAlive: env.BgKeepAlive, AutoTurnsMax: env.AutoTurnsMax,
+		MaxFailedCalls: env.MaxFailedToolCalls, MaxFailedSameTool: env.MaxFailedSameTool, // #217
 		Titler: newTitler(cat, env.TitleModel), Platform: plat, Toolsets: toolsets,
 		ExperimentUsers: env.ExperimentUsers, // X0.2: who may create experiment chats
 		Sessions:        sessionKeeper(auth), // A-E3: keeps the login of plan owners fresh

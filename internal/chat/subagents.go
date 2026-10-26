@@ -475,7 +475,7 @@ func (m *Manager) enforceSubagentLimit(chatID string, l *live, now time.Time) bo
 	slog.Warn("subagent limit exceeded, aborting", "chat", chatID, "running", n, "allowed", limit)
 	// The turn was cut short by the limit, not by the user, and every run that met it says so (issue #120, L3):
 	// the UI shows "stopped (subagent limit)" instead of "stopped by you".
-	m.markTurnAborted(chatID, l, AbortSubagentLimit)
+	m.markTurnAborted(chatID, l, AbortSubagentLimit, "")
 	for _, id := range running {
 		if err := m.st.SetSubagentStoppedBy(context.Background(), chatID, id, StoppedByLimit); err != nil {
 			slog.Warn("stopped_by not stored", "chat", chatID, "run", id, "err", err)

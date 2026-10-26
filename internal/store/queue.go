@@ -124,6 +124,9 @@ const (
 	// NoteSubagentStop: the user stopped a subagent (issue #120). Like NoteSubagentUser passive: the agent learns it
 	// with its next message or tool step, and such a note never wakes a resting chat.
 	NoteSubagentStop = "subagent_stop"
+	// NoteFailedCalls: the gateway stopped the agent after too many failed tool calls in a row (#217). Passive: it
+	// never wakes the agent and goes with the user's next message.
+	NoteFailedCalls = "failed_calls"
 	// NotePlan: the user paused, resumed or cancelled an autonomous plan (A-E1); queued so the agent learns it.
 	NotePlan = "plan"
 	// NotePlanStep: a step of an autonomous plan ended — its observed platform job finished or failed, or
