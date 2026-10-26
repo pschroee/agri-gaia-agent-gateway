@@ -489,6 +489,10 @@ func (s *summarizer) importTemplate() (string, []string) {
 
 // get reads a JSON value with one GET (cached per path); err is a short reason when it cannot be read.
 func (s *summarizer) get(path string, query map[string]string) (any, string) {
+	// A placeholder path ("{{step3.id}}") names a resource that does not exist yet: it is never read.
+	if strings.Contains(path, "{{") {
+		return nil, ""
+	}
 	key := path + "?" + fmt.Sprint(query)
 	if c, ok := s.cache[key]; ok {
 		return c.v, c.err
@@ -582,7 +586,7 @@ func (s *summarizer) named(kind, id string) string {
 
 func (s *summarizer) modelText(id string, m map[string]any, err string) string {
 	t := s.idText("model", id)
-	if n, ok := m["name"].(string); ok {
+	if n, ok := m["name"].(string); ok && n != "" {
 		t += " " + strconv.Quote(n)
 		if f, ok := m["format"].(string); ok && f != "" {
 			t += ", format " + f
