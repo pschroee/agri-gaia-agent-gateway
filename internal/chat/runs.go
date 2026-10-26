@@ -391,14 +391,14 @@ func (m *Manager) ExperimentRuns(ctx context.Context, f RunFilter) (RunPage, err
 	perChat := map[string]int{}
 	var filtered []runSource
 	for _, r := range all {
-		if !contains(f.Kinds, r.kind) {
+		if len(f.Kinds) > 0 && !contains(f.Kinds, r.kind) {
 			continue
 		}
 		inChat := f.ChatID == "" || r.chatID == f.ChatID
 		if inChat {
 			page.Counts[r.state]++
 		}
-		if !contains(f.States, r.state) {
+		if len(f.States) > 0 && !contains(f.States, r.state) {
 			continue
 		}
 		perChat[r.chatID]++
