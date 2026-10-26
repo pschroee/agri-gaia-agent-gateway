@@ -81,7 +81,7 @@ func bodyRef(rawBody json.RawMessage, key string) (ref int, literal string) {
 	return 0, text
 }
 
-// TemplateOK tells whether the installed template with this id comes from platform.AllowedTemplateGitURL.
+// TemplateOK tells whether the installed template with this id comes from one of the allowed repositories (platform.TemplateSources).
 type TemplateOK func(id string) bool
 
 // ImageOrigins sets ImageOrigin, Covered and UncoveredReason of every deployment start whose image the gateway can
@@ -161,7 +161,7 @@ func templateKnown(build store.PlanStep, in []store.PlanStep, mustBeDone bool, t
 			if json.Unmarshal(st.Form, &form) != nil {
 				return false
 			}
-			return len(form["git_url"]) == 1 && form["git_url"][0] == platform.AllowedTemplateGitURL
+			return len(form["git_url"]) == 1 && platform.AllowedTemplateURL(form["git_url"][0])
 		}
 		return false
 	case literal != "":
