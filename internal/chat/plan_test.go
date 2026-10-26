@@ -635,3 +635,37 @@ func TestPlanToolStepNotCoveredByRawRequest(t *testing.T) {
 		t.Fatalf("step claimed by a raw request: %+v", p.Steps[0])
 	}
 }
+
+// A plan proposed over MCP or REST carries no session header; it belongs to the main session, so the CLI call of its
+// first step (session "main") is the step, and the other way round (demo run of 26.10.2026, #218).
+func TestPlanWithoutSessionHeaderIsMain(t *testing.T) {
+	for _, tc := range []struct{ name, propose, call string }{
+		{"mcp plan, cli call", "", "main"},
+		{"cli plan, mcp call", "main", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := setup(t)
+			withPlanPlatform(t, e)
+			bare := context.Background()
+			c, _ := e.m.Create(bare, NewChat{})
+			slot := e.m.live[c.ID].slot.ID
+			pctx := bare
+			if tc.propose != "" {
+				pctx = store.WithSession(bare, tc.propose)
+			}
+			if r, _ := proposeAndDecideVia(t, e, pctx, c.ID, slot, "mcp", planTwo, true); r.Status != "ok" {
+				t.Fatalf("plan: %+v", r)
+			}
+			if p := onlyPlan(t, e, bare, c.ID); p.Session != "main" {
+				t.Fatalf("plan session %q, want main", p.Session)
+			}
+			cctx := bare
+			if tc.call != "" {
+				cctx = store.WithSession(bare, tc.call)
+			}
+			if st := e.m.planMatch(cctx, c.ID, liveCall(t, "GET", "/train/containers/7/model", "")); st == nil || st.Idx != 1 {
+				t.Fatalf("the call is not step 1: %+v", st)
+			}
+		})
+	}
+}
