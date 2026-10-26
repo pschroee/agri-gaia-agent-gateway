@@ -103,6 +103,9 @@ type Proposal struct {
 	Budget *Budget `json:"budget,omitempty"`
 	// Replaces names a running plan of this chat that this one replaces (D1.12).
 	Replaces string `json:"replaces,omitempty"`
+	// invalid marks the steps (from 1) that did not decode; ParseProposal reported them, Build skips them
+	// (issue #218).
+	invalid map[int]bool
 }
 
 // Budget is the budget the agent proposes for an autonomous plan (A-E1).
@@ -113,7 +116,7 @@ type Budget struct {
 }
 
 // StepSpec is one step as the agent writes it: either a platform tool with its arguments, or a
-// raw call (method, path, query, body). FileSHA256 and FileBytes are set by the socket, not by the agent.
+// raw call (method, path, query, body). FileSHA256, FileBytes and FileError are set by the socket, not by the agent.
 type StepSpec struct {
 	Tool        string            `json:"tool,omitempty"`
 	Args        json.RawMessage   `json:"args,omitempty"`
@@ -124,6 +127,8 @@ type StepSpec struct {
 	Description string            `json:"description,omitempty"`
 	FileSHA256  []string          `json:"file_sha256,omitempty"`
 	FileBytes   []int64           `json:"file_bytes,omitempty"`
+	// FileError: the socket could not read the files of this step (written by the socket, issue #218).
+	FileError string `json:"file_error,omitempty"`
 	// MaxAttempts: how often an autonomous plan may repeat this step after a failure (1 to 3, A-E1).
 	MaxAttempts int `json:"max_attempts,omitempty"`
 }
@@ -136,69 +141,110 @@ type Classify func(r platform.Request) (effect, action string, confirmEach bool)
 type Resolve func(n int) (string, bool)
 
 // ParseProposal checks the body of propose_plan against the budget limits (A-E1). Duplicate keys are
-// refused before the fields are read; unknown fields are an error.
+// refused before the fields are read; unknown fields are an error. Every problem found is reported at once
+// (Problems, issue #218): a proposal with a broken step still gives back its other steps, so that Build can
+// check them too. Only a proposal that cannot be read at all (no JSON, duplicate keys, a head that does not
+// decode) gives back an empty Proposal.
 func ParseProposal(raw []byte, lim Limits) (Proposal, error) {
-	p, err := parseProposal(raw)
-	if err != nil {
-		return Proposal{}, err
-	}
-	if err := p.checkBudget(lim); err != nil {
-		return Proposal{}, err
-	}
-	return p, nil
+	p, probs := parseProposal(raw)
+	p.checkBudget(lim, &probs)
+	return p, probs.err()
 }
 
 // parseProposal reads and checks the shape of a proposal, without the budget (used where the limits do
 // not matter, e.g. reading the file references of a proposal before it is decided).
-func parseProposal(raw []byte) (Proposal, error) {
+func parseProposal(raw []byte) (Proposal, Problems) {
+	var probs Problems
+	raw = unwrapText(raw)
 	if _, err := Canonical(raw); err != nil {
-		return Proposal{}, fmt.Errorf("plan: %w", err)
+		probs.add(0, fmt.Errorf("plan: %w", err))
+		return Proposal{}, probs
+	}
+	var head struct {
+		Title    string            `json:"title"`
+		Steps    []json.RawMessage `json:"steps"`
+		Mode     string            `json:"mode,omitempty"`
+		Budget   *Budget           `json:"budget,omitempty"`
+		Replaces string            `json:"replaces,omitempty"`
 	}
 	d := json.NewDecoder(bytes.NewReader(raw))
 	d.DisallowUnknownFields()
-	var p Proposal
-	if err := d.Decode(&p); err != nil {
-		return Proposal{}, fmt.Errorf("plan is not valid: %v", err)
+	if err := d.Decode(&head); err != nil {
+		probs.add(0, fmt.Errorf("plan is not valid: %v", err))
+		return Proposal{}, probs
 	}
-	title := strings.TrimSpace(p.Title)
-	if n := utf8.RuneCountInString(title); n == 0 || n > MaxTitle {
-		return Proposal{}, fmt.Errorf("title must have 1 to %d characters", MaxTitle)
+	p := Proposal{Title: strings.TrimSpace(head.Title), Mode: head.Mode, Budget: head.Budget, Replaces: head.Replaces}
+	if n := utf8.RuneCountInString(p.Title); n == 0 || n > MaxTitle {
+		probs.add(0, fmt.Errorf("title must have 1 to %d characters", MaxTitle))
 	}
-	p.Title = title
-	if len(p.Steps) == 0 || len(p.Steps) > MaxSteps {
-		return Proposal{}, fmt.Errorf("a plan has 1 to %d steps", MaxSteps)
+	if len(head.Steps) == 0 || len(head.Steps) > MaxSteps {
+		probs.add(0, fmt.Errorf("a plan has 1 to %d steps", MaxSteps))
+		return p, probs
 	}
-	for i, s := range p.Steps {
-		if utf8.RuneCountInString(s.Description) > MaxDescription {
-			return Proposal{}, fmt.Errorf("step %d: description longer than %d characters", i+1, MaxDescription)
+	p.Steps = make([]StepSpec, len(head.Steps))
+	p.invalid = map[int]bool{}
+	for i, rs := range head.Steps {
+		idx := i + 1
+		spec, err := decodeStep(rs)
+		if err != nil {
+			probs.add(idx, err)
+			p.invalid[idx] = true
+			continue
+		}
+		p.Steps[i] = spec
+		if utf8.RuneCountInString(spec.Description) > MaxDescription {
+			probs.add(idx, fmt.Errorf("description longer than %d characters", MaxDescription))
+			p.invalid[idx] = true
 		}
 	}
-	return p, nil
+	return p, probs
+}
+
+// decodeStep reads one step; unknown fields are an error. A step that is text is refused with a hint at
+// the shape of a step (a broken array often leaves a lone string behind).
+func decodeStep(raw json.RawMessage) (StepSpec, error) {
+	var spec StepSpec
+	if t := bytes.TrimSpace(raw); len(t) > 0 && t[0] == '"' {
+		var s string
+		_ = json.Unmarshal(t, &s)
+		if r := []rune(s); len(r) > 40 {
+			s = string(r[:40]) + "…"
+		}
+		return spec, fmt.Errorf("a step is a JSON object {\"tool\": …, \"args\": {…}} or {\"method\": …, \"path\": …}, not the text %q", s)
+	}
+	d := json.NewDecoder(bytes.NewReader(raw))
+	d.DisallowUnknownFields()
+	if err := d.Decode(&spec); err != nil {
+		return StepSpec{}, err
+	}
+	return spec, nil
 }
 
 // Autonomous reports whether the proposal asks for an autonomous plan.
 func (p Proposal) Autonomous() bool { return p.Mode == ModeAutonomous }
 
-// checkBudget fills in the defaults of an autonomous plan's budget and refuses values above the limits;
+// checkBudget fills in the defaults of an autonomous plan's budget and records every value above the limits;
 // values are never silently shortened (D1.6). A budget or max_attempts without mode autonomous is refused.
-func (p *Proposal) checkBudget(lim Limits) error {
+func (p *Proposal) checkBudget(lim Limits, probs *Problems) {
 	switch p.Mode {
 	case "", ModeInteractive:
 		if p.Budget != nil {
-			return errors.New("budget and max_attempts need \"mode\": \"autonomous\"")
+			probs.add(0, errors.New("budget and max_attempts need \"mode\": \"autonomous\""))
 		}
 		for i, s := range p.Steps {
 			if s.MaxAttempts > 0 {
-				return fmt.Errorf("step %d: max_attempts needs \"mode\": \"autonomous\"", i+1)
+				probs.add(i+1, errors.New("max_attempts needs \"mode\": \"autonomous\""))
 			}
 		}
-		return nil
+		return
 	case ModeAutonomous:
 	default:
-		return fmt.Errorf("mode must be %q or %q, not %q", ModeInteractive, ModeAutonomous, p.Mode)
+		probs.add(0, fmt.Errorf("mode must be %q or %q, not %q", ModeInteractive, ModeAutonomous, p.Mode))
+		return
 	}
 	if lim.MaxDuration <= 0 || lim.MaxLLMCost <= 0 {
-		return errors.New("autonomous plans are not configured on this instance")
+		probs.add(0, errors.New("autonomous plans are not configured on this instance"))
+		return
 	}
 	if p.Budget == nil {
 		p.Budget = &Budget{}
@@ -209,37 +255,36 @@ func (p *Proposal) checkBudget(lim Limits) error {
 	case b.MaxDurationMinutes == 0:
 		b.MaxDurationMinutes = DefaultPlanDurationMinutes
 	case b.MaxDurationMinutes < 0:
-		return errors.New("budget: max_duration_minutes must not be negative")
+		probs.add(0, errors.New("budget: max_duration_minutes must not be negative"))
 	case b.MaxDurationMinutes > maxMinutes:
-		return fmt.Errorf("budget: max_duration_minutes is %d, at most %d", b.MaxDurationMinutes, maxMinutes)
+		probs.add(0, fmt.Errorf("budget: max_duration_minutes is %d, at most %d", b.MaxDurationMinutes, maxMinutes))
 	}
 	switch {
 	case b.MaxLLMCostUSD == 0:
 		b.MaxLLMCostUSD = DefaultPlanLLMCostUSD
 	case b.MaxLLMCostUSD < 0:
-		return errors.New("budget: max_llm_cost_usd must not be negative")
+		probs.add(0, errors.New("budget: max_llm_cost_usd must not be negative"))
 	case b.MaxLLMCostUSD > lim.MaxLLMCost:
-		return fmt.Errorf("budget: max_llm_cost_usd is %.2f, at most %.2f", b.MaxLLMCostUSD, lim.MaxLLMCost)
+		probs.add(0, fmt.Errorf("budget: max_llm_cost_usd is %.2f, at most %.2f", b.MaxLLMCostUSD, lim.MaxLLMCost))
 	}
 	switch {
 	case b.MaxAutoTurns == 0:
 		b.MaxAutoTurns = DefaultPlanAutoTurns
 	case b.MaxAutoTurns < 0:
-		return errors.New("budget: max_auto_turns must not be negative")
+		probs.add(0, errors.New("budget: max_auto_turns must not be negative"))
 	case b.MaxAutoTurns > MaxAutoTurnsCap:
-		return fmt.Errorf("budget: max_auto_turns is %d, at most %d", b.MaxAutoTurns, MaxAutoTurnsCap)
+		probs.add(0, fmt.Errorf("budget: max_auto_turns is %d, at most %d", b.MaxAutoTurns, MaxAutoTurnsCap))
 	}
 	for i, s := range p.Steps {
 		switch {
 		case s.MaxAttempts == 0:
 			p.Steps[i].MaxAttempts = MinPlanAttempts
 		case s.MaxAttempts < MinPlanAttempts:
-			return fmt.Errorf("step %d: max_attempts must be %d to %d", i+1, MinPlanAttempts, MaxPlanAttempts)
+			probs.add(i+1, fmt.Errorf("max_attempts must be %d to %d", MinPlanAttempts, MaxPlanAttempts))
 		case s.MaxAttempts > MaxPlanAttempts:
-			return fmt.Errorf("step %d: max_attempts is %d, at most %d", i+1, s.MaxAttempts, MaxPlanAttempts)
+			probs.add(i+1, fmt.Errorf("max_attempts is %d, at most %d", s.MaxAttempts, MaxPlanAttempts))
 		}
 	}
-	return nil
 }
 
 // FallbackEffect classifies a call until the delegation rules name the effect (#63): a GET that
@@ -266,9 +311,13 @@ func StepRequest(spec StepSpec) (platform.Request, []int, error) {
 		case "propose_plan", "rights", "api_paths", "capabilities":
 			return platform.Request{}, nil, fmt.Errorf("tool %s cannot be a plan step", spec.Tool)
 		}
-		tool, ok := platform.Lookup(spec.Tool)
+		tool, ok := planLookup(spec.Tool)
 		if !ok {
-			return platform.Request{}, nil, fmt.Errorf("unknown tool %q", spec.Tool)
+			return platform.Request{}, nil, unknownToolError(spec.Tool)
+		}
+		switch tool.Name {
+		case "propose_plan", "rights", "api_paths", "capabilities":
+			return platform.Request{}, nil, fmt.Errorf("tool %s cannot be a plan step", tool.Name)
 		}
 		args, refs, err := sentinelJSON(spec.Args)
 		if err != nil {
@@ -276,7 +325,7 @@ func StepRequest(spec StepSpec) (platform.Request, []int, error) {
 		}
 		req, err := tool.Build(json.RawMessage(args))
 		if err != nil {
-			return platform.Request{}, nil, err
+			return platform.Request{}, nil, withParams(err, tool)
 		}
 		return req, refs, nil
 	}
@@ -339,6 +388,9 @@ func BuildStep(spec StepSpec, idx int) (store.PlanStep, platform.Request, []int,
 	if req.Path == planPath || req.Path == platform.RightsPath {
 		return fail(fmt.Errorf("%s cannot be a plan step", req.Path))
 	}
+	if spec.FileError != "" {
+		return fail(errors.New(spec.FileError))
+	}
 	if len(spec.FileSHA256) != len(req.Files) {
 		return fail(fmt.Errorf("%d file_sha256 for %d uploads", len(spec.FileSHA256), len(req.Files)))
 	}
@@ -362,7 +414,7 @@ func BuildStep(spec StepSpec, idx int) (store.PlanStep, platform.Request, []int,
 	}
 	st := store.PlanStep{Idx: idx, Description: spec.Description, Tool: spec.Tool, Method: req.Method}
 	if spec.Tool != "" {
-		if tool, ok := platform.Lookup(spec.Tool); ok {
+		if tool, ok := planLookup(spec.Tool); ok {
 			st.Tool = tool.Name
 			if tool.HasSteps() {
 				// A tool with steps builds its final call itself (it reads first and adds fields the agent never
@@ -421,30 +473,82 @@ func BuildStep(spec StepSpec, idx int) (store.PlanStep, platform.Request, []int,
 // no object) are refused. Every step
 // keeps its own approval rules; the plan only records them. A step that asks for every single
 // approval (confirm each, G1.1) is never covered: the plan's approval does not replace it.
+//
+// Build does not stop at the first problem (issue #218): every step is checked, a step that does not build
+// is left out, and a reference to such a step is not reported again. The error is a Problems; the steps
+// returned are only good if there is none.
 func Build(p Proposal, classify Classify) ([]store.PlanStep, error) {
 	if len(p.Steps) == 0 || len(p.Steps) > MaxSteps {
-		return nil, fmt.Errorf("a plan has 1 to %d steps", MaxSteps)
+		return nil, Problems{{Msg: fmt.Sprintf("a plan has 1 to %d steps", MaxSteps)}}
 	}
+	var probs Problems
 	out := make([]store.PlanStep, 0, len(p.Steps))
 	actions := make([]string, len(p.Steps)+1)
+	failed := make([]bool, len(p.Steps)+1)
+	// objectOf[n] is the step that created the object step n works on: the one placeholder of step n leads
+	// to it, directly or through the steps in between. It lets a refused reference name the right one.
+	objectOf := make([]int, len(p.Steps)+1)
+	built := map[int]store.PlanStep{}
 	for i, spec := range p.Steps {
 		idx := i + 1
+		if p.invalid[idx] {
+			failed[idx] = true
+			continue
+		}
 		st, sample, refs, err := BuildStep(spec, idx)
 		if err != nil {
-			return nil, err
+			probs.add(idx, err)
+			failed[idx] = true
+			continue
 		}
 		effect, action, confirmEach := classify(sample)
 		if effect == EffectRead {
-			return nil, fmt.Errorf("step %d: reading calls do not belong in a plan", idx)
+			probs.add(idx, errors.New("reading calls do not belong in a plan"))
+			failed[idx] = true
+			continue
 		}
+		if why := checkSampleFields(spec, sample); why != "" {
+			probs.add(idx, errors.New(why))
+			failed[idx] = true
+			continue
+		}
+		var distinct []int
+		seen := map[int]bool{}
 		for _, n := range refs {
+			if !seen[n] {
+				seen[n] = true
+				distinct = append(distinct, n)
+			}
+		}
+		if len(distinct) == 1 {
+			if n := distinct[0]; n < idx {
+				if actions[n] == delegation.Create {
+					objectOf[idx] = n
+				} else {
+					objectOf[idx] = objectOf[n]
+				}
+			}
+		}
+		for _, n := range distinct {
+			if n < idx && failed[n] {
+				continue // the step it points at is reported already
+			}
+			hint := ""
+			if n < idx {
+				if o := objectOf[n]; o > 0 {
+					hint = fmt.Sprintf("; step %d works on the object of step %d, so write \"{{step%d.id}}\"", n, o, o)
+				}
+			}
 			switch {
 			case n >= idx:
-				return nil, fmt.Errorf("step %d: {{step%d.id}} refers to this or a later step", idx, n)
+				probs.add(idx, fmt.Errorf("{{step%d.id}} refers to this or a later step", n))
 			case actions[n] == delegation.Run:
-				return nil, fmt.Errorf("step %d: {{step%d.id}} refers to step %d, which starts a job and creates no object; use the placeholder of the step that created the object", idx, n, n)
+				if hint == "" {
+					hint = "; use the placeholder of the step that created the object"
+				}
+				probs.add(idx, fmt.Errorf("{{step%d.id}} refers to step %d, which starts a job and creates no object%s", n, n, hint))
 			case actions[n] != delegation.Create:
-				return nil, fmt.Errorf("step %d: {{step%d.id}} refers to step %d, which does not create an object", idx, n, n)
+				probs.add(idx, fmt.Errorf("{{step%d.id}} refers to step %d, which does not create an object%s", n, n, hint))
 			}
 		}
 		actions[idx] = action
@@ -458,7 +562,12 @@ func Build(p Proposal, classify Classify) ([]store.PlanStep, error) {
 		if st.MaxAttempts < MinPlanAttempts {
 			st.MaxAttempts = MinPlanAttempts
 		}
+		built[idx] = st
 		out = append(out, st)
+	}
+	checkImageSteps(built, &probs)
+	if len(probs) > 0 {
+		return out, probs
 	}
 	return out, nil
 }
@@ -512,17 +621,25 @@ func SameShape(st store.PlanStep, tool string, r platform.Request) bool {
 }
 
 // FileRefs returns the uploads of every step (by step number, from 1) so that the socket can
-// read them and pin their SHA-256.
+// read them and pin their SHA-256. A step that does not read or does not build is left out: Build reports
+// it, and the files of the others are pinned all the same (issue #218). The error says only that the
+// proposal cannot be read at all.
 func FileRefs(raw []byte) (map[int][]platform.File, error) {
-	p, err := parseProposal(raw)
-	if err != nil {
-		return nil, err
+	p, probs := parseProposal(raw)
+	if len(p.Steps) == 0 {
+		if err := probs.err(); err != nil {
+			return nil, err
+		}
+		return nil, errors.New("plan has no steps")
 	}
 	out := map[int][]platform.File{}
 	for i, s := range p.Steps {
+		if p.invalid[i+1] {
+			continue
+		}
 		req, _, err := StepRequest(s)
 		if err != nil {
-			return nil, fmt.Errorf("step %d: %w", i+1, err)
+			continue
 		}
 		if len(req.Files) > 0 {
 			out[i+1] = req.Files
@@ -537,21 +654,72 @@ type FilePin struct {
 	Bytes  int64
 }
 
-// SetFilePins writes the pinned SHA-256 and size of each step's uploads into the proposal and drops every
-// value the agent wrote itself.
-func SetFilePins(raw []byte, pins map[int][]FilePin) ([]byte, error) {
-	p, err := parseProposal(raw)
+// stepFileFields are the fields of a step that only the socket writes.
+var stepFileFields = []string{"file_sha256", "file_bytes", "file_error"}
+
+// SetFilePins writes the pinned SHA-256 and size of each step's uploads into the proposal, and the reason
+// why a step's files could not be read (fileErrs, issue #218), and drops every value the agent wrote itself.
+// It works on the raw text of the steps, so a step that does not read is passed on unchanged and Build
+// reports it; JSON text of a plan, its steps or a step is unpacked first.
+func SetFilePins(raw []byte, pins map[int][]FilePin, fileErrs map[int]string) ([]byte, error) {
+	raw = unwrapText(raw)
+	if _, err := Canonical(raw); err != nil {
+		return nil, fmt.Errorf("plan: %w", err)
+	}
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &top); err != nil || top == nil {
+		return nil, errors.New("plan is not a JSON object")
+	}
+	var steps []json.RawMessage
+	if err := json.Unmarshal(top["steps"], &steps); err != nil {
+		return nil, errors.New("plan has no steps array")
+	}
+	for i := range steps {
+		var m map[string]json.RawMessage
+		if json.Unmarshal(steps[i], &m) != nil || m == nil {
+			continue
+		}
+		for _, f := range stepFileFields {
+			delete(m, f)
+		}
+		var sums []string
+		var sizes []int64
+		for _, pin := range pins[i+1] {
+			sums = append(sums, pin.SHA256)
+			sizes = append(sizes, pin.Bytes)
+		}
+		set := func(key string, v any) error {
+			b, err := json.Marshal(v)
+			if err == nil {
+				m[key] = b
+			}
+			return err
+		}
+		if len(sums) > 0 {
+			if err := set("file_sha256", sums); err != nil {
+				return nil, err
+			}
+			if err := set("file_bytes", sizes); err != nil {
+				return nil, err
+			}
+		}
+		if msg := fileErrs[i+1]; msg != "" {
+			if err := set("file_error", msg); err != nil {
+				return nil, err
+			}
+		}
+		b, err := json.Marshal(m)
+		if err != nil {
+			return nil, err
+		}
+		steps[i] = b
+	}
+	b, err := json.Marshal(steps)
 	if err != nil {
 		return nil, err
 	}
-	for i := range p.Steps {
-		p.Steps[i].FileSHA256, p.Steps[i].FileBytes = nil, nil
-		for _, pin := range pins[i+1] {
-			p.Steps[i].FileSHA256 = append(p.Steps[i].FileSHA256, pin.SHA256)
-			p.Steps[i].FileBytes = append(p.Steps[i].FileBytes, pin.Bytes)
-		}
-	}
-	return json.Marshal(p)
+	top["steps"] = b
+	return json.Marshal(top)
 }
 
 // Matches tells whether a live call is exactly the step: method, path, query, body (canonical
@@ -949,4 +1117,89 @@ func MatchesTool(st store.PlanStep, tool string, args json.RawMessage, r platfor
 		return false, "path"
 	}
 	return true, ""
+}
+
+// planLookup finds the tool a step names. Besides the name and the CLI name it takes what an agent
+// writes by habit: the MCP name (mcp_platform_x, platform_x) and the CLI name with underscores
+// (model_from_training). The step is stored under the tool's own name (issue #218).
+func planLookup(name string) (platform.Tool, bool) {
+	n := strings.TrimSpace(name)
+	n = strings.TrimPrefix(n, "mcp_")
+	n = strings.TrimPrefix(n, "platform_")
+	for _, c := range []string{n, strings.ReplaceAll(n, "_", "-"), strings.ReplaceAll(n, "-", "_")} {
+		if t, ok := platform.Lookup(c); ok {
+			return t, true
+		}
+	}
+	return platform.Tool{}, false
+}
+
+// unknownToolError names the tools a step may have meant: writing tools whose name contains the one given
+// (or the other way round), else those that share a word with it; at most three.
+func unknownToolError(name string) error {
+	n := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(name), "-", "_"))
+	n = strings.TrimPrefix(strings.TrimPrefix(n, "mcp_"), "platform_")
+	words := map[string]bool{}
+	for _, w := range strings.Split(n, "_") {
+		if len(w) >= 4 {
+			words[w] = true
+		}
+	}
+	var near, shared []string
+	for _, t := range platform.Tools {
+		if !t.Write || t.Name == "propose_plan" {
+			continue
+		}
+		switch {
+		case n != "" && (strings.Contains(t.Name, n) || strings.Contains(n, t.Name)):
+			near = append(near, t.Name)
+		default:
+			for _, w := range strings.Split(t.Name, "_") {
+				if words[w] {
+					shared = append(shared, t.Name)
+					break
+				}
+			}
+		}
+	}
+	list := near
+	if len(list) == 0 {
+		list = shared
+	}
+	if len(list) > 3 {
+		list = list[:3]
+	}
+	if len(list) == 0 {
+		return fmt.Errorf("unknown tool %q", name)
+	}
+	return fmt.Errorf("unknown tool %q; did you mean %s?", name, strings.Join(list, ", "))
+}
+
+// withParams adds the arguments a tool takes to the refusal of an unknown argument (issue #218): the agent
+// sees the right names in the same answer.
+func withParams(err error, t platform.Tool) error {
+	if !strings.HasPrefix(err.Error(), "unknown argument ") {
+		return err
+	}
+	names := make([]string, len(t.Params))
+	for i, p := range t.Params {
+		names[i] = p.Name
+	}
+	return fmt.Errorf("%s; %s takes: %s", err.Error(), t.Name, strings.Join(names, ", "))
+}
+
+// checkSampleFields applies the field rules of the platform (allowlists of a route, the name rule of a
+// deployment, the completeness of a body, issues #65 and #218) to the sample call of a step, for the
+// interactive plan as well as the autonomous one: a step that would be refused when it goes out does not
+// belong in an approval. A tool that completes its body at run time (update_model reads the model and
+// adds the fields the agent left out) is judged without the completeness of the body: the call that goes
+// out is complete and is checked in full by PlatformCall. A raw step is the body that goes out, so it must
+// be complete. It returns the reason, empty if the step is fine.
+func checkSampleFields(spec StepSpec, sample platform.Request) string {
+	if spec.Tool != "" {
+		if tool, ok := planLookup(spec.Tool); ok && tool.HasSteps() {
+			return delegation.ClassifyPartial(sample).Problem
+		}
+	}
+	return delegation.Classify(sample).Problem
 }

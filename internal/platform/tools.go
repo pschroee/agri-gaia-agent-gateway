@@ -27,6 +27,23 @@ type Param struct {
 	Desc     string
 	Required bool
 	Path     bool
+	// Schema, if set, is the complete JSON Schema of the argument; it replaces the one generated from Type
+	// (propose_plan, issue #218).
+	Schema map[string]any
+}
+
+// SchemaJSON is the schema of the argument as compact JSON, empty if the argument has none of its own.
+func (p Param) SchemaJSON() string {
+	if p.Schema == nil {
+		return ""
+	}
+	var b strings.Builder
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(p.Schema); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(b.String())
 }
 
 // Tool is a tool of the platform binding.
@@ -52,6 +69,16 @@ func (t Tool) Schema() map[string]any {
 	req := []string{}
 	for _, p := range t.Params {
 		s := map[string]any{"description": p.Desc}
+		if p.Schema != nil {
+			for k, v := range p.Schema {
+				s[k] = v
+			}
+			props[p.Name] = s
+			if p.Required {
+				req = append(req, p.Name)
+			}
+			continue
+		}
 		if p.Type != "" {
 			s["type"] = p.Type
 		}

@@ -43,12 +43,18 @@ func (m *Manager) ProposePlan(ctx context.Context, chatID, slotID, via string, r
 		return platform.Result{Status: "error", Message: platform.RefusedPrefix + trashRefusal}, nil
 	}
 	lim := plan.Limits{MaxDuration: m.opt.PlanMaxDuration, MaxLLMCost: m.opt.PlanMaxLLMCost}
-	p, err := plan.ParseProposal(req.Body, lim)
-	if err != nil {
-		return platform.Result{Status: "error", Message: err.Error()}, nil
+	// Every problem of the proposal comes back in one answer (issue #218): what ParseProposal found and what
+	// Build finds in the steps that did read.
+	p, perr := plan.ParseProposal(req.Body, lim)
+	if len(p.Steps) == 0 {
+		msg := "plan is not valid"
+		if perr != nil {
+			msg = perr.Error()
+		}
+		return platform.Result{Status: "error", Message: msg}, nil
 	}
-	steps, err := plan.Build(p, planClassify)
-	if err != nil {
+	steps, berr := plan.Build(p, planClassify)
+	if err := plan.Join(perr, berr); err != nil {
 		return platform.Result{Status: "error", Message: err.Error()}, nil
 	}
 	// #219: trace the image of every deployment start before the autonomous checks, so that the grant and the
@@ -56,6 +62,7 @@ func (m *Manager) ProposePlan(ctx context.Context, chatID, slotID, via string, r
 	rl := &readLog{}
 	replaced := m.replacedPlanOf(ctx, chatID, p.Replaces)
 	plan.ImageOrigins(steps, replaced, m.templateOK(ctx, m.loggedSummaryReader(chatID, rl)))
+	var err error
 	var (
 		mode   string
 		budget store.PlanBudget

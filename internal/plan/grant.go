@@ -28,10 +28,10 @@ func Grant(steps []store.PlanStep, sample func(store.PlanStep) (platform.Request
 		if err != nil {
 			return delegation.Delegation{}, fmt.Errorf("step %d: %w", st.Idx, err)
 		}
+		// The field rules (a.Problem) are checked when the plan is proposed, for both modes (Build, #218): a step
+		// that would be refused never gets here. The call of a tool that completes its body at run time is only
+		// complete then, so it cannot be judged on the stored step.
 		a := delegation.Classify(req)
-		if a.Problem != "" {
-			return delegation.Delegation{}, fmt.Errorf("step %d: %s", st.Idx, a.Problem)
-		}
 		for _, x := range append([]delegation.Access{a}, a.Also...) {
 			if x.Effect == delegation.EffectRead || x.Action == delegation.Read {
 				continue // reading is open anyway

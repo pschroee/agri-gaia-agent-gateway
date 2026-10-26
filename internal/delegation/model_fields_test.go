@@ -85,3 +85,28 @@ func TestModelPatchConformance(t *testing.T) {
 		}
 	}
 }
+
+// ClassifyPartial leaves out only the completeness of a body (issue #218): the allowlists and the refines
+// of the route still apply, Classify is not changed.
+func TestClassifyPartialSkipsOnlyRequired(t *testing.T) {
+	patch := func(path, body string) platform.Request {
+		return platform.Request{Method: http.MethodPatch, Path: path, Body: json.RawMessage(body)}
+	}
+	if p := ClassifyPartial(patch("/models/5", `{"name":"x"}`)).Problem; p != "" {
+		t.Fatalf("name only, partial: %q", p)
+	}
+	if p := Classify(patch("/models/5", `{"name":"x"}`)).Problem; !strings.Contains(p, "fields missing") {
+		t.Fatalf("name only, full: %q", p)
+	}
+	if p := ClassifyPartial(patch("/models/5", `{"name":"x","owner":"y"}`)).Problem; !strings.Contains(p, `field "owner" not allowed`) {
+		t.Fatalf("a field outside the allowlist must stay refused: %q", p)
+	}
+	if p := ClassifyPartial(patch("/datasets/5", `{"description":"d"}`)).Problem; !strings.Contains(p, "not allowed") {
+		t.Fatalf("another route's allowlist must stay: %q", p)
+	}
+	// The classification itself is the same.
+	a, b := Classify(patch("/models/5", modelFull)), ClassifyPartial(patch("/models/5", modelFull))
+	if a.Action != b.Action || a.Resource != b.Resource || a.ID != b.ID || a.Effect != b.Effect || b.Problem != "" {
+		t.Fatalf("classification differs: %+v vs %+v", a, b)
+	}
+}

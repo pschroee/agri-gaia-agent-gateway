@@ -70,7 +70,7 @@ func TestFactoryCapabilityLines(t *testing.T) {
 	f := &Factory{Cat: cat, Env: config.Env{}}
 	lines := f.capabilities("cli")
 	joined := strings.Join(lines, "\n")
-	if len(lines) != 2 || !strings.Contains(joined, "vision: ") || !strings.Contains(joined, "bindings: ") {
+	if len(lines) != 3 || !strings.Contains(joined, "vision: ") || !strings.Contains(joined, "bindings: ") || !strings.Contains(joined, "plans: ") {
 		t.Fatalf("lines: %v", lines)
 	}
 	// The statically described vision follows the catalog: an image model is reported as such.

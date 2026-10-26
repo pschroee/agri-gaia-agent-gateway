@@ -199,6 +199,9 @@ func GatewayIndexDetail(prefix string) string {
 				typ = "JSON"
 			}
 			fmt.Fprintf(&b, "    %s (%s, %s) — %s\n", a.label(), a.Where, typ, VisibleControls(oneLine(a.Param.Desc)))
+			if sj := a.Param.SchemaJSON(); sj != "" {
+				fmt.Fprintf(&b, "      schema: %s\n", VisibleControls(sj))
+			}
 		}
 		if c.Body != "" {
 			fmt.Fprintf(&b, "    body: %s\n", c.Body)

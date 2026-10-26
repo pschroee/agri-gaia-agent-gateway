@@ -7,6 +7,7 @@ package platform
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -216,17 +217,18 @@ var createDeploymentTool = Tool{
 	Desc: "Creates a deployment of an inference image on an edge device; nothing runs yet (start it with {{tool:start_deployment}}). " +
 		"Checks first: device registered and online, image in the registry with the device's architecture and not a training image, host ports 18100-18199 not used by another deployment on the device. " +
 		"The container is named agw-<name> and exposes Triton's HTTP port 8000 on host_port (grpc 8001 and metrics 8002 optional). " +
-		"Only images built in this chat or from the user's own repository can be deployed. Writes; the user must approve.",
+		"Only images built in this chat or from the user's own repository can be deployed. " +
+		"In a plan that also builds the image, give image_id \"{{stepN.id}}\" of the build step instead of repository and tag. Writes; the user must approve.",
 	Write: true,
 	Params: []Param{
 		{Name: "device_id", Type: "integer", Desc: "id of the edge device ({{tool:list_edge_devices}})", Required: true},
-		{Name: "repository", Type: "string", Desc: "repository of the image, <owner>/<name>, e.g. agent-test/mnist-triton", Required: true},
-		{Name: "tag", Type: "string", Desc: "tag of the image, e.g. v1", Required: true},
+		{Name: "repository", Type: "string", Desc: "repository of the image, <owner>/<name>, e.g. agent-test/mnist-triton; with tag, or leave both out and give image_id"},
+		{Name: "tag", Type: "string", Desc: "tag of the image, e.g. v1; with repository, or leave both out and give image_id"},
 		{Name: "name", Type: "string", Desc: "name of the deployment without the agw- prefix; lowercase letters, digits and . _ -, e.g. mnist", Required: true},
 		{Name: "host_port", Type: "integer", Desc: "host port on the device for Triton's HTTP port 8000 (18100-18199)", Required: true},
 		{Name: "grpc_host_port", Type: "integer", Desc: "host port for Triton's gRPC port 8001 (18100-18199, optional)"},
 		{Name: "metrics_host_port", Type: "integer", Desc: "host port for Triton's metrics port 8002 (18100-18199, optional)"},
-		{Name: "image_id", Type: "integer", Desc: "identifier of the image as {{tool:container_image_status}} shows it; optional, only to make a plan step identical to the later call"},
+		{Name: "image_id", Type: "integer", Desc: "identifier of the image as {{tool:container_image_status}} shows it; in a plan that builds the image, \"{{stepN.id}}\" of that build step, and then leave out repository and tag"},
 	},
 	build: func(a Args) (Request, error) {
 		deviceID, err := requiredInt(a, "device_id")
@@ -266,14 +268,29 @@ func deploymentArgs(a Args) (name, repo, tag string, err error) {
 	if !deploymentNameRe.MatchString(name) {
 		return "", "", "", fmt.Errorf("name %q is not valid: lowercase letters, digits and . _ -, at most 58 characters (the gateway puts agw- in front)", name)
 	}
-	if repo, err = requiredStr(a, "repository"); err != nil {
+	repo, hasRepo, err := a.str("repository")
+	if err != nil {
 		return "", "", "", err
+	}
+	tag, hasTag, err := a.str("tag")
+	if err != nil {
+		return "", "", "", err
+	}
+	switch {
+	case !hasRepo && !hasTag:
+		// Without repository and tag the image is named by its id (a plan that builds the image cannot know
+		// the repository when it is proposed, issue #218).
+		if id, err := optionalImageID(a); err != nil {
+			return "", "", "", err
+		} else if id == 0 {
+			return "", "", "", errors.New("give repository and tag, or image_id")
+		}
+		return name, "", "", nil
+	case !hasRepo || !hasTag:
+		return "", "", "", errors.New("give repository and tag, or image_id")
 	}
 	if !repositoryRe.MatchString(repo) {
 		return "", "", "", fmt.Errorf("repository %q is not valid: <owner>/<name>", repo)
-	}
-	if tag, err = requiredStr(a, "tag"); err != nil {
-		return "", "", "", err
 	}
 	if !tagRe.MatchString(tag) {
 		return "", "", "", fmt.Errorf("tag %q is not valid", tag)
@@ -391,6 +408,23 @@ func createDeploymentSteps(ctx context.Context, a Args, _ Request, do Doer) (Res
 		return Refuse("%s is offline (last heartbeat %s, more than %s ago); deploying would fail", deviceText(*device), heartbeatText(device.LastHeartbeat), EdgeOnlineWindow)
 	}
 
+	if repo == "" {
+		// Only image_id is given: the registry list names the repository and the tag of that image.
+		var all []imageEntry
+		if res, stop, err := ReadJSON(ctx, do, Request{Method: http.MethodGet, Path: "/container-images"}, &all); stop {
+			return res, "", err
+		}
+		found := false
+		for _, e := range all {
+			if e.ID.String() == strconv.FormatInt(providedID, 10) {
+				repo, tag, found = e.Repository, e.Tag, true
+				break
+			}
+		}
+		if !found || !repositoryRe.MatchString(repo) || !tagRe.MatchString(tag) {
+			return Refuse("image %d is not in the platform's image list; check {{tool:container_image_status}}", providedID)
+		}
+	}
 	image := repo + ":" + tag
 	var entries []imageEntry
 	{

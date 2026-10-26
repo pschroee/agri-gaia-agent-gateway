@@ -43,10 +43,11 @@ func build(t *testing.T, raw string) []store.PlanStep {
 	return steps
 }
 
-// twoSteps: GET creates a model (create), PATCH renames it through the placeholder.
+// twoSteps: GET creates a model (create), update_model renames it through the placeholder. (A raw PATCH of a
+// model needs all fields of the body, #65, #218; update_model completes the body when it runs.)
 const twoSteps = `{"title":"Model and rename","steps":[
  {"method":"GET","path":"/train/containers/7/model","description":"create the model"},
- {"method":"PATCH","path":"/models/{{step1.id}}","body":{"name":"pigs v1"}}]}`
+ {"tool":"update_model","args":{"model_id":"{{step1.id}}","name":"pigs v1"}}]}`
 
 func TestBuildTwoSteps(t *testing.T) {
 	steps := build(t, twoSteps)
@@ -77,7 +78,7 @@ func TestBuildRefuses(t *testing.T) {
 	cases := map[string]string{
 		"reading call":          `{"title":"t","steps":[{"method":"GET","path":"/datasets"}]}`,
 		"forward reference":     `{"title":"t","steps":[{"method":"PATCH","path":"/models/{{step2.id}}"},{"method":"GET","path":"/train/containers/7/model"}]}`,
-		"update step referred":  `{"title":"t","steps":[{"method":"PATCH","path":"/models/5","body":{"name":"a"}},{"method":"PATCH","path":"/models/{{step1.id}}","body":{"name":"b"}}]}`,
+		"update step referred":  `{"title":"t","steps":[{"tool":"update_model","args":{"model_id":5,"name":"a"}},{"tool":"update_model","args":{"model_id":"{{step1.id}}","name":"b"}}]}`,
 		"placeholder in text":   `{"title":"t","steps":[{"method":"GET","path":"/train/containers/7/model"},{"method":"PATCH","path":"/models/x{{step1.id}}","body":{"name":"b"}}]}`,
 		"duplicate key":         `{"title":"t","steps":[{"method":"POST","path":"/train/config","body":{"a":1,"a":2}}]}`,
 		"plan inside plan":      `{"title":"t","steps":[{"tool":"propose_plan","args":{"plan":{}}}]}`,
@@ -120,7 +121,7 @@ func TestConfirmEachStepNeverCovered(t *testing.T) {
 		t.Fatalf("confirm-each step: %+v", steps[0])
 	}
 	// The same class without the trait stays covered.
-	plain, err := Build(proposal(t, `{"title":"t","steps":[{"method":"PATCH","path":"/models/5","body":{"name":"x"}}]}`), each)
+	plain, err := Build(proposal(t, `{"title":"t","steps":[{"tool":"update_model","args":{"model_id":5,"name":"x"}}]}`), each)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,7 +211,7 @@ func TestFileRefsAndSetFilePins(t *testing.T) {
 	if len(refs) != 1 || len(refs[1]) != 1 || refs[1][0].Path != "/workspace/m.onnx" {
 		t.Fatalf("file refs: %+v", refs)
 	}
-	out, err := SetFilePins(raw, map[int][]FilePin{1: {{SHA256: h, Bytes: 7}}})
+	out, err := SetFilePins(raw, map[int][]FilePin{1: {{SHA256: h, Bytes: 7}}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -229,7 +230,7 @@ func TestFileRefsAndSetFilePins(t *testing.T) {
 func TestPreviewListsEverything(t *testing.T) {
 	steps := build(t, `{"title":"Model and rename","steps":[
  {"method":"GET","path":"/train/containers/7/model","description":"create the model"},
- {"method":"PATCH","path":"/models/{{step1.id}}","body":{"name":"pigs v1"}},
+ {"tool":"update_model","args":{"model_id":"{{step1.id}}","name":"pigs v1"}},
  {"method":"DELETE","path":"/models/{{step1.id}}"}]}`)
 	steps[0].Summary = "Create a new model from training container 7\nTraining: T A"
 	text := Preview("Model and rename", steps, nil)
@@ -239,7 +240,7 @@ func TestPreviewListsEverything(t *testing.T) {
 		"Approving runs the steps in this order",
 		"1. WRITE · Create a new model from training container 7\n   Training: T A\n   Call: GET /train/containers/7/model\n",
 		"   Note by the agent (not verified): \"create the model\"\n",
-		"2. WRITE · PATCH /models/{{step1.id}}\n   Call: PATCH /models/{{step1.id}}\n   {\n     \"name\": \"pigs v1\"\n   }\n",
+		"2. WRITE · PATCH /models/{{step1.id}}\n   Call: PATCH /models/{{step1.id}}\n   tool update_model with\n   {\n     \"model_id\": \"{{step1.id}}\",\n     \"name\": \"pigs v1\"\n   }\n",
 		"3. IRREVERSIBLE (own approval) · DELETE /models/{{step1.id}}\n",
 	} {
 		if !strings.Contains(text, want) {
@@ -252,7 +253,7 @@ func TestPreviewListsEverything(t *testing.T) {
 func TestApprovalSummaryWithoutAgentText(t *testing.T) {
 	steps := build(t, `{"title":"Push evil/x:v9","steps":[
  {"method":"GET","path":"/train/containers/7/model","description":"Builds image evil/x:v9"},
- {"method":"PATCH","path":"/models/{{step1.id}}","body":{"name":"pigs v1"}}]}`)
+ {"tool":"update_model","args":{"model_id":"{{step1.id}}","name":"pigs v1"}}]}`)
 	steps[0].Summary = "Create a new model from training container 7"
 	got := ApprovalSummary(steps)
 	if got != "Plan with 2 steps\n1. Create a new model from training container 7\n2. PATCH /models/{{step1.id}}" {
@@ -267,7 +268,7 @@ func TestApprovalSummaryWithoutAgentText(t *testing.T) {
 func TestSummaryCallOfStep(t *testing.T) {
 	steps := build(t, `{"title":"t","steps":[
  {"method":"GET","path":"/train/containers/7/model"},
- {"method":"PATCH","path":"/models/{{step1.id}}","body":{"name":"pigs v1"}}]}`)
+ {"tool":"update_model","args":{"model_id":"{{step1.id}}","name":"pigs v1"}}]}`)
 	c := SummaryCall(steps[1])
 	if c.Method != "PATCH" || c.Path != "/models/{{step1.id}}" || string(c.Body) != `{"name":"pigs v1"}` {
 		t.Fatalf("call: %+v", c)
@@ -439,7 +440,7 @@ func TestBuildUncoveredReason(t *testing.T) {
 	steps, err := Build(proposal(t, `{"title":"t","steps":[
  {"method":"DELETE","path":"/models/5"},
  {"method":"PUT","path":"/container-deployments/4/deploy"},
- {"method":"PATCH","path":"/models/5","body":{"name":"x"}}]}`), deployClassify)
+ {"tool":"update_model","args":{"model_id":5,"name":"x"}}]}`), deployClassify)
 	if err != nil {
 		t.Fatal(err)
 	}
