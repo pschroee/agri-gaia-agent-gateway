@@ -48,8 +48,8 @@ func platformCmd(hc *http.Client, args []string) (int, error) {
 		return 1, err
 	}
 	body, _ := json.Marshal(in)
-	if tool.Write || (tool.Name == "request" && strings.ToUpper(fmt.Sprint(in["method"])) != "GET") {
-		fmt.Fprintln(os.Stderr, "Writing call. Waiting for confirmation by the user …")
+	if line := waitLine(tool, in); line != "" {
+		fmt.Fprintln(os.Stderr, line)
 	}
 	req, _ := http.NewRequest(http.MethodPost, "http://agw/platform/"+tool.Name, bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -225,4 +225,17 @@ func toolUsage(w io.Writer, t platform.Tool) {
 			fmt.Fprintf(w, "    schema: %s\n", sj)
 		}
 	}
+}
+
+// waitLine is what the CLI says before a call that may wait: for a plan, that the gateway checks it first; for
+// another writing call, that the gateway checks it and asks where it needs a confirmation (a step of an approved
+// plan asks for none). A reading call says nothing (issue #225).
+func waitLine(tool platform.Tool, in map[string]any) string {
+	switch {
+	case tool.Name == "propose-plan":
+		return "Proposing the plan. The gateway checks it first; only a valid plan is shown to the user for approval …"
+	case tool.Write || (tool.Name == "request" && strings.ToUpper(fmt.Sprint(in["method"])) != "GET"):
+		return "Writing call. The gateway checks it and asks the user where it needs a confirmation …"
+	}
+	return ""
 }
