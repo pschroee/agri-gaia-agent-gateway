@@ -89,3 +89,5 @@ ALTER TABLE plan_steps ADD COLUMN IF NOT EXISTS watch_job text NOT NULL DEFAULT 
 -- parked_approval names the approval a non-covered step of an autonomous plan waits for (D2.8): the
 -- approval stays open until the plan expires, and the gateway repeats the stored call on approval.
 ALTER TABLE plan_steps ADD COLUMN IF NOT EXISTS parked_approval text NOT NULL DEFAULT '';
+-- When the step was last claimed for execution (issue #221); started_at of the joined job stays the job start.
+ALTER TABLE plan_steps ADD COLUMN IF NOT EXISTS claimed_at timestamptz;

@@ -69,6 +69,18 @@ type WatchJob struct {
 	// not know them. The duration of a run is counted from these, not from StartedAt/EndedAt.
 	RunStartedAt *time.Time `json:"run_started_at,omitempty"`
 	RunEndedAt   *time.Time `json:"run_ended_at,omitempty"`
+	// LastEpoch: the last training epoch a poll reported (EpochFigures as JSON); empty for other kinds and
+	// before the first epoch (issue #221).
+	LastEpoch json.RawMessage `json:"last_epoch,omitempty"`
+}
+
+// EpochFigures is the last epoch of a training run: the number, the planned number of epochs and the figures
+// the platform reported for it (loss, val_accuracy, ...). Stored as JSON in watch_jobs.last_epoch.
+type EpochFigures struct {
+	Epoch  int                `json:"epoch"`
+	Epochs int                `json:"epochs,omitempty"`
+	Values map[string]float64 `json:"values"`
+	At     *time.Time         `json:"at,omitempty"`
 }
 
 // WatchOutput is an object a job produced ({Resource, ID, Label, Size} of watch.Output). Size is the
@@ -93,19 +105,22 @@ type WatchProgress struct {
 	// RunStartedAt and RunEndedAt are kept once set: a poll without them leaves the stored values alone.
 	RunStartedAt *time.Time
 	RunEndedAt   *time.Time
-	ReadFail     bool // the reading call failed: the row keeps its state and counts the failure
+	// LastEpoch: EpochFigures as JSON; nil keeps the stored value (issue #221).
+	LastEpoch []byte
+	ReadFail  bool // the reading call failed: the row keeps its state and counts the failure
 }
 
-const watchJobCols = `id, chat_id::text, plan_id, step_idx, tool_call_id, kind, ref, state, progress, message, eta, log_tail, outputs, link, stopped_by, fail_reads, started_at, checked_at, ended_at, run_started_at, run_ended_at`
+const watchJobCols = `id, chat_id::text, plan_id, step_idx, tool_call_id, kind, ref, state, progress, message, eta, log_tail, outputs, link, stopped_by, fail_reads, started_at, checked_at, ended_at, run_started_at, run_ended_at, last_epoch`
 
 func scanWatchJob(row interface{ Scan(...any) error }) (WatchJob, error) {
 	var j WatchJob
-	var outputs string
+	var outputs, lastEpoch string
 	err := row.Scan(&j.ID, &j.ChatID, &j.PlanID, &j.StepIdx, &j.ToolCallID, &j.Kind, &j.Ref, &j.State,
-		&j.Progress, &j.Message, &j.ETA, &j.LogTail, &outputs, &j.Link, &j.StoppedBy, &j.FailReads, &j.StartedAt, &j.CheckedAt, &j.EndedAt, &j.RunStartedAt, &j.RunEndedAt)
+		&j.Progress, &j.Message, &j.ETA, &j.LogTail, &outputs, &j.Link, &j.StoppedBy, &j.FailReads, &j.StartedAt, &j.CheckedAt, &j.EndedAt, &j.RunStartedAt, &j.RunEndedAt, &lastEpoch)
 	if err != nil {
 		return j, err
 	}
+	j.LastEpoch = rawOrNil(lastEpoch)
 	if outputs != "" && outputs != "[]" {
 		if err := json.Unmarshal([]byte(outputs), &j.Outputs); err != nil {
 			return j, err
@@ -228,8 +243,8 @@ func (s *Store) UpdateJobProgress(ctx context.Context, jobID string, p WatchProg
 	}
 	tag, err := s.pool.Exec(ctx, `UPDATE watch_jobs SET state=$2, progress=$3, message=$4, eta=$5, log_tail=$6, outputs=$7,
 fail_reads=0, checked_at=now(), ended_at=$8, link=$9, run_started_at=COALESCE($10, run_started_at),
-run_ended_at=COALESCE($11, run_ended_at) WHERE id=$1 AND state='running'`,
-		jobID, state, p.Percent, p.Message, p.ETA, p.LogTail, outputs, ended, p.Link, p.RunStartedAt, p.RunEndedAt)
+run_ended_at=COALESCE($11, run_ended_at), last_epoch=COALESCE(NULLIF($12,''), last_epoch) WHERE id=$1 AND state='running'`,
+		jobID, state, p.Percent, p.Message, p.ETA, p.LogTail, outputs, ended, p.Link, p.RunStartedAt, p.RunEndedAt, string(p.LastEpoch))
 	return err == nil && tag.RowsAffected() > 0, err
 }
 
