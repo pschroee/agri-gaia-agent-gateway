@@ -108,3 +108,7 @@ ALTER TABLE experiment_trials ADD COLUMN IF NOT EXISTS gpu_available boolean;
 DELETE FROM experiment_trials t WHERE t.search_id IS NULL AND t.path = 'notebook'
   AND t.state IN ('done','failed','stopped')
   AND NOT EXISTS (SELECT 1 FROM trial_epochs e WHERE e.trial_id = t.id);
+
+-- issue #227: what a single training run trains (architecture and dataset, the form of a search's base), read when the
+-- trial is made; null for older trials.
+ALTER TABLE experiment_trials ADD COLUMN IF NOT EXISTS subject jsonb;

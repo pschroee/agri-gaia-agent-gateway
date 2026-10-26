@@ -200,3 +200,28 @@ func TestPollTrainingRunPercentFromEpochs(t *testing.T) {
 		t.Errorf("unsupported: %+v", p)
 	}
 }
+
+// Issue #227: the reason of a failed training is the last line of the log that names an error.
+func TestLastErrorLine(t *testing.T) {
+	log := "Epoch 1\nTraceback (most recent call last):\n  File \"x.py\"\n RuntimeError: CUDA out of memory \nexit 1\n"
+	if got := LastErrorLine(log); got != "RuntimeError: CUDA out of memory" {
+		t.Errorf("got %q", got)
+	}
+	if got := LastErrorLine("Epoch 1\nEpoch 2\n"); got != "" {
+		t.Errorf("no error line: %q", got)
+	}
+}
+
+func TestTrainingContainerOf(t *testing.T) {
+	for _, c := range []struct{ kind, ref, want string }{
+		{kindTrainingRun, "145", "145"},
+		{kindPlatformTask, "task:5|train:145", "145"},
+		{kindPlatformTask, "task:5|config:12", ""},
+		{kindPlatformTask, "task:5", ""},
+		{"notebook_run", "r1", ""},
+	} {
+		if got := TrainingContainerOf(c.kind, c.ref); got != c.want {
+			t.Errorf("%s %s: %q, want %q", c.kind, c.ref, got, c.want)
+		}
+	}
+}

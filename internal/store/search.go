@@ -116,14 +116,16 @@ type Search struct {
 // Seq numbers the trials of a chat from 1, Idx those of a search from 1 (0: single run). Ref is the training
 // container (template) or the run (notebook); JobID the observed job.
 type Trial struct {
-	ID          string          `json:"id"`
-	ChatID      string          `json:"chat_id"`
-	SearchID    string          `json:"search_id,omitempty"`
-	Seq         int             `json:"seq"`
-	Idx         int             `json:"idx"`
-	Path        string          `json:"path"`
-	State       string          `json:"state"`
-	Params      json.RawMessage `json:"params"`
+	ID       string          `json:"id"`
+	ChatID   string          `json:"chat_id"`
+	SearchID string          `json:"search_id,omitempty"`
+	Seq      int             `json:"seq"`
+	Idx      int             `json:"idx"`
+	Path     string          `json:"path"`
+	State    string          `json:"state"`
+	Params   json.RawMessage `json:"params"`
+	// Subject is what a single training run trains (the form of a search's base); nil for older trials.
+	Subject     json.RawMessage `json:"subject,omitempty"`
 	Note        string          `json:"note,omitempty"`
 	Ref         string          `json:"ref,omitempty"`
 	JobID       string          `json:"job_id,omitempty"`
@@ -384,13 +386,13 @@ func (s *Store) SetSearchApproval(ctx context.Context, id, approvalID string) er
 
 // --- trials ---
 
-const trialCols = `id, chat_id::text, COALESCE(search_id,''), seq, idx, path, state, params::text, note, ref, job_id, code_version, source,
+const trialCols = `id, chat_id::text, COALESCE(search_id,''), seq, idx, path, state, params::text, COALESCE(subject::text,''), note, ref, job_id, code_version, source,
 epoch, epochs, score, score_epoch, COALESCE(gpu::text,''), figures, gpu_available, error, stopped_by, declared_at, started_at, ended_at`
 
 func scanTrial(row pgx.Row) (Trial, error) {
 	var t Trial
-	var params, gpu string
-	err := row.Scan(&t.ID, &t.ChatID, &t.SearchID, &t.Seq, &t.Idx, &t.Path, &t.State, &params, &t.Note, &t.Ref, &t.JobID, &t.CodeVersion,
+	var params, subject, gpu string
+	err := row.Scan(&t.ID, &t.ChatID, &t.SearchID, &t.Seq, &t.Idx, &t.Path, &t.State, &params, &subject, &t.Note, &t.Ref, &t.JobID, &t.CodeVersion,
 		&t.Source, &t.Epoch, &t.Epochs, &t.Score, &t.ScoreEpoch, &gpu, &t.Figures, &t.GPUAvailable, &t.Error, &t.StoppedBy, &t.DeclaredAt, &t.StartedAt, &t.EndedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return t, ErrNotFound
@@ -399,6 +401,9 @@ func scanTrial(row pgx.Row) (Trial, error) {
 		return t, err
 	}
 	t.Params = json.RawMessage(params)
+	if subject != "" {
+		t.Subject = json.RawMessage(subject)
+	}
 	if gpu != "" {
 		t.GPU = json.RawMessage(gpu)
 	}
@@ -414,15 +419,19 @@ func (s *Store) DeclareTrial(ctx context.Context, in Trial) (Trial, error) {
 	if in.State == "" {
 		in.State = TrialDeclared
 	}
+	var subject any // nil: NULL
+	if len(in.Subject) > 0 {
+		subject = string(in.Subject)
+	}
 	var lastErr error
 	for attempt := 0; attempt < 3; attempt++ {
 		t, err := scanTrial(s.pool.QueryRow(ctx, `
-INSERT INTO experiment_trials (id, chat_id, search_id, seq, idx, path, state, params, note, ref, job_id, code_version, source)
+INSERT INTO experiment_trials (id, chat_id, search_id, seq, idx, path, state, params, subject, note, ref, job_id, code_version, source)
 VALUES ($1, $2, NULLIF($3,''),
   (SELECT COALESCE(max(seq),0)+1 FROM experiment_trials WHERE chat_id=$2),
   CASE WHEN $3 = '' THEN 0 ELSE (SELECT COALESCE(max(idx),0)+1 FROM experiment_trials WHERE search_id=$3) END,
-  $4, $5, $6::jsonb, $7, $8, $9, $10, $11) RETURNING `+trialCols,
-			in.ID, in.ChatID, in.SearchID, in.Path, in.State, jsonOr(in.Params, "{}"), in.Note, in.Ref, in.JobID, in.CodeVersion, in.Source))
+  $4, $5, $6::jsonb, $12::jsonb, $7, $8, $9, $10, $11) RETURNING `+trialCols,
+			in.ID, in.ChatID, in.SearchID, in.Path, in.State, jsonOr(in.Params, "{}"), in.Note, in.Ref, in.JobID, in.CodeVersion, in.Source, subject))
 		if err == nil {
 			return t, nil
 		}

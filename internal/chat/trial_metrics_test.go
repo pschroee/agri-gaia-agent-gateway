@@ -43,7 +43,7 @@ func singleRunSetup(t *testing.T) (*env, ChatView, *fakeJobs, string) {
 	}
 	f.set("GET /train/containers/9/status", `{"status":"running","score":null}`)
 	f.set("GET /train/containers/9/logs?tail=100", `{"logs":""}`)
-	f.set("GET /train/containers/9/config", `{"train":{"values":{"lr":0.01,"epochs":4},"schema":{}}}`)
+	f.set("GET /train/containers/9/config", `{"config":{"train":{"values":{"lr":0.01,"epochs":4},"schema":{}}},"provider":"p","architecture":{"name":"resnet18","category":"classification"},"dataset_id":177}`)
 	jobID, err := e.st.AddWatchJob(ctx, store.WatchJob{ChatID: c.ID, Kind: trialKindTraining, Ref: "9"})
 	if err != nil {
 		t.Fatal(err)

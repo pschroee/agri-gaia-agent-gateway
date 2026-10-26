@@ -6,11 +6,12 @@ package chat
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"log/slog"
-	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
@@ -283,8 +284,8 @@ func singleRunIsTrial(path string, p watch.Progress) bool {
 
 // declareSingleTrial makes the trial of a run that no search declared and starts it with the job.
 func (m *Manager) declareSingleTrial(ctx context.Context, j store.WatchJob, path string, p watch.Progress) (store.Trial, bool) {
-	params := m.singleRunParams(ctx, j, path, p)
-	t, err := m.st.DeclareTrial(ctx, store.Trial{ChatID: j.ChatID, Path: path, Params: params, Ref: j.Ref})
+	params, subject := m.singleRunInfo(ctx, j, path, p)
+	t, err := m.st.DeclareTrial(ctx, store.Trial{ChatID: j.ChatID, Path: path, Params: params, Subject: subject, Ref: j.Ref})
 	if err != nil {
 		slog.Error("single trial not declared", "job", j.ID, "ref", j.Ref, "error", err)
 		return store.Trial{}, false
@@ -301,14 +302,16 @@ func (m *Manager) declareSingleTrial(ctx context.Context, j store.WatchJob, path
 	return t, true
 }
 
+// trainingNoScoreText is the reason of a failed training run whose log names no error.
+const trainingNoScoreText = "The training container exited without a score"
+
 // maxTrialParams is the size of the parameters kept with a trial.
 const maxTrialParams = 4 << 10
 
-// singleRunParams names the parameters of a run for the book: the template's train_config values (read from the
-// platform) or the params.json of a notebook run (read by the notebook kind). An empty object when there are none
-// or they cannot be read.
-func (m *Manager) singleRunParams(ctx context.Context, j store.WatchJob, path string, p watch.Progress) json.RawMessage {
-	empty := json.RawMessage(`{}`)
+// singleRunInfo names what a run is for the book: its parameters (the template's train_config values, read from the
+// platform, or the params.json of a notebook run, read by the notebook kind) and, for a training run, what it trains
+// (issue #227). The parameters are an empty object, the subject nil, when there are none or they cannot be read.
+func (m *Manager) singleRunInfo(ctx context.Context, j store.WatchJob, path string, p watch.Progress) (params, subject json.RawMessage) {
 	var raw json.RawMessage
 	switch path {
 	case store.SearchPathNotebook:
@@ -318,21 +321,26 @@ func (m *Manager) singleRunParams(ctx context.Context, j store.WatchJob, path st
 	case store.SearchPathTemplate:
 		read := m.summaryReader(j.ChatID)
 		if read == nil {
-			return empty
+			return emptyParams(nil), nil
 		}
-		res, err := read(ctx, platform.Request{Method: http.MethodGet, Path: "/train/containers/" + j.Ref + "/config"})
-		if err != nil || res.Status == "error" || res.HTTPStatus >= 400 {
-			return empty
+		doc, msg := readTrainConfig(ctx, read, j.Ref)
+		if msg != "" {
+			return emptyParams(nil), nil
 		}
-		var doc struct {
-			Train struct {
-				Values json.RawMessage `json:"values"`
-			} `json:"train"`
+		if len(doc.Config.Train.Values) > 0 {
+			raw, _ = json.Marshal(doc.Config.Train.Values)
 		}
-		if json.Unmarshal([]byte(res.Body), &doc) == nil {
-			raw = doc.Train.Values
+		id, _ := strconv.ParseInt(j.Ref, 10, 64)
+		if b, err := json.Marshal(subjectOf(ctx, read, doc, id)); err == nil {
+			subject = b
 		}
 	}
+	return emptyParams(raw), subject
+}
+
+// emptyParams checks the parameters of a run (an object of limited size) and gives them canonically, else `{}`.
+func emptyParams(raw json.RawMessage) json.RawMessage {
+	empty := json.RawMessage(`{}`)
 	raw = bytes.TrimSpace(raw)
 	if len(raw) == 0 || len(raw) > maxTrialParams || raw[0] != '{' {
 		return empty
@@ -347,7 +355,7 @@ func (m *Manager) singleRunParams(ctx context.Context, j store.WatchJob, path st
 // finishSingleTrial ends the trial of a run that no search declared with the job. The trials of a search are
 // ended by the search (it needs the score and the budget first).
 func finishSingleTrial(ctx context.Context, m *Manager, j store.WatchJob, p watch.Progress) {
-	if _, ok := trialPath(j.Kind); !ok || m.st == nil {
+	if m.st == nil {
 		return
 	}
 	trialJobs.Delete(j.ID)
@@ -368,6 +376,10 @@ func finishSingleTrial(ctx context.Context, m *Manager, j store.WatchJob, p watc
 		}
 	case p.State == watch.StateFailed:
 		state, errText = store.TrialFailed, watch.ClipRunes(platform.RedactText(p.Message), watch.MaxMessage)
+		if j.Kind == trialKindTraining {
+			// The last line of the log that names an error says more than the container's status (issue #227).
+			errText = watch.ClipRunes(platform.RedactText(cmp.Or(watch.LastErrorLine(p.LogTail), trainingNoScoreText)), watch.MaxMessage)
+		}
 	}
 	if _, err := m.st.FinishTrial(ctx, t.ID, state, errText); err != nil {
 		slog.Error("single trial not ended", "trial", t.ID, "error", err)
