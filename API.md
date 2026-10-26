@@ -566,6 +566,52 @@ the filter, `running` the user's `approved` and `paused` plans whatever the filt
 after a reconnect. Plans of other users and of chats in the trash never appear. The stream is separate because a plan
 event comes with every poll of a running job.
 
+## Experiments across chats
+
+`GET /api/experiments` lists the training searches, single training runs and notebook runs of **all chats of the
+logged-in user** on one page (issue #222). In oidc mode only the user's own chats count (chats in the trash do not);
+`chat=` with another user's or an unknown chat gives an empty page, not 404; without a login the answer is 401
+`not logged in`. In token mode all chats count. The per-chat `GET /api/chats/{id}/experiments` stays unchanged.
+
+One row per run: a **training search** is one row (its trials only show in the detail), a **single training run**
+(`path` template, a trial outside a search) is one row, and so is a **notebook run**, with or without figures in
+`outputs/metrics.jsonl`. A notebook run that has become a trial is the trial's row, not a second one. Proposed
+searches appear as `waiting`; rejected or expired searches and refused trials never appear.
+
+| Parameter | Meaning |
+|---|---|
+| `state` | comma list of `running,waiting,done,failed,stopped`; 400 `state: one of running, waiting, done, failed, stopped` |
+| `kind` | comma list of `training_search,training_run,notebook_run`; 400 `kind: one of training_search, training_run, notebook_run` |
+| `chat` | one chat id (uuid); 400 `chat: a chat id (uuid)` |
+| `since`, `until` | RFC 3339 times; a run is in the period when it **overlaps** it (started by `until`, not ended before `since`; a run that has not ended is still in); 400 `since: expected an RFC 3339 time such as 2026-10-06T00:00:00Z` (`until` alike) |
+| `sort` | `started`, `duration`, `title`, `state` or `chat`; empty = running first, then waiting, then the rest, newest first; 400 `sort: one of started, duration, title, state, chat` |
+| `order` | `asc` or `desc`; default `desc` for `started`/`duration`, else `asc`; 400 `order: asc or desc` |
+| `offset`, `limit` | page; `offset` 0 or more (400 `offset: 0 or more`), `limit` 1 to 100, default 25 (400 `limit: 1 to 100`) |
+
+```json
+{"runs": [RunRow], "total": 57, "offset": 0, "limit": 25,
+ "counts": {"running": 2, "waiting": 1, "done": 50, "failed": 3, "stopped": 1},
+ "chats": [{"id": "…", "title": "…", "runs": 12}], "truncated": false}
+```
+
+`counts` cover all filters except `state`, `chats` all except `chat` (only chats with runs, most runs first), so the
+filter menus show what each choice would give. `truncated` is true when one of the three queries hit its limit of
+5 000 rows (the newest are kept). `RunRow`: `kind`, `id` (search `s…`, trial `t…`, notebook job `w…`), `chat_id`,
+`chat_title`, `title` (search: its title; single run: `Single run <n> · <architecture, entry file or training
+container>`; notebook run: its entry file), `state` (`running`, `waiting`, `done`, `failed`, `stopped`), `path`,
+`started_at`, `ended_at`, `duration_s`, `progress` (`trial`, `trials`, `trials_done`, `epoch`, `epochs`, `eta`,
+`message`), `score` (`metric`, `mode`, `value`, `trial`), `error` (first line, at most 200 characters, tokens
+redacted), `plan_id`, `plan_step`, `tool_call_id`, `link` (https only, from the job) and exactly one of `search`
+(the `SearchView` of the per-chat route), `trial` (`TrialView`) or `job` (the watch job, texts redacted). Only the rows
+of the page carry these objects and the progress; the filters and the sort work on the cheap fields.
+
+State mapping: a search is `waiting` while proposed, `running` while it runs, and ended it is `failed` (start failed),
+`stopped` (stopped by the user) or `done`; a trial is `running` while declared or running, else its own state; a
+notebook job is `running`, `failed`, `stopped` (done, but a user or the agent stopped it) or `done`.
+
+There is no stream across chats for this: clients **poll** the route (every 5 s while a run runs or waits, else every
+30 s, and again after the SSE event `platform_changed`).
+
 ## Effect classes
 
 Every platform call has one effect class (issue #63). `delegation.Classify` decides it once for CLI, MCP and REST
