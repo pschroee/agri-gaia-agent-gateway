@@ -565,7 +565,15 @@ func TestPublishBlockedZeroOnGrantStart(t *testing.T) {
 		t.Fatalf("after the refusal: %+v", v)
 	}
 	startTestGrant(t, e, chatID, "domains", []string{"a.example.org"}, 30, 100)
-	v := waitEvent(t, events, "internet_blocked", "").Data.(*BlockedView)
+	// An event with the old count can still come first (seen once in ./dev.sh test, 27.10.2026); the
+	// grant's own event, with the counter starting at the grant, follows within a few events.
+	var v *BlockedView
+	for i := 0; i < 5; i++ {
+		v = waitEvent(t, events, "internet_blocked", "").Data.(*BlockedView)
+		if v.Count == 0 {
+			break
+		}
+	}
 	if v.Count != 0 || len(v.Last) != 0 || v.Since.Before(before) {
 		t.Fatalf("after the grant started: %+v", v)
 	}

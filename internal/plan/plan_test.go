@@ -342,7 +342,7 @@ func TestBuildStepStoresArgsOfToolWithSteps(t *testing.T) {
 		!strings.Contains(string(st.Args), `"template_id":"1"`) {
 		t.Fatalf("step = %+v args %s", st, st.Args)
 	}
-	list, _, _, err := BuildStep(StepSpec{Tool: "list_templates"}, 1)
+	list, _, _, err := BuildStep(StepSpec{Tool: "list_models"}, 1)
 	if err == nil && IsToolStep(list) {
 		t.Fatal("a tool without steps became a tool step")
 	}
