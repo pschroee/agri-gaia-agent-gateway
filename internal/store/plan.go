@@ -9,6 +9,8 @@ import (
 	_ "embed"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"regexp"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -659,4 +661,11 @@ WHERE (state='approved' OR (mode='autonomous' AND state='paused')) AND id IN (SE
 	// survives the restart, so the loop picks the observation up again. Parked approvals stay open, the
 	// user may still decide.
 	return nil
+}
+
+var deployCallRe = regexp.MustCompile(`^/container-deployments/[^/]+/deploy$`)
+
+// IsDeployCall tells whether method and path start a container deployment.
+func IsDeployCall(method, path string) bool {
+	return method == http.MethodPut && deployCallRe.MatchString(path)
 }
