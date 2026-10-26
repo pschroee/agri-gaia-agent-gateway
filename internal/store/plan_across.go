@@ -58,6 +58,9 @@ func (s *Store) ListPlansAcross(ctx context.Context, f PlanListFilter) ([]PlanLi
 	if f.ChatID != "" && !isUUID(f.ChatID) {
 		return []PlanListItem{}, 0, nil
 	}
+	if err := s.expireLapsedPlans(ctx, f.Owner); err != nil {
+		return nil, 0, err
+	}
 	where, args := f.where()
 	var total int
 	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM plans p JOIN chats c ON c.id = p.chat_id WHERE `+where, args...).Scan(&total); err != nil {
@@ -134,6 +137,9 @@ func (s *Store) planStepsOf(ctx context.Context, ids []string) (map[string][]Pla
 
 // RunningPlanCount counts the approved and paused plans of not-trashed chats (owner nil: every chat).
 func (s *Store) RunningPlanCount(ctx context.Context, owner *string) (int, error) {
+	if err := s.expireLapsedPlans(ctx, owner); err != nil {
+		return 0, err
+	}
 	q := `SELECT count(*) FROM plans p JOIN chats c ON c.id = p.chat_id WHERE c.trashed_at IS NULL AND p.state IN ('approved','paused')`
 	args := []any{}
 	if owner != nil {
@@ -153,4 +159,19 @@ type prefixedRow struct {
 
 func (r prefixedRow) Scan(dest ...any) error {
 	return r.row.Scan(append([]any{r.prefix}, dest...)...)
+}
+
+// expireLapsedPlans moves approved plans whose time is over to expired (owner nil: every chat). The chat does so
+// only when the next call of the plan comes (planNext), so a plan nobody touched again stayed "running" in the
+// overview for days (render check of #223, 26.10.2026).
+func (s *Store) expireLapsedPlans(ctx context.Context, owner *string) error {
+	q := `UPDATE plans p SET state='expired' FROM chats c WHERE c.id = p.chat_id AND p.state='approved'
+AND p.expires_at IS NOT NULL AND p.expires_at <= now()`
+	args := []any{}
+	if owner != nil {
+		q += ` AND c.owner = $1`
+		args = append(args, *owner)
+	}
+	_, err := s.pool.Exec(ctx, q, args...)
+	return err
 }

@@ -199,3 +199,28 @@ func TestRunningPlanCount(t *testing.T) {
 		t.Fatalf("all: %d %v, want 3", n, err)
 	}
 }
+
+// An approved plan whose time is over counts as expired in the overview, also when no call of it came since.
+func TestLapsedPlanIsExpired(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	o := "sub-anna"
+	c := acrossChat(t, s, "chat", o)
+	lapsed := acrossPlan(t, s, c.ID, "lapsed", "interactive", "approved", 1)
+	acrossPlan(t, s, c.ID, "running", "interactive", "approved", 1)
+	if _, err := s.pool.Exec(ctx, `UPDATE plans SET expires_at = now() - interval '1 hour' WHERE id = $1`, lapsed.ID); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := s.RunningPlanCount(ctx, &o); err != nil || n != 1 {
+		t.Fatalf("running: %d %v, want 1", n, err)
+	}
+	items, _, err := s.ListPlansAcross(ctx, PlanListFilter{Owner: &o})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, it := range items {
+		if it.ID == lapsed.ID && it.State != "expired" {
+			t.Fatalf("lapsed plan: %s", it.State)
+		}
+	}
+}
