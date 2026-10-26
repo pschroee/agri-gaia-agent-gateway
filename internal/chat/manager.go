@@ -326,6 +326,10 @@ type Manager struct {
 	// jobPolls: one poll per observed job at a time; the watcher and the plan wait guard share it (issue #180).
 	jobPolls singleflight.Group
 
+	// blockedTimers: per chat the timer that sends the empty refusal counter when the window runs out (issue #229).
+	blockedMu     sync.Mutex
+	blockedTimers map[string]*time.Timer
+
 	mu   sync.Mutex
 	live map[string]*live
 	subs map[string]map[chan Event]struct{}
