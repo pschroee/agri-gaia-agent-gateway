@@ -1,0 +1,15 @@
+# SPDX-FileCopyrightText: 2026 Philipp Schröer
+#
+# SPDX-License-Identifier: MIT
+
+# Sourced by /usr/bin/chromium (Debian's launcher) on every start: mmdc and mermaid-check (Puppeteer),
+# plotly's write_image (kaleido, BROWSER_PATH) and the agent's own chromium calls (issue #229).
+# Chromium in this sandbox renders local files. Without these switches it asks Google's update,
+# component and account services in the background, and the gateway counts each try as refused.
+# The launcher expands CHROMIUM_FLAGS unquoted: no value may contain a space or a glob character.
+export CHROMIUM_FLAGS="$CHROMIUM_FLAGS --disable-background-networking --disable-component-update --disable-sync --disable-default-apps --disable-domain-reliability --disable-client-side-phishing-detection --metrics-recording-only --no-pings --no-first-run --no-default-browser-check"
+# Fail closed: whatever still wants the network goes to a closed local port, not to the relay.
+# Under an internet grant, AGW_CHROMIUM_ONLINE=1 lets Chromium use the relay like curl does.
+if [ "${AGW_CHROMIUM_ONLINE:-}" != 1 ]; then
+  export CHROMIUM_FLAGS="$CHROMIUM_FLAGS --proxy-server=http://127.0.0.1:9"
+fi
