@@ -112,7 +112,10 @@ RUN apt-get update \
 # onnxruntime pinned (R0.15): the result checks run a model in a container of this image with it, and a
 # rebuild must not pull another version (unpinned broke the build once, see CLAUDE.md). Side effect: the
 # agent can load ONNX models in its sandbox as well.
-RUN pip3 install --no-cache-dir --break-system-packages numpy pandas matplotlib jinja2 plotly kaleido openpyxl \
+# plotly, kaleido and choreographer pinned (#229): the Chromium network check depends on kaleido's switches and its
+# MathJax host.
+RUN pip3 install --no-cache-dir --break-system-packages numpy pandas matplotlib jinja2 \
+    plotly==7.1.0 kaleido==1.5.0 choreographer==1.4.0 openpyxl \
     onnxruntime==1.20.1 \
  && MPLBACKEND=Agg python3 -c "import numpy, pandas, matplotlib.pyplot" \
  && python3 -c "import onnxruntime, PIL; print('onnxruntime', onnxruntime.__version__)"
@@ -172,6 +175,18 @@ RUN chmod 0644 /opt/agw/mmdc/ui-config.json && chmod 0755 /usr/local/bin/mermaid
  && ! printf 'flowchart LR\n  A[a<br/>b] --> B\n' | HOME=/tmp mermaid-check - 2>/dev/null
 # The same Chromium writes images for plotly (kaleido 1.x finds the browser via BROWSER_PATH).
 ENV BROWSER_PATH=/usr/bin/chromium
+# Chromium without background networking, failing closed (issue #229): one file read by Debian's launcher for
+# every start. netcheck.py proves it at build time and stays in the image for diagnosis.
+COPY images/agw-basis/chromium/agw-offline /etc/chromium.d/agw-offline
+COPY images/agw-basis/chromium/netcheck.py /opt/agw/chromium/netcheck.py
+RUN rm -f /etc/chromium.d/extensions /etc/chromium.d/apikeys \
+ && chmod 0644 /etc/chromium.d/agw-offline /opt/agw/chromium/netcheck.py \
+ && cd /tmp && printf 'flowchart LR\n  A["Größe"] --> B["fertig"]\n' > n.mmd \
+ && HOME=/tmp python3 /opt/agw/chromium/netcheck.py -- mmdc -q -i n.mmd -o n.png \
+ && HOME=/tmp python3 /opt/agw/chromium/netcheck.py -- mermaid-check n.mmd \
+ && HOME=/tmp python3 /opt/agw/chromium/netcheck.py -- timeout 60 chromium --headless --no-sandbox --disable-gpu --dump-dom about:blank \
+ && HOME=/tmp python3 /opt/agw/chromium/netcheck.py --allow cdnjs.cloudflare.com -- python3 -c "import plotly.graph_objects as go; go.Figure(go.Bar(y=[1, 2])).write_image('/tmp/n-plotly.png')" \
+ && test -s n.png && test -s n-plotly.png && rm -f n.mmd n.png n-plotly.png
 # fd for the find tool (M2): pi calls fd with fixed arguments and otherwise downloads it itself;
 # here is a pinned version (the one pi 0.87.1 pins for darwin/x64).
 ARG FD_VERSION=10.3.0
