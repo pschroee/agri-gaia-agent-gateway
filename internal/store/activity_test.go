@@ -476,3 +476,37 @@ func TestListActivityGroupsUserSwitchOff(t *testing.T) {
 		t.Fatalf("old entry: %d entries, want 2", len(p.Calls))
 	}
 }
+
+// The gateway's stop after failed calls (#217) is listed with the platform kind but never counted in the figures.
+func TestFailedCallsRowListedNotCounted(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	c, err := s.CreateChat(ctx, NewChat{Title: "stop", Model: "p/m", Variant: "cli", Owner: "sub-anna"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, sc := range []SocketCall{
+		{Op: "platform", Via: "cli", Detail: "GET /datasets/999999", Result: "error 404", ToolCallID: "tc-1"},
+		{Op: "failed_calls_limit", Via: "orchestrator", Detail: "5 failed calls of get_dataset in a row (limit 5). Last error: x", Result: "refused: stopped after 5 failed calls of get_dataset in a row (limit 5)", ToolCallID: "tc-1"},
+	} {
+		sc.ChatID, sc.SlotID = c.ID, "p"
+		if _, err := s.AddSocketCall(ctx, sc); err != nil {
+			t.Fatal(err)
+		}
+	}
+	anna := "sub-anna"
+	p, err := s.ListActivity(ctx, ActivityFilter{Owner: &anna})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p.Calls) != 2 || p.Calls[0].Op != "failed_calls_limit" || p.Calls[0].Kind != KindPlatform || p.Calls[0].ToolCallID != "tc-1" {
+		t.Fatalf("platform kind: %+v", p.Calls)
+	}
+	if p.Summary.Total != 1 {
+		t.Fatalf("the figures count the stop: %+v", p.Summary)
+	}
+	all, err := s.ListActivity(ctx, ActivityFilter{Owner: &anna, Kind: KindAll})
+	if err != nil || len(all.Calls) != 2 {
+		t.Fatalf("all kind: %d calls, %v", len(all.Calls), err)
+	}
+}

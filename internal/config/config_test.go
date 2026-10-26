@@ -285,6 +285,26 @@ func TestBackgroundEnv(t *testing.T) {
 	}
 }
 
+// #217: limits for failed tool calls in a row; 0 switches off, negative counts as 0.
+func TestFailedCallLimitsEnv(t *testing.T) {
+	e := FromEnv()
+	if e.MaxFailedToolCalls != 20 || e.MaxFailedSameTool != 5 {
+		t.Fatalf("defaults: %d %d", e.MaxFailedToolCalls, e.MaxFailedSameTool)
+	}
+	t.Setenv("AGW_MAX_FAILED_TOOL_CALLS", "0")
+	t.Setenv("AGW_MAX_FAILED_SAME_TOOL", "-3")
+	e = FromEnv()
+	if e.MaxFailedToolCalls != 0 || e.MaxFailedSameTool != 0 {
+		t.Fatalf("off: %d %d", e.MaxFailedToolCalls, e.MaxFailedSameTool)
+	}
+	t.Setenv("AGW_MAX_FAILED_TOOL_CALLS", "7")
+	t.Setenv("AGW_MAX_FAILED_SAME_TOOL", "2")
+	e = FromEnv()
+	if e.MaxFailedToolCalls != 7 || e.MaxFailedSameTool != 2 {
+		t.Fatalf("set: %d %d", e.MaxFailedToolCalls, e.MaxFailedSameTool)
+	}
+}
+
 func TestCheckAuth(t *testing.T) {
 	tok := strings.Repeat("a", 32)
 	oidc := Env{AuthMode: AuthOIDC, OIDCIssuer: "https://kc.example/realms/r", OIDCClientID: "agw-agent", OIDCClientSecret: "s", PublicURL: "https://agent.example"}

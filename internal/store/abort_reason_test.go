@@ -7,6 +7,7 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -23,10 +24,10 @@ func TestTurnAbortReasonFirstWins(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.SetTurnAbortReason(ctx, id, "time_limit"); err != nil {
+	if err := s.SetTurnAbort(ctx, id, "time_limit", ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.SetTurnAbortReason(ctx, id, "trash"); err != nil {
+	if err := s.SetTurnAbort(ctx, id, "trash", ""); err != nil {
 		t.Fatal(err)
 	}
 	var got *string
@@ -41,16 +42,16 @@ func TestTurnAbortReasonFirstWins(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.SetTurnAbortReason(ctx, other, "user"); err != nil {
+	if err := s.SetTurnAbort(ctx, other, "user", ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.SetTurnAbortReason(ctx, 999999, "user"); err != nil {
+	if err := s.SetTurnAbort(ctx, 999999, "user", ""); err != nil {
 		t.Fatalf("unknown turn: %v", err)
 	}
-	if err := s.SetTurnAbortReason(ctx, 0, "user"); err != nil {
+	if err := s.SetTurnAbort(ctx, 0, "user", ""); err != nil {
 		t.Fatalf("turn 0: %v", err)
 	}
-	if err := s.SetTurnAbortReason(ctx, other, ""); err != nil {
+	if err := s.SetTurnAbort(ctx, other, "", ""); err != nil {
 		t.Fatalf("empty reason: %v", err)
 	}
 }
@@ -72,7 +73,7 @@ func TestMessagesCarryAbortReason(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.SetTurnAbortReason(ctx, aborted, "subagent_limit"); err != nil {
+	if err := s.SetTurnAbort(ctx, aborted, "subagent_limit", ""); err != nil {
 		t.Fatal(err)
 	}
 	user := json.RawMessage(`{"role":"user","content":[{"type":"text","text":"hallo"}]}`)
@@ -171,5 +172,70 @@ func TestSubagentStoppedByOnce(t *testing.T) {
 	}
 	if err := s.SetSubagentStoppedBy(ctx, "not-a-uuid", "run-1", "user"); err != ErrNotFound {
 		t.Fatalf("foreign chat: %v", err)
+	}
+}
+
+// The detail goes in with the reason, and the first reason wins together with its detail (#217).
+func TestAbortDetailFirstWins(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	c, err := s.CreateChat(ctx, NewChat{Title: "Chat", Model: "deepseek/deepseek-flash", Variant: "cli", Owner: "alice"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := s.CreateTurn(ctx, c.ID, TriggerUser, OriginUser, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetTurnAbort(ctx, id, "failed_calls", "5 failed calls of get_dataset in a row (limit 5). Last error: x"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetTurnAbort(ctx, id, "user", "later"); err != nil {
+		t.Fatal(err)
+	}
+	var reason, detail string
+	if err := s.pool.QueryRow(ctx, `SELECT COALESCE(abort_reason,''), COALESCE(abort_detail,'') FROM chat_turns WHERE id=$1`, id).Scan(&reason, &detail); err != nil {
+		t.Fatal(err)
+	}
+	if reason != "failed_calls" || !strings.HasPrefix(detail, "5 failed calls of get_dataset") {
+		t.Fatalf("stored %q / %q", reason, detail)
+	}
+	// An empty detail stays NULL.
+	other, _ := s.CreateTurn(ctx, c.ID, TriggerUser, OriginUser, nil, nil)
+	if err := s.SetTurnAbort(ctx, other, "user", ""); err != nil {
+		t.Fatal(err)
+	}
+	var isNull bool
+	if err := s.pool.QueryRow(ctx, `SELECT abort_detail IS NULL FROM chat_turns WHERE id=$1`, other).Scan(&isNull); err != nil || !isNull {
+		t.Fatalf("empty detail should stay NULL: %v %v", isNull, err)
+	}
+}
+
+// Every stored message of the turn carries the detail (#217).
+func TestAbortDetailOnMessages(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	c, err := s.CreateChat(ctx, NewChat{Title: "Chat", Model: "deepseek/deepseek-flash", Variant: "cli", Owner: "alice"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	turn, _ := s.CreateTurn(ctx, c.ID, TriggerUser, OriginUser, nil, nil)
+	plain, _ := s.CreateTurn(ctx, c.ID, TriggerUser, OriginUser, nil, nil)
+	if err := s.SetTurnAbort(ctx, turn, "failed_calls", "detail text"); err != nil {
+		t.Fatal(err)
+	}
+	user := json.RawMessage(`{"role":"user","content":[{"type":"text","text":"hallo"}]}`)
+	if _, err := s.AppendTurnMessage(ctx, c.ID, user, nil, &MessageMeta{TurnID: turn, Trigger: TriggerUser, Origin: OriginUser}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AppendTurnMessage(ctx, c.ID, user, nil, &MessageMeta{TurnID: plain, Trigger: TriggerUser, Origin: OriginUser}); err != nil {
+		t.Fatal(err)
+	}
+	msgs, err := s.Messages(ctx, c.ID)
+	if err != nil || len(msgs) != 2 {
+		t.Fatalf("messages: %d %v", len(msgs), err)
+	}
+	if msgs[0].AbortReason != "failed_calls" || msgs[0].AbortDetail != "detail text" || msgs[1].AbortDetail != "" {
+		t.Fatalf("detail: %+v / %+v", msgs[0], msgs[1])
 	}
 }
