@@ -88,22 +88,42 @@ func cachedReads(read platform.Doer) platform.Doer {
 // happened (binding without a platform, or a summary that names no object). phase is "proposed" for the reads that
 // wrote the summary at proposal time and "approval" for the re-read at the moment of the decision.
 func (m *Manager) logSummaryReads(ctx context.Context, chatID, approvalID, phase string, rl *readLog) {
+	paths, result, ok := readPaths(rl)
+	if !ok {
+		return
+	}
+	detail := fmt.Sprintf("for approval %s (%s): %s", shortApprovalID(approvalID), phase, paths)
+	m.LogCallBy(ctx, m.slotOf(chatID), chatID, "orchestrator", "summary_read", detail, result)
+}
+
+// readPaths names the paths of a readLog (at most maxSummaryReadPaths, then a count) and the result of the
+// activity entry; ok is false when nothing was read.
+func readPaths(rl *readLog) (detail, result string, ok bool) {
 	rl.mu.Lock()
 	paths, failed := append([]string(nil), rl.paths...), rl.failed
 	rl.mu.Unlock()
 	if len(paths) == 0 {
-		return
+		return "", "", false
 	}
 	shown, tail := paths, ""
 	if len(shown) > maxSummaryReadPaths {
 		tail = fmt.Sprintf(", … and %d more", len(shown)-maxSummaryReadPaths)
 		shown = shown[:maxSummaryReadPaths]
 	}
-	detail := fmt.Sprintf("for approval %s (%s): %s%s", shortApprovalID(approvalID), phase, strings.Join(shown, ", "), tail)
-	result := "ok"
+	result = "ok"
 	if failed > 0 {
 		result = fmt.Sprintf("error: %d of %d not readable", failed, len(paths))
 	}
+	return strings.Join(shown, ", ") + tail, result, true
+}
+
+// logRunSummaryReads writes the activity entry of the reads that wrote the summary of a step as it was sent (#225).
+func (m *Manager) logRunSummaryReads(ctx context.Context, chatID, planID string, idx int, rl *readLog) {
+	paths, result, ok := readPaths(rl)
+	if !ok {
+		return
+	}
+	detail := fmt.Sprintf("for plan %s step %d (run): %s", shortApprovalID(planID), idx, paths)
 	m.LogCallBy(ctx, m.slotOf(chatID), chatID, "orchestrator", "summary_read", detail, result)
 }
 

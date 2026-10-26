@@ -73,3 +73,19 @@ func TestCLIIndexMatchesHelp(t *testing.T) {
 		}
 	}
 }
+
+// Before a call that may wait the CLI says what the gateway does (issue #225): a plan is checked first, another
+// writing call is checked and confirmed where needed, a reading call says nothing.
+func TestPlatformWaitLine(t *testing.T) {
+	plan, _ := platform.Lookup("propose-plan")
+	if l := waitLine(plan, map[string]any{}); !strings.Contains(l, "Proposing the plan") || !strings.Contains(l, "checks it first") {
+		t.Errorf("plan: %q", l)
+	}
+	req, _ := platform.Lookup("request")
+	if l := waitLine(req, map[string]any{"method": "PATCH"}); !strings.HasPrefix(l, "Writing call. The gateway checks it") {
+		t.Errorf("writing call: %q", l)
+	}
+	if l := waitLine(req, map[string]any{"method": "GET"}); l != "" {
+		t.Errorf("reading call: %q", l)
+	}
+}

@@ -114,7 +114,7 @@ func describeAssessModel(c SummaryCall, s *summarizer) (string, []string, bool) 
 			modelName, _ = m["name"].(string)
 		}
 	}
-	head := "Check model " + s.modelText(modelID, map[string]any{"name": modelName}, "")
+	head := "Check " + s.modelText(modelID, map[string]any{"name": modelName}, "")
 	if evalID != "" {
 		name, _, _, readErr := s.datasetForSplit(evalID)
 		head += " on " + s.datasetText(evalID, name, readErr)

@@ -97,3 +97,7 @@ ALTER TABLE plan_steps ADD COLUMN IF NOT EXISTS claimed_at timestamptz;
 -- origin. Stored so that a plan that is loaded again decides "covered" the same way (see StepCovered).
 ALTER TABLE plan_steps ADD COLUMN IF NOT EXISTS image_origin_plan text NOT NULL DEFAULT '';
 ALTER TABLE plan_steps ADD COLUMN IF NOT EXISTS image_origin_step integer NOT NULL DEFAULT 0;
+
+-- summary_run (#225): the summary of the call as it was actually sent (placeholders resolved, values the tool filled in);
+-- summary keeps the text that was approved. Empty when the call went out as stored.
+ALTER TABLE plan_steps ADD COLUMN IF NOT EXISTS summary_run text NOT NULL DEFAULT '';

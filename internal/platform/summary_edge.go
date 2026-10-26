@@ -60,6 +60,13 @@ func (s *summarizer) createDeployment() (string, []string) {
 // note that the container runs with network access and opens its ports on every interface of the
 // device (edge D2.7). The deployment is read to name the image and the device.
 func (s *summarizer) startDeployment(id string) (string, []string) {
+	if p, isPh := placeholder(id); isPh {
+		// The deployment does not exist yet: nothing to read, its image and device are those of step p.
+		return fmt.Sprintf("Start the deployment created by step %d", p), []string{
+			fmt.Sprintf("Image and device: those of the deployment created by step %d.", p),
+			"The device pulls the image and runs it with network access; ports are opened on all interfaces of the device.",
+		}
+	}
 	dep, err := s.object("/container-deployments/" + id)
 	name, _ := dep["name"].(string)
 	head := fmt.Sprintf("Start deployment %s (id %s)", strconv.Quote(name), id)

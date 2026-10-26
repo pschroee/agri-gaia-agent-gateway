@@ -521,7 +521,8 @@ maximum in ms, rounded to 0.1 ms).
 the gateway*); those reads belong to the system, not to the agent, and appear as **one entry per summary**: `detail` =
 `for approval <first 8 characters of the id> (proposed|approval): GET /datasets/16, GET /models/3` (at most 20 paths,
 then `… and N more`), `result` = `ok` or `error: <n> of <m> not readable`. `proposed` is the read that wrote the
-summary at proposal time, `approval` the re-read at the moment of the decision. They carry no `outcome` and no
+summary at proposal time, `approval` the re-read at the moment of the decision. For a plan step that goes out in another form than stored
+(issue #225) the detail reads `for plan <first 8 characters of the id> step <n> (run): GET /models/42`. They carry no `outcome` and no
 `approval`, and **never count in `summary`** — the figures stay those of the agent's platform calls.
 
 **Internet entries** (issue #37) are the `socket_calls` entries with `op` `internet` (the agent's request, `detail` =
@@ -1449,12 +1450,17 @@ merged (strand G-B), an approved plan does not yet change how the steps are appr
   configured on this instance; interactive plans up to 10 steps`. It is the last entry of the overview.
 - **Types:** `Plan = {id, chat_id, approval_id?, agent_title, session?, tool_call_id?, via, state, mode?, budget,
   auto_turns?, grant?, pause_reason?, replaces?, created_at,
-  decided_at?, expires_at?, ended_at?, steps: PlanStep[]}`; `PlanStep = {idx, summary?, summary_proposed?, agent_note?, tool?, args?, method, path,
+  decided_at?, expires_at?, ended_at?, steps: PlanStep[]}`; `PlanStep = {idx, summary?, summary_proposed?, summary_run?, agent_note?, tool?, args?, method, path,
   query?, body?, body_sha256?,
   form?, form_sha256?, files?: {field, path, sha256}[], effect, covered, state, result?, created_resource?, created_id?,
   done_at?, max_attempts?, attempts?}`; `budget = {max_duration_s, max_llm_cost, max_auto_turns}`. Plan states: `proposed | approved |
   paused | rejected | expired | completed | failed | cancelled | superseded`; step states:
   `open | running | done | failed | skipped`.
+- **`summary_run`** (issue #225): the summary of the call of a step as it was sent (placeholders resolved, values the
+  tool filled in), written just before the call goes out; `summary` keeps the text that was approved. Set only when
+  the sent call differs from the stored one; never when the call is unchanged or a read for the text failed or took
+  longer than 5 s. A step of a single approval given in the same call takes over the text of that approval. Plans from
+  before this change have none.
 - **Endpoint:** `GET /api/chats/{id}/plans` → `Plan[]`, oldest first; 404 for foreign and unknown chats. SSE
   `GET /api/chats/{id}/events` sends `plan` with the `Plan` on every change of state. `plan` is not a cross-chat kind.
 - **Limits of the design:** the session is taken from a header in the CLI, which the agent can change; MCP and REST
