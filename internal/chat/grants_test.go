@@ -551,3 +551,78 @@ func TestFinishWebCountsRefusal(t *testing.T) {
 		t.Fatalf("rows: %+v", rows)
 	}
 }
+
+// Issue #229: when a grant starts, the counter starts at the grant, so the refusals before it no longer count; the UI
+// is told with count 0 instead of keeping the old number until a reload.
+func TestPublishBlockedZeroOnGrantStart(t *testing.T) {
+	e := setup(t)
+	chatID, _ := newChatNoNet(t, e)
+	events, cancel := e.m.Subscribe(chatID)
+	defer cancel()
+	before := time.Now()
+	e.m.RecordWeb(webproxy.Request{ChatID: chatID, Method: "CONNECT", Host: "accounts.google.com", Port: 443, Status: 403, Denied: "blocked: internet is off", Reason: "internet_off", StartedAt: before, Origin: "exec"})
+	if v := waitEvent(t, events, "internet_blocked", "").Data.(*BlockedView); v.Count != 1 {
+		t.Fatalf("after the refusal: %+v", v)
+	}
+	startTestGrant(t, e, chatID, "domains", []string{"a.example.org"}, 30, 100)
+	v := waitEvent(t, events, "internet_blocked", "").Data.(*BlockedView)
+	if v.Count != 0 || len(v.Last) != 0 || v.Since.Before(before) {
+		t.Fatalf("after the grant started: %+v", v)
+	}
+}
+
+// Issue #229: without a grant, the counter falls to 0 by itself once the last refusal has left the window, and the
+// UI is told. With a grant active nothing leaves the window, so no timer runs.
+func TestPublishBlockedWindowExpiry(t *testing.T) {
+	oldW, oldS := blockedWindow, blockedSlack
+	blockedWindow, blockedSlack = 300*time.Millisecond, 100*time.Millisecond
+	t.Cleanup(func() { blockedWindow, blockedSlack = oldW, oldS })
+	e := setup(t)
+	chatID, _ := newChatNoNet(t, e)
+	events, cancel := e.m.Subscribe(chatID)
+	defer cancel()
+	e.m.RecordWeb(webproxy.Request{ChatID: chatID, Method: "GET", Host: "clients2.google.com", Port: 80, Status: 403, Denied: "blocked: internet is off", Reason: "internet_off", StartedAt: time.Now(), Origin: "exec"})
+	if v := waitEvent(t, events, "internet_blocked", "").Data.(*BlockedView); v.Count != 1 {
+		t.Fatalf("after the refusal: %+v", v)
+	}
+	e.m.blockedMu.Lock()
+	armed := e.m.blockedTimers[chatID] != nil
+	e.m.blockedMu.Unlock()
+	if !armed {
+		t.Fatal("no timer armed")
+	}
+	done := make(chan *BlockedView, 1)
+	go func() { done <- waitEvent(t, events, "internet_blocked", "").Data.(*BlockedView) }()
+	select {
+	case v := <-done:
+		if v.Count != 0 {
+			t.Fatalf("after the window: %+v", v)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("no event with count 0 within 2 s")
+	}
+
+	// with a grant active: no timer
+	other, _ := newChatNoNet(t, e)
+	startTestGrant(t, e, other, "domains", []string{"a.example.org"}, 30, 100)
+	e.m.RecordWeb(webproxy.Request{ChatID: other, Method: "CONNECT", Host: "github.com", Port: 443, Status: 403, Denied: "blocked: x", StartedAt: time.Now(), Origin: "exec"})
+	e.m.blockedMu.Lock()
+	armed = e.m.blockedTimers[other] != nil
+	e.m.blockedMu.Unlock()
+	if armed {
+		t.Fatal("timer armed although a grant is active")
+	}
+}
+
+// The chat view still carries no internet_blocked without refusals (omitempty), although the event goes out with 0.
+func TestBlockedViewNilAtZero(t *testing.T) {
+	e := setup(t)
+	chatID, _ := newChatNoNet(t, e)
+	if v := e.m.blockedView(context.Background(), chatID); v != nil {
+		t.Fatalf("view without refusals: %+v", v)
+	}
+	s, err := e.m.blockedState(context.Background(), chatID)
+	if err != nil || s.Count != 0 || s.Last == nil {
+		t.Fatalf("state: %+v, %v", s, err)
+	}
+}

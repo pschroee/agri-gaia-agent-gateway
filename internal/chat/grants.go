@@ -645,6 +645,7 @@ func (m *Manager) startGrant(ctx context.Context, g store.Grant) error {
 	slog.Info("internet grant started", "chat", g.ChatID, "grant", g.ID, "kind", g.Kind, "origin", g.Origin)
 	m.publishGrant(l)
 	m.publishChat(ctx, g.ChatID)
+	m.publishBlocked(g.ChatID) // the counter starts at the grant
 	return nil
 }
 
@@ -689,6 +690,7 @@ func (m *Manager) endLocked(ctx context.Context, chatID string, id int64, reason
 	m.LogCallBy(ctx, slot, chatID, "gateway", "internet_end", fmt.Sprintf("grant %d %s", id, g.Kind), reason)
 	slog.Info("internet grant ended", "chat", chatID, "grant", id, "kind", g.Kind, "reason", reason, "bytes", total)
 	m.publishChat(ctx, chatID)
+	m.publishBlocked(chatID) // the counter starts at the default window again
 	return ok
 }
 
@@ -955,21 +957,34 @@ type BlockedConnection struct {
 	At      time.Time `json:"at"`
 }
 
-// blockedWindow is how far back the counter looks when no grant is active.
-const blockedWindow = 15 * time.Minute
+// blockedWindow is how far back the counter looks when no grant is active; blockedSlack is added to the timer that
+// sends the empty counter once the last refusal has left the window. Variables so that tests can shorten them.
+var (
+	blockedWindow = 15 * time.Minute
+	blockedSlack  = time.Second
+)
 
 // blockedView reads the counter; nil if nothing was refused in the window.
 func (m *Manager) blockedView(ctx context.Context, chatID string) *BlockedView {
+	v, err := m.blockedState(ctx, chatID)
+	if err != nil || v.Count == 0 {
+		return nil
+	}
+	return v
+}
+
+// blockedState reads the counter; with nothing refused it is a view with count 0 (the UI clears its display).
+func (m *Manager) blockedState(ctx context.Context, chatID string) (*BlockedView, error) {
 	since := m.blockedSince(chatID)
 	n, last, err := m.st.ChatBlocked(ctx, chatID, since, 3)
-	if err != nil || n == 0 {
-		return nil
+	if err != nil {
+		return nil, err
 	}
 	v := &BlockedView{Count: n, Since: since, Last: []BlockedConnection{}}
 	for _, r := range last {
 		v.Last = append(v.Last, BlockedConnection{Host: r.Host, Origin: r.Origin, Reason: r.Reason, Denied: r.Denied, Package: r.Package, Service: r.Service, At: r.StartedAt})
 	}
-	return v
+	return v, nil
 }
 
 // RecentRefusals: the last three refusals of the chat that the refusal counter counts (agw-internet status).
@@ -999,11 +1014,39 @@ func (m *Manager) blockedSince(chatID string) time.Time {
 	return since
 }
 
-// publishBlocked tells the UI the new state of the refusal counter.
+// publishBlocked tells the UI the new state of the refusal counter, also when it is 0 (issue #229): the UI shows
+// the count until told otherwise. Without a grant, a timer sends the 0 when the last refusal leaves the window.
 func (m *Manager) publishBlocked(chatID string) {
-	if v := m.blockedView(context.Background(), chatID); v != nil {
-		m.publish(chatID, Event{Kind: "internet_blocked", Data: v})
+	v, err := m.blockedState(context.Background(), chatID)
+	if err != nil {
+		return
 	}
+	m.publish(chatID, Event{Kind: "internet_blocked", Data: v})
+	if v.Count > 0 && len(m.grants.active(chatID)) == 0 {
+		m.armBlockedTimer(chatID)
+	}
+}
+
+// armBlockedTimer (re)sets the chat's timer that publishes the counter again after the window has passed.
+func (m *Manager) armBlockedTimer(chatID string) {
+	m.blockedMu.Lock()
+	defer m.blockedMu.Unlock()
+	if m.blockedTimers == nil {
+		m.blockedTimers = map[string]*time.Timer{}
+	}
+	if t := m.blockedTimers[chatID]; t != nil {
+		t.Stop()
+	}
+	var t *time.Timer
+	t = time.AfterFunc(blockedWindow+blockedSlack, func() {
+		m.blockedMu.Lock()
+		if m.blockedTimers[chatID] == t {
+			delete(m.blockedTimers, chatID)
+		}
+		m.blockedMu.Unlock()
+		m.publishBlocked(chatID)
+	})
+	m.blockedTimers[chatID] = t
 }
 
 // GrantBrief is what the activity chips need of a grant: its kind and what it lists.
