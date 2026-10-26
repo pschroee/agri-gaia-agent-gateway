@@ -360,7 +360,8 @@ type NotebookApprovalData = {
 };
 type SocketCall = { id: number; chat_id?: string; slot_id: string; via: "cli" | "mcp" | "api" | "user" /* user: the user's internet switch */; op: string; detail: string; result: string; created_at: string; session?: string; tool_call_id?: string;
   duration_ms?: number /* platform calls: round trip to the platform in ms (token exchange included, approval wait excluded); missing: not measured */;
-  effect?: "read" | "write" | "compute" | "irreversible" /* platform calls: class of the call (see "Effect classes") */ };
+  effect?: "read" | "write" | "compute" | "irreversible" /* platform calls: class of the call (see "Effect classes") */;
+  plan_id?: string; plan_step?: number /* platform calls of an approved plan step (#221): the plan and the step the call belonged to; missing for older calls and calls outside a plan */ };
 // GET /api/activity (see "Activity across chats").
 type ActivityCall = SocketCall & { kind: "platform" | "internet";
   outcome?: "ok" | "error" | "blocked" | "logged" | "rejected" | "refused" /* platform calls only */;
@@ -428,7 +429,7 @@ type ActivityPage = { calls: ActivityCall[]; chats: Record<string, { id: string;
 | `DELETE /api/chats/{id}/inputs/{name}` | 204 | takes back an uploaded input that was **not** sent with a message (issue L4/#121): row, file in the object store and the mirror in the sandbox; the chat's subscribers get the SSE event `artifact_removed`. `404` for an unknown name, `409 {"error":"input already sent","code":"already_sent"}` for a file that went with a message — that one belongs to the history. The same 409 for a chat in the trash is `{"code":"chat_in_trash"}` |
 | `GET /api/approvals?state=pending` | `Approval[]` | open approvals of all chats |
 | `GET /api/events` | SSE | approvals across all the user's chats, see *SSE `GET /api/events`* |
-| `GET /api/activity?kind=&since=&until=&outcome=&chat=&call=&limit=&before=` | `ActivityPage` | platform calls (with `kind=internet\|all` also the internet switches) of the user's chats across all chats, newest first, with a summary of the period; see *Activity across chats* |
+| `GET /api/activity?kind=&since=&until=&outcome=&chat=&call=&plan=&step=&limit=&before=` | `ActivityPage` | platform calls (with `kind=internet\|all` also the internet switches) of the user's chats across all chats, newest first, with a summary of the period; see *Activity across chats* |
 | `POST /api/approvals/{id}` `{approve: boolean}` | `Approval` | approve or reject; approving re-reads the platform first (see *Summaries by the gateway*): on a change **409** with `{error, code: "summary_changed", approval}` and the approval stays open |
 | `GET /api/chats/{id}/events` | SSE | live events of the chat |
 | `POST /api/chats/{id}/trash` | `Chat` | moves the chat into the trash (see *Chat trash*): stops the work, rejects open approvals and expires open plans, returns the sandbox; idempotent; 404 for foreign and unknown chats |
@@ -498,6 +499,8 @@ count. The per-chat log in `GET /api/chats/{id}` (`socket_calls`) and the SSE ev
 | `outcome` | `ok`, `error`, `blocked` (violation blocked by the delegation), `logged` (violation let through and logged), `rejected` (by the user or no decision in time), `refused` (by the gateway before it went out); filters `calls` only, not `summary`; it belongs to platform calls, so with `kind=all` it leaves out the internet entries |
 | `chat` | one chat of the user |
 | `call` | one tool call id: only the platform calls it produced, so the step details of a chat can link to their entries (issue L6/#123). The id has the shape it has in the socket log (printable, valid UTF-8, at most 256 bytes), 400 otherwise; an id without calls gives an empty page. It narrows `calls` and the figures of the calls, but not `runs` — `chat_turns` carry no tool call id |
+| `plan` | one plan id (uuid, 400 otherwise): only the platform calls logged with that `plan_id` (#221). Calls from before the column existed carry none and are not matched afterwards. Like every filter it stays inside the user's own chats; another user's plan gives an empty page |
+| `step` | one step number 1 to 99 of that plan (400 outside; 400 `step: needs plan` without `plan`). Needed because two plans of one chat both number their steps from 1 |
 | `limit` | page size, default 100, at most 500 (larger values are capped), 400 below 1 |
 | `before` | cursor: `next_before` of the previous page; only calls with a smaller id |
 
@@ -1254,6 +1257,12 @@ merged (strand G-B), an approved plan does not yet change how the steps are appr
   duplicate keys and reading calls are refused. Plans cannot
   contain `propose_plan`, `rights` or `/_agw/…`. Optional `"mode": "autonomous"`, `"budget"` and `"replaces"`: see
   *Autonomous plans*.
+- **Step times and failures (#221):** `plan_steps.claimed_at` is written at every claim of a step and travels as
+  `step_started_at` on the step (left out while the step was never claimed); the `started_at` of a step stays the start of
+  its observed job. A step whose call failed without an exception stores `result` as `<status> <http status>: <line>`,
+  e.g. `error 422: Dataset not found`: the gateway's message, else the `detail` of the platform's JSON answer (a text, or
+  the first `msg` of a list), one line, tokens redacted, at most 200 characters. Without a usable text `result` stays
+  `error 422`.
 - **Placeholders:** the id of an object an earlier step created is written `"{{stepN.id}}"`, as a whole argument, body
   value, path segment or query value. It resolves only to an object that this plan created in this chat (the
   provenance register `delegation_objects`), and only once that step is `done`. A placeholder may point only backwards,
@@ -1393,7 +1402,11 @@ user's token.
   the last ten lines in a fence with a random marker, like the note at the end of a background task.
 - **SSE:** every poll publishes `job` for the chat (`{change: progress|next|ended, job: WatchJob}`) and, for a plan step,
   `plan` with the plan as it now is — the step carries `progress`, `progress_msg`, `eta`, `log_tail`, `outputs` and
-  `started_at` of its job.
+  `started_at` of its job, and `last_epoch` (see below).
+- **Last training epoch (#221):** `watch_jobs.last_epoch` (JSON text, empty until a poll read an epoch) holds
+  `{"epoch","epochs"?,"values":{name: number},"at"?}` of the last epoch of a training run: at most 8 finite figures, names
+  up to 40 characters. `WatchJob.last_epoch` and `PlanStep.last_epoch` carry it as an object (left out when empty); a
+  poll without figures keeps the stored value. Only the last epoch is kept, not the series.
 - **The end of a job (D2.6/D2.7):** the step is `done` or `failed` (a covered step is repeated while `max_attempts`
   allows, A-E1), the plan completes or fails, and the agent gets a **note** (`chat_queue.note` `plan_step`, refs the plan
   and the step; origin `system`). A resting chat is **woken** for such a note: `ensureLive` resumes it and the note is
@@ -2451,7 +2464,8 @@ or `refused: <reason>`. The row also carries the structured record of X5: `decis
 `pending_user`, `error`), `reason` (stable code), `rule` (checked rule as JSON), `body` (as sent after the rebuild,
 files in multipart only as name/size/SHA-256), `body_in_sha256`, `body_truncated`, `call_ref`/`call_ref_source`
 (`pi`, `exec_window`, `exec_ambiguous`, `none`; the agent's `X-Agw-Tool-Call` header is only `call_ref_claimed`),
-`within_delegation`, `approval_id`, `approval_decision` and `plan_step`.
+`within_delegation`, `approval_id`, `approval_decision`, `plan_step` and (since #221, with `plan_step`) `plan_id`. Both are
+set for a platform call that matched a step of an approved plan and NULL for every other call.
 
 ### Endpoints at pi's socket
 
