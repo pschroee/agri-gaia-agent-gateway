@@ -38,6 +38,9 @@ type TrialView struct {
 	// address of the run, as the job gives it (issue #194).
 	Name string `json:"name,omitempty"`
 	Link string `json:"link,omitempty"`
+	// PlanID and PlanStep name the plan step whose call started the run, as the job says (issue #227).
+	PlanID   string `json:"plan_id,omitempty"`
+	PlanStep int    `json:"plan_step,omitempty"`
 }
 
 // SearchEventData is the payload of the event "search".
@@ -200,6 +203,7 @@ func (m *Manager) trialView(ctx context.Context, t store.Trial, jobs map[string]
 		if t.Path == store.SearchPathNotebook {
 			v.Link = job.Link
 		}
+		v.PlanID, v.PlanStep = job.PlanID, job.StepIdx
 	}
 	switch t.Path {
 	case store.SearchPathNotebook:
@@ -211,6 +215,10 @@ func (m *Manager) trialView(ctx context.Context, t store.Trial, jobs map[string]
 	case store.SearchPathTemplate:
 		if t.Ref != "" {
 			v.Name = "training container " + t.Ref
+		}
+		var b SearchBase
+		if len(t.Subject) > 0 && json.Unmarshal(t.Subject, &b) == nil {
+			v.Name = subjectText(b)
 		}
 	}
 	return v

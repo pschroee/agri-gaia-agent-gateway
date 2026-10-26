@@ -5,6 +5,7 @@
 package chat
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"net/url"
@@ -278,23 +279,24 @@ func inList(list []string, v string) bool {
 	return false
 }
 
-// singleTrialTitle names a single run like the UI does: "Single run 3 · <architecture or entry or container>".
+// singleTrialTitle names a single run by what it is (issue #227): "<architecture> on <dataset>" for a training run
+// whose subject is known, else "Training container <id>" or "Training run"; the entry file of a notebook run, else
+// "Notebook run".
 func singleTrialTitle(t store.Trial, entry string) string {
-	head := "Single run " + strconv.Itoa(t.Seq)
-	var p struct {
-		Architecture string `json:"architecture"`
+	if t.Path == store.SearchPathNotebook {
+		return cmp.Or(entry, "Notebook run")
 	}
-	if len(t.Params) > 0 && json.Unmarshal(t.Params, &p) == nil && p.Architecture != "" {
-		return head + " · " + p.Architecture
+	var b SearchBase
+	if len(t.Subject) > 0 && json.Unmarshal(t.Subject, &b) == nil {
+		if b.ContainerID == 0 {
+			b.ContainerID, _ = strconv.ParseInt(t.Ref, 10, 64)
+		}
+		return subjectText(b)
 	}
-	name := entry
-	if name == "" && t.Path == store.SearchPathTemplate && t.Ref != "" {
-		name = "training container " + t.Ref
+	if t.Ref != "" {
+		return "Training container " + t.Ref
 	}
-	if name != "" {
-		return head + " · " + name
-	}
-	return head
+	return "Training run"
 }
 
 // ExperimentRuns lists the runs of a user's chats for the overview of issue #222: training searches, single
@@ -529,6 +531,9 @@ func (m *Manager) enrichTrial(ctx context.Context, row *RunRow, t store.Trial) {
 		if j, err := m.st.GetWatchJob(ctx, t.ChatID, t.JobID); err == nil {
 			row.PlanID, row.PlanStep, row.ToolCallID = j.PlanID, j.StepIdx, j.ToolCallID
 		}
+	}
+	if row.PlanID == "" {
+		row.PlanID, row.PlanStep = tv.PlanID, tv.PlanStep
 	}
 	if row.State == RunFailed {
 		row.Error = firstLine(t.Error)

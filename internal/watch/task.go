@@ -118,6 +118,20 @@ func splitTaskRef(ref string) (taskID, chain, target string) {
 	return head, chain, target
 }
 
+// TrainingContainerOf names the training container a job runs or starts: a training job's own ref, or the target of
+// the start call of a container that is observed as a platform task (issue #227); empty for any other job.
+func TrainingContainerOf(kind, ref string) string {
+	switch kind {
+	case kindTrainingRun:
+		return ref
+	case kindPlatformTask:
+		if _, chain, target := splitTaskRef(ref); chain == chainTraining {
+			return target
+		}
+	}
+	return ""
+}
+
 // Status values of a platform task (db/models.py: TaskStatus).
 const (
 	taskInProgress = "inprogress"

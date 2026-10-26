@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"regexp"
 	"strconv"
+	"strings"
 
 	"agw/internal/delegation"
 	"agw/internal/platform"
@@ -186,7 +187,21 @@ func trainingMessage(doc trainingDoc) string {
 // decides whether an exited container without a score counts as failed, and the watcher's message
 // carries the log tail so that the agent can look.
 func logShowsError(tail string) bool {
-	return regexp.MustCompile(`(?i)\b(error|traceback|exception|failed)\b`).MatchString(tail)
+	return logErrorPattern.MatchString(tail)
+}
+
+var logErrorPattern = regexp.MustCompile(`(?i)\b(error|traceback|exception|failed)\b`)
+
+// LastErrorLine is the last line of the log tail that names an error (issue #227), trimmed and clipped; empty when no
+// line does.
+func LastErrorLine(tail string) string {
+	lines := strings.Split(tail, "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		if l := strings.TrimSpace(lines[i]); l != "" && logErrorPattern.MatchString(l) {
+			return ClipRunes(l, 200)
+		}
+	}
+	return ""
 }
 
 // trainingLogReadLines is how many log lines the watcher reads: a traceback may sit above many progress

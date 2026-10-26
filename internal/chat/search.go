@@ -301,32 +301,14 @@ func (m *Manager) readTemplateBase(ctx context.Context, chatID string, read plat
 	if !mt.Supported {
 		return templateBase{}, 0, fmt.Sprintf("training container %s was built before the platform wrote figures; create a new one", id), nil
 	}
-	var cfg struct {
-		Config struct {
-			Train struct {
-				Schema json.RawMessage            `json:"schema"`
-				Values map[string]json.RawMessage `json:"values"`
-			} `json:"train"`
-		} `json:"config"`
-		Provider     string `json:"provider"`
-		Architecture struct {
-			Name     string `json:"name"`
-			Category string `json:"category"`
-		} `json:"architecture"`
-		DatasetID int64 `json:"dataset_id"`
-	}
-	if msg := readJSONInto(ctx, read, "/train/containers/"+id+"/config", &cfg); msg != "" {
+	cfg, msg := readTrainConfig(ctx, read, id)
+	if msg != "" {
 		return templateBase{}, 0, "the configuration of the training container could not be read: " + msg, nil
 	}
 	if err := search.CheckSchema(p.Space, cfg.Config.Train.Schema); err != nil {
 		return templateBase{}, 0, err.Error(), nil
 	}
-	b := templateBase{base: SearchBase{ContainerID: p.BaseContainerID, Provider: platform.VisibleControls(cfg.Provider),
-		Category: platform.VisibleControls(cfg.Architecture.Category), Architecture: platform.VisibleControls(cfg.Architecture.Name)}, fixed: map[string]json.RawMessage{}}
-	if cfg.DatasetID > 0 {
-		n := readNamed(ctx, read, cfg.DatasetID)
-		b.base.Dataset = &n
-	}
+	b := templateBase{base: subjectOf(ctx, read, cfg, p.BaseContainerID), fixed: map[string]json.RawMessage{}}
 	for k, v := range cfg.Config.Train.Values {
 		if _, inSpace := p.Space[k]; !inSpace {
 			b.fixed[k] = v

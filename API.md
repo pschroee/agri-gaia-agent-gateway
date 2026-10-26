@@ -598,13 +598,21 @@ searches appear as `waiting`; rejected or expired searches and refused trials ne
 `counts` cover all filters except `state`, `chats` all except `chat` (only chats with runs, most runs first), so the
 filter menus show what each choice would give. `truncated` is true when one of the three queries hit its limit of
 5 000 rows (the newest are kept). `RunRow`: `kind`, `id` (search `s…`, trial `t…`, notebook job `w…`), `chat_id`,
-`chat_title`, `title` (search: its title; single run: `Single run <n> · <architecture, entry file or training
-container>`; notebook run: its entry file), `state` (`running`, `waiting`, `done`, `failed`, `stopped`), `path`,
+`chat_title`, `title` (search: its title; single training run: `<architecture> on <dataset name>`, else `<architecture>`,
+`Training on <dataset>`, `Training container <id>` or `Training run`; single notebook run: its entry file, else
+`Notebook run`; notebook job: its entry file), `state` (`running`, `waiting`, `done`, `failed`, `stopped`), `path`,
 `started_at`, `ended_at`, `duration_s`, `progress` (`trial`, `trials`, `trials_done`, `epoch`, `epochs`, `eta`,
 `message`), `score` (`metric`, `mode`, `value`, `trial`), `error` (first line, at most 200 characters, tokens
 redacted), `plan_id`, `plan_step`, `tool_call_id`, `link` (https only, from the job) and exactly one of `search`
 (the `SearchView` of the per-chat route), `trial` (`TrialView`) or `job` (the watch job, texts redacted). Only the rows
 of the page carry these objects and the progress; the filters and the sort work on the cheap fields.
+
+A trial carries `subject` (#227): what a single training run trains, `{container_id, provider, category, architecture,
+dataset:{id,name,images,classes}}` (the form of the `base` of a search), read from the platform when the trial is made;
+missing for older trials and when the configuration could not be read. A `TrialView` also carries `plan_id` and
+`plan_step` of its job, and its `name` is the title of a training run. A single training run is listed from the call
+that starts it (state `running`, no epoch yet), not from the first poll of its container; a run that failed says why with
+the last error line of its log, else `The training container exited without a score`.
 
 State mapping: a search is `waiting` while proposed, `running` while it runs, and ended it is `failed` (start failed),
 `stopped` (stopped by the user) or `done`; a trial is `running` while declared or running, else its own state; a
