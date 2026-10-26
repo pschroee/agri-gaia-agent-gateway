@@ -174,3 +174,49 @@ func TestUploadDatasetDuplicateNames(t *testing.T) {
 		t.Errorf("the annotation file may share a name: %v", err)
 	}
 }
+
+func buildUpload(t *testing.T, args string) Request {
+	t.Helper()
+	tool, ok := Lookup("upload_dataset")
+	if !ok {
+		t.Fatal("upload_dataset missing")
+	}
+	r, err := tool.Build([]byte(args))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
+func filePaths(r Request) []string {
+	var out []string
+	for _, f := range r.Files {
+		out = append(out, f.Path)
+	}
+	return out
+}
+
+func TestUploadDatasetAnnotationInFilesSentOnce(t *testing.T) {
+	r := buildUpload(t, `{"name":"d","description":"x","files":["/w/d/a.png","/w/d/annotations.xml"],"annotation_file":"/w/d/annotations.xml"}`)
+	if got := strings.Join(filePaths(r), ","); got != "/w/d/a.png,/w/d/annotations.xml" {
+		t.Errorf("files = %s", got)
+	}
+	if r.Form["includes_annotation_file"][0] != "true" {
+		t.Errorf("includes_annotation_file = %v", r.Form["includes_annotation_file"])
+	}
+}
+
+func TestUploadDatasetSamePathTwiceSentOnce(t *testing.T) {
+	r := buildUpload(t, `{"name":"d","description":"x","files":["/w/b","/w/a","/w/b","/w/./a"]}`)
+	if got := strings.Join(filePaths(r), ","); got != "/w/b,/w/a" {
+		t.Errorf("files = %s", got)
+	}
+}
+
+func TestUploadDatasetOnlyAnnotationInFiles(t *testing.T) {
+	tool, _ := Lookup("upload_dataset")
+	_, err := tool.Build([]byte(`{"name":"d","description":"x","files":["/w/d/annotations.xml"],"annotation_file":"/w/d/annotations.xml"}`))
+	if err == nil || !strings.Contains(err.Error(), "at least one file besides the annotation file") {
+		t.Fatalf("only the annotation file: %v", err)
+	}
+}

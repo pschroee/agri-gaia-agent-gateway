@@ -342,3 +342,22 @@ func TestCLIProposePlanCollects(t *testing.T) {
 		}
 	}
 }
+
+// A path given twice and the annotation file in files as well are pinned once (#233): the proposal is accepted
+// and the step carries two pins, not four.
+func TestMCPProposePlanDuplicateAnnotation(t *testing.T) {
+	b := &planCheckBackend{platformBackend{fakeBackend: fakeBackend{chat: "chat-dup", decide: "approved"}}}
+	c := startRun(t, b, &fakeRunner{file: []byte("PNG")})
+	res := mcpCall(t, c, "tools/call", map[string]any{"name": "platform_propose_plan", "arguments": map[string]any{
+		"plan": map[string]any{"title": "t", "steps": []any{
+			map[string]any{"tool": "upload_dataset", "args": map[string]any{"name": "n", "description": "d",
+				"files":           []any{"/workspace/a.png", "/workspace/a.png", "/workspace/annotations.xml"},
+				"annotation_file": "/workspace/annotations.xml"}}}}}})
+	if res["isError"] == true {
+		t.Fatalf("proposal refused: %v", mcpText(t, res))
+	}
+	p := recordedPlan(t, b, 0)
+	if len(p.Steps) != 1 || len(p.Steps[0].FileSHA256) != 2 || len(p.Steps[0].FileBytes) != 2 {
+		t.Fatalf("want 2 pinned files: %+v", p.Steps[0])
+	}
+}
