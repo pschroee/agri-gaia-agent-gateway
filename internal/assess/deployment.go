@@ -48,11 +48,17 @@ const (
 	// MaxTestInputValues bounds one input: a larger one says no more than a smaller one and would push
 	// megabytes through the socket of the device.
 	MaxTestInputValues = 1_000_000
-	// AbsTolerance and RelTolerance bound the difference between the answer of the device and of the
-	// model file: |a - b| <= AbsTolerance + RelTolerance*|b|. They cover the difference between the
-	// onnxruntime the device's Triton links and the one of the check container (R3.6).
-	AbsTolerance = 1e-4
-	RelTolerance = 1e-3
+	// AbsTolerance and ScaleTolerance bound the difference between the answer of the device and of the
+	// model file, per output tensor and request: max|a - b| <= AbsTolerance + ScaleTolerance*s, where the
+	// scale s is the largest absolute value of that output in the model file. The rounding error of a
+	// sum grows with the magnitude of its terms, not with the magnitude of its result, so another
+	// summation order in another onnxruntime moves even a small element of a vector of large values by
+	// an amount of the order of the whole vector (#232). Measured: 2.6e-6 absolute on an output of scale
+	// ~2, and 0.0826 on an output of scale ~300 (about 2.8e-4 of it), both for the identical model file;
+	// another model differs in the order of the logits themselves (>= 1e-1 of the scale). 1e-2 lies a
+	// factor 35 above the first and a factor 10 below the second (R3.6).
+	AbsTolerance   = 1e-4
+	ScaleTolerance = 1e-2
 	// MaxDeviceBytes is the largest answer one device request may have (8 MiB, as for the check
 	// container).
 	MaxDeviceBytes = MaxOutputBytes
@@ -112,18 +118,40 @@ type (
 	}
 	// DeploymentFigures is what a deployment check measured (R3.7, L17).
 	DeploymentFigures struct {
-		Deployment  DeploymentRef    `json:"deployment"`
-		Device      DeviceRef        `json:"device"`
-		Image       string           `json:"image,omitempty"`
-		Model       SubjectRef       `json:"model"`
-		Ready       bool             `json:"ready"`
-		ServedModel string           `json:"served_model,omitempty"`
-		IO          DeploymentIO     `json:"io"`
-		Requests    int              `json:"requests"`
-		MaxAbsDiff  *float64         `json:"max_abs_diff"`
-		ArgmaxSame  *int             `json:"argmax_same"`
-		Roundtrip   RoundtripFigures `json:"roundtrip_ms"`
-		ModelCheck  *ModelCheck      `json:"model_check"`
+		Deployment  DeploymentRef `json:"deployment"`
+		Device      DeviceRef     `json:"device"`
+		Image       string        `json:"image,omitempty"`
+		Model       SubjectRef    `json:"model"`
+		Ready       bool          `json:"ready"`
+		ServedModel string        `json:"served_model,omitempty"`
+		IO          DeploymentIO  `json:"io"`
+		Requests    int           `json:"requests"`
+		MaxAbsDiff  *float64      `json:"max_abs_diff"`
+		// MaxRelDiff is the largest difference as a share of the scale of its output (nil without a
+		// comparison or when every scale is 0); ToleranceUsed is the largest share of the tolerance
+		// that a request used (<= 1 means the comparison held).
+		MaxRelDiff    *float64         `json:"max_rel_diff"`
+		ToleranceUsed *float64         `json:"tolerance_used"`
+		Tolerance     ToleranceRule    `json:"tolerance"`
+		PerRequest    []RequestFigures `json:"per_request"`
+		ArgmaxSame    *int             `json:"argmax_same"`
+		Roundtrip     RoundtripFigures `json:"roundtrip_ms"`
+		ModelCheck    *ModelCheck      `json:"model_check"`
+	}
+	// ToleranceRule names the numbers of the comparison, so that a report is readable without the code.
+	ToleranceRule struct {
+		Abs   float64 `json:"abs"`
+		Scale float64 `json:"scale"`
+	}
+	// RequestFigures is the comparison of one test request (E5 of #232).
+	RequestFigures struct {
+		Input         string   `json:"input"`
+		MaxAbsDiff    float64  `json:"max_abs_diff"`
+		Scale         float64  `json:"scale"`
+		RelDiff       *float64 `json:"rel_diff"`
+		ToleranceUsed float64  `json:"tolerance_used"`
+		ArgmaxSame    *bool    `json:"argmax_same"`
+		Tie           bool     `json:"tie,omitempty"`
 	}
 )
 
@@ -213,6 +241,9 @@ type deploymentRun struct {
 type requestAnswer struct {
 	// Diff: how far the answer of the device is from the model file.
 	Diff OutputDiff
+	// N and Input: the number (1-based) and the name of the test request (requestLabel).
+	N     int
+	Input string
 	// Took: the round trip of this request, measured in the gateway around the command in the device's
 	// container (R3.6).
 	Took time.Duration
@@ -321,7 +352,7 @@ func (s *Service) runDeploymentCheck(ctx context.Context, chatID string, depID, 
 		return in.report(NotMeasured, nil), err
 	}
 	for i := range inputs {
-		if err := s.testRequest(ctx, in, model, inputs[i], i >= 2); err != nil {
+		if err := s.testRequest(ctx, in, model, inputs[i], i); err != nil {
 			return in.report(Questionable, in.Reasons), err
 		}
 	}
@@ -330,7 +361,9 @@ func (s *Service) runDeploymentCheck(ctx context.Context, chatID string, depID, 
 
 // testRequest sends one synthetic input to the model file and to the device and compares the two answers
 // (R3.4, R3.6). The model file runs first: it is the reference, and its interface is the third source.
-func (s *Service) testRequest(ctx context.Context, in *deploymentRun, model []byte, t Tensor, drawn bool) error {
+func (s *Service) testRequest(ctx context.Context, in *deploymentRun, model []byte, t Tensor, i int) error {
+	drawn := i >= 2
+	label := requestLabel(i)
 	out, err := s.runner().Run(ctx, Job{Model: model, Tensors: []Tensor{t}})
 	if err != nil {
 		return err
@@ -365,9 +398,9 @@ func (s *Service) testRequest(ctx context.Context, in *deploymentRun, model []by
 	}
 	diff := CompareOutputs(device, out.Tensors[0])
 	if diff.Reason != "" {
-		in.Reasons = append(in.Reasons, diff.Reason)
+		in.Reasons = append(in.Reasons, fmt.Sprintf("test request %d (%s): %s", i+1, label, diff.Reason))
 	}
-	in.Answers = append(in.Answers, requestAnswer{Diff: diff, Took: took, Drawn: drawn, Device: device})
+	in.Answers = append(in.Answers, requestAnswer{Diff: diff, N: i + 1, Input: label, Took: took, Drawn: drawn, Device: device})
 	return nil
 }
 
@@ -629,17 +662,32 @@ func parseInfer(data []byte) ([]TensorOut, error) {
 type OutputDiff struct {
 	// MaxAbs: the largest difference between a value of the device and of the model file.
 	MaxAbs float64
-	// Argmax: whether the device named the same top classes; nil when the output is no classification
-	// (there is no class to compare).
+	// Argmax: whether the device named the same top classes (strictly); nil when the output is no
+	// classification (there is no class to compare).
 	Argmax *bool
+	// ArgmaxOK: the top classes agree or differ only inside a tie (see Tie).
+	ArgmaxOK bool
+	// Scale: the largest absolute value of the output in the model file, of the output that used most of
+	// its tolerance.
+	Scale float64
+	// RelDiff: the difference of that output as a share of Scale; nil when Scale is 0.
+	RelDiff *float64
+	// Used: the largest share of the tolerance that one output used (<= 1 means it held).
+	Used float64
+	// Tie: the device names another top class, but the two values of the model file are no further apart
+	// than twice the tolerance; TieGap is that distance.
+	Tie    bool
+	TieGap float64
 	// Reason: what did not hold; empty when the two answers agree.
 	Reason string
 }
 
 // CompareOutputs compares one answer of the device with the answer of the model file (R3.6): the same
-// outputs in the same order, the same shapes, every value finite, every value inside
-// AbsTolerance + RelTolerance*|b| (b is the value of the model file) and, for a classification output,
-// the same top class. It is a pure function: no device and no container is needed to test it.
+// outputs in the same order, the same shapes, every value finite, per output tensor the largest
+// difference d inside AbsTolerance + ScaleTolerance*s (s is the largest absolute value of the model
+// file's output) and, for a classification output, the same top class unless the two values of the model
+// file are a tie inside twice the tolerance. It is a pure function: no device and no container is needed
+// to test it.
 func CompareOutputs(device, file []TensorOut) OutputDiff {
 	out := OutputDiff{}
 	if len(device) != len(file) {
@@ -648,7 +696,12 @@ func CompareOutputs(device, file []TensorOut) OutputDiff {
 	}
 	var deviceTop, fileTop []int
 	classification := true
-	outside := false
+	strictSame := true
+	tie := false
+	var tieGap float64
+	topReason := ""
+	var worstD, worstS float64
+	worstUsed := -1.0
 	for i := range file {
 		a, b := device[i], file[i]
 		if a.Name != b.Name {
@@ -665,37 +718,79 @@ func CompareOutputs(device, file []TensorOut) OutputDiff {
 				b.Name, len(a.Data), len(b.Data))
 			return out
 		}
+		var d, s float64
 		for j := range b.Data {
 			if !finite(a.Data[j]) || !finite(b.Data[j]) {
 				out.Reason = fmt.Sprintf("the output %s carries a value that is not a finite number", b.Name)
 				return out
 			}
-			d := math.Abs(a.Data[j] - b.Data[j])
-			if d > out.MaxAbs {
-				out.MaxAbs = d
-			}
-			if d > AbsTolerance+RelTolerance*math.Abs(b.Data[j]) {
-				outside = true
-			}
+			d = math.Max(d, math.Abs(a.Data[j]-b.Data[j]))
+			s = math.Max(s, math.Abs(b.Data[j]))
 		}
-		if isDistribution(b.Shape) {
-			deviceTop = append(deviceTop, topOf(a.Data))
-			fileTop = append(fileTop, topOf(b.Data))
+		tol := AbsTolerance + ScaleTolerance*s
+		used := d / tol
+		out.MaxAbs = math.Max(out.MaxAbs, d)
+		if used > worstUsed {
+			worstUsed, worstD, worstS = used, d, s
+		}
+		if isDistribution(b.Shape) && len(b.Data) > 0 {
+			k, top := topOf(a.Data), topOf(b.Data)
+			deviceTop = append(deviceTop, k)
+			fileTop = append(fileTop, top)
+			if k != top {
+				strictSame = false
+				if gap := b.Data[top] - b.Data[k]; gap <= 2*tol {
+					tie, tieGap = true, gap
+				} else if topReason == "" {
+					topReason = fmt.Sprintf("the device names class %d as the top class, the model file class %d", k, top)
+				}
+			}
 		} else {
 			classification = false
 		}
 	}
+	if worstUsed >= 0 {
+		out.Used, out.Scale = worstUsed, worstS
+		if worstS > 0 {
+			rel := worstD / worstS
+			out.RelDiff = &rel
+		}
+	}
+	out.ArgmaxOK = true
+	if out.Used > 1 {
+		tie = false // a tie is only rounding where the values agree inside the tolerance anyway
+	}
 	if classification && len(deviceTop) > 0 {
-		same := slices.Equal(deviceTop, fileTop)
-		out.Argmax = &same
+		out.Argmax = &strictSame
+		out.Tie, out.TieGap = tie, tieGap
+		out.ArgmaxOK = strictSame || (tie && topReason == "")
 	}
 	switch {
-	case outside:
-		out.Reason = fmt.Sprintf("the device's answer differs from the model file by up to %.3g, more than the tolerance allows", out.MaxAbs)
-	case out.Argmax != nil && !*out.Argmax:
-		out.Reason = "the device names another top class than the model file"
+	case out.Used > 1:
+		if out.RelDiff == nil {
+			out.Reason = fmt.Sprintf("the device differs from the model file by up to %.3g while the output of the model file is all zero; "+
+				"rounding in another runtime stays below %g of the largest value, so the device serves another model or computes it differently",
+				worstD, AbsTolerance)
+		} else {
+			out.Reason = fmt.Sprintf("the device differs from the model file by up to %.3g, %.2g of the largest value of the output (%.3g); "+
+				"rounding in another runtime stays below %g of it, so the device serves another model or computes it differently",
+				worstD, *out.RelDiff, worstS, ScaleTolerance)
+		}
+	case topReason != "":
+		out.Reason = topReason
 	}
 	return out
+}
+
+// requestLabel names test request i (0-based) the way messages and figures do (E6 of #232).
+func requestLabel(i int) string {
+	switch i {
+	case 0:
+		return "zeros"
+	case 1:
+		return "0.5 everywhere"
+	}
+	return fmt.Sprintf("drawn %d", i-1)
 }
 
 // isDistribution reports whether a shape is a classification output: [1, C] or [C].
@@ -754,6 +849,20 @@ func (in *deploymentRun) judged() Report {
 		verdict = Usable
 	}
 	rep := in.report(verdict, reasons)
+	for _, a := range in.Answers {
+		if a.Diff.Tie {
+			rep.Hints = append(rep.Hints, fmt.Sprintf(
+				"test request %d (%s): the two largest values of the model file are only %.3g apart, inside the tolerance; "+
+					"that the device names another top class there is rounding, not another model",
+				a.N, a.Input, a.Diff.TieGap))
+		}
+	}
+	if f := rep.Figures.(*DeploymentFigures); verdict == Usable && f.MaxAbsDiff != nil && *f.MaxAbsDiff > AbsTolerance && f.MaxRelDiff != nil {
+		rep.Hints = append(rep.Hints, fmt.Sprintf(
+			"the device differs from the model file by up to %.3g, %.2g of the largest value of the output; "+
+				"differences below %g of it come from rounding in another runtime and do not mean another model",
+			*f.MaxAbsDiff, *f.MaxRelDiff, ScaleTolerance))
+	}
 	if labelsWrong {
 		rep.Suggestions = append(rep.Suggestions, suggestionFixOutputLabels, suggestionRebuild)
 	}
@@ -788,11 +897,14 @@ func (in *deploymentRun) report(verdict Verdict, reasons []string) Report {
 // (L8, W4) when there is one.
 func (in *deploymentRun) figures() *DeploymentFigures {
 	maxAbs, argmaxSame := in.metrics()
+	maxRel, used, perRequest := in.perRequest()
 	f := &DeploymentFigures{
 		Deployment: in.Deployment, Device: in.Device, Image: in.Image, Model: in.Model,
 		Ready: in.Ready, ServedModel: in.servedName(),
 		IO:       DeploymentIO{Same: in.ioSame(), Triton: in.TritonIO, Platform: in.PlatIO, File: in.FileIO},
 		Requests: in.requests(), MaxAbsDiff: maxAbs, ArgmaxSame: argmaxSame,
+		MaxRelDiff: maxRel, ToleranceUsed: used, PerRequest: perRequest,
+		Tolerance: ToleranceRule{Abs: AbsTolerance, Scale: ScaleTolerance},
 		Roundtrip: roundtripOf(in.times()),
 	}
 	f.ModelCheck = in.check
@@ -826,6 +938,28 @@ func (in *deploymentRun) metrics() (*float64, *int) {
 		argmax = nil
 	}
 	return maxAbs, argmax
+}
+
+// perRequest are the figures of every compared request (E5 of #232): the largest share of the scale and
+// of the tolerance (nil while nothing was compared) and one entry per request, so that every threshold
+// can be checked against the stored numbers.
+func (in *deploymentRun) perRequest() (*float64, *float64, []RequestFigures) {
+	var maxRel, used *float64
+	out := make([]RequestFigures, 0, len(in.Answers))
+	for _, a := range in.Answers {
+		d := a.Diff
+		if d.RelDiff != nil && (maxRel == nil || *d.RelDiff > *maxRel) {
+			v := *d.RelDiff
+			maxRel = &v
+		}
+		if used == nil || d.Used > *used {
+			v := d.Used
+			used = &v
+		}
+		out = append(out, RequestFigures{Input: a.Input, MaxAbsDiff: d.MaxAbs, Scale: d.Scale,
+			RelDiff: d.RelDiff, ToleranceUsed: d.Used, ArgmaxSame: d.Argmax, Tie: d.Tie})
+	}
+	return maxRel, used, out
 }
 
 // requests is how many requests the device answered.

@@ -561,8 +561,41 @@ func TestEdgeCheckDifferingAnswers(t *testing.T) {
 	if fig.Requests != TestRequests {
 		t.Errorf("requests: %d", fig.Requests)
 	}
+	if len(rep.Reasons) == 0 || !strings.HasPrefix(rep.Reasons[0], "test request 1 (zeros): ") {
+		t.Errorf("reasons: %v", rep.Reasons)
+	}
+	if len(fig.PerRequest) != TestRequests || fig.Tolerance != (ToleranceRule{Abs: 1e-4, Scale: 1e-2}) {
+		t.Errorf("per request: %+v, tolerance %+v", fig.PerRequest, fig.Tolerance)
+	}
 	if !hasSuggestion(rep.Suggestions, "undeploy") {
 		t.Errorf("suggestions: %v", rep.Suggestions)
+	}
+}
+
+// A device that rounds a little differently (0.1 % of every value, zeros stay zero) is usable, and the
+// report says that the difference is rounding (E8 of #232).
+func TestEdgeCheckRoundingHint(t *testing.T) {
+	d := deploymentSetup(t, func(d *deploymentService) {
+		d.dev.answer = modelAnswer("mnist_net", func(in []float32) []float64 {
+			out := linear(in)
+			for i := range out {
+				out[i] *= 1 + 1e-3
+			}
+			return out
+		})
+	})
+	ctx := context.Background()
+	c := testChat(t, d.svg.St, "deployment")
+	a := d.check(t, ctx, c.ID, "5")
+	rep, fig := report(t, a)
+	if rep.Verdict != Usable {
+		t.Fatalf("verdict %q: %v", rep.Verdict, rep.Reasons)
+	}
+	if !hasText(rep.Hints, "come from rounding") {
+		t.Errorf("hints: %v", rep.Hints)
+	}
+	if fig.ToleranceUsed == nil || *fig.ToleranceUsed > 1 || fig.MaxRelDiff == nil {
+		t.Errorf("figures: %+v", fig)
 	}
 }
 
@@ -661,17 +694,17 @@ func TestCompareOutputs(t *testing.T) {
 	if same.Reason != "" || same.MaxAbs != 0 || same.Argmax == nil || !*same.Argmax {
 		t.Errorf("same: %+v", same)
 	}
-	// Just inside the tolerance: 1e-4 + 1e-3*0.7 = 8e-4; 7e-4 passes.
-	inside := CompareOutputs([]TensorOut{{Name: "output", Shape: []int{1, 3}, Data: []float64{0.1, 0.7007, 0.2}}}, file)
+	// Just inside the tolerance: 1e-4 + 1e-2*0.7 = 7.1e-3; 7e-3 passes.
+	inside := CompareOutputs([]TensorOut{{Name: "output", Shape: []int{1, 3}, Data: []float64{0.1, 0.707, 0.2}}}, file)
 	if inside.Reason != "" {
 		t.Errorf("inside the tolerance: %+v", inside)
 	}
-	if inside.MaxAbs < 6e-4 || inside.MaxAbs > 8e-4 {
+	if inside.MaxAbs < 6e-3 || inside.MaxAbs > 7.1e-3 {
 		t.Errorf("max_abs: %v", inside.MaxAbs)
 	}
-	// Just outside it: 9e-4 fails.
-	outside := CompareOutputs([]TensorOut{{Name: "output", Shape: []int{1, 3}, Data: []float64{0.1, 0.7009, 0.2}}}, file)
-	if outside.Reason == "" || !strings.Contains(outside.Reason, "tolerance") {
+	// Just outside it: 9e-3 fails.
+	outside := CompareOutputs([]TensorOut{{Name: "output", Shape: []int{1, 3}, Data: []float64{0.1, 0.709, 0.2}}}, file)
+	if outside.Reason == "" || !strings.Contains(outside.Reason, "another model") {
 		t.Errorf("outside the tolerance: %+v", outside)
 	}
 	// Another top class, inside the tolerance.
@@ -701,6 +734,106 @@ func TestCompareOutputs(t *testing.T) {
 	plain := []TensorOut{{Name: "boxes", Shape: []int{2, 4}, Data: []float64{1, 2, 3, 4, 5, 6, 7, 8}}}
 	if d := CompareOutputs(plain, plain); d.Argmax != nil || d.Reason != "" {
 		t.Errorf("no classification: %+v", d)
+	}
+}
+
+func vec(name string, v ...float64) []TensorOut {
+	return []TensorOut{{Name: name, Shape: []int{1, len(v)}, Data: v}}
+}
+
+// The first demo run (#232): the model file is identical, the logits are about +-300 and the difference
+// of 0.0826 sits on a small element. The old per-element rule (1e-4 + 1e-3*61.3 = 0.0614) failed it.
+func TestCompareOutputsDemoRun1(t *testing.T) {
+	d := CompareOutputs(vec("o", 299.62, -61.2174), vec("o", 299.6, -61.3))
+	if d.Reason != "" {
+		t.Fatalf("reason: %s", d.Reason)
+	}
+	if d.Used < 0.02 || d.Used > 0.04 {
+		t.Errorf("used: %v", d.Used)
+	}
+	if d.RelDiff == nil || *d.RelDiff < 2.5e-4 || *d.RelDiff > 3e-4 {
+		t.Errorf("rel diff: %v", d.RelDiff)
+	}
+	if old := 1e-4 + 1e-3*61.3; d.MaxAbs <= old {
+		t.Errorf("the old element rule (%v) would have held: %v", old, d.MaxAbs)
+	}
+}
+
+func TestCompareOutputsDemoRun2(t *testing.T) {
+	if d := CompareOutputs(vec("o", 299.6+0.0488, -61.3), vec("o", 299.6, -61.3)); d.Reason != "" {
+		t.Errorf("reason: %s", d.Reason)
+	}
+}
+
+func TestCompareOutputsDeployment6(t *testing.T) {
+	d := CompareOutputs(vec("o", 1.84+2.6e-6, -1.21), vec("o", 1.84, -1.21))
+	if d.Reason != "" || d.Used >= 1e-3 {
+		t.Errorf("%+v", d)
+	}
+}
+
+func TestCompareOutputsSwappedClasses(t *testing.T) {
+	d := CompareOutputs(vec("o", -61.3, 299.6), vec("o", 299.6, -61.3))
+	if !strings.Contains(d.Reason, "another model") {
+		t.Errorf("reason: %q", d.Reason)
+	}
+	if d.Argmax == nil || *d.Argmax || d.Tie || d.ArgmaxOK {
+		t.Errorf("%+v", d)
+	}
+}
+
+func TestCompareOutputsOtherModel(t *testing.T) {
+	d := CompareOutputs(vec("o", 212.4, -40.8), vec("o", 299.6, -61.3))
+	if !strings.Contains(d.Reason, "another model") || d.Used <= 1 {
+		t.Errorf("%+v", d)
+	}
+}
+
+func TestCompareOutputsThreePercent(t *testing.T) {
+	d := CompareOutputs(vec("o", 0.97*299.6, 0.97*-61.3), vec("o", 299.6, -61.3))
+	if !strings.Contains(d.Reason, "another model") {
+		t.Errorf("%+v", d)
+	}
+}
+
+func TestCompareOutputsZeroOutput(t *testing.T) {
+	ok := CompareOutputs(vec("o", 5e-5, 0), vec("o", 0, 0))
+	if ok.Reason != "" || ok.RelDiff != nil {
+		t.Errorf("inside: %+v", ok)
+	}
+	bad := CompareOutputs(vec("o", 2e-4, 0), vec("o", 0, 0))
+	if bad.Reason == "" || bad.RelDiff != nil {
+		t.Errorf("outside: %+v", bad)
+	}
+}
+
+func TestCompareOutputsTie(t *testing.T) {
+	d := CompareOutputs(vec("o", 0.4985, 0.4995), vec("o", 0.500, 0.498))
+	if d.Reason != "" || !d.Tie || d.Argmax == nil || *d.Argmax || !d.ArgmaxOK {
+		t.Errorf("%+v", d)
+	}
+	if d.TieGap <= 0 || d.TieGap > 0.01 {
+		t.Errorf("gap: %v", d.TieGap)
+	}
+}
+
+func TestCompareOutputsMultipleTensors(t *testing.T) {
+	file := []TensorOut{
+		{Name: "a", Shape: []int{2, 2}, Data: []float64{100, 100, 100, 100}},
+		{Name: "b", Shape: []int{2, 2}, Data: []float64{1, 1, 1, 1}},
+	}
+	// a: d = 0.5 of tolerance 1.0001 (used ~0.5); b: d = 0.02 of tolerance 0.0101 (used ~2).
+	dev := []TensorOut{
+		{Name: "a", Shape: []int{2, 2}, Data: []float64{100.5, 100, 100, 100}},
+		{Name: "b", Shape: []int{2, 2}, Data: []float64{1.02, 1, 1, 1}},
+	}
+	d := CompareOutputs(dev, file)
+	if d.Reason == "" || d.Used < 1.9 || d.Used > 2.1 || d.Scale != 1 {
+		t.Errorf("%+v", d)
+	}
+	dev[1].Data[0] = 1.005 // used ~0.5 as well: both inside, each against its own scale
+	if d := CompareOutputs(dev, file); d.Reason != "" {
+		t.Errorf("%+v", d)
 	}
 }
 
