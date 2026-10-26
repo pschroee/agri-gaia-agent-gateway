@@ -466,6 +466,33 @@ func (m *Manager) Plans(ctx context.Context, chatID string) ([]store.Plan, error
 	return list, nil
 }
 
+// PlansAcross lists one page of the plans of the user's chats (GET /api/plans, issue #223): running ones first,
+// each with its steps, the chat title and the usage of the autonomous ones. total counts all plans matching the
+// filter, running the approved and paused plans of the owner whatever the filter.
+func (m *Manager) PlansAcross(ctx context.Context, f store.PlanListFilter) (items []store.PlanListItem, total, running int, err error) {
+	items, total, err = m.st.ListPlansAcross(ctx, f)
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	for i := range items {
+		m.fillPlanUsage(ctx, &items[i].Plan)
+	}
+	running, err = m.st.RunningPlanCount(ctx, f.Owner)
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	return items, total, running, nil
+}
+
+// ChatTitle returns the title of a chat and whether it is in the trash (for GET /api/plans/events).
+func (m *Manager) ChatTitle(ctx context.Context, id string) (title string, trashed bool, err error) {
+	c, err := m.st.GetChat(ctx, id)
+	if err != nil {
+		return "", false, err
+	}
+	return c.Title, c.TrashedAt != nil, nil
+}
+
 // --- Autonomous plans: proposal checks and the user's controls (A-E1) ---
 
 // computeLeft is how many compute calls the chat has left (AGW_COMPUTE_MAX_PER_CHAT, never negative).

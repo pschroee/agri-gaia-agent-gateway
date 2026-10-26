@@ -431,6 +431,8 @@ type ActivityPage = { calls: ActivityCall[]; chats: Record<string, { id: string;
 | `GET /api/approvals?state=pending` | `Approval[]` | open approvals of all chats |
 | `GET /api/events` | SSE | approvals across all the user's chats, see *SSE `GET /api/events`* |
 | `GET /api/activity?kind=&since=&until=&outcome=&chat=&call=&plan=&step=&limit=&before=` | `ActivityPage` | platform calls (with `kind=internet\|all` also the internet switches) of the user's chats across all chats, newest first, with a summary of the period; see *Activity across chats* |
+| `GET /api/plans?state=&mode=&chat=&limit=&offset=` | `{plans: PlanListItem[], total, running}` | plans of the user's chats across all chats, running ones first; see *Plans across chats* |
+| `GET /api/plans/events` | SSE | live `plan` events of the user's chats, see *Plans across chats* |
 | `POST /api/approvals/{id}` `{approve: boolean}` | `Approval` | approve or reject; approving re-reads the platform first (see *Summaries by the gateway*): on a change **409** with `{error, code: "summary_changed", approval}` and the approval stays open |
 | `GET /api/chats/{id}/events` | SSE | live events of the chat |
 | `POST /api/chats/{id}/trash` | `Chat` | moves the chat into the trash (see *Chat trash*): stops the work, rejects open approvals and expires open plans, returns the sandbox; idempotent; 404 for foreign and unknown chats |
@@ -538,6 +540,31 @@ returns platform calls without `kind`; clients treat a missing `kind` as `platfo
 `duration_ms` is measured around the request to the platform (`Platform.Do`, including the token exchange), after
 any approval, and stored with the log entry (column `socket_calls.duration_ms`). Calls that did not go out (blocked,
 rejected, refused, `/_agw/rights`) and entries from before 2026-10-06 have none.
+
+## Plans across chats
+
+`GET /api/plans` (issue #223) lists the plans of all chats of the logged-in user, for the Plans tab. In oidc mode the
+database query filters by the chat's owner (401 `not logged in` without a user); `chat=` with another user's or an
+unknown chat gives an empty page, not 404. In token mode all chats count. Chats in the trash are left out.
+
+| Parameter | Meaning |
+|---|---|
+| `state` | comma-separated list of `proposed`, `approved`, `paused`, `completed`, `failed`, `cancelled`, `rejected`, `expired`, `superseded`; 400 `state: one of …` otherwise |
+| `mode` | `interactive` or `autonomous`; 400 `mode: interactive or autonomous` |
+| `chat` | a chat id (uuid); 400 `chat: a chat id (uuid)` |
+| `limit`, `offset` | page; `limit` 1 to 100 (default 25), `offset` 0 or more; 400 `limit: 1 to 100`, `offset: 0 or more` |
+
+`since`, `until`, `sort` and `order` are read like in the other overviews but ignored here. Order: plans that are
+still going on (`proposed`, `approved`, `paused`) first, then newest first (`created_at`, then `id`). Answer:
+`{"plans": PlanListItem[], "total": n, "running": k}`. A `PlanListItem` is the plan as `GET /api/chats/{id}/plans`
+returns it (steps, redacted texts, `usage` for autonomous plans) plus `chat_title`. `total` counts all plans matching
+the filter, `running` the user's `approved` and `paused` plans whatever the filter.
+
+`GET /api/plans/events` is a stream of its own (same format as `GET /api/events`: `retry: 2000`, `: ping` every
+15 s): every state change and every progress of a plan of one of the user's chats arrives as
+`{"kind":"plan","chat_id":…,"data":PlanListItem}`. It carries no snapshot; a client loads the list first and again
+after a reconnect. Plans of other users and of chats in the trash never appear. The stream is separate because a plan
+event comes with every poll of a running job.
 
 ## Effect classes
 
