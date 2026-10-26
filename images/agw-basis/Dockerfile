@@ -176,16 +176,21 @@ RUN chmod 0644 /opt/agw/mmdc/ui-config.json && chmod 0755 /usr/local/bin/mermaid
 # The same Chromium writes images for plotly (kaleido 1.x finds the browser via BROWSER_PATH).
 ENV BROWSER_PATH=/usr/bin/chromium
 # Chromium without background networking, failing closed (issue #229): one file read by Debian's launcher for
-# every start. netcheck.py proves it at build time and stays in the image for diagnosis.
+# every start, plus a managed policy (sign-in, network time, sync, metrics, component updates). netcheck.py proves it
+# at build time and stays in the image for diagnosis. Chromium 155 still asks update.googleapis.com once per start
+# (the on-device model installer checks its component even with --disable-component-update and the policy), and
+# kaleido's page asks cdnjs.cloudflare.com (MathJax) and start.duckduckgo.com (Debian's default search). These end at
+# the dead proxy port and never reach the relay, so --allow names them; any other host still fails the build.
 COPY images/agw-basis/chromium/agw-offline /etc/chromium.d/agw-offline
+COPY images/agw-basis/chromium/agw-offline.json /etc/chromium/policies/managed/agw-offline.json
 COPY images/agw-basis/chromium/netcheck.py /opt/agw/chromium/netcheck.py
 RUN rm -f /etc/chromium.d/extensions /etc/chromium.d/apikeys \
- && chmod 0644 /etc/chromium.d/agw-offline /opt/agw/chromium/netcheck.py \
+ && chmod 0644 /etc/chromium.d/agw-offline /etc/chromium/policies/managed/agw-offline.json /opt/agw/chromium/netcheck.py \
  && cd /tmp && printf 'flowchart LR\n  A["Größe"] --> B["fertig"]\n' > n.mmd \
- && HOME=/tmp python3 /opt/agw/chromium/netcheck.py -- mmdc -q -i n.mmd -o n.png \
- && HOME=/tmp python3 /opt/agw/chromium/netcheck.py -- mermaid-check n.mmd \
- && HOME=/tmp python3 /opt/agw/chromium/netcheck.py -- timeout 60 chromium --headless --no-sandbox --disable-gpu --dump-dom about:blank \
- && HOME=/tmp python3 /opt/agw/chromium/netcheck.py --allow cdnjs.cloudflare.com -- python3 -c "import plotly.graph_objects as go; go.Figure(go.Bar(y=[1, 2])).write_image('/tmp/n-plotly.png')" \
+ && HOME=/tmp python3 /opt/agw/chromium/netcheck.py --allow update.googleapis.com -- mmdc -q -i n.mmd -o n.png \
+ && HOME=/tmp python3 /opt/agw/chromium/netcheck.py --allow update.googleapis.com -- mermaid-check n.mmd \
+ && HOME=/tmp python3 /opt/agw/chromium/netcheck.py --allow update.googleapis.com -- timeout 60 chromium --headless --no-sandbox --disable-gpu --dump-dom about:blank \
+ && HOME=/tmp python3 /opt/agw/chromium/netcheck.py --allow update.googleapis.com,cdnjs.cloudflare.com,start.duckduckgo.com -- python3 -c "import plotly.graph_objects as go; go.Figure(go.Bar(y=[1, 2])).write_image('/tmp/n-plotly.png')" \
  && test -s n.png && test -s n-plotly.png && rm -f n.mmd n.png n-plotly.png
 # fd for the find tool (M2): pi calls fd with fixed arguments and otherwise downloads it itself;
 # here is a pinned version (the one pi 0.87.1 pins for darwin/x64).
