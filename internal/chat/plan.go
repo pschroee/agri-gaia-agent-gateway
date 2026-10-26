@@ -51,6 +51,11 @@ func (m *Manager) ProposePlan(ctx context.Context, chatID, slotID, via string, r
 	if err != nil {
 		return platform.Result{Status: "error", Message: err.Error()}, nil
 	}
+	// #219: trace the image of every deployment start before the autonomous checks, so that the grant and the
+	// compute count see the final Covered of the steps.
+	rl := &readLog{}
+	replaced := m.replacedPlanOf(ctx, chatID, p.Replaces)
+	plan.ImageOrigins(steps, replaced, m.templateOK(ctx, m.loggedSummaryReader(chatID, rl)))
 	var (
 		mode   string
 		budget store.PlanBudget
@@ -97,7 +102,6 @@ func (m *Manager) ProposePlan(ctx context.Context, chatID, slotID, via string, r
 	for i := range steps {
 		calls[i] = plan.SummaryCall(steps[i])
 	}
-	rl := &readLog{}
 	for i, s := range platform.SummarizePlan(ctx, m.loggedSummaryReader(chatID, rl), calls) {
 		steps[i].Summary = platform.VisibleControls(s)
 	}
@@ -775,4 +779,53 @@ func failureLine(res platform.Result) string {
 	}
 	line = strings.Join(strings.Fields(line), " ")
 	return watch.ClipRunes(platform.RedactText(line), 200)
+}
+
+// replacedPlanOf returns the plan that "replaces" names, for the image origin of a deployment start (#219); nil
+// without "replaces", on a read error and for a plan of another chat.
+func (m *Manager) replacedPlanOf(ctx context.Context, chatID, planID string) *store.Plan {
+	if planID == "" {
+		return nil
+	}
+	rp, err := m.st.GetPlan(ctx, planID)
+	if err != nil || rp.ChatID != chatID {
+		return nil
+	}
+	return &rp
+}
+
+// templateOK answers whether an installed template comes from the one allowed repository (#219). It reads
+// /inference-container-templates at most once, at the first question; without a reader or after a read error
+// every answer is false.
+func (m *Manager) templateOK(ctx context.Context, read platform.Doer) plan.TemplateOK {
+	var (
+		loaded bool
+		ok     map[string]bool
+	)
+	return func(id string) bool {
+		if !loaded {
+			loaded = true
+			ok = map[string]bool{}
+			if read == nil {
+				return false
+			}
+			res, err := read(ctx, platform.Request{Method: http.MethodGet, Path: "/inference-container-templates", Query: map[string]string{"limit": "1000"}})
+			if err != nil || res.Status != "ok" || res.HTTPStatus >= 400 {
+				return false
+			}
+			var list []struct {
+				ID     json.Number `json:"id"`
+				GitURL string      `json:"git_url"`
+			}
+			if json.Unmarshal([]byte(res.Body), &list) != nil || res.Truncated {
+				return false
+			}
+			for _, t := range list {
+				if t.GitURL == platform.AllowedTemplateGitURL {
+					ok[t.ID.String()] = true
+				}
+			}
+		}
+		return ok[id]
+	}
 }
