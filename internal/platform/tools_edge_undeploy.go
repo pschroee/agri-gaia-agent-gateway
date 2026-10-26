@@ -57,7 +57,7 @@ func undeploySteps(ctx context.Context, a Args, final Request, do Doer) (Result,
 	case hasContainer && (dep.Status == "deployed" || dep.Status == "created"):
 		// deployed, or a start that failed and could not remove its container again (#231): the platform
 		// knows the container id and removes it.
-	case !hasContainer && dep.Status != "undeployed":
+	case !hasContainer && (dep.Status == "deployed" || dep.Status == "created"):
 		return Refuse("deployment %d has no container on the device (status %s); nothing to undeploy", id, deployStatusText(dep.Status))
 	default:
 		return Refuse("deployment %d is not deployed (status %s); nothing to undeploy", id, deployStatusText(dep.Status))
