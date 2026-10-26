@@ -462,6 +462,9 @@ type Env struct {
 	// calls of one tool (AGW_MAX_FAILED_SAME_TOOL, default 5, 0 = off). Negative values count as 0.
 	MaxFailedToolCalls int
 	MaxFailedSameTool  int
+	// InferenceRuntime: the runtime of inference images the agent builds when a call names none
+	// (AGW_INFERENCE_RUNTIME: triton (default) or ovms; #230). Checked at the start by platform.SetDefaultRuntime.
+	InferenceRuntime string
 	// TrashRetentionDays: chats in the trash are deleted permanently after this many whole days
 	// (AGW_TRASH_RETENTION_DAYS; default 0 = never, negative counts as 0).
 	TrashRetentionDays int
@@ -708,6 +711,7 @@ func FromEnv() Env {
 		AutoTurnsMax:         wakes(num("AGW_AUTO_TURNS_MAX", 5)),
 		MaxFailedToolCalls:   max(0, num("AGW_MAX_FAILED_TOOL_CALLS", 20)),
 		MaxFailedSameTool:    max(0, num("AGW_MAX_FAILED_SAME_TOOL", 5)),
+		InferenceRuntime:     str("AGW_INFERENCE_RUNTIME", "triton"),
 		TrashRetentionDays:   max(0, num("AGW_TRASH_RETENTION_DAYS", 0)),
 		PlatformAPIURL:       str("AGW_PLATFORM_API_URL", ""),
 		PlatformTokenURL:     str("AGW_PLATFORM_TOKEN_URL", ""),

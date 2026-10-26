@@ -52,6 +52,11 @@ func main() {
 
 func run() error {
 	env := config.FromEnv()
+	// The runtime of inference images the agent builds when a call names none (#230); a typo stops the start.
+	if err := platform.SetDefaultRuntime(env.InferenceRuntime); err != nil {
+		return fmt.Errorf("AGW_INFERENCE_RUNTIME %q: triton or ovms", env.InferenceRuntime)
+	}
+	slog.Info("inference runtime of the agent", "default", platform.DefaultRuntime(), "available", "triton,ovms")
 	// The bindings of every new chat (issue #29); a typo stops the start.
 	toolsets, err := env.Toolset()
 	if err != nil {

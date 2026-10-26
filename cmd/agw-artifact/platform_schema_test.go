@@ -31,3 +31,14 @@ func TestToolUsagePrintsSchema(t *testing.T) {
 		t.Fatalf("start-training: %s", b.String())
 	}
 }
+
+// The help of build-image prints the enum of its runtime argument (#230).
+func TestBuildImageHelpShowsRuntimeSchema(t *testing.T) {
+	tool, _ := platform.Lookup("build-image")
+	var b strings.Builder
+	toolUsage(&b, tool)
+	out := b.String()
+	if !strings.Contains(out, "--runtime") || !strings.Contains(out, `schema: {"enum":["triton","ovms"],"type":"string"}`) {
+		t.Fatalf("usage:\n%s", out)
+	}
+}

@@ -38,7 +38,8 @@ func withOriginPlatform(t *testing.T, e *env) func() []string {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/inference-container-templates":
-			fmt.Fprintf(w, `[{"id":4,"name":"official","git_url":%q},{"id":9,"name":"other","git_url":"https://example.invalid/t"}]`, platform.AllowedTemplateGitURL)
+			fmt.Fprintf(w, `[{"id":4,"name":"official","git_url":%q},{"id":5,"name":"ovms","git_url":%q},{"id":9,"name":"other","git_url":"https://example.invalid/t"}]`,
+				platform.TemplateSources[0].GitURL, platform.TemplateSources[1].GitURL)
 		case r.Method == http.MethodGet && r.URL.Path == "/edge-devices":
 			fmt.Fprint(w, "["+device+"]")
 		case r.Method == http.MethodGet && r.URL.Path == "/container-images":
@@ -122,6 +123,33 @@ func TestProposeBuildAndDeployOneApproval(t *testing.T) {
 	}
 	if !reached(got(), "PUT /container-deployments/9/deploy") {
 		t.Fatalf("the start did not reach the platform: %v", got())
+	}
+}
+
+// The template of the OpenVINO fork counts as a known origin like the Triton one (#230): the start is covered.
+func TestTemplateOKForkTemplate(t *testing.T) {
+	e := setup(t)
+	withOriginPlatform(t, e)
+	ctx := store.WithSession(context.Background(), "main")
+	c, _ := e.m.Create(ctx, NewChat{})
+	slot := e.m.live[c.ID].slot.ID
+	if r, _ := proposeAndDecide(t, e, ctx, c.ID, slot, buildDeployPlan(5), true); r.Status != "ok" {
+		t.Fatalf("plan: %+v", r)
+	}
+	p := onlyPlan(t, e, ctx, c.ID)
+	if start := p.Steps[2]; !start.Covered || start.ImageOrigin == nil || start.ImageOrigin.Step != 1 {
+		t.Fatalf("start step: %+v", start)
+	}
+	// A template of no official repository (id 9) stays uncovered.
+	e2 := setup(t)
+	withOriginPlatform(t, e2)
+	c2, _ := e2.m.Create(ctx, NewChat{})
+	slot2 := e2.m.live[c2.ID].slot.ID
+	if r, _ := proposeAndDecide(t, e2, ctx, c2.ID, slot2, buildDeployPlan(9), true); r.Status != "ok" {
+		t.Fatalf("plan 2: %+v", r)
+	}
+	if start := onlyPlan(t, e2, ctx, c2.ID).Steps[2]; start.Covered {
+		t.Fatalf("foreign template: %+v", start)
 	}
 }
 

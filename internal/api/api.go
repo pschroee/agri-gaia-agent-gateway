@@ -651,6 +651,8 @@ func (s *Server) config(w http.ResponseWriter, r *http.Request) {
 		// Hard limits for failed tool calls in a row, over all tools and for one tool; 0 = off (#217).
 		"max_failed_tool_calls": o.MaxFailedCalls,
 		"max_failed_same_tool":  o.MaxFailedSameTool,
+		// Default runtime of inference images the agent builds when a call names none (AGW_INFERENCE_RUNTIME, #230).
+		"inference_runtime": platform.DefaultRuntime(),
 		// The longest a training search runs (#168): the approval card says "ends after {h} h at the latest".
 		"search_max_hours": s.M.SearchMaxHours(),
 		// Tools whose execution is evidenced at the socket (E9, L6): the UI matches against them

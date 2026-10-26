@@ -380,7 +380,7 @@ type ActivityPage = { calls: ActivityCall[]; chats: Record<string, { id: string;
 |---|---|---|
 | `GET /api/models` | `Model[]` | selectable models |
 | `GET /api/variants` | `Variant[]` | every combination of bindings; `active` marks the one new chats get (`AGW_TOOLSETS`) |
-| `GET /api/config` | `{internet_default: boolean, approval_timeout_s: number, artifact_max_mb: number, idle_timeout_s: number, auto_compact_default: boolean, compact_reserve_tokens: number, compact_keep_recent_tokens: number, max_subagents: number /* at the same time per chat, fixed */, max_subagents_default: number /* deprecated, = max_subagents */, max_subagents_limit: number /* deprecated, = max_subagents */, workspace_max_mb: number /* 0 = workspace is not backed up */, bg_wakes_per_hour: number /* 0 = never wake */, bg_keepalive_s: number, auto_turns_max: number /* consecutive turns without the user, 0 = none */, max_failed_tool_calls: number /* failed tool calls in a row, all tools, 0 = off (#217) */, max_failed_same_tool: number /* the same for one tool, 0 = off (#217) */, search_max_hours: number /* the longest a training search runs (#168) */, executed_tools: string[] /* tools whose execution is proven at the socket, sorted */, toolsets: Variant /* bindings of every new chat (AGW_TOOLSETS) */, gateway_version: string, gateway_commit: string, gateway_describe: string /* identity of this build, X8.1 */}` | defaults for the UI |
+| `GET /api/config` | `{internet_default: boolean, approval_timeout_s: number, artifact_max_mb: number, idle_timeout_s: number, auto_compact_default: boolean, compact_reserve_tokens: number, compact_keep_recent_tokens: number, max_subagents: number /* at the same time per chat, fixed */, max_subagents_default: number /* deprecated, = max_subagents */, max_subagents_limit: number /* deprecated, = max_subagents */, workspace_max_mb: number /* 0 = workspace is not backed up */, bg_wakes_per_hour: number /* 0 = never wake */, bg_keepalive_s: number, auto_turns_max: number /* consecutive turns without the user, 0 = none */, max_failed_tool_calls: number /* failed tool calls in a row, all tools, 0 = off (#217) */, max_failed_same_tool: number /* the same for one tool, 0 = off (#217) */, inference_runtime: string /* default runtime of inference images (AGW_INFERENCE_RUNTIME, #230) */, search_max_hours: number /* the longest a training search runs (#168) */, executed_tools: string[] /* tools whose execution is proven at the socket, sorted */, toolsets: Variant /* bindings of every new chat (AGW_TOOLSETS) */, gateway_version: string, gateway_commit: string, gateway_describe: string /* identity of this build, X8.1 */}` | defaults for the UI |
 | `GET /api/pool` | `Pool` | pool status (the UI polls every second) |
 | `GET /api/platform` | `{configured: boolean, api_url?, login?: "user" \| "account", account?: string /* login account only */, client_id?, token_exchange?: boolean, probe?: {reachable, http_status?, latency_ms, error?, checked_at}, last_exchange?: {chat_id, at, ok, error?}}` | binding to the platform, read-only. `probe`: unauthenticated `GET` on the API base, any HTTP answer counts as reachable, cached 10 s. `last_exchange`: newest token exchange among the user's own chats, also a failed one (e.g. the user's login expired); in memory only, empty after a restart until the next platform call. `{configured: false}` without `AGW_PLATFORM_API_URL` |
 | `GET /api/exp/usage?plan=<plan>` | `{tokens_total, duration_total, runs}` | what the plan has consumed so far (#161): `input + output` of its chats from `llm_calls` without cache reads, the wall-clock time of its attempts (`duration_total`, Go duration such as `1h2m3s`) and their number. The runner checks the plan's `tokens_total` and `duration_total` before every run; `agw exp export` puts the sums into `manifest.json` |
@@ -672,7 +672,12 @@ confirm-each call always asks.
 Some paths and values are refused before the delegation check, also with a delegation that would allow them; they are
 logged as `refused: …`. `GET /urls`, `/service`, `/users` and `/network` are blocked entirely (they return credentials
 or are internal callbacks). The inference container templates (issue #67) may only be read, and importing is limited to
-`AllowedTemplateGitURL` without credentials.
+the repositories of `platform.TemplateSources` (the Triton template of Upstream, branch `triton`, and the OpenVINO template of the
+author's fork, branch `ovms-onnx`; #230) without credentials. `import_template` takes `runtime` (`triton` or `ovms`, default
+`AGW_INFERENCE_RUNTIME`) and a `git_ref` only if it is the branch of that runtime. `list_templates` adds `runtime`
+(`triton`, `ovms` or `other`) to each template. `build_inference_image` takes `runtime` too: the template must be the one of
+that runtime (a template of no official source only without `runtime`), `ovms` needs `architecture amd64` and a tag ending in
+`-ovms`, `triton` refuses that suffix; the answer is `{repository, tag, task, runtime}`.
 
 **Training (issue #93).** The keys and values of `train_config` reach a shell in the privileged training container
 without being checked (`config_to_args.py` builds `--key value` pairs, `docker-entrypoint.sh` evaluates them with `eval`).
@@ -1500,7 +1505,7 @@ covers the whole run instead of one question per writing call.
   `confirm: none`; irreversible steps ask as well. The one exception: a start `PUT /container-deployments/{{stepM.id}}/deploy`
   is covered (`covered: true`) when the chain is complete: step M is `POST /container-deployments` whose
   `container_image_id` is `{{stepN.id}}`, step N is `POST /container-images/build`, and the template of that build is the
-  official one (`platform.AllowedTemplateGitURL`: a literal template id is looked up once in
+  official one (`platform.AllowedTemplateURL`, any repository of `platform.TemplateSources`: a literal template id is looked up once in
   `GET /inference-container-templates`; a placeholder must point at an import step of the same plan with the allowed
   `git_url`; a read error means not covered). With `"replaces"` naming a plan of the **same chat**, a literal
   `container_image_id` is also known when that plan has a `done` build step with `created_resource = container_image`
@@ -2432,7 +2437,7 @@ checks (R0); this section names what is R3's own.
   `questionable`. Two rules reach over single requests: the answers of the four drawn requests must not
   all be the same (a model that ignores its input), and fewer than six answers are a reason.
 - **`figures`** of a deployment check (R3.7, L17): `deployment {id, name}`, `device {name, simulated}`,
-  `image`, `model {id, name}`, `ready`, `served_model`, `io {same, triton, platform, file}` with each
+  `image`, `model {id, name}`, `ready`, `served_model`, `io {same, triton, platform, file}` (`triton` is the inference server of the device, OVMS too) with each
   `{inputs, outputs}` of `{name, shape, type}` (the types are written alike from all three sources,
   `assess.normalType`), `requests`, `max_abs_diff` (`null` while nothing was compared), `argmax_same`
   (the count; `null` when the output is no classification) and `roundtrip_ms {median, max}` — the round

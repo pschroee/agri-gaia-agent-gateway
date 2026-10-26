@@ -841,7 +841,7 @@ func (m *Manager) replacedPlanOf(ctx context.Context, chatID, planID string) *st
 	return &rp
 }
 
-// templateOK answers whether an installed template comes from the one allowed repository (#219). It reads
+// templateOK answers whether an installed template comes from one of the allowed repositories (#219). It reads
 // /inference-container-templates at most once, at the first question; without a reader or after a read error
 // every answer is false.
 func (m *Manager) templateOK(ctx context.Context, read platform.Doer) plan.TemplateOK {
@@ -868,7 +868,7 @@ func (m *Manager) templateOK(ctx context.Context, read platform.Doer) plan.Templ
 				return false
 			}
 			for _, t := range list {
-				if t.GitURL == platform.AllowedTemplateGitURL {
+				if platform.AllowedTemplateURL(t.GitURL) {
 					ok[t.ID.String()] = true
 				}
 			}

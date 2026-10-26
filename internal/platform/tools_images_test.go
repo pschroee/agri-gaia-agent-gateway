@@ -12,13 +12,20 @@ import (
 	"testing"
 )
 
+// upstreamTemplateURL and forkTemplateURL are the repositories of the two official templates (#230).
+var (
+	upstreamTemplateURL = TemplateSources[0].GitURL
+	forkTemplateURL     = TemplateSources[1].GitURL
+)
+
 // Sample data: an ONNX model with all tensor fields, owned by agent-test; the template with id 2 is the official one.
 const (
 	readyModel = `{"id":5,"name":"mnist_efficientnet","format":"onnx","owner":"agent-test",` +
 		`"input_shape":[1,1,28,28],"input_datatype":"float32","input_semantics":"image",` +
 		`"output_shape":[1,2],"output_datatype":"float32","output_labels":["0","1"]}`
-	officialTemplates = `[{"id":2,"name":"triton-inference","source":"git","git_url":"` + AllowedTemplateGitURL + `","git_ref":"triton"}]`
 )
+
+var officialTemplates = `[{"id":2,"name":"triton-inference","source":"git","git_url":"` + upstreamTemplateURL + `","git_ref":"triton"}]`
 
 func mustLookup(t *testing.T, name string) Tool {
 	t.Helper()
@@ -43,15 +50,15 @@ func TestTemplateCallsBlocked(t *testing.T) {
 		"update from git": {Method: http.MethodPatch, Path: "/inference-container-templates/2/update-from-git", Body: json.RawMessage(`{"git_ref":"main"}`)},
 		"delete":          {Method: http.MethodDelete, Path: "/inference-container-templates/2"},
 		"upload":          {Method: http.MethodPost, Path: "/inference-container-templates/create/upload", Form: map[string][]string{"name": {"x"}}},
-		"git JSON body":   {Method: http.MethodPost, Path: "/inference-container-templates/create/git", Body: json.RawMessage(`{"git_url":"` + AllowedTemplateGitURL + `"}`)},
+		"git JSON body":   {Method: http.MethodPost, Path: "/inference-container-templates/create/git", Body: json.RawMessage(`{"git_url":"` + upstreamTemplateURL + `"}`)},
 		"foreign URL": {Method: http.MethodPost, Path: "/inference-container-templates/create/git",
 			Form: map[string][]string{"git_url": {"https://example.com/other.git"}, "git_ref": {"triton"}}},
 		"URL with .git": {Method: http.MethodPost, Path: "/inference-container-templates/create/git",
-			Form: map[string][]string{"git_url": {AllowedTemplateGitURL + ".git"}, "git_ref": {"triton"}}},
+			Form: map[string][]string{"git_url": {upstreamTemplateURL + ".git"}, "git_ref": {"triton"}}},
 		"with access token": {Method: http.MethodPost, Path: "/inference-container-templates/create/git",
-			Form: map[string][]string{"git_url": {AllowedTemplateGitURL}, "git_access_token": {"secret"}}},
+			Form: map[string][]string{"git_url": {upstreamTemplateURL}, "git_access_token": {"secret"}}},
 		"with username": {Method: http.MethodPost, Path: "/inference-container-templates/create/git",
-			Form: map[string][]string{"git_url": {AllowedTemplateGitURL}, "git_username": {"x"}}},
+			Form: map[string][]string{"git_url": {upstreamTemplateURL}, "git_username": {"x"}}},
 	}
 	for name, r := range blocked {
 		if _, err := Normalize(r); err == nil {
@@ -60,7 +67,7 @@ func TestTemplateCallsBlocked(t *testing.T) {
 	}
 	allowed := map[string]Request{
 		"list":           {Method: http.MethodGet, Path: "/inference-container-templates"},
-		"import allowed": {Method: http.MethodPost, Path: "/inference-container-templates/create/git", Form: map[string][]string{"git_url": {AllowedTemplateGitURL}, "git_ref": {"triton"}, "name": {"t"}}},
+		"import allowed": {Method: http.MethodPost, Path: "/inference-container-templates/create/git", Form: map[string][]string{"git_url": {upstreamTemplateURL}, "git_ref": {"triton"}, "name": {"t"}}},
 	}
 	for name, r := range allowed {
 		if _, err := Normalize(r); err != nil {
@@ -81,7 +88,7 @@ func TestImportTemplateBuild(t *testing.T) {
 	if req.Method != http.MethodPost || req.Path != "/inference-container-templates/create/git" {
 		t.Fatalf("request = %s %s", req.Method, req.Path)
 	}
-	if req.Form["git_url"][0] != AllowedTemplateGitURL || req.Form["git_ref"][0] != "triton" || req.Form["name"][0] != "triton-inference" {
+	if req.Form["git_url"][0] != upstreamTemplateURL || req.Form["git_ref"][0] != "triton" || req.Form["name"][0] != "triton-inference" {
 		t.Fatalf("form = %v", req.Form)
 	}
 	for _, raw := range []string{
@@ -210,7 +217,7 @@ func TestBuildInferenceImageSteps(t *testing.T) {
 	if !strings.HasSuffix(s.calls[4], "|"+body) {
 		t.Errorf("build body = %q", s.calls[4])
 	}
-	if res.HTTPStatus != http.StatusAccepted || res.Body != `{"repository":"agent-test/mnist-triton","tag":"v1","task":"/tasks/40"}` {
+	if res.HTTPStatus != http.StatusAccepted || res.Body != `{"repository":"agent-test/mnist-triton","runtime":"triton","tag":"v1","task":"/tasks/40"}` {
 		t.Errorf("result = %+v", res)
 	}
 }
