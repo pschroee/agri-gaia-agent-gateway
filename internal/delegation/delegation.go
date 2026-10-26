@@ -372,8 +372,9 @@ var routes = []route{
 }
 
 // classify classifies a (normalized) call; Classify adds its effect class. Unknown paths are api:
-// GET is read, anything else update; allowed only with an explicit api rule.
-func classify(req platform.Request) Access {
+// GET is read, anything else update; allowed only with an explicit api rule. partial leaves out the
+// completeness of the body (requiredFields), see ClassifyPartial.
+func classify(req platform.Request, partial bool) Access {
 	for _, rt := range routes {
 		if rt.method != req.Method {
 			continue
@@ -398,7 +399,7 @@ func classify(req platform.Request) Access {
 			a.Also = append(a.Also, Access{Action: Read, Resource: Training, ID: canonID(m[1])})
 		}
 		a.Also = append(a.Also, extraAlso(rt, req)...) // identifiers in the body, issue #67
-		if p := checkFields(req); p != "" {
+		if p := checkFields(req, partial); p != "" {
 			a.Problem = p
 		}
 		a.ConfirmEach = rt.each
@@ -430,10 +431,13 @@ var fieldRules = []struct {
 	{http.MethodPatch, regexp.MustCompile(`^/train/containers/[^/]+/score$`), []string{"score"}},
 }
 
-// checkFields checks the fields of a JSON body against the route's allowlist.
-func checkFields(req platform.Request) string {
-	if p := checkRequired(req); p != "" {
-		return p
+// checkFields checks the fields of a JSON body against the route's allowlist. Unless partial, it also checks
+// that a route with required fields gets all of them.
+func checkFields(req platform.Request, partial bool) string {
+	if !partial {
+		if p := checkRequired(req); p != "" {
+			return p
+		}
 	}
 	for _, fr := range fieldRules {
 		if fr.method != req.Method || !fr.re.MatchString(req.Path) {

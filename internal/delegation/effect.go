@@ -47,7 +47,19 @@ func effectOfAction(action string) Effect {
 // keeps the empty class; PlatformCall refuses it (fail closed). Writes stays the floor: a call
 // that writes (for example a GET that writes in the backend) is never read.
 func Classify(req platform.Request) Access {
-	a := classify(req)
+	return classifyAs(req, false)
+}
+
+// ClassifyPartial is Classify for the sample of a plan step whose tool completes the body at run time
+// (platform.Tool.HasSteps, e.g. update_model): the completeness of the body (requiredFields) is not
+// checked, every allowlist and every refine of the route is. The call that goes out is classified with
+// Classify and refused there if it is incomplete (issue #65).
+func ClassifyPartial(req platform.Request) Access {
+	return classifyAs(req, true)
+}
+
+func classifyAs(req platform.Request, partial bool) Access {
+	a := classify(req, partial)
 	if a.Effect == "" {
 		a.Effect = effectOfAction(a.Action)
 	}

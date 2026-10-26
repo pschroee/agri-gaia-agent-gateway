@@ -1124,5 +1124,18 @@ func withParams(err error, t platform.Tool) error {
 	return fmt.Errorf("%s; %s takes: %s", err.Error(), t.Name, strings.Join(names, ", "))
 }
 
-// checkSampleFields is filled in with the field rules of issue #218 (D3).
-func checkSampleFields(spec StepSpec, sample platform.Request) string { return "" }
+// checkSampleFields applies the field rules of the platform (allowlists of a route, the name rule of a
+// deployment, the completeness of a body, issues #65 and #218) to the sample call of a step, for the
+// interactive plan as well as the autonomous one: a step that would be refused when it goes out does not
+// belong in an approval. A tool that completes its body at run time (update_model reads the model and
+// adds the fields the agent left out) is judged without the completeness of the body: the call that goes
+// out is complete and is checked in full by PlatformCall. A raw step is the body that goes out, so it must
+// be complete. It returns the reason, empty if the step is fine.
+func checkSampleFields(spec StepSpec, sample platform.Request) string {
+	if spec.Tool != "" {
+		if tool, ok := planLookup(spec.Tool); ok && tool.HasSteps() {
+			return delegation.ClassifyPartial(sample).Problem
+		}
+	}
+	return delegation.Classify(sample).Problem
+}
