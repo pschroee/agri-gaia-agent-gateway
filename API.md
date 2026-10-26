@@ -2432,16 +2432,25 @@ checks (R0); this section names what is R3's own.
   otherwise the verdict is `not measured – input type <t> not supported by the test`. A model with more
   than one input cannot be tested this way (the requests carry one) and says so.
 - **The comparison** (R3.6) is a function of its own, `assess.CompareOutputs`: the same outputs in the
-  same order, the same shapes, every value finite, `|a − b| ≤ 1e-4 + 1e-3·|b|` (b is the value of the
-  model file; the tolerance covers the onnxruntime the device and the check container link) and, for a
-  classification output, the same top class. The verdict is `usable` only when all six requests were
-  answered and everything held; every rule that did not hold becomes a reason and the verdict is
-  `questionable`. Two rules reach over single requests: the answers of the four drawn requests must not
-  all be the same (a model that ignores its input), and fewer than six answers are a reason.
+  same order, the same shapes, every value finite and, per output tensor and request, `max|a − b| ≤
+  1e-4 + 1e-2·s` where `s = max|b|` is the largest absolute value of that output in the model file
+  (`b` is the model file's answer). For a classification output the top class must agree, unless the two
+  largest values of the model file are no further apart than twice the tolerance (a *tie*: a hint, not a
+  reason). Why the scale and not the single element: the rounding error of a sum grows with the magnitude
+  of its terms, not of its result, so another summation order in another onnxruntime moves even a small
+  element of a vector of large values by an amount of the order of the whole vector. Measured (#232):
+  2.6e-6 absolute at scale ~2 and 0.0826 at scale ~300 (about 2.8e-4 of it) for the identical model file;
+  another model differs by >= 1e-1 of the scale, so 1e-2 sits a factor of 10 below that. No comparison
+  after softmax (it saturates at large logits). The verdict is `usable` only when all six requests were
+  answered and everything held; every rule that did not hold becomes a reason (prefixed `test request <n>
+  (<input>): `, inputs are `zeros`, `0.5 everywhere`, `drawn 1` … `drawn 4`) and the verdict is
+  `questionable`. A `usable` check whose `max_abs_diff` exceeds `1e-4` carries a hint that names the
+  difference as rounding. Two rules reach over single requests: the answers of the four drawn requests
+  must not all be the same (a model that ignores its input), and fewer than six answers are a reason.
 - **`figures`** of a deployment check (R3.7, L17): `deployment {id, name}`, `device {name, simulated}`,
   `image`, `model {id, name}`, `ready`, `served_model`, `io {same, triton, platform, file}` (`triton` is the inference server of the device, OVMS too) with each
   `{inputs, outputs}` of `{name, shape, type}` (the types are written alike from all three sources,
-  `assess.normalType`), `requests`, `max_abs_diff` (`null` while nothing was compared), `argmax_same`
+  `assess.normalType`), `requests`, `max_abs_diff` (`null` while nothing was compared), `max_rel_diff` (largest `d/s`; `null` without a comparison or when every scale is 0), `tolerance_used` (largest `d/tolerance`; <= 1 means it held), `tolerance {abs, scale}`, `per_request` (per request `input`, `max_abs_diff`, `scale`, `rel_diff`, `tolerance_used`, `argmax_same` (`bool`/`null`), `tie`), `argmax_same`
   (the count; `null` when the output is no classification) and `roundtrip_ms {median, max}` — the round
   trip of one request, measured in the gateway around the command, so it includes the `docker exec` into
   the device (a hint names that). `model_check` is the last finished check of the model in this chat or
