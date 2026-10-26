@@ -1451,6 +1451,8 @@ merged (strand G-B), an approved plan does not yet change how the steps are appr
   step; the approval covers that content. Hashes written by the agent are replaced. A step that does not build no
   longer hides the others' uploads, and a file that cannot be read stops only its own step: the socket writes the reason
   as `file_error` into the step, and the answer names it with the step beside every other problem (#218).
+  `upload_dataset` sends a path given twice, and an annotation file that `files` lists as well, once; the step, its
+  hashes and the later call are built from that list (#233).
 - **Approval:** `Approval.kind` is `plan`, `name` is "Plan with N steps" (the agent's title is not part of it),
   `summary` is that name followed by "N. <first line of the step's summary>" per step; the preview lists every step
   with its effect, the gateway's summary, the call and its parameters, and marks the title and the notes as the

@@ -184,3 +184,99 @@ func TestWithUploads(t *testing.T) {
 		t.Fatal("the stored plan was changed")
 	}
 }
+
+// dupArgs lists a.png, b.png, then a.png again and the annotation file both in files and as annotation_file (#233).
+const dupArgs = `{"name":"d","description":"x","files":["/w/a.png","/w/b.png","/w/a.png","/w/annotations.xml"],"annotation_file":"/w/annotations.xml"}`
+const singleArgs = `{"name":"d","description":"x","files":["/w/a.png","/w/b.png"],"annotation_file":"/w/annotations.xml"}`
+
+func dupProposal(args string) []byte {
+	return []byte(`{"title":"t","steps":[{"tool":"upload_dataset","args":` + args + `}]}`)
+}
+
+func dupPins(n int) []FilePin {
+	var pins []FilePin
+	for i := 0; i < n; i++ {
+		pins = append(pins, FilePin{SHA256: sumOf(fmt.Sprintf("file %d", i)), Bytes: 6})
+	}
+	return pins
+}
+
+func TestPlanUploadDuplicatePathPinsOnce(t *testing.T) {
+	raw := dupProposal(dupArgs)
+	refs, err := FileRefs(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(refs[1]) != 3 {
+		t.Fatalf("want 3 files (a, b, annotation), got %d: %+v", len(refs[1]), refs[1])
+	}
+	out, err := SetFilePins(raw, map[int][]FilePin{1: dupPins(3)}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, _ := parseProposal(out)
+	st, req, _, err := BuildStep(p.Steps[0], 1)
+	if err != nil {
+		t.Fatalf("pins for the merged list must be accepted: %v", err)
+	}
+	if len(req.Files) != 3 || len(st.Files) != 3 {
+		t.Fatalf("files: %d in the request, %d in the step", len(req.Files), len(st.Files))
+	}
+}
+
+func uploadsFor(r platform.Request, pins []FilePin) platform.Request {
+	for i, f := range r.Files {
+		r.Uploads = append(r.Uploads, platform.Upload{Field: f.Field, Name: "x", SHA256: pins[i].SHA256, Data: []byte("file 0")[:pins[i].Bytes]})
+	}
+	return r
+}
+
+func TestPlanUploadDuplicateMatchesCall(t *testing.T) {
+	raw := dupProposal(dupArgs)
+	out, err := SetFilePins(raw, map[int][]FilePin{1: dupPins(3)}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, _ := parseProposal(out)
+	st, _, _, err := BuildStep(p.Steps[0], 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tool, _ := platform.Lookup("upload_dataset")
+	for name, args := range map[string]string{"without the duplicate": singleArgs, "with the duplicate": dupArgs} {
+		call, err := tool.Build([]byte(args))
+		if err != nil {
+			t.Fatal(err)
+		}
+		call = uploadsFor(call, dupPins(3))
+		// the pins hash different contents per file; give each upload its own pinned hash and matching length
+		for i := range call.Uploads {
+			call.Uploads[i].Data = make([]byte, 6)
+		}
+		if m, why := Matches(st, call, resolveTo("1")); !m {
+			t.Errorf("%s: call does not match the step: %s", name, why)
+		}
+	}
+}
+
+func TestStepManifestDuplicateSameAsSingle(t *testing.T) {
+	manifest := func(args string) string {
+		out, err := SetFilePins(dupProposal(args), map[int][]FilePin{1: dupPins(3)}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		p, _ := parseProposal(out)
+		st, _, _, err := BuildStep(p.Steps[0], 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		m, ok := StepManifest(st)
+		if !ok {
+			t.Fatal("no manifest")
+		}
+		return m.SHA256
+	}
+	if a, b := manifest(dupArgs), manifest(singleArgs); a != b {
+		t.Errorf("manifest with the duplicate %s, without %s", a, b)
+	}
+}

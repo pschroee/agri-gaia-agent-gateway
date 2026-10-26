@@ -414,12 +414,12 @@ var Tools = []Tool{
 		}},
 	{Name: "start_training", CLI: "start-training", Desc: "Starts a built training container (POST /train/containers/<id>/run). Effect compute: uses compute time, the user must approve, and a chat has a limited number of compute calls (default 3). Response: Location with the task (/tasks/<id>).",
 		Params: []Param{{Name: "train_container_id", Type: "integer", Desc: "id of the training container", Required: true}}, Write: true, build: byID(http.MethodPost, "/train/containers", "train_container_id", "/run")},
-	{Name: "upload_dataset", CLI: "upload-dataset", Desc: "Creates a dataset on the platform and uploads files from the sandbox (POST /datasets, multipart). Effect write; the user must approve. The approval shows the number, total size, folders and file types of the files, the annotation file with its SHA-256 and one SHA-256 over the list of all files; the full list is attached. At most 2 000 files and 512 MB per call, and every call creates a new dataset. File names must be unique: the platform stores every file under its name without the folder. Give classes as annotation_labels; a CVAT annotation (annotations.xml) as annotation_file.",
+	{Name: "upload_dataset", CLI: "upload-dataset", Desc: "Creates a dataset on the platform and uploads files from the sandbox (POST /datasets, multipart). Effect write; the user must approve. The approval shows the number, total size, folders and file types of the files, the annotation file with its SHA-256 and one SHA-256 over the list of all files; the full list is attached. At most 2 000 files and 512 MB per call, and every call creates a new dataset. File names must be unique: the platform stores every file under its name without the folder. A path given twice, or the annotation file listed in files as well, is sent once. Give classes as annotation_labels; a CVAT annotation (annotations.xml) as annotation_file.",
 		Params: []Param{
 			{Name: "name", Type: "string", Desc: "name of the dataset (unique, preferably without spaces)", Required: true},
 			{Name: "description", Type: "string", Desc: "short description", Required: true},
 			{Name: "files", Type: "array", Desc: "file paths in the sandbox, e.g. /workspace/images/a.png", Required: true, Path: true},
-			{Name: "annotation_file", Type: "string", Desc: "path of a CVAT annotation (annotations.xml), sent as the last file", Path: true},
+			{Name: "annotation_file", Type: "string", Desc: "path of a CVAT annotation (annotations.xml), sent once as the last file (also when files lists it)", Path: true},
 			{Name: "annotation_labels", Type: "array", Desc: "classes (labels) of the dataset, e.g. [\"0\",\"1\"]"},
 			{Name: "dataset_type", Type: "string", Desc: "dataset type (default AgriImageDataResource; only this one can be annotated)"},
 			{Name: "metadata", Type: "object", Desc: "further metadata as an object (default {}); the platform stores it in the triple store"},
@@ -477,18 +477,33 @@ var Tools = []Tool{
 			if len(paths) == 0 {
 				return Request{}, errors.New("files: at least one file")
 			}
-			files := make([]File, 0, len(paths)+1)
-			names := map[string]string{}
-			for _, p := range paths {
-				if other, dup := names[path.Base(p)]; dup {
-					return Request{}, fmt.Errorf("two files have the same name %q (%s and %s); the platform stores every file under its name without the folder, so one would overwrite the other; rename one of them", path.Base(p), other, p)
-				}
-				names[path.Base(p)] = p
-				files = append(files, File{Field: "files", Path: p})
-			}
 			ann, hasAnn, err := a.str("annotation_file")
 			if err != nil {
 				return Request{}, err
+			}
+			// A path given twice, and an entry that equals annotation_file, is sent once (#233): the plan
+			// step and the later call are built by this function, so both get the same list and hashes.
+			files := make([]File, 0, len(paths)+1)
+			names := map[string]string{}
+			seen := map[string]bool{}
+			annClean := ""
+			if hasAnn {
+				annClean = path.Clean(ann)
+			}
+			for _, p := range paths {
+				c := path.Clean(p)
+				if seen[c] || (hasAnn && c == annClean) {
+					continue
+				}
+				seen[c] = true
+				if other, dup := names[path.Base(c)]; dup {
+					return Request{}, fmt.Errorf("two files have the same name %q (%s and %s); the platform stores every file under its name without the folder, so one would overwrite the other; rename one of them", path.Base(c), other, p)
+				}
+				names[path.Base(c)] = p
+				files = append(files, File{Field: "files", Path: p})
+			}
+			if len(files) == 0 && hasAnn {
+				return Request{}, fmt.Errorf("files: at least one file besides the annotation file %q", ann)
 			}
 			form["includes_annotation_file"] = []string{strconv.FormatBool(hasAnn)}
 			if hasAnn {
