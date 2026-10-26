@@ -24,7 +24,7 @@ var createModelFromTraining = Tool{
 		"writes the model although the call is a GET). It takes model.onnx, or model.pt when the training saved no ONNX " +
 		"export, plus the training log. Every call creates another model, also for the same container: take a model over " +
 		"once per training and only when the user wants it. Needs approval. Before the call it checks that the training is " +
-		"exited and reads the training (from the list of training containers) and its dataset. The answer has id, name, format, tensor_metadata and warnings; a " +
+		"exited and reads the training (from the list of training containers) and its dataset. The answer has id, name, format, output_labels, tensor_metadata and warnings; a " +
 		"model without tensor metadata cannot be built into an inference container.",
 	Params: []Param{{Name: "train_container_id", Type: "integer", Desc: "id of the finished training container ({{tool:list_trainings}})", Required: true}},
 	Write:  true,
@@ -112,10 +112,16 @@ func modelSummary(res Result) Result {
 		warnings = append(warnings, "the platform did not recognise the score (None in the name); check the model with {{tool:assess_model}}: the gateway reads the platform figure from the training log and measures the model on held-out images")
 	}
 
+	labels, hasLabels := m["output_labels"].([]any)
+	if (!hasLabels || len(labels) == 0) && classificationOutput(m["output_shape"]) {
+		warnings = append(warnings, "the platform recorded no class order for this model; do not guess output_labels: run {{tool:assess_model}} and set them in the order of its mapping with {{tool:update_model}}")
+	}
+
 	out, err := json.Marshal(map[string]any{
 		"id":              m["id"],
 		"name":            name,
 		"format":          format,
+		"output_labels":   m["output_labels"],
 		"tensor_metadata": tensorOK,
 		"warnings":        warnings,
 		"model":           json.RawMessage(res.Body),
@@ -125,6 +131,33 @@ func modelSummary(res Result) Result {
 	}
 	res.Body = string(out)
 	return res
+}
+
+// classificationOutput reports whether an output shape looks like a classification: [1, C] or [C] with
+// C >= 2. Detectors and segmentations have other shapes and carry no output_labels.
+func classificationOutput(shape any) bool {
+	dims, ok := shape.([]any)
+	if !ok || len(dims) < 1 || len(dims) > 2 {
+		return false
+	}
+	last, ok := dims[len(dims)-1].(json.Number)
+	if !ok {
+		return false
+	}
+	c, err := last.Int64()
+	if err != nil || c < 2 {
+		return false
+	}
+	if len(dims) == 2 {
+		first, ok := dims[0].(json.Number)
+		if !ok {
+			return false
+		}
+		if n, err := first.Int64(); err != nil || n != 1 {
+			return false
+		}
+	}
+	return true
 }
 
 // trainingEntry reads one training container from the platform's list. GET /train/containers/{id} answers

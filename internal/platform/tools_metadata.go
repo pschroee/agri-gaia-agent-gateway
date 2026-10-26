@@ -89,7 +89,7 @@ var updateModel = Tool{
 		{Name: "output_name", Type: "string", Desc: "name of the output tensor"},
 		{Name: "output_datatype", Type: "string", Desc: "data type of the output (as input_datatype)"},
 		{Name: "output_shape", Desc: "shape of the output, e.g. [1,2] (as input_shape)"},
-		{Name: "output_labels", Type: "array", Desc: "class labels of the output, one entry per label"},
+		{Name: "output_labels", Type: "array", Desc: "class labels in the order the model outputs them (index 0 first). A model taken over from a training already carries them; change them only to the order the mapping of {{tool:assess_model}} shows"},
 	},
 	Write: true,
 	build: buildUpdateModel,

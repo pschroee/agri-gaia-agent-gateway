@@ -187,3 +187,41 @@ func TestGetTrainingFromList(t *testing.T) {
 		t.Fatalf("unknown id: res=%+v refused=%q", res, refused)
 	}
 }
+
+func TestModelSummaryOutputLabels(t *testing.T) {
+	warned := func(warnings []string) bool {
+		for _, w := range warnings {
+			if strings.Contains(w, "recorded no class order") {
+				return true
+			}
+		}
+		return false
+	}
+	body := func(extra string) Result {
+		return Result{Status: "ok", HTTPStatus: 200, Body: `{"id":4,"name":"m","format":"onnx"` + extra + `}`}
+	}
+	// Labels present: the field is in the answer, no warning.
+	got := readSummary(t, modelSummary(body(`,"output_shape":[1,2],"output_labels":["1","0"]`)).Body)
+	if warned(got.Warnings) {
+		t.Errorf("warnings: %v", got.Warnings)
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(modelSummary(body(`,"output_shape":[1,2],"output_labels":["1","0"]`)).Body), &raw); err != nil {
+		t.Fatal(err)
+	}
+	if string(raw["output_labels"]) != `["1","0"]` {
+		t.Errorf("output_labels = %s", raw["output_labels"])
+	}
+	// Missing at a classification output: warning, and the key is null.
+	res := modelSummary(body(`,"output_shape":[1,2]`))
+	if !warned(readSummary(t, res.Body).Warnings) {
+		t.Errorf("no warning: %s", res.Body)
+	}
+	if err := json.Unmarshal([]byte(res.Body), &raw); err != nil || string(raw["output_labels"]) != "null" {
+		t.Errorf("output_labels = %s (%v)", raw["output_labels"], err)
+	}
+	// A detector output: no warning.
+	if got := readSummary(t, modelSummary(body(`,"output_shape":[1,25200,85]`)).Body); warned(got.Warnings) {
+		t.Errorf("warnings: %v", got.Warnings)
+	}
+}
