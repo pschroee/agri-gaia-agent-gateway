@@ -22,6 +22,7 @@ import (
 	"agw/internal/config"
 	"agw/internal/platform"
 	"agw/internal/sandbox"
+	"agw/internal/store"
 )
 
 // The tests of the deployment check (R3) run the whole way with a fake platform, a fake check container
@@ -816,4 +817,29 @@ func slicesEqualFloat(a, b []float32) bool {
 		}
 	}
 	return true
+}
+
+// The last final check of the model found its output_labels in another order: the deployment check is
+// questionable and names the correction and the rebuild (#226).
+func TestDeploymentCheckLabelOrder(t *testing.T) {
+	d := deploymentSetup(t)
+	ctx := context.Background()
+	c := testChat(t, d.svg.St, "label order")
+	reason := OutputLabelsOrder([]string{"0", "1"}, map[int]string{0: "1", 1: "0"})
+	body, _ := json.Marshal(map[string]any{"verdict": "questionable", "measured_images": 40, "reasons": []string{reason}})
+	finishedCheck(t, d.svg.St, store.Assessment{ChatID: c.ID, Kind: KindTrainingModel,
+		Subject: "model:5", Final: true}, string(body))
+
+	a := d.check(t, ctx, c.ID, "5")
+	rep, fig := report(t, a)
+	if rep.Verdict != Questionable || !hasText(rep.Reasons, ReasonLabelOrderFromCheck) {
+		t.Fatalf("verdict %q: %v", rep.Verdict, rep.Reasons)
+	}
+	ids := suggestionIDs(rep)
+	if !containsString(ids, "fix_output_labels") || !containsString(ids, "rebuild_image") {
+		t.Errorf("suggestions: %v", ids)
+	}
+	if fig.ModelCheck == nil || !fig.ModelCheck.LabelOrderWrong {
+		t.Errorf("model check: %+v", fig.ModelCheck)
+	}
 }

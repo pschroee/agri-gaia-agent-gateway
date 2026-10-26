@@ -67,7 +67,62 @@ const (
 	// ReasonDeclaredClassOrder: the class order the agent declared for its own model (R2.4) contradicts
 	// the order the gateway derived from the images the model saw.
 	ReasonDeclaredClassOrder = "declared class order differs from the order the model shows on training images"
+	// ReasonOutputLabelsPrefix begins the reason of a training model whose output_labels name the
+	// outputs in another order than the model shows; the deployment check finds it by this prefix.
+	ReasonOutputLabelsPrefix = "the output_labels of the model"
 )
+
+// OutputLabelsOrder is the reason of a training model whose recorded output_labels contradict the
+// order its outputs show on the images it saw.
+func OutputLabelsOrder(labels []string, m map[int]string) string {
+	return fmt.Sprintf("%s (%s) name the outputs in another order than the model shows on the images it saw (%s)",
+		ReasonOutputLabelsPrefix, jsonList(labels), jsonList(orderedLabels(m)))
+}
+
+// orderedLabels lists the class of every output in index order (0 ... n-1); a gap stays empty.
+func orderedLabels(m map[int]string) []string {
+	n := 0
+	for i := range m {
+		if i+1 > n {
+			n = i + 1
+		}
+	}
+	out := make([]string, n)
+	for i, c := range m {
+		if i >= 0 {
+			out[i] = c
+		}
+	}
+	return out
+}
+
+// jsonList renders a list of strings as a JSON array.
+func jsonList(l []string) string {
+	b, err := json.Marshal(l)
+	if err != nil {
+		return "[]"
+	}
+	return string(b)
+}
+
+// fixOutputLabels is the suggestion that names the labels the model has to carry.
+func fixOutputLabels(m map[int]string) Suggestion {
+	return Suggestion{ID: "fix_output_labels",
+		Text: "set output_labels to " + jsonList(orderedLabels(m)) + " with {{tool:update_model}}, then build any inference image of this model again ({{tool:build_inference_image}}): the image carries the labels"}
+}
+
+// outputLabelsAbsentHint is the hint for a training model that carries no output_labels.
+func outputLabelsAbsentHint(m map[int]string) string {
+	return "the model has no output_labels; in the order the model shows they are " + jsonList(orderedLabels(m)) +
+		" (set them with {{tool:update_model}})"
+}
+
+// outputLabelsWrong reports whether the check of a training model found its output_labels in another
+// order than the outputs show.
+func outputLabelsWrong(in JudgeInput) bool {
+	return in.Kind == KindTrainingModel && in.MappingOK && len(in.OutputLabels) > 0 &&
+		declaredOrderDiffers(in.Mapping, in.OutputLabels)
+}
 
 // TooFewValidation is the reason of a not measured report with too few validation images (L16).
 func TooFewValidation(n int) string {
@@ -139,6 +194,8 @@ type TrainingFigures struct {
 	SeenSample     SeenSample              `json:"seen_sample"`
 	// Mapping: the class every output of the model means, as the gateway derived it (P9).
 	Mapping map[string]string `json:"mapping"`
+	// OutputLabels: the output_labels of the platform record of the model (training models only).
+	OutputLabels []string `json:"output_labels,omitempty"`
 	// PlatformFigure: what the template measured itself; nil: the log carried no figure.
 	PlatformFigure *PlatformFigure `json:"platform_figure"`
 	// LogNaN: the training log names nan losses (R1.13).
@@ -194,6 +251,8 @@ type JudgeInput struct {
 	// DeclaredClassNames: the class names the agent declared for its own model, in the order of the
 	// model's outputs (R2.4). Empty: none were declared, and then nothing is compared.
 	DeclaredClassNames []string
+	// OutputLabels: the output_labels of the platform record of a training model, in output order.
+	OutputLabels []string
 	// NonFinite: at least one prediction of the measured set was not a finite number.
 	NonFinite bool
 	// SkippedPredictions: how many images of the measured set the model could not run.
@@ -229,10 +288,11 @@ func JudgeClassification(in JudgeInput) Report {
 	return judgeReport(in, &TrainingFigures{
 		Model: in.Model, EvalDataset: in.EvalDataset, SeenDatasets: in.SeenDatasets,
 		MeasuredImages: measuredImages(in), PerClass: in.PerClass,
-		Overall:    OverallFigures{Accuracy: in.Accuracy, MacroF1: in.MacroF1},
-		Baseline:   BaselineFigures{Kind: "majority", Class: in.Baseline.Class, Accuracy: in.Baseline.Accuracy, MacroF1: in.Baseline.MacroF1, PValue: in.PValue},
-		SeenSample: SeenSample{Images: in.SeenImages, Accuracy: in.SeenAccuracy},
-		Mapping:    mappingNames(in.Mapping),
+		Overall:      OverallFigures{Accuracy: in.Accuracy, MacroF1: in.MacroF1},
+		Baseline:     BaselineFigures{Kind: "majority", Class: in.Baseline.Class, Accuracy: in.Baseline.Accuracy, MacroF1: in.Baseline.MacroF1, PValue: in.PValue},
+		SeenSample:   SeenSample{Images: in.SeenImages, Accuracy: in.SeenAccuracy},
+		Mapping:      mappingNames(in.Mapping),
+		OutputLabels: in.OutputLabels,
 		// PlatformFigure stays a typed nil when the log held none: the key is written as null.
 		PlatformFigure: in.PlatformFigure,
 		LogNaN:         in.LogNaN,
@@ -319,6 +379,10 @@ func judgeReport(in JudgeInput, figures ModelFigures) Report {
 		// An own model (R2.4): the order the agent declared contradicts the one the model shows. The
 		// gateway keeps its own order; the difference is what the user has to know.
 		reasons = append(reasons, ReasonDeclaredClassOrder)
+	} else if outputLabelsWrong(in) {
+		// A training model: the labels the platform recorded contradict the order the model shows. A
+		// deployment of it answers with wrong names, so this makes the verdict questionable.
+		reasons = append(reasons, OutputLabelsOrder(in.OutputLabels, in.Mapping))
 	}
 	if in.Outputs > 0 && len(in.Classes) > 0 && in.Outputs != len(in.Classes) {
 		reasons = append(reasons, fmt.Sprintf("the model has %d outputs for %d classes", in.Outputs, len(in.Classes)))
@@ -402,6 +466,9 @@ func weakClasses(perClass map[string]ClassFigures) []string {
 // hints are the observations that do not change the verdict (R1.10).
 func hints(in JudgeInput, verdict Verdict) []string {
 	var out []string
+	if in.Kind == KindTrainingModel && in.MappingOK && len(in.OutputLabels) == 0 && len(in.Mapping) > 0 {
+		out = append(out, outputLabelsAbsentHint(in.Mapping))
+	}
 	if in.MissingClass != "" {
 		out = append(out, fmt.Sprintf("class %q of the training data does not occur in the measured images", in.MissingClass))
 	}
@@ -429,6 +496,9 @@ func suggestions(in JudgeInput, verdict Verdict) []Suggestion {
 		return nil
 	}
 	var out []Suggestion
+	if outputLabelsWrong(in) {
+		out = append(out, fixOutputLabels(in.Mapping))
+	}
 	if in.Counted > 0 && in.SeenImages > 0 && in.SeenAccuracy < GoodAccuracy {
 		out = append(out, suggestionMoreEpochs)
 	}
@@ -633,6 +703,7 @@ func (s *Service) runTrainingCheck(ctx context.Context, chatID, checkID string, 
 		return Report{}, err
 	}
 	in.Model = SubjectRef{ID: model.ID, Name: model.Name}
+	in.OutputLabels = model.OutputLabels
 	modelBytes, logText, err := s.modelFile(ctx, chatID, body.ModelID)
 	if err != nil {
 		return Report{}, err
@@ -777,7 +848,7 @@ func figuresOf(in JudgeInput) *TrainingFigures {
 	return &TrainingFigures{
 		Model: in.Model, EvalDataset: in.EvalDataset, SeenDatasets: in.SeenDatasets,
 		PerClass: map[string]ClassFigures{}, Mapping: map[string]string{},
-		PlatformFigure: in.PlatformFigure, LogNaN: in.LogNaN,
+		PlatformFigure: in.PlatformFigure, LogNaN: in.LogNaN, OutputLabels: in.OutputLabels,
 	}
 }
 
@@ -1158,6 +1229,8 @@ type modelMeta struct {
 	ID     int64  `json:"id"`
 	Name   string `json:"name"`
 	Format string `json:"format"`
+	// OutputLabels: the class labels the platform recorded, in output order (null: none).
+	OutputLabels []string `json:"output_labels"`
 }
 
 // modelInfo reads the metadata of a model (a reading call with the user's token).
@@ -1244,6 +1317,8 @@ type ModelCheck struct {
 	Measured int     `json:"measured_images,omitempty"`
 	Accuracy float64 `json:"accuracy,omitempty"`
 	Reason   string  `json:"reason,omitempty"`
+	// LabelOrderWrong: the check found the output_labels of the model in another order than its outputs.
+	LabelOrderWrong bool `json:"label_order_wrong,omitempty"`
 }
 
 // Text is the wording the approval adds (R1.14, L8): the verdict words in lower case and with spaces.

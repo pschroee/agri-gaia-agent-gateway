@@ -76,6 +76,8 @@ type modelFixture struct {
 	inputShape                 []int
 	outputName, outputDatatype string
 	outputShape                []int
+	// outputLabels: the output_labels of the record (nil: the record carries none).
+	outputLabels []string
 }
 
 // deploymentFixture is one container deployment of the fake platform (R3.4): the device it runs on, the
@@ -280,6 +282,9 @@ func (f *fakePlatform) handle(w http.ResponseWriter, r *http.Request) {
 		}
 		if md.outputName != "" {
 			out["output_name"], out["output_shape"], out["output_datatype"] = md.outputName, md.outputShape, md.outputDatatype
+		}
+		if md.outputLabels != nil {
+			out["output_labels"] = md.outputLabels
 		}
 		writeTestJSON(w, out)
 	default:
