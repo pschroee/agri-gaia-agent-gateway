@@ -221,5 +221,8 @@ func toolUsage(w io.Writer, t platform.Tool) {
 			typ = "JSON"
 		}
 		fmt.Fprintf(w, "  --%-20s %s (%s%s)\n", p.Name, p.Desc, typ, req)
+		if sj := p.SchemaJSON(); sj != "" {
+			fmt.Fprintf(w, "    schema: %s\n", sj)
+		}
 	}
 }

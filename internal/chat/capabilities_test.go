@@ -200,7 +200,7 @@ func TestCapabilitiesRegistered(t *testing.T) {
 	// The static part feeds the system note: vision (from the catalog) and bindings, and here also the
 	// feature's line; state such as internet and compute calls left never belongs into the note.
 	joined := strings.Join(SetupLines(Setup{Catalog: e.cat, Variant: "cli"}), "\n")
-	for _, want := range []string{"vision: ", "bindings: ", "notebook: a notebook server is configured"} {
+	for _, want := range []string{"vision: ", "bindings: ", "plans: ", "notebook: a notebook server is configured"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("setup lines without %q: %s", want, joined)
 		}
@@ -210,12 +210,12 @@ func TestCapabilitiesRegistered(t *testing.T) {
 			t.Errorf("setup lines hold state (%s): %s", bad, joined)
 		}
 	}
-	if got := SetupLines(Setup{Catalog: e.cat, Variant: "cli"}); len(got) != 3 {
+	if got := SetupLines(Setup{Catalog: e.cat, Variant: "cli"}); len(got) != 4 {
 		t.Errorf("lines: %v", got)
 	}
-	// Without the feature's static part only vision and bindings are named.
+	// Without the feature's static part only vision, bindings and plans are named.
 	delete(capabilitySetups, "notebook")
-	if got := SetupLines(Setup{Catalog: e.cat, Variant: "cli"}); len(got) != 2 {
+	if got := SetupLines(Setup{Catalog: e.cat, Variant: "cli"}); len(got) != 3 {
 		t.Errorf("lines without the feature: %v", got)
 	}
 }

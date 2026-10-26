@@ -146,7 +146,7 @@ func TestDescriptionsRenderedPerBinding(t *testing.T) {
 // text once named model_from_training, which no step accepts).
 func TestPlanToolDescriptionToolsExist(t *testing.T) {
 	params := map[string]bool{"max_attempts": true, "max_duration_minutes": true, "max_llm_cost_usd": true, "max_auto_turns": true,
-		"dataset_id": true, "train_container_id": true, "plan_id": true}
+		"dataset_id": true, "train_container_id": true, "plan_id": true, "model_id": true, "image_id": true, "deployment_id": true}
 	for _, name := range regexp.MustCompile(`[a-z]+(?:_[a-z]+)+`).FindAllString(PlanToolDescription, -1) {
 		if params[name] {
 			continue
