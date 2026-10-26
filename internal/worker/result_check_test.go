@@ -72,6 +72,7 @@ func TestResultCheckSkillBody(t *testing.T) {
 		// edge deployment (issue #116).
 		"agw-platform deployment-check",
 		"Never describe the checked set itself",
+		"`check_warning`",
 	} {
 		if !strings.Contains(content, want) {
 			t.Errorf("skill text lacks %q", want)

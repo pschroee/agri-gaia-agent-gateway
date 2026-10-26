@@ -21,6 +21,10 @@ The approval of `create-training` comes on top; it does not replace the consent.
   `train_config`).
 - Propose `split-dataset` first, so that the result can be checked on held-out images; see the skill
   result-check. Train on the training dataset it creates, not on the source.
+- The check needs at least 5 validation and 20 held-out images, that is about 30 kept-back images: with
+  train_share 70 about 100 annotated images, with train_share 50 at least about 60. If filecount is below
+  that, say so in the proposal before the split and let the user choose between train_share 50, more
+  annotated images or a training whose check will be reported as not measured.
 
 ## 2. Check the category
 
