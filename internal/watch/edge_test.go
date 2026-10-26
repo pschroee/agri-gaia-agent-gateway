@@ -68,13 +68,23 @@ func TestEdgeDeploymentKind(t *testing.T) {
 		t.Fatalf("done: %+v %v", p, err)
 	}
 
-	// A failed task carries the F3 hint (a container may be left on the device).
+	// A failed task carries the platform's reason, and no longer claims that a container may be left on
+	// the device: since #231 the platform removes it again and says so in the task message.
 	p, err = k.Poll(t.Context(), job, edgeReader(map[string]string{
-		"/tasks/12":                `{"status":"failed","message":"port is already allocated"}`,
+		"/tasks/12":                `{"status":"failed","message":"port is already allocated; the container was removed from the device again"}`,
 		"/container-deployments/9": `{"id":9,"name":"agw-mnist","status":"created"}`,
 	}))
-	if err != nil || p.State != "failed" || !strings.Contains(p.Message, "the start failed") || !strings.Contains(p.Message, "agw-mnist") {
+	want := "the start of agw-mnist failed: port is already allocated; the container was removed from the device again"
+	if err != nil || p.State != "failed" || p.Message != want || strings.Contains(p.Message, "may be left") {
 		t.Fatalf("failed: %+v %v", p, err)
+	}
+	// Without a message the line still names the deployment and says that no reason came.
+	p, err = k.Poll(t.Context(), job, edgeReader(map[string]string{
+		"/tasks/12":                `{"status":"failed","message":"  "}`,
+		"/container-deployments/9": `{"id":9,"name":"agw-mnist","status":"created"}`,
+	}))
+	if err != nil || p.State != "failed" || p.Message != "the start of agw-mnist failed; the platform gave no reason" {
+		t.Fatalf("failed without message: %+v %v", p, err)
 	}
 
 	// The stop of the job is the undeploy of its deployment.

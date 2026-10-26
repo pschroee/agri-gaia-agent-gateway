@@ -39,9 +39,21 @@ var (
 	taskLocationRe = regexp.MustCompile(`/tasks/(\d+)$`)
 )
 
-// edgeStartFailed is the one line the watcher shows for a failed start (F3, edge D2): the container
-// the platform cannot reach stays on the device.
-const edgeStartFailed = "the start failed; a container named %s may be left on the device and the platform cannot remove it (no container id)"
+// edgeStartFailed is the one line the watcher shows for a failed start, with the reason from the task. Since
+// #231 the platform removes the container of a failed start again, and its task message says so (or names
+// the container that stayed on the device); edgeStartFailedNoReason stands in when the task has no message.
+const (
+	edgeStartFailed         = "the start of %s failed: %s"
+	edgeStartFailedNoReason = "the start of %s failed; the platform gave no reason"
+)
+
+// edgeStartFailedText is the line for a failed start of the deployment named name.
+func edgeStartFailedText(name, message string) string {
+	if m := strings.TrimSpace(message); m != "" {
+		return fmt.Sprintf(edgeStartFailed, name, m)
+	}
+	return fmt.Sprintf(edgeStartFailedNoReason, name)
+}
 
 // edgeDeploymentRef builds "deployment:<id>" and, when the answer carried a task, "|task:<id>". It
 // serves both routes of the kind, starting a deployment and taking it back.
@@ -89,6 +101,7 @@ func pollEdgeDeployment(ctx context.Context, j Job, read Reader) (Progress, erro
 		var task struct {
 			Status               string   `json:"status"`
 			CompletionPercentage *float64 `json:"completion_percentage"`
+			Message              string   `json:"message"`
 		}
 		res, err := read(ctx, platform.Request{Method: http.MethodGet, Path: "/tasks/" + taskID})
 		if err != nil {
@@ -102,7 +115,7 @@ func pollEdgeDeployment(ctx context.Context, j Job, read Reader) (Progress, erro
 		}
 		switch task.Status {
 		case "failed":
-			return Progress{State: "failed", Message: fmt.Sprintf(edgeStartFailed, deploymentName(ctx, read, depID))}, nil
+			return Progress{State: "failed", Message: edgeStartFailedText(deploymentName(ctx, read, depID), task.Message)}, nil
 		case "completed":
 			// fall through to the deployment below
 		default:
