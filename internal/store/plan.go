@@ -100,8 +100,12 @@ type PlanStep struct {
 	Effect  string          `json:"effect"`
 	// ConfirmEach: the route asks for every single call (G1.1); such a step is never covered by a plan,
 	// also not after the plan was loaded again (A-E2).
-	ConfirmEach     bool       `json:"confirm_each,omitempty"`
-	Covered         bool       `json:"covered"`
+	ConfirmEach bool `json:"confirm_each,omitempty"`
+	Covered     bool `json:"covered"`
+	// ImageOrigin (#219): the build step whose image this deployment start runs; set only by plan.ImageOrigins.
+	ImageOrigin *ImageOrigin `json:"image_origin,omitempty"`
+	// UncoveredReason (#219): why the step asks on its own; derived by UncoveredReason, not stored.
+	UncoveredReason string     `json:"uncovered_reason,omitempty"`
 	State           string     `json:"state"`
 	Result          string     `json:"result,omitempty"`
 	CreatedResource string     `json:"created_resource,omitempty"`
@@ -147,7 +151,7 @@ const planCols = `id::text, chat_id::text, approval_id, title, session, tool_cal
 // first, then the fields of watch_jobs, so that the plan API carries them for every step at once.
 // The columns of the job are COALESCEd: a step without an observed job joins onto no row at all, and NULL
 // would be readable only into pointers.
-const planStepCols = `s.idx, s.summary, COALESCE(s.summary_proposed,''), s.description, s.tool, s.args, s.method, s.path, s.query, s.body, s.body_sha256, s.form, s.form_sha256, s.files, s.effect, s.confirm_each, s.state, s.result, s.created_resource, s.created_id, s.done_at, s.max_attempts, s.attempts, s.watch_job, s.parked_approval, w.progress, COALESCE(w.message,''), w.eta, COALESCE(w.log_tail,''), COALESCE(w.outputs,'[]'), w.started_at, s.claimed_at, NULLIF(w.last_epoch,'')`
+const planStepCols = `s.idx, s.summary, COALESCE(s.summary_proposed,''), s.description, s.tool, s.args, s.method, s.path, s.query, s.body, s.body_sha256, s.form, s.form_sha256, s.files, s.effect, s.confirm_each, s.state, s.result, s.created_resource, s.created_id, s.done_at, s.max_attempts, s.attempts, s.watch_job, s.parked_approval, s.image_origin_plan, s.image_origin_step, w.progress, COALESCE(w.message,''), w.eta, COALESCE(w.log_tail,''), COALESCE(w.outputs,'[]'), w.started_at, s.claimed_at, NULLIF(w.last_epoch,'')`
 
 func scanPlan(row interface{ Scan(...any) error }) (Plan, error) {
 	var p Plan
@@ -169,11 +173,12 @@ func rawOrNil(s string) json.RawMessage {
 
 func scanPlanStep(row interface{ Scan(...any) error }) (PlanStep, error) {
 	var st PlanStep
-	var query, body, form, files, args, outputs string
+	var query, body, form, files, args, outputs, originPlan string
+	var originStep int
 	var lastEpoch *string
 	err := row.Scan(&st.Idx, &st.Summary, &st.SummaryProposed, &st.Description, &st.Tool, &args, &st.Method, &st.Path, &query, &body, &st.BodySHA256, &form, &st.FormSHA256, &files,
 		&st.Effect, &st.ConfirmEach, &st.State, &st.Result, &st.CreatedResource, &st.CreatedID, &st.DoneAt, &st.MaxAttempts, &st.Attempts,
-		&st.WatchJob, &st.ParkedApproval, &st.Progress, &st.ProgressMsg, &st.ETA, &st.LogTail, &outputs, &st.JobStarted, &st.StepStartedAt, &lastEpoch)
+		&st.WatchJob, &st.ParkedApproval, &originPlan, &originStep, &st.Progress, &st.ProgressMsg, &st.ETA, &st.LogTail, &outputs, &st.JobStarted, &st.StepStartedAt, &lastEpoch)
 	if err != nil {
 		return st, err
 	}
@@ -194,7 +199,11 @@ func scanPlanStep(row interface{ Scan(...any) error }) (PlanStep, error) {
 			return st, err
 		}
 	}
-	st.Covered = st.Effect != "irreversible" && !st.ConfirmEach
+	if originStep > 0 {
+		st.ImageOrigin = &ImageOrigin{PlanID: originPlan, Step: originStep}
+	}
+	st.Covered = StepCovered(st)
+	st.UncoveredReason = UncoveredReason(st)
 	return st, nil
 }
 
@@ -230,10 +239,14 @@ VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id::text`,
 		if attempts < 1 {
 			attempts = 1
 		}
+		originPlan, originStep := "", 0
+		if st.ImageOrigin != nil {
+			originPlan, originStep = st.ImageOrigin.PlanID, st.ImageOrigin.Step
+		}
 		_, err := tx.Exec(ctx, `INSERT INTO plan_steps (plan_id, idx, description, tool, args, method, path, query, body, body_sha256,
-form, form_sha256, files, effect, confirm_each, summary, max_attempts) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
+form, form_sha256, files, effect, confirm_each, summary, max_attempts, image_origin_plan, image_origin_step) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`,
 			id, st.Idx, st.Description, st.Tool, string(st.Args), st.Method, st.Path, string(st.Query), string(st.Body), st.BodySHA256,
-			string(st.Form), st.FormSHA256, files, st.Effect, st.ConfirmEach, st.Summary, attempts)
+			string(st.Form), st.FormSHA256, files, st.Effect, st.ConfirmEach, st.Summary, attempts, originPlan, originStep)
 		if err != nil {
 			return Plan{}, err
 		}
@@ -672,9 +685,44 @@ WHERE (state='approved' OR (mode='autonomous' AND state='paused')) AND id IN (SE
 	return nil
 }
 
+// ImageOrigin names the build step whose image a deployment start runs (#219): a step of this plan
+// (PlanID empty) or a finished step of the plan this one replaces. Only plan.ImageOrigins sets it.
+type ImageOrigin struct {
+	PlanID string `json:"plan_id,omitempty"`
+	Step   int    `json:"step"`
+}
+
 var deployCallRe = regexp.MustCompile(`^/container-deployments/[^/]+/deploy$`)
 
 // IsDeployCall tells whether method and path start a container deployment.
 func IsDeployCall(method, path string) bool {
 	return method == http.MethodPut && deployCallRe.MatchString(path)
+}
+
+// StepCovered is the one rule whether the plan's approval covers a step (G1.1 refined by #219): never an
+// irreversible step; a step on a confirm-each route only when it starts a deployment whose image the gateway
+// traced to a build (ImageOrigin). plan.Build, plan.ImageOrigins and scanPlanStep use it.
+func StepCovered(st PlanStep) bool {
+	if st.Effect == "irreversible" {
+		return false
+	}
+	if !st.ConfirmEach {
+		return true
+	}
+	return IsDeployCall(st.Method, st.Path) && st.ImageOrigin != nil && st.ImageOrigin.Step > 0
+}
+
+// UncoveredReason names why a step asks on its own: "irreversible", "image_origin" (a deployment start whose
+// image the plan does not build), "runs_code" (any other confirm-each route); "" for a covered step.
+func UncoveredReason(st PlanStep) string {
+	switch {
+	case StepCovered(st):
+		return ""
+	case st.Effect == "irreversible":
+		return "irreversible"
+	case IsDeployCall(st.Method, st.Path):
+		return "image_origin"
+	default:
+		return "runs_code"
+	}
 }
