@@ -299,9 +299,10 @@ func judgeReport(in JudgeInput, figures ModelFigures) Report {
 	case in.ValidationImages < MinValidationImages || in.HoldoutImages < MinHoldoutImages:
 		rep.Verdict = NotMeasured
 		if in.ValidationImages < MinValidationImages {
-			rep.Reasons = []string{TooFewValidation(in.ValidationImages)}
-		} else {
-			rep.Reasons = []string{TooFewHoldout(in.HoldoutImages)}
+			rep.Reasons = append(rep.Reasons, TooFewValidation(in.ValidationImages))
+		}
+		if in.HoldoutImages < MinHoldoutImages {
+			rep.Reasons = append(rep.Reasons, TooFewHoldout(in.HoldoutImages))
 		}
 		rep.Suggestions = []Suggestion{suggestionMoreData}
 		return rep
