@@ -28,8 +28,10 @@ var planSchema = map[string]any{
 	"properties": map[string]any{
 		"title": map[string]any{"type": "string", "minLength": 1, "maxLength": 120, "description": "short title of the plan"},
 		"steps": map[string]any{
-			"type": "array", "minItems": 1, "maxItems": 10,
-			"description": "the steps in the order they run",
+			// A JSON text of the array is parsed by the gateway (#218); a client that checks the schema first
+			// (pi over MCP) must let it through, so the type names both.
+			"type": []string{"array", "string"}, "minItems": 1, "maxItems": 10,
+			"description": "the steps in the order they run (an array; a JSON text of it is parsed too)",
 			"items": map[string]any{
 				"type":                 "object",
 				"additionalProperties": false,

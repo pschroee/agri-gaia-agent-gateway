@@ -86,6 +86,10 @@ func TestPlanSchemaInMCP(t *testing.T) {
 	if got := at(plan, "properties", "budget", "properties", "max_auto_turns", "maximum"); got != float64(50) {
 		t.Errorf("max_auto_turns maximum: %v", got)
 	}
+	// pi checks MCP arguments against the schema before the gateway sees them: steps as JSON text must pass (#218).
+	if typ, _ := at(plan, "properties", "steps", "type").([]any); len(typ) != 2 || typ[0] != "array" || typ[1] != "string" {
+		t.Errorf("steps type: %v, want [array string]", at(plan, "properties", "steps", "type"))
+	}
 	if got := at(plan, "properties", "steps", "maxItems"); got != float64(10) {
 		t.Errorf("maxItems: %v", got)
 	}
