@@ -745,11 +745,18 @@ func (in *deploymentRun) judged() Report {
 		reasons = append(reasons, fmt.Sprintf("only %d of %d test requests were answered by the device",
 			in.requests(), TestRequests))
 	}
+	labelsWrong := in.check != nil && in.check.LabelOrderWrong
+	if labelsWrong {
+		reasons = append(reasons, ReasonLabelOrderFromCheck)
+	}
 	verdict := Questionable
 	if len(reasons) == 0 && in.requests() == TestRequests && in.ioSame() {
 		verdict = Usable
 	}
 	rep := in.report(verdict, reasons)
+	if labelsWrong {
+		rep.Suggestions = append(rep.Suggestions, suggestionFixOutputLabels, suggestionRebuild)
+	}
 	if verdict == Questionable && in.Device.Name != "" {
 		rep.Suggestions = append(rep.Suggestions, suggestionUndeploy)
 	}
@@ -885,7 +892,11 @@ func roundtripOf(list []time.Duration) RoundtripFigures {
 
 // suggestionUndeploy and suggestionRebuild are the suggestions of R3.8: taking a deployment back is a
 // write and asks the user (or runs inside a plan), so the gateway proposes it instead of doing it.
+const ReasonLabelOrderFromCheck = "the last check of the model found output_labels in another order than the model's outputs, so the device answers with wrong class names"
+
 var (
+	suggestionFixOutputLabels = Suggestion{ID: "fix_output_labels",
+		Text: "correct output_labels with {{tool:update_model}} as the model check says"}
 	suggestionUndeploy = Suggestion{ID: "undeploy",
 		Text: "take the deployment back ({{tool:undeploy}}) and deploy the right image again"}
 	suggestionRebuild = Suggestion{ID: "rebuild_image",
