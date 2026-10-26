@@ -243,6 +243,7 @@ type Result struct {
 	ApprovalID       string          `json:"-"`
 	ApprovalDecision string          `json:"-"` // user | experiment | none
 	PlanStep         *int            `json:"-"` // step of an approved plan, if the call matched one
+	PlanID           string          `json:"-"` // the plan of PlanStep (issue #221)
 	SentBody         []byte          `json:"-"`
 	BodyTruncated    bool            `json:"-"`
 	BodyInSHA256     string          `json:"-"`

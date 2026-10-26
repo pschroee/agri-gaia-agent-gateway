@@ -2071,7 +2071,7 @@ func (m *Manager) LogPlatformCall(ctx context.Context, slotID, chatID, via, deta
 		Session: store.SessionFrom(ctx), ToolCallID: store.ToolCallFrom(ctx), DurationMs: store.DurationMsFrom(ctx),
 		Effect: store.EffectFrom(ctx), Decision: res.Decision, Reason: res.Reason, Rule: res.Rule, Body: res.SentBody,
 		BodyTruncated: res.BodyTruncated, BodyInSHA256: res.BodyInSHA256, WithinDelegation: res.WithinDelegation,
-		ApprovalID: res.ApprovalID, ApprovalDecision: res.ApprovalDecision}
+		ApprovalID: res.ApprovalID, ApprovalDecision: res.ApprovalDecision, PlanStep: res.PlanStep, PlanID: res.PlanID}
 	if ref, ok := store.CallRefFrom(ctx); ok {
 		rec.CallRef, rec.CallRefSource, rec.CallRefCandidates, rec.CallRefClaimed = ref.Ref, ref.Source, ref.Candidates, ref.Claimed
 	}
@@ -2298,6 +2298,11 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 	// A call that is exactly the next step of an approved plan (issue #70) needs no new approval when the
 	// step is covered by the plan; an irreversible step is returned unclaimed and still asks the user.
 	var step *store.PlanStep
+	defer func() { // name the plan next to the step, so the Activity can tell the steps of two plans apart (issue #221)
+		if res.PlanStep != nil && step != nil {
+			res.PlanID = step.PlanID
+		}
+	}()
 	if access.Effect != delegation.EffectRead || req.Writes() {
 		var nextStep int
 		var differs string
