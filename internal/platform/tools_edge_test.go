@@ -209,14 +209,14 @@ func TestCreateDeploymentChecks(t *testing.T) {
 			devices: oneOnlineDevice(deploymentJSON(9, "agw-other", "created", 18100, "agent-test/mnist-triton", "v1")),
 			answers: map[string]Result{image: {Status: "ok", HTTPStatus: 200, Body: imageListJSON(5, "agent-test/mnist-triton", "v1", "linux/amd64")}},
 			args:    edgeArgs,
-			refuse:  "is already used by deployment 9",
+			refuse:  "host port 18100 is used by deployment 9 (agw-other) on device 1",
 		},
 		{
 			name:    "name already used",
 			devices: oneOnlineDevice(deploymentJSON(9, "agw-mnist", "undeployed", 18150, "agent-test/mnist-triton", "v1")),
 			answers: map[string]Result{image: {Status: "ok", HTTPStatus: 200, Body: imageListJSON(5, "agent-test/mnist-triton", "v1", "linux/amd64")}},
 			args:    edgeArgs,
-			refuse:  "already exists on device 1",
+			refuse:  "name agw-mnist is taken on device 1 \"sim-edge-01\" by deployment 9 (status undeployed); use a free name, e.g. name \"mnist-2\"",
 		},
 		{
 			name:    "image_id does not belong",
@@ -327,7 +327,7 @@ func TestDeploymentStatusHints(t *testing.T) {
 			deployment: `{"id":9,"name":"agw-mnist","status":"created","edge_device_id":1,"container_image_id":5}`,
 			device:     oneOnlineDevice(),
 			task:       `{"id":5,"status":"failed","message":"port is already allocated"}`,
-			want:       "the start failed; a container named agw-mnist may be left",
+			want:       "the start failed: port is already allocated. Nothing of it is left on the device.",
 		},
 		{
 			name:       "deployed is not running",
@@ -470,5 +470,182 @@ func TestCreateDeploymentNeedsRepoOrImageID(t *testing.T) {
 		if _, err := tool.Build(json.RawMessage(args)); err != nil {
 			t.Errorf("%s: %v", name, err)
 		}
+	}
+}
+
+// After a failed start the hint says why, that nothing is left and to start the same deployment again; with a
+// container id the removal failed too and undeploy is the way (#231).
+func TestDeploymentStatusHintRestart(t *testing.T) {
+	res, refused, _ := runEdgeTool(t, "deployment_status", `{"deployment_id":9,"task_id":5}`, map[string]Result{
+		"GET /container-deployments/9": {Status: "ok", HTTPStatus: 200, Body: `{"id":9,"name":"agw-mnist","status":"created","edge_device_id":1,"container_image_id":5}`},
+		"GET /edge-devices":            {Status: "ok", HTTPStatus: 200, Body: oneOnlineDevice()},
+		"GET /tasks/5":                 {Status: "ok", HTTPStatus: 200, Body: `{"id":5,"status":"failed","message":"Conflict. The container name is already in use"}`},
+	})
+	if refused != "" || res.Status != "ok" {
+		t.Fatalf("status: %+v refused=%q", res, refused)
+	}
+	for _, want := range []string{"Conflict. The container name is already in use", "Nothing of it is left on the device", "start_deployment", "deployment_id 9", "replaces"} {
+		if !strings.Contains(res.Body, want) {
+			t.Fatalf("hint missing %q in %s", want, res.Body)
+		}
+	}
+}
+
+func TestDeploymentStatusHintLeftover(t *testing.T) {
+	res, refused, _ := runEdgeTool(t, "deployment_status", `{"deployment_id":9,"task_id":5}`, map[string]Result{
+		"GET /container-deployments/9": {Status: "ok", HTTPStatus: 200, Body: `{"id":9,"name":"agw-mnist","status":"created","edge_device_id":1,"container_image_id":5,"docker_container_id":"abc"}`},
+		"GET /edge-devices":            {Status: "ok", HTTPStatus: 200, Body: oneOnlineDevice()},
+		"GET /tasks/5":                 {Status: "ok", HTTPStatus: 200, Body: `{"id":5,"status":"failed","message":"port is already allocated; the container abc could not be removed"}`},
+	})
+	if refused != "" || res.Status != "ok" {
+		t.Fatalf("status: %+v refused=%q", res, refused)
+	}
+	if !strings.Contains(res.Body, "could not be removed and is still on the device") || !strings.Contains(res.Body, "undeploy") ||
+		strings.Contains(res.Body, "Nothing of it is left") {
+		t.Fatalf("hint: %s", res.Body)
+	}
+}
+
+// containersJSON is the answer of GET /edge-devices/{id}/containers.
+func containersJSON(items ...string) string { return "[" + strings.Join(items, ",") + "]" }
+
+func containerJSON(name, state string, ports ...int) string {
+	ps := make([]string, len(ports))
+	for i, p := range ports {
+		ps[i] = fmt.Sprint(p)
+	}
+	return fmt.Sprintf(`{"name":%q,"state":%q,"host_ports":[%s]}`, name, state, strings.Join(ps, ","))
+}
+
+// createWith runs create_deployment on device 1 with the given containers and deployments of the device.
+func createWith(t *testing.T, containers Result, deployments ...string) (Result, string, []string) {
+	t.Helper()
+	return runEdgeTool(t, "create_deployment", edgeArgs, map[string]Result{
+		"GET /edge-devices": {Status: "ok", HTTPStatus: 200, Body: oneOnlineDevice(deployments...)},
+		"GET /container-images/agent-test/mnist-triton:v1": {Status: "ok", HTTPStatus: 200, Body: imageListJSON(5, "agent-test/mnist-triton", "v1", "linux/amd64")},
+		"GET /edge-devices/1/containers":                   containers,
+		"POST /container-deployments":                      {Status: "ok", HTTPStatus: 201, Body: `{"id":9,"name":"agw-mnist","status":"created"}`},
+	})
+}
+
+func okContainers(items ...string) Result {
+	return Result{Status: "ok", HTTPStatus: 200, Body: containersJSON(items...)}
+}
+
+func TestOccupancyNameTakenByDeployment(t *testing.T) {
+	_, refused, _ := createWith(t, okContainers(), deploymentJSON(9, "agw-mnist", "created", 18150, "agent-test/mnist-triton", "v1"))
+	want := `name agw-mnist is taken on device 1 "sim-edge-01" by deployment 9 (status created); use a free name, e.g. name "mnist-2"`
+	if refused != want {
+		t.Fatalf("refused=%q\nwant    %q", refused, want)
+	}
+}
+
+func TestOccupancyNameTakenByContainer(t *testing.T) {
+	_, refused, calls := createWith(t, okContainers(containerJSON("agw-mnist", "exited")))
+	want := `a container named agw-mnist is on device 1 "sim-edge-01" (state exited) and belongs to no platform deployment; use a free name, e.g. name "mnist-2", and tell the user that this container needs removal on the device`
+	if refused != want {
+		t.Fatalf("refused=%q\nwant    %q", refused, want)
+	}
+	if reachedCall(calls, "POST /container-deployments") {
+		t.Fatalf("POST went out: %v", calls)
+	}
+}
+
+// A container with the name of a deployment entry counts as that entry: one message, not two.
+func TestOccupancyContainerOfDeploymentCountsAsDeployment(t *testing.T) {
+	_, refused, _ := createWith(t, okContainers(containerJSON("agw-other", "running", 18100)),
+		deploymentJSON(9, "agw-other", "deployed", 18100, "agent-test/mnist-triton", "v1"))
+	if strings.Contains(refused, "belongs to no platform deployment") || strings.Contains(refused, "published by container") ||
+		!strings.Contains(refused, "host port 18100 is used by deployment 9 (agw-other)") || strings.Count(refused, "host port 18100") != 1 {
+		t.Fatalf("refused=%q", refused)
+	}
+}
+
+func TestOccupancyPortIgnoresUndeployed(t *testing.T) {
+	res, refused, _ := createWith(t, okContainers(), deploymentJSON(9, "agw-other", "undeployed", 18100, "agent-test/mnist-triton", "v1"))
+	if refused != "" || res.Status != "ok" {
+		t.Fatalf("an undeployed entry blocked the port: %+v %q", res, refused)
+	}
+}
+
+func TestOccupancyPortTakenByContainer(t *testing.T) {
+	_, refused, _ := createWith(t, okContainers(containerJSON("portainer", "running", 18100)))
+	want := `host port 18100 is published by container portainer on device 1 "sim-edge-01"; free host ports: 18101, 18102, 18103`
+	if refused != want {
+		t.Fatalf("refused=%q\nwant    %q", refused, want)
+	}
+}
+
+func TestOccupancyFreeNameAndPorts(t *testing.T) {
+	o := Occupancy{
+		deployments: []occupiedDeployment{{ID: "1", Name: "agw-x", Status: "deployed", Ports: []string{"18100"}}, {ID: "2", Name: "agw-x-2", Status: "undeployed", Ports: []string{"18101"}}},
+		containers:  []deviceContainer{{Name: "agw-x-3", State: "exited"}},
+	}
+	if got := o.FreeName("x"); got != "x-4" {
+		t.Fatalf("FreeName = %q", got)
+	}
+	if got := o.FreePorts(nil); got != "18101, 18102, 18103" {
+		t.Fatalf("FreePorts = %q", got)
+	}
+	if got := o.FreePorts([]string{"18101"}); got != "18102, 18103, 18104" {
+		t.Fatalf("FreePorts with exclude = %q", got)
+	}
+	long := strings.Repeat("a", 58)
+	o = Occupancy{}
+	got := o.FreeName(long)
+	if len("agw-"+got) > 62 || !strings.HasSuffix(got, "-2") {
+		t.Fatalf("FreeName of a long name = %q (%d characters with prefix)", got, len("agw-"+got))
+	}
+}
+
+func TestOccupancyNoFreePort(t *testing.T) {
+	var deps []occupiedDeployment
+	for p := EdgeHostPortMin; p <= EdgeHostPortMax; p++ {
+		deps = append(deps, occupiedDeployment{ID: "1", Name: "agw-d", Status: "deployed", Ports: []string{fmt.Sprint(p)}})
+	}
+	o := Occupancy{deployments: deps}
+	if got := o.FreePorts(nil); got != "none in 18100-18199" {
+		t.Fatalf("FreePorts = %q", got)
+	}
+}
+
+func TestOccupancyReserveAndRelease(t *testing.T) {
+	o := Occupancy{deployments: []occupiedDeployment{{ID: "6", Name: "agw-old", Status: "deployed", Ports: []string{"18100"}}}}
+	o.Release("6", false)
+	if c := o.Conflicts("new", []string{"18100"}); len(c) != 0 {
+		t.Fatalf("undeploy did not free the port: %v", c)
+	}
+	o.Reserve(2, "new", []string{"18100"})
+	c := o.Conflicts("new", []string{"18100"})
+	if len(c) != 2 || !strings.Contains(c[0], "also given to step 2") || !strings.Contains(c[1], "also used by step 2") {
+		t.Fatalf("conflicts: %v", c)
+	}
+	if c := o.Conflicts("old", nil); len(c) != 1 || !strings.Contains(c[0], "taken on") {
+		t.Fatalf("an undeployed entry keeps its name: %v", c)
+	}
+	o.Release("6", true)
+	if c := o.Conflicts("old", nil); len(c) != 0 {
+		t.Fatalf("delete did not free the name: %v", c)
+	}
+}
+
+// A device whose containers cannot be read does not block the creation; the answer says what was not checked.
+func TestCreateDeploymentContainersUnreadable(t *testing.T) {
+	res, refused, calls := createWith(t, Result{Status: "error", HTTPStatus: 404, Message: "Not Found"})
+	if refused != "" || res.Status != "ok" || !reachedCall(calls, "POST /container-deployments") {
+		t.Fatalf("res=%+v refused=%q calls=%v", res, refused, calls)
+	}
+	if !strings.Contains(res.Body, `"note"`) || !strings.Contains(res.Body, "could not be read") || !strings.Contains(res.Body, "only the platform's deployments were checked") {
+		t.Fatalf("answer: %s", res.Body)
+	}
+}
+
+func TestCreateDeploymentRefusesContainerPort(t *testing.T) {
+	res, refused, calls := createWith(t, okContainers(containerJSON("foreign", "running", 18100, 18101)))
+	if res.Status != "error" || !strings.Contains(refused, "host port 18100 is published by container foreign") || !strings.Contains(refused, "free host ports: 18102, 18103, 18104") {
+		t.Fatalf("res=%+v refused=%q", res, refused)
+	}
+	if reachedCall(calls, "POST /container-deployments") {
+		t.Fatalf("POST went out: %v", calls)
 	}
 }

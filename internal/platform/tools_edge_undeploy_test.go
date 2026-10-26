@@ -34,8 +34,9 @@ func countCalls(calls []string, prefix string) int {
 }
 
 // undeploy refuses before its PUT what the platform would report as a success: a deployment that is
-// not deployed and one whose start failed without a container id (F3, edge D3.1). Only a deployed
-// deployment with a container id sends exactly one PUT.
+// not deployed and one without a container id (F3, edge D3.1, #231). A deployed deployment with a
+// container id, and a created one that kept the id of a container its failed start could not remove,
+// send exactly one PUT.
 func TestUndeployChecks(t *testing.T) {
 	const undeploy = "PUT /container-deployments/9/undeploy"
 	cases := []struct {
@@ -44,14 +45,13 @@ func TestUndeployChecks(t *testing.T) {
 		refuse string
 	}{
 		{"created without a container", undeployDeploymentJSON("created", false),
-			"deployment 9 is not deployed (status created); nothing to undeploy"},
+			"deployment 9 has no container on the device (status created); nothing to undeploy"},
 		{"already taken back", undeployDeploymentJSON("undeployed", false),
 			"deployment 9 is not deployed (status undeployed); nothing to undeploy"},
 		{"status missing", `{"id":9,"name":"agw-mnist"}`,
 			"deployment 9 is not deployed (status unknown); nothing to undeploy"},
 		{"deployed without a container id", undeployDeploymentJSON("deployed", false),
-			"deployment 9 has no container id: its start failed, and the platform cannot remove a leftover container named" +
-				" agw-mnist. Tell the user; it needs manual removal on the device."},
+			"deployment 9 has no container on the device (status deployed); nothing to undeploy"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -193,5 +193,34 @@ func TestUndeployToolsInAllBindings(t *testing.T) {
 		if len(req) != 1 || req[0] != "deployment_id" {
 			t.Errorf("%s: required %v", c.name, schema["required"])
 		}
+	}
+}
+
+// A failed start removes its container again; only when that removal failed too, the deployment is
+// still created but keeps the container id, and undeploy takes it back (#231).
+func TestUndeployLeftoverOfFailedStart(t *testing.T) {
+	res, refused, calls := runEdgeTool(t, "undeploy", `{"deployment_id":9}`, map[string]Result{
+		"GET /container-deployments/9":          {Status: "ok", HTTPStatus: 200, Body: undeployDeploymentJSON("created", true)},
+		"PUT /container-deployments/9/undeploy": {Status: "ok", HTTPStatus: http.StatusAccepted, Location: "/tasks/7"},
+	})
+	if refused != "" || res.Status != "ok" {
+		t.Fatalf("undeploy: %+v refused=%q", res, refused)
+	}
+	if n := countCalls(calls, "PUT /container-deployments/9/undeploy"); n != 1 {
+		t.Fatalf("PUTs: %d in %v", n, calls)
+	}
+}
+
+// A created deployment without a container id has nothing on the device to take back (#231).
+func TestUndeployCreatedWithoutContainer(t *testing.T) {
+	res, refused, calls := runEdgeTool(t, "undeploy", `{"deployment_id":9}`, map[string]Result{
+		"GET /container-deployments/9": {Status: "ok", HTTPStatus: 200, Body: undeployDeploymentJSON("created", false)},
+	})
+	want := "deployment 9 has no container on the device (status created); nothing to undeploy"
+	if refused != want || res.Status != "error" {
+		t.Fatalf("refused=%q res=%+v", refused, res)
+	}
+	if countCalls(calls, "PUT ") != 0 {
+		t.Fatalf("a PUT went out: %v", calls)
 	}
 }

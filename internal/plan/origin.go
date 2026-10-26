@@ -114,7 +114,10 @@ func traceImage(dep store.PlanStep, byIdx map[int]store.PlanStep, steps []store.
 		return nil
 	}
 	m, ok := wholePlaceholder(parts[2])
-	if !ok || m >= dep.Idx {
+	if !ok {
+		return traceRestart(parts[2], replaced, templateOK)
+	}
+	if m >= dep.Idx {
 		return nil
 	}
 	create, ok := byIdx[m]
@@ -139,6 +142,35 @@ func traceImage(dep store.PlanStep, byIdx map[int]store.PlanStep, steps []store.
 				return &store.ImageOrigin{PlanID: replaced.ID, Step: b.Idx}
 			}
 		}
+	}
+	return nil
+}
+
+// traceRestart covers the start of a deployment by its literal id (#231, E11): the replaced plan (same chat) has a
+// done create-deployment step that created exactly this deployment, and its image is a placeholder of a done build
+// step of that plan with a known template. A deployment cannot change its image, so the start runs what #219 checked.
+func traceRestart(literal string, replaced *store.Plan, templateOK TemplateOK) *store.ImageOrigin {
+	if replaced == nil || !digitsRe.MatchString(literal) {
+		return nil
+	}
+	byIdx := make(map[int]store.PlanStep, len(replaced.Steps))
+	for _, st := range replaced.Steps {
+		byIdx[st.Idx] = st
+	}
+	for _, c := range replaced.Steps {
+		if !IsCreateDeploymentStep(c) || c.State != StepDone || c.CreatedResource != delegation.ContainerDeployment || c.CreatedID != literal {
+			continue
+		}
+		ref, _ := DeploymentImage(c)
+		if ref <= 0 || ref >= c.Idx {
+			return nil
+		}
+		build, ok := byIdx[ref]
+		if !ok || !IsBuildStep(build) || build.State != StepDone || build.CreatedResource != delegation.ContainerImage ||
+			!templateKnown(build, replaced.Steps, true, templateOK) {
+			return nil
+		}
+		return &store.ImageOrigin{PlanID: replaced.ID, Step: ref}
 	}
 	return nil
 }

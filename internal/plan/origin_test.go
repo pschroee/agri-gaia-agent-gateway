@@ -258,3 +258,54 @@ func TestImageOriginsNotebookStaysUncovered(t *testing.T) {
 		t.Fatalf("notebook: %+v", steps[1])
 	}
 }
+
+// replacedRestartPlan is a replaced plan of the demo run (#231): a done build (step 8, template 4), a done
+// create step that created deployment 9 from image {{step8.id}} and a failed start.
+func replacedRestartPlan(createdDeployment string, buildState string) *store.Plan {
+	b := buildStepWith(8, "4")
+	b.State, b.CreatedResource, b.CreatedID = buildState, delegation.ContainerImage, "87"
+	c := createStepWith(9, `"{{step8.id}}"`)
+	c.State, c.CreatedResource, c.CreatedID = StepDone, delegation.ContainerDeployment, createdDeployment
+	return &store.Plan{ID: "7c1f231f-aaaa-bbbb-cccc-000000000000", Steps: []store.PlanStep{b, c}}
+}
+
+func restartStep(idx int, deployment string) store.PlanStep {
+	return store.PlanStep{Idx: idx, Method: "PUT", Path: "/container-deployments/" + deployment + "/deploy", Effect: "compute", ConfirmEach: true}
+}
+
+func TestImageOriginsRestartOfReplacedDeployment(t *testing.T) {
+	steps := []store.PlanStep{restartStep(1, "55")}
+	ImageOrigins(steps, replacedRestartPlan("55", StepDone), okTemplates("4"))
+	o := steps[0].ImageOrigin
+	if o == nil || o.PlanID != "7c1f231f-aaaa-bbbb-cccc-000000000000" || o.Step != 8 || !steps[0].Covered {
+		t.Fatalf("start: %+v", steps[0])
+	}
+}
+
+func TestImageOriginsRestartNotCoveredWithoutDoneBuild(t *testing.T) {
+	steps := []store.PlanStep{restartStep(1, "55")}
+	ImageOrigins(steps, replacedRestartPlan("55", StepOpen), okTemplates("4"))
+	if steps[0].Covered || steps[0].ImageOrigin != nil {
+		t.Fatalf("start: %+v", steps[0])
+	}
+	// A foreign template is not covered either.
+	steps = []store.PlanStep{restartStep(1, "55")}
+	ImageOrigins(steps, replacedRestartPlan("55", StepDone), okTemplates("9"))
+	if steps[0].Covered || steps[0].ImageOrigin != nil {
+		t.Fatalf("foreign template: %+v", steps[0])
+	}
+	// Without a replaced plan a literal deployment id stays uncovered.
+	steps = []store.PlanStep{restartStep(1, "55")}
+	ImageOrigins(steps, nil, okTemplates("4"))
+	if steps[0].Covered || steps[0].ImageOrigin != nil {
+		t.Fatalf("no replaced plan: %+v", steps[0])
+	}
+}
+
+func TestImageOriginsRestartOtherDeployment(t *testing.T) {
+	steps := []store.PlanStep{restartStep(1, "56")}
+	ImageOrigins(steps, replacedRestartPlan("55", StepDone), okTemplates("4"))
+	if steps[0].Covered || steps[0].ImageOrigin != nil {
+		t.Fatalf("start of a deployment the replaced plan did not create: %+v", steps[0])
+	}
+}

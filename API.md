@@ -1421,6 +1421,19 @@ merged (strand G-B), an approved plan does not yet change how the steps are appr
   `image_id` the tool reads `GET /container-images`, takes repository and tag of the entry with that id and checks as
   before (device, architecture, ports, name, origin). A plan that builds and also deploys another existing image is
   refused; propose it separately.
+- **Edge occupancy (#231):** the deployments of a plan are checked against the device when the plan is proposed, and
+  `create_deployment` runs the same check when it executes (`platform.Occupancy`). Taken are (a) the names of all
+  platform entries of the device (any status), (b) the host ports of the entries that are not `undeployed`, (c) the
+  names of all containers on the device (`GET /edge-devices/{id}/containers`, any state) and (d) their published host
+  ports; a container with the name of an entry counts as that entry. A proposal with a conflict is refused without an
+  approval; the problems join the list of #218 (`step 2: host port 18100 is used by deployment 6 (…) on device 1 "…";
+  free host ports: 18101, 18102, 18103`) and name a free name (`<name>-2` … `<name>-99`) and the three lowest free
+  ports of 18100-18199 (`none in 18100-18199` when the range is full). The gateway never replaces a value itself. In
+  a plan an earlier `create_deployment` step reserves its name and ports for the later ones, an earlier `undeploy`
+  step with a literal id frees the ports of its entry and an earlier `delete_deployment` the whole entry. When the
+  containers cannot be read (route missing, device not registered, Portainer down, timeout), the check goes on with
+  the platform's entries alone: `create_deployment` adds a `note` to its answer, the proposal only writes a log line.
+  The route is a read of the device (`read edge_device`) and returns name, state and host ports only.
 - **Step times and failures (#221):** `plan_steps.claimed_at` is written at every claim of a step and travels as
   `step_started_at` on the step (left out while the step was never claimed); the `started_at` of a step stays the start of
   its observed job. A step whose call failed without an exception stores `result` as `<status> <http status>: <line>`,
@@ -1511,8 +1524,12 @@ covers the whole run instead of one question per writing call.
   `GET /inference-container-templates`; a placeholder must point at an import step of the same plan with the allowed
   `git_url`; a read error means not covered). With `"replaces"` naming a plan of the **same chat**, a literal
   `container_image_id` is also known when that plan has a `done` build step with `created_resource = container_image`
-  and that `created_id` (and a known template). Not supported, so the start asks on its own: a literal deployment id in
-  the start path, chains over more than one replaced plan, `replaces` on a plan of another chat. Notebook runs always
+  and that `created_id` (and a known template). The same plan also covers the **restart** of a deployment by its literal
+  id in the start path (`PUT /container-deployments/<id>/deploy`, #231): when the replaced plan has a `done` create
+  step with `created_resource = container_deployment` and that `created_id`, whose `container_image_id` is a
+  placeholder of a `done` build step of that plan with a known template. Not supported, so the start asks on its own: a literal
+  deployment id that the replaced plan did not create, chains over more than one replaced plan, `replaces` on a plan of
+  another chat. Notebook runs always
   ask. Autonomous plans use the same rule: a covered start runs in the budget (compute calls still count), an uncovered
   one is parked (D2.8). One function decides, `store.StepCovered`; `plan.Build`, `plan.ImageOrigins` and `scanPlanStep`
   call it. Step fields: `image_origin` `{"plan_id"?: string, "step": int}` (absent without a traced origin; `plan_id`

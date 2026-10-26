@@ -52,6 +52,8 @@ func init() {
 		r(http.MethodPut, `/container-deployments/`+seg+`/deploy`, Run, ContainerDeployment, 1).as(EffectCompute).confirmEach(),
 		r(http.MethodPut, `/container-deployments/`+seg+`/undeploy`, Run, ContainerDeployment, 1).as(EffectWrite),
 		r(http.MethodDelete, `/container-deployments/`+seg, Delete, ContainerDeployment, 1),
+		// The containers that really are on a device (name, state, host ports; #231): reading, like the deployments of the device.
+		r(http.MethodGet, `/edge-devices/`+seg+`/containers`, Read, EdgeDevice, 1),
 	)
 	// The body of a new deployment has these four fields and no others (schemas/container_deployment.py,
 	// ContainerDeploymentBase); the field check runs with and without a delegation (issue #65), the
@@ -266,6 +268,7 @@ func deploymentConformanceCases() []Case {
 		// Allowed control calls: reading deployments and the edge groups. A check that refuses
 		// everything must not pass as correct.
 		{Name: "list container deployments", Req: platform.Request{Method: http.MethodGet, Path: "/container-deployments"}, Allowed: true, Group: "control", Rules: edgeReadRules},
+		{Name: "read containers of an edge device", Req: platform.Request{Method: http.MethodGet, Path: "/edge-devices/1/containers"}, Allowed: true, Group: "control", Rules: edgeDeviceReadRules},
 		{Name: "read the edge groups (only reading)", Req: platform.Request{Method: http.MethodGet, Path: "/edge-groups"}, Allowed: true, Group: "control", Rules: edgeReadRules},
 
 		// Blocked for the agent whatever the delegation says (edge D1.1)
@@ -311,6 +314,13 @@ const (
   "rules": [
     {"action": "create", "resource": "container_deployment"},
     {"action": "read",   "resource": "container_image", "ids": ["5"]}
+  ],
+  "confirm": "none"
+}`
+	// edgeDeviceReadRules: reading one edge device and with it the containers on it.
+	edgeDeviceReadRules = `{
+  "rules": [
+    {"action": "read", "resource": "edge_device", "ids": ["1"]}
   ],
   "confirm": "none"
 }`

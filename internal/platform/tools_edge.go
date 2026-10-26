@@ -215,7 +215,7 @@ func listDeploymentsSteps(ctx context.Context, _ Args, final Request, do Doer) (
 var createDeploymentTool = Tool{
 	Name: "create_deployment", CLI: "create-deployment",
 	Desc: "Creates a deployment of an inference image on an edge device; nothing runs yet (start it with {{tool:start_deployment}}). " +
-		"Checks first: device registered and online, image in the registry with the device's architecture and not a training image, host ports 18100-18199 not used by another deployment on the device. " +
+		"Checks first: device registered and online, image in the registry with the device's architecture and not a training image, name and host ports (18100-18199) not taken on the device, neither by a platform deployment nor by a container there. " +
 		"The container is named agw-<name> and exposes the inference server's HTTP port 8000 (Triton or OVMS) on host_port (grpc 8001 optional; Triton's metrics port 8002 optional, Triton only). " +
 		"Only images built in this chat or from the user's own repository can be deployed. " +
 		"In a plan that also builds the image, give image_id \"{{stepN.id}}\" of the build step instead of repository and tag. Writes; the user must approve.",
@@ -453,23 +453,17 @@ func createDeploymentSteps(ctx context.Context, a Args, _ Request, do Doer) (Res
 		return Refuse("image %s is a training image, not an inference image", image)
 	}
 
-	for _, dep := range device.Deployments {
-		if dep.Status == "undeployed" {
-			continue
-		}
-		for _, used := range dep.PortBindings {
-			for _, want := range bindings {
-				if want["host_port"] == used.HostPort {
-					return Refuse("host port %s is already used by deployment %s (%s) on %s; choose another port in %d-%d",
-						used.HostPort, dep.ID, dep.Name, deviceText(*device), EdgeHostPortMin, EdgeHostPortMax)
-				}
-			}
+	// Name and host ports against the deployments of the platform and the containers on the device (#231).
+	occ := occupancyOf(*device)
+	occ.readContainers(ctx, do, device.ID.String())
+	wantPorts := make([]string, 0, len(bindings))
+	for _, want := range bindings {
+		if hp, ok := want["host_port"].(string); ok {
+			wantPorts = append(wantPorts, hp)
 		}
 	}
-	for _, dep := range device.Deployments {
-		if dep.Name == "agw-"+name {
-			return Refuse("a deployment named agw-%s already exists on %s (id %s); choose another name", name, deviceText(*device), dep.ID)
-		}
+	if c := occ.Conflicts(name, wantPorts); len(c) > 0 {
+		return Refuse("%s", strings.Join(c, "; "))
 	}
 
 	imageID := providedID
@@ -493,6 +487,9 @@ func createDeploymentSteps(ctx context.Context, a Args, _ Request, do Doer) (Res
 	dec.UseNumber()
 	if dec.Decode(&created) == nil && created != nil {
 		created["next"] = "start it with {{tool:start_deployment}} (approval; compute)"
+		if occ.Note != "" {
+			created["note"] = occ.Note
+		}
 		res.Body = jsonBody(created)
 	}
 	return res, "", nil
@@ -638,13 +635,29 @@ var deploymentStatusTool = Tool{
 	steps:  deploymentStatusSteps,
 }
 
-// The hints of deployment_status (edge D2.6, D2.4); a failed start leaves a container the platform
-// cannot reach (F3), and the API never checks whether a started container still runs (F11).
+// The hints of deployment_status (edge D2.6, D2.4, #231): a failed start removes its container again, so the same
+// deployment can be started again; only when that removal failed too, the container stays and has to be taken back
+// with undeploy. The API never checks whether a started container still runs (F11).
 const (
-	msgStartFailed = "the start failed; a container named %s may be left on the device and the platform cannot remove it (no container id). Create a new deployment with another name and port; tell the user that the leftover container needs manual removal."
-	msgNoCheck     = "the platform does not check whether the container still runs; deployed means it was started."
-	msgDeviceLate  = "the device has not checked in for more than 5 minutes; deploying will fail."
+	msgStartFailed         = "the start failed: %s. Nothing of it is left on the device. Fix the cause and start the same deployment again with {{tool:start_deployment}} (deployment_id %s); in a plan, propose a plan with \"replaces\" and only that start step."
+	msgStartFailedLeftover = "the start failed: %s. Its container could not be removed and is still on the device; take it back with {{tool:undeploy}}, then start the deployment again."
+	msgNoCheck             = "the platform does not check whether the container still runs; deployed means it was started."
+	msgDeviceLate          = "the device has not checked in for more than 5 minutes; deploying will fail."
+	// startFailedMax is how much of the task's message the hint quotes.
+	startFailedMax = 300
 )
+
+// startFailedText shortens the message of the failed task for the hint; an empty message says so.
+func startFailedText(msg string) string {
+	msg = strings.TrimSpace(msg)
+	if msg == "" {
+		return "the task gave no reason"
+	}
+	if r := []rune(msg); len(r) > startFailedMax {
+		return string(r[:startFailedMax]) + "…"
+	}
+	return msg
+}
 
 // taskOut is the part of a platform task a status shows.
 type taskOut struct {
@@ -714,7 +727,11 @@ func deploymentStatusSteps(ctx context.Context, a Args, final Request, do Doer) 
 
 	switch {
 	case out.Task != nil && out.Task.Status == "failed" && dep.Status == "created":
-		out.Hint = fmt.Sprintf(msgStartFailed, dep.Name)
+		if out.DockerIDSet {
+			out.Hint = fmt.Sprintf(msgStartFailedLeftover, startFailedText(out.Task.Message))
+		} else {
+			out.Hint = fmt.Sprintf(msgStartFailed, startFailedText(out.Task.Message), dep.ID)
+		}
 	case dep.Status == "deployed":
 		out.Hint = msgNoCheck
 	case !out.Device.Online && dep.Status != "undeployed":
