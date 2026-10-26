@@ -91,6 +91,8 @@ func TestFailureLine(t *testing.T) {
 		want func(string) bool
 	}{
 		{"message first", platform.Result{Message: "name already taken", Body: `{"detail":"other"}`}, func(s string) bool { return s == "name already taken" }},
+		{"generic message gives way", platform.Result{Message: "platform responds 422", Body: `{"detail":"name taken"}`}, func(s string) bool { return s == "name taken" }},
+		{"generic message kept without body", platform.Result{Message: "platform responds 502", Body: `<html>`}, func(s string) bool { return s == "platform responds 502" }},
 		{"detail text", platform.Result{Body: `{"detail":"Dataset not found"}`}, func(s string) bool { return s == "Dataset not found" }},
 		{"detail list", platform.Result{Body: `{"detail":[{"loc":["body","name"],"msg":"field required"},{"msg":"second"}]}`}, func(s string) bool { return s == "field required" }},
 		{"one line", platform.Result{Message: "first\n  second\tthird"}, func(s string) bool { return s == "first second third" }},

@@ -783,11 +783,13 @@ func (m *Manager) stepResolve(ctx context.Context, chatID string, steps []store.
 }
 
 // failureLine is the platform's reason for a failed call as one short line: the gateway's message, else the
-// detail of the JSON body (text, or the first msg of a list as FastAPI sends validation errors). Tokens are
-// redacted and the line is clipped. Empty when the platform said nothing usable.
+// detail of the JSON body (text, or the first msg of a list as FastAPI sends validation errors). The bare
+// "platform responds <code>" of the client says less than the body and gives way to it. Tokens are redacted and
+// the line is clipped. Empty when the platform said nothing usable.
 func failureLine(res platform.Result) string {
 	line := strings.TrimSpace(res.Message)
-	if line == "" && res.Body != "" {
+	generic := strings.HasPrefix(line, "platform responds ")
+	if (line == "" || generic) && res.Body != "" {
 		var doc struct {
 			Detail json.RawMessage `json:"detail"`
 		}
