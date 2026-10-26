@@ -252,6 +252,8 @@ refer to this repository.
   `SubscribeAll`, which has **no** owner check; the API filters every event through `owns` (cached per connection).
   Subscribe before reading the snapshot. A new kind there needs the owner filter and a case in
   `internal/api/events_test.go` (foreign events must not appear). Rules in `API.md`, *SSE `GET /api/events`*.
+- `Manager.SubscribeKinds(kinds...)` is `SubscribeAll` for other kinds than `crossChatKinds` (no owner check either). The
+  plan stream `GET /api/plans/events` (#223) uses it with `plan`, so that the many plan events do not reach `/api/events`.
 
 ## Request sizes at the LLM proxy
 

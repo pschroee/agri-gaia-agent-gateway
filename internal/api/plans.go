@@ -6,9 +6,13 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
 	"strconv"
+	"time"
 
 	"agw/internal/chat"
 	"agw/internal/plan"
@@ -148,5 +152,120 @@ func (s *Server) planControl(f func(ctx context.Context, chatID, planID string) 
 			return
 		}
 		writeJSON(w, 200, redactPlanText(p))
+	}
+}
+
+// plansAcross lists the plans of the user's chats across all chats, running ones first (GET /api/plans, issue
+// #223). In oidc mode the store filters by the owner, so another user's plans never leave the database; a
+// foreign chat in ?chat= gives an empty page, like an unknown one.
+func (s *Server) plansAcross(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	oq, bad := parseOverviewQuery(q, nil)
+	if bad != "" {
+		writeErr(w, http.StatusBadRequest, bad)
+		return
+	}
+	states, bad := parseList(q, "state", store.PlanStates)
+	if bad != "" {
+		writeErr(w, http.StatusBadRequest, bad)
+		return
+	}
+	mode := q.Get("mode")
+	if mode != "" && mode != "interactive" && mode != "autonomous" {
+		writeErr(w, http.StatusBadRequest, "mode: interactive or autonomous")
+		return
+	}
+	f := store.PlanListFilter{States: states, Mode: mode, ChatID: oq.ChatID, Limit: oq.Limit, Offset: oq.Offset}
+	if s.OIDC != nil {
+		u, ok := UserFrom(r.Context())
+		if !ok || u.Sub == "" {
+			writeErr(w, http.StatusUnauthorized, "not logged in")
+			return
+		}
+		f.Owner = &u.Sub
+	}
+	items, total, running, err := s.M.PlansAcross(r.Context(), f)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	for i := range items {
+		items[i].Plan = redactPlanText(items[i].Plan)
+	}
+	writeJSON(w, 200, map[string]any{"plans": items, "total": total, "running": running})
+}
+
+// planEvents is the stream of plans across the user's chats (GET /api/plans/events, issue #223): every state
+// change and every progress of a plan of a chat that is not in the trash, as "plan" with the chat title. It is a
+// stream of its own, because a plan event comes with every poll of a job and would burden every page that
+// listens on GET /api/events.
+func (s *Server) planEvents(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	fl, ok := w.(http.Flusher)
+	if !ok {
+		writeErr(w, 500, "streaming not possible")
+		return
+	}
+	if s.OIDC != nil {
+		if u, ok := UserFrom(ctx); !ok || u.Sub == "" {
+			writeErr(w, http.StatusUnauthorized, "not logged in")
+			return
+		}
+	}
+	ch, cancel := s.M.SubscribeKinds("plan")
+	defer cancel()
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.WriteHeader(200)
+	_, _ = fmt.Fprintf(w, "retry: %d\n: connected\n\n", eventsRetryMs)
+	fl.Flush()
+	type chatInfo struct {
+		mine  bool
+		title string
+	}
+	known := map[string]chatInfo{}
+	ping := time.NewTicker(15 * time.Second)
+	defer ping.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ping.C:
+			_, _ = io.WriteString(w, ": ping\n\n")
+			fl.Flush()
+		case ev := <-ch:
+			p, isPlan := ev.Data.(store.Plan)
+			if !isPlan {
+				continue
+			}
+			info, seen := known[ev.ChatID]
+			if !seen {
+				own, err := s.owns(ctx, ev.ChatID)
+				if err != nil {
+					return // the client reconnects and loads the list again
+				}
+				info.mine = own
+				if own {
+					title, trashed, err := s.M.ChatTitle(ctx, ev.ChatID)
+					if err != nil {
+						return
+					}
+					info.mine = !trashed
+					info.title = title
+				}
+				known[ev.ChatID] = info
+			}
+			if !info.mine {
+				continue
+			}
+			b, err := json.Marshal(map[string]any{"kind": "plan", "chat_id": ev.ChatID,
+				"data": store.PlanListItem{Plan: redactPlanText(p), ChatTitle: info.title}})
+			if err != nil {
+				continue
+			}
+			_, _ = fmt.Fprintf(w, "data: %s\n\n", b)
+			fl.Flush()
+		}
 	}
 }

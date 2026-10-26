@@ -356,6 +356,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/approvals", s.approvals)
 	mux.HandleFunc("GET /api/events", s.allEvents)
 	mux.HandleFunc("GET /api/activity", s.activity)
+	mux.HandleFunc("GET /api/plans", s.plansAcross)
+	mux.HandleFunc("GET /api/plans/events", s.planEvents)
 	mux.HandleFunc("GET /api/activity/connections", s.activityConnections)
 	mux.Handle("POST /api/approvals/{id}", s.ownApproval(s.approvalWritable(s.decide)))
 	s.registerExp(mux) // X1: the experiment runner, only with the experiment key

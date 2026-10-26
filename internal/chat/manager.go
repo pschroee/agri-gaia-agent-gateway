@@ -329,7 +329,7 @@ type Manager struct {
 	live map[string]*live
 	subs map[string]map[chan Event]struct{}
 	// allSubs: subscribers of approval events of every chat (GET /api/events); the API filters by owner.
-	allSubs map[chan ChatEvent]struct{}
+	allSubs map[chan ChatEvent]map[string]bool
 	// chatMu serializes state changes per chat (resuming, idling, closing).
 	chatMu map[string]*sync.Mutex
 	// imgMu serializes saving the display images per chat.
@@ -425,7 +425,7 @@ func NewManager(st *store.Store, p *pool.Pool[Agent], cat *config.Catalog, blobs
 		opt.PlanMaxLLMCost = config.DefaultPlanMaxLLMCost
 	}
 	return &Manager{st: st, pool: p, cat: cat, blobs: blobs, broker: broker, opt: opt,
-		live: map[string]*live{}, subs: map[string]map[chan Event]struct{}{}, allSubs: map[chan ChatEvent]struct{}{}, chatMu: map[string]*sync.Mutex{},
+		live: map[string]*live{}, subs: map[string]map[chan Event]struct{}{}, allSubs: map[chan ChatEvent]map[string]bool{}, chatMu: map[string]*sync.Mutex{},
 		imgMu: map[string]*sync.Mutex{}, wsMu: map[string]*sync.Mutex{}, qMu: map[string]*sync.Mutex{},
 		sending: map[string]bool{}, delivering: map[string][]*turnMeta{}, resuming: map[string]bool{}, starting: map[string]bool{}, pendingModel: map[string]string{}, levels: map[string][]string{}, userAt: map[string]time.Time{}, endSeen: map[string]map[int]bool{}, aborts: map[string]uint64{},
 		rechecks: map[string]recheck{}, apMu: map[string]*sync.Mutex{}, planCache: map[string]planCacheEntry{},
@@ -473,9 +473,23 @@ func (m *Manager) Subscribe(chatID string) (<-chan Event, func()) {
 // SubscribeAll delivers the approval events (new and decided) of every chat, with the chat's ID, for the
 // stream across chats (GET /api/events). It carries no ownership check: the caller filters by owner.
 func (m *Manager) SubscribeAll() (<-chan ChatEvent, func()) {
+	return m.SubscribeKinds()
+}
+
+// SubscribeKinds is SubscribeAll for the given event kinds instead of crossChatKinds (without kinds: crossChatKinds).
+// The stream of plans across chats (GET /api/plans/events) takes "plan", which would burden every other
+// subscriber across chats. No ownership check: the caller filters by owner.
+func (m *Manager) SubscribeKinds(kinds ...string) (<-chan ChatEvent, func()) {
 	ch := make(chan ChatEvent, 256)
+	var want map[string]bool // nil: crossChatKinds
+	if len(kinds) > 0 {
+		want = map[string]bool{}
+		for _, k := range kinds {
+			want[k] = true
+		}
+	}
 	m.mu.Lock()
-	m.allSubs[ch] = struct{}{}
+	m.allSubs[ch] = want
 	m.mu.Unlock()
 	return ch, func() {
 		m.mu.Lock()
@@ -491,8 +505,12 @@ func (m *Manager) publish(chatID string, ev Event) {
 	for ch := range m.subs[chatID] {
 		sendDropOldest(ch, ev, important)
 	}
-	if crossChatKinds[ev.Kind] {
-		for ch := range m.allSubs {
+	for ch, kinds := range m.allSubs {
+		want := crossChatKinds[ev.Kind]
+		if kinds != nil {
+			want = kinds[ev.Kind]
+		}
+		if want {
 			sendDropOldest(ch, ChatEvent{ChatID: chatID, Event: ev}, true)
 		}
 	}
