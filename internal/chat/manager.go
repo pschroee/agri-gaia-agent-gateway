@@ -2338,6 +2338,7 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 			res.PlanID = step.PlanID
 		}
 	}()
+	var approvalSummary string // the summary of a single approval given in this call (issue #225)
 	if access.Effect != delegation.EffectRead || req.Writes() {
 		var nextStep int
 		var differs string
@@ -2441,6 +2442,7 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 			read = cachedReads(read)
 		}
 		summary := platform.VisibleControls(platform.Summarize(ctx, read, summaryCall))
+		approvalSummary = summary
 		// The structured data of the run (own code C-E4): the card shows the files instead of the text
 		// preview. Without data there is no approval — the user must see the code of the run.
 		var notebookData json.RawMessage
@@ -2628,6 +2630,11 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 	}
 	// A read of a job the gateway observes for this chat gets a note and waits its turn (#212); the wait is not
 	// part of the duration of the call.
+	// A plan step that goes out in another form than stored (placeholder resolved, values filled in by the
+	// tool) gets the summary of the call as it is sent (issue #225).
+	if step != nil {
+		m.recordRunSummary(ctx, chatID, step, req, approvalSummary)
+	}
 	obsJob, observed := "", false
 	if step == nil && claim == nil {
 		obsJob, observed = m.observedRead(ctx, chatID, req)

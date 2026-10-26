@@ -81,6 +81,9 @@ type PlanStep struct {
 	// SummaryProposed (issue L2/#119): the summary as it was proposed, kept when a re-read at the moment of the
 	// approval found other values. Empty while nothing changed.
 	SummaryProposed string `json:"summary_proposed,omitempty"`
+	// SummaryRun (issue #225): the summary of the call as it was sent, written just before it went out. Empty
+	// when the call went out as stored or the summary could not be read; Summary stays the approved text.
+	SummaryRun string `json:"summary_run,omitempty"`
 	// Description is the agent's note on the step, not checked by the gateway: the API names it agent_note.
 	Description string `json:"agent_note,omitempty"`
 	Tool        string `json:"tool,omitempty"`
@@ -151,7 +154,7 @@ const planCols = `id::text, chat_id::text, approval_id, title, session, tool_cal
 // first, then the fields of watch_jobs, so that the plan API carries them for every step at once.
 // The columns of the job are COALESCEd: a step without an observed job joins onto no row at all, and NULL
 // would be readable only into pointers.
-const planStepCols = `s.idx, s.summary, COALESCE(s.summary_proposed,''), s.description, s.tool, s.args, s.method, s.path, s.query, s.body, s.body_sha256, s.form, s.form_sha256, s.files, s.effect, s.confirm_each, s.state, s.result, s.created_resource, s.created_id, s.done_at, s.max_attempts, s.attempts, s.watch_job, s.parked_approval, s.image_origin_plan, s.image_origin_step, w.progress, COALESCE(w.message,''), w.eta, COALESCE(w.log_tail,''), COALESCE(w.outputs,'[]'), w.started_at, s.claimed_at, NULLIF(w.last_epoch,'')`
+const planStepCols = `s.idx, s.summary, COALESCE(s.summary_proposed,''), s.summary_run, s.description, s.tool, s.args, s.method, s.path, s.query, s.body, s.body_sha256, s.form, s.form_sha256, s.files, s.effect, s.confirm_each, s.state, s.result, s.created_resource, s.created_id, s.done_at, s.max_attempts, s.attempts, s.watch_job, s.parked_approval, s.image_origin_plan, s.image_origin_step, w.progress, COALESCE(w.message,''), w.eta, COALESCE(w.log_tail,''), COALESCE(w.outputs,'[]'), w.started_at, s.claimed_at, NULLIF(w.last_epoch,'')`
 
 func scanPlan(row interface{ Scan(...any) error }) (Plan, error) {
 	var p Plan
@@ -176,7 +179,7 @@ func scanPlanStep(row interface{ Scan(...any) error }) (PlanStep, error) {
 	var query, body, form, files, args, outputs, originPlan string
 	var originStep int
 	var lastEpoch *string
-	err := row.Scan(&st.Idx, &st.Summary, &st.SummaryProposed, &st.Description, &st.Tool, &args, &st.Method, &st.Path, &query, &body, &st.BodySHA256, &form, &st.FormSHA256, &files,
+	err := row.Scan(&st.Idx, &st.Summary, &st.SummaryProposed, &st.SummaryRun, &st.Description, &st.Tool, &args, &st.Method, &st.Path, &query, &body, &st.BodySHA256, &form, &st.FormSHA256, &files,
 		&st.Effect, &st.ConfirmEach, &st.State, &st.Result, &st.CreatedResource, &st.CreatedID, &st.DoneAt, &st.MaxAttempts, &st.Attempts,
 		&st.WatchJob, &st.ParkedApproval, &originPlan, &originStep, &st.Progress, &st.ProgressMsg, &st.ETA, &st.LogTail, &outputs, &st.JobStarted, &st.StepStartedAt, &lastEpoch)
 	if err != nil {
@@ -356,6 +359,15 @@ WHERE plan_id=$1 AND idx=$2`, planID, i+1, sum); err != nil {
 		}
 	}
 	return tx.Commit(ctx)
+}
+
+// SetPlanStepRunSummary stores the summary of the call as it was sent (issue #225); a repeated call overwrites it.
+func (s *Store) SetPlanStepRunSummary(ctx context.Context, planID string, idx int, text string) error {
+	if !isUUID(planID) {
+		return ErrNotFound
+	}
+	_, err := s.pool.Exec(ctx, `UPDATE plan_steps SET summary_run=$3 WHERE plan_id=$1 AND idx=$2`, planID, idx, text)
+	return err
 }
 
 // DecidePlan sets the decision of a plan that is still "proposed"; ok reports whether it took effect.

@@ -576,3 +576,45 @@ func TestPlanStepImageOriginRoundTrip(t *testing.T) {
 		t.Fatalf("step 1: %+v", st[0])
 	}
 }
+
+// The summary of the call as it was sent has its own column and JSON field; the approved summary stays (issue #225).
+func TestSetPlanStepRunSummary(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	c := newPlanChat(t, s)
+	in := twoStepPlan(c.ID, "main")
+	in.Steps[1].Summary = "Delete the model created by step 1"
+	p, err := s.CreatePlan(ctx, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Steps[1].SummaryRun != "" {
+		t.Fatalf("new step has a run summary: %q", p.Steps[1].SummaryRun)
+	}
+	if err := s.SetPlanStepRunSummary(ctx, p.ID, 2, "Delete model 42"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.GetPlan(ctx, p.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Steps[1].SummaryRun != "Delete model 42" || got.Steps[1].Summary != "Delete the model created by step 1" || got.Steps[0].SummaryRun != "" {
+		t.Fatalf("steps: %+v", got.Steps)
+	}
+	raw, _ := json.Marshal(got.Steps[1])
+	if !strings.Contains(string(raw), `"summary_run":"Delete model 42"`) {
+		t.Fatalf("json: %s", raw)
+	}
+	if b, _ := json.Marshal(got.Steps[0]); strings.Contains(string(b), "summary_run") {
+		t.Fatalf("empty run summary is serialized: %s", b)
+	}
+	if err := s.SetPlanStepRunSummary(ctx, p.ID, 2, "Delete model 43"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ = s.GetPlan(ctx, p.ID); got.Steps[1].SummaryRun != "Delete model 43" {
+		t.Fatalf("a repeat does not overwrite: %q", got.Steps[1].SummaryRun)
+	}
+	if err := s.SetPlanStepRunSummary(ctx, "not-a-uuid", 1, "x"); err != ErrNotFound {
+		t.Fatalf("invalid id: %v", err)
+	}
+}
