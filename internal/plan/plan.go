@@ -566,6 +566,7 @@ func Build(p Proposal, classify Classify) ([]store.PlanStep, error) {
 		out = append(out, st)
 	}
 	checkImageSteps(built, &probs)
+	checkModelNames(built, &probs)
 	if len(probs) > 0 {
 		return out, probs
 	}

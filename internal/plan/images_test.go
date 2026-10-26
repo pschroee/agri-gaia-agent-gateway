@@ -11,7 +11,8 @@ import (
 
 const (
 	imgModelStep = `{"tool":"create_model_from_training","args":{"train_container_id":7}}`
-	imgBuildStep = `{"tool":"build_inference_image","args":{"template_id":3,"model_id":"{{step1.id}}","name":"mnist-triton","tag":"v1","architecture":"amd64"}}`
+	// The build takes an existing model (35): a model of step 1 would need a rename first (checkModelNames).
+	imgBuildStep = `{"tool":"build_inference_image","args":{"template_id":3,"model_id":35,"name":"mnist-triton","tag":"v1","architecture":"amd64"}}`
 )
 
 func deployToolStep(args string) string {
@@ -73,7 +74,7 @@ func TestImageStepsNoBuildNoRule(t *testing.T) {
 		t.Errorf("a deployment next to a model step: %v", err)
 	}
 	if _, err := problemsOf(t, imagePlan(`{"tool":"create_model_from_training","args":{"train_container_id":7}}`, own,
-		`{"tool":"build_inference_image","args":{"template_id":3,"model_id":"{{step1.id}}","name":"mnist-triton","tag":"v2","architecture":"amd64"}}`)); err != nil {
+		`{"tool":"build_inference_image","args":{"template_id":3,"model_id":35,"name":"mnist-triton","tag":"v2","architecture":"amd64"}}`)); err != nil {
 		t.Errorf("a deployment before the build: %v", err)
 	}
 }
@@ -95,5 +96,23 @@ func TestImageStepsSkipFailedSteps(t *testing.T) {
 	ps, err := problemsOf(t, imagePlan(imgModelStep, `{"tool":"nonsense_tool"}`, deployToolStep(`"image_id":"{{step2.id}}"`)))
 	if err == nil || len(ps) != 1 || ps[0].Step != 2 {
 		t.Fatalf("problems: %v", err)
+	}
+}
+
+// A model taken over in the plan keeps the training's name, which Triton cannot address: the build of it needs an
+// update_model step with only "name" in between (demo run of 26.10.2026).
+func TestModelNamesRenameBeforeBuild(t *testing.T) {
+	build := `{"tool":"build_inference_image","args":{"template_id":3,"model_id":"{{step1.id}}","name":"mnist-triton","tag":"v1","architecture":"amd64"}}`
+	_, err := problemsOf(t, imagePlan(imgModelStep, build))
+	want := `step 2: the model of step 1 keeps the training's name, which Triton cannot address (spaces, brackets); add an {{tool:update_model}} step with model_id "{{step1.id}}" and only "name"`
+	if err == nil || !strings.HasPrefix(err.Error(), want) {
+		t.Fatalf("no rename:\n got  %v\n want %s", err, want)
+	}
+	rename := `{"tool":"update_model","args":{"model_id":"{{step1.id}}","name":"mnist_effnet"}}`
+	if _, err := problemsOf(t, imagePlan(imgModelStep, rename, build)); err != nil {
+		t.Fatalf("with update_model: %v", err)
+	}
+	if _, err := problemsOf(t, imagePlan(imgModelStep, build, rename)); err == nil || !strings.Contains(err.Error(), "Triton") {
+		t.Fatalf("a rename after the build does not count: %v", err)
 	}
 }
