@@ -43,8 +43,8 @@ var undeployTool = Tool{
 
 // undeploySteps reads the deployment and refuses what the platform would otherwise report as a
 // success: it removes the container only by its stored docker id and answers 2xx even when there is
-// none, so a deployment whose start failed would look taken back while its container stays on the
-// device (F3, edge D3.1).
+// none, so a deployment without a container would look taken back (F3, edge D3.1). A failed start removes its
+// container again (#231); only one whose removal failed too keeps the id while still created and can be undeployed.
 func undeploySteps(ctx context.Context, a Args, final Request, do Doer) (Result, string, error) {
 	id, _ := requiredInt(a, "deployment_id") // checked by build
 	read := Request{Method: http.MethodGet, Path: "/container-deployments/" + strconv.FormatInt(id, 10)}
@@ -52,11 +52,15 @@ func undeploySteps(ctx context.Context, a Args, final Request, do Doer) (Result,
 	if res, stop, err := ReadJSON(ctx, do, read, &dep); stop {
 		return res, "", err
 	}
+	hasContainer := dep.DockerContainerID != nil && *dep.DockerContainerID != ""
 	switch {
-	case dep.Status != "deployed":
+	case hasContainer && (dep.Status == "deployed" || dep.Status == "created"):
+		// deployed, or a start that failed and could not remove its container again (#231): the platform
+		// knows the container id and removes it.
+	case !hasContainer && dep.Status != "undeployed":
+		return Refuse("deployment %d has no container on the device (status %s); nothing to undeploy", id, deployStatusText(dep.Status))
+	default:
 		return Refuse("deployment %d is not deployed (status %s); nothing to undeploy", id, deployStatusText(dep.Status))
-	case dep.DockerContainerID == nil || *dep.DockerContainerID == "":
-		return Refuse("deployment %d has no container id: its start failed, and the platform cannot remove a leftover container named %s. Tell the user; it needs manual removal on the device.", id, dep.Name)
 	}
 	res, err := do(ctx, final)
 	if err != nil || res.Status != "ok" || res.HTTPStatus < 200 || res.HTTPStatus >= 300 {

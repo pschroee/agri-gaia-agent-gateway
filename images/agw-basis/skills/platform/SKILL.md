@@ -190,14 +190,16 @@ online. Without it the way ends at the built image — say that and invent no de
    `create-deployment --image_id "{{stepN.id}}"` of the build step and no repository or tag (the gateway takes
    them from the image); otherwise give `<repository> <tag>` and `--image_id` from `image-status`. Then `start-deployment` with the placeholder of
    `create-deployment`. Only images built in this chat or from your own namespace can be deployed; host
-   ports only 18100-18199; the name (without `agw-`) is free to choose.
+   ports only 18100-18199; the name (without `agw-`) is free to choose. The gateway checks name and host
+   ports against the device when you propose the plan; a refusal names a free name and free ports — take
+   them and propose again.
 4. Starting runs the image with network access on the device. In a plan the start is covered by the
    plan's approval only when the image comes from a build step of the same plan (or of the plan named in
    "replaces"); otherwise it asks on its own. The device pulls the image (several GB the first time);
    its ports open on every interface of the device. Nothing runs before that.
 5. Follow it with `agw-platform deployment-status <deployment_id> --task_id <id>`; `deployed`, or a
-   `hint`. After a failed start do not start again — create a new deployment with another name and port
-   and tell the user that the leftover container needs manual removal.
+   `hint`. After a failed start the `hint` says why; nothing is left on the device. Fix the cause and
+   start the same deployment again — in a plan, propose a plan with `"replaces"` and only that start step.
 6. Once it shows `deployed`, have the gateway test the container on the device:
    `agw-platform deployment-check <deployment_id> <model_id>` — the skill `result-check` says how to
    report it. This reaches simulated devices only (the entry `edge` names them under "test requests").
@@ -211,8 +213,8 @@ deployment stays and can be started again. It needs **no device online** (the pl
 the device, and the task fails when the device is gone); `agw-platform capabilities` names the device state.
 `agw-platform delete-deployment <deployment_id>` removes the deployment entry afterwards — it asks on its own
 and cannot be undone. An image can only be deleted when no deployment points at it any more; **you delete no
-images** (the user does). A deployment that has no container id means its start failed and a container of that
-name stays on the device, which the platform cannot remove — tell the user.
+images** (the user does). A deployment whose start failed but whose container could not be removed has a
+container id while still `created`; `undeploy` removes it.
 
 ## Everything else
 
