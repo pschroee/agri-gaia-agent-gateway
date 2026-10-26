@@ -1327,6 +1327,40 @@ merged (strand G-B), an approved plan does not yet change how the steps are appr
   duplicate keys and reading calls are refused. Plans cannot
   contain `propose_plan`, `rights` or `/_agw/…`. Optional `"mode": "autonomous"`, `"budget"` and `"replaces"`: see
   *Autonomous plans*.
+- **Every problem at once (#218):** a refused proposal answers (status `error`) with all problems found, so that one
+  more attempt is enough: one problem reads as a single line (`step 3: …`, or without a step for the plan as a
+  whole), several as `plan refused, N problems; fix all of them and propose the whole plan once more:` and one line
+  `- step N: …` each, at most 20 lines, then `- … and K more`. A step that does not read or build is skipped: the other
+  steps are checked all the same, and a reference to the skipped step is not reported again. Only a proposal that
+  cannot be read at all (no JSON, duplicate keys, a head that does not decode) gives a single problem. Checks that
+  depend on the state of the chat (`checkAutonomous`, the number of open plans) still come in a second round.
+- **JSON as text (#218):** the plan, its `steps` or a single step may arrive as a string that holds JSON (some clients
+  send arrays as text). It is unpacked as text before anything is decoded, so duplicate keys inside are still refused;
+  a title or a description that merely looks like JSON stays text. A step that is text without JSON is refused with
+  the shape of a step.
+- **Tool names and arguments (#218):** a step names its tool as the table does (`create_model_from_training`); the CLI
+  name with underscores (`model_from_training`) and the prefixes `platform_` and `mcp_platform_` are accepted and stored
+  under the tool's own name. An unknown name is refused with up to three suggestions (`unknown tool "x"; did you mean
+  …?`); an unknown argument with the arguments the tool takes (`unknown argument "x"; update_model takes: …`).
+- **Schema (#218):** the MCP input schema of `propose_plan` holds every field of the plan (`additionalProperties: false`
+  everywhere, `steps` 1 to 10, `max_auto_turns` at most 50); `agw-platform propose-plan --help` and
+  `GET /_agw/paths?prefix=/_agw/plan` print it as a `schema:` line. `file_sha256`, `file_bytes` and `file_error` of a
+  step are written by the gateway and are not in it. The description names every tool that can be a step and those
+  that create an object, and points at the capability `plans` for the limits.
+- **Field rules at the proposal (#218):** the rules of the platform's bodies (allowlists such as `PATCH /datasets` with
+  `name` only, the name and ports of a deployment, the fields of `PATCH /models`) are checked for the call of every
+  step when the plan is proposed, in the interactive mode as well as in the autonomous one (`plan.Build`; `Grant` no
+  longer checks them). A raw `PATCH /models/{id}` must carry all fields, as the call that goes out. A tool that
+  completes its body when it runs (`update_model` reads the model and adds the fields the plan leaves out) is judged
+  without the completeness of its body (`delegation.ClassifyPartial`): `update_model` with `model_id` and only
+  `name` is a complete step. The call that goes out is classified in full as before (issue #65).
+- **Build and deployment (#218):** if a plan has a build step (`build_inference_image` or `POST /container-images/build`),
+  every deployment step after it (`create_deployment` or `POST /container-deployments`) names its image by the
+  placeholder of a build step: `"image_id": "{{stepN.id}}"` with no `repository` and `tag` for the tool,
+  `"container_image_id": "{{stepN.id}}"` in a raw body. Repository and id are known only after the build. With only
+  `image_id` the tool reads `GET /container-images`, takes repository and tag of the entry with that id and checks as
+  before (device, architecture, ports, name, origin). A plan that builds and also deploys another existing image is
+  refused; propose it separately.
 - **Step times and failures (#221):** `plan_steps.claimed_at` is written at every claim of a step and travels as
   `step_started_at` on the step (left out while the step was never claimed); the `started_at` of a step stays the start of
   its observed job. A step whose call failed without an exception stores `result` as `<status> <http status>: <line>`,
@@ -1354,13 +1388,19 @@ merged (strand G-B), an approved plan does not yet change how the steps are appr
   or subagent run). A newly approved plan of the same session ends the older approved ones (`superseded`). A failed
   step fails the plan; when all steps are done it is `completed`. A restart fails running steps and expires proposals.
 - **Uploads:** the orchestrator reads each uploaded file when the plan is proposed and writes its SHA-256 into the
-  step; the approval covers that content. Hashes written by the agent are replaced.
+  step; the approval covers that content. Hashes written by the agent are replaced. A step that does not build no
+  longer hides the others' uploads, and a file that cannot be read stops only its own step: the socket writes the reason
+  as `file_error` into the step, and the answer names it with the step beside every other problem (#218).
 - **Approval:** `Approval.kind` is `plan`, `name` is "Plan with N steps" (the agent's title is not part of it),
   `summary` is that name followed by "N. <first line of the step's summary>" per step; the preview lists every step
   with its effect, the gateway's summary, the call and its parameters, and marks the title and the notes as the
   agent's, not verified. Answer after
   approval: `{"plan_id", "state": "approved", "expires_at", "steps": [{"step", "call", "effect", "covered"}], "note"}`
   with status `ok`. A rejected or expired plan answers `rejected` and executes nothing.
+- **Capability `plans` (#218):** the tool `capabilities` (and the system note) names the limits: `up to 10 steps;
+  autonomous budget at most N minutes, X USD and 50 turns without the user; max_attempts 1-3`, from
+  `AGW_PLAN_MAX_DURATION` and `AGW_PLAN_MAX_LLM_COST`; without limits `available: false` with `autonomous plans are not
+  configured on this instance; interactive plans up to 10 steps`. It is the last entry of the overview.
 - **Types:** `Plan = {id, chat_id, approval_id?, agent_title, session?, tool_call_id?, via, state, mode?, budget,
   auto_turns?, grant?, pause_reason?, replaces?, created_at,
   decided_at?, expires_at?, ended_at?, steps: PlanStep[]}`; `PlanStep = {idx, summary?, summary_proposed?, agent_note?, tool?, args?, method, path,

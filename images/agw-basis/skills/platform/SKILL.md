@@ -76,7 +76,7 @@ agw-platform propose-plan '{"title": "tf-flowers: split, train EfficientNet, tak
    "description": "Build the training container"},
   {"tool": "start_training", "args": {"train_container_id": "{{step2.id}}"},
    "description": "Train"},
-  {"tool": "model_from_training", "args": {"train_container_id": "{{step2.id}}"},
+  {"tool": "create_model_from_training", "args": {"train_container_id": "{{step2.id}}"},
    "description": "Take over the model"}]}'
 ```
 
@@ -86,6 +86,8 @@ agw-platform propose-plan '{"title": "tf-flowers: split, train EfficientNet, tak
 - Steps 2 and 3 start platform jobs. The gateway observes them; the next step runs only after the job ended.
   Calling it earlier is refused with the reason. End your turn while a job runs; the gateway's note at its end
   names the object, e.g. "Created training container 63; {{step2.id}} is 63". Then make the next call with that id.
+- To rename the model a plan creates, add `update_model` with `model_id "{{step4.id}}"` and only `"name"`; the tool
+  keeps the other fields.
 - If a job fails, the plan ends; the note says why. Propose a new plan for what is left.
 - Take the `train_config` keys and values from `agw-platform train-options <provider> <architecture>`; the values
   above are only an example.
@@ -175,9 +177,9 @@ online. Without it the way ends at the built image — say that and invent no de
 1. `agw-platform edge-devices` lists the devices with `arch` and `online`; pick an online device whose
    arch matches the image.
 2. `agw-platform image-status <repository> <tag>` gives the image's `entries[].id`, the `image_id`.
-3. Propose the writing steps as one plan. If the plan also builds the image, give `create-deployment
-   <device_id> <repository> <tag> <name> <host_port> --image_id "{{stepN.id}}"` of the build step;
-   otherwise use `entries[].id` from `image-status`. Then `start-deployment` with the placeholder of
+3. Propose the writing steps as one plan. If the plan also builds the image, skip step 2: give
+   `create-deployment --image_id "{{stepN.id}}"` of the build step and no repository or tag (the gateway takes
+   them from the image); otherwise give `<repository> <tag>` and `--image_id` from `image-status`. Then `start-deployment` with the placeholder of
    `create-deployment`. Only images built in this chat or from your own namespace can be deployed; host
    ports only 18100-18199; the name (without `agw-`) is free to choose.
 4. Starting runs the image with network access on the device. In a plan the start is covered by the
