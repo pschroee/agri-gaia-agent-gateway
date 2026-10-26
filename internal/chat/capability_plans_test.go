@@ -52,6 +52,7 @@ func TestCapabilityPlans(t *testing.T) {
 // A proposal with a problem of the shape (ParseProposal) and one of a step (Build) gets both in one answer.
 func TestProposePlanJoinsParseAndBuild(t *testing.T) {
 	e := setup(t)
+	withPlanPlatform(t, e)
 	ctx := store.WithSession(context.Background(), "main")
 	c, _ := e.m.Create(ctx, NewChat{})
 	slot := e.m.live[c.ID].slot.ID

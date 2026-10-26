@@ -120,7 +120,8 @@ func TestSystemNoteGatewayPaths(t *testing.T) {
 	if n := SystemNoteFor("exp:api", 4, nil, apiIndexTest); !strings.Contains(n, "- Gateway paths:") || strings.Contains(strings.ReplaceAll(n, "{{step", ""), "{{") {
 		t.Error("exp:api: gateway paths missing")
 	}
-	if strings.Contains(SystemNoteFor("api", 4, nil, apiIndexTest), "notebook_run") {
+	// The plan description names notebook_run among the plannable tools (#218); a gateway path it has not.
+	if strings.Contains(SystemNoteFor("api", 4, nil, apiIndexTest), "/_agw/notebook") {
 		t.Error("notebook tools have no gateway path in the REST binding")
 	}
 }
