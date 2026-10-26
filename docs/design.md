@@ -817,7 +817,9 @@ subagent.
    turn (**wake-up**). Every handover consisting only of notes is a wake-up, including the one at the
    end of the run (Review 3, H2): at most `AGW_BG_WAKES_PER_HOUR` (default 10) per chat and hour and
    `AGW_AUTO_TURNS_MAX` (default 5) in a row without the user, counted in `chat_turns`. Above a limit it stays
-   enqueued but held back (`hold_reason`), and the UI shows a notice (SSE `auto_held`). If the agent stops
+   enqueued but held back (`hold_reason`), and the UI shows a notice (SSE `auto_held`). A third limit is of another
+   kind: `AGW_MAX_FAILED_TOOL_CALLS` (default 20) and `AGW_MAX_FAILED_SAME_TOOL` (default 5) stop a chat after that
+   many failed tool calls in a row (0 = off; #217, `API.md`, *Failed calls in a row*). If the agent stops
    a task itself (`bg_stop`), there is no note; a stop by the user is reported as "stopped by the user".
    **Origin:** every prompt to pi is a turn in `chat_turns` with `trigger` (`user`, `queue`, `wake`)
    and `origin` (`user`, `system`, `mixed`); the messages carry `turn_id`, `trigger`, `origin` and `sources`.

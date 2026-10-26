@@ -644,6 +644,7 @@ func (m *Manager) ResumePlan(ctx context.Context, chatID, planID string) (store.
 		}
 		return fresh, &PlanStateError{State: fresh.State}
 	}
+	m.resetFailedCalls(chatID) // the user resumes: the counters of failed calls and a stop for them end (#217)
 	if p.Mode == plan.ModeAutonomous {
 		// D3.4: a step a restart failed stays failed while the plan is paused, and a failed step blocks the
 		// plan (the agent may only run its next open step). The user's resume is exactly the repeat the

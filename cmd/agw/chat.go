@@ -902,6 +902,8 @@ func holdReasonText(r string) string {
 		return "limit of wake-ups per hour reached"
 	case "auto_turns":
 		return "limit of turns without the user reached"
+	case "failed_calls":
+		return "the agent was stopped after failed tool calls"
 	}
 	return ""
 }

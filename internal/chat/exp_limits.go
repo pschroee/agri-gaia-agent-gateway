@@ -6,6 +6,7 @@ package chat
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -67,6 +68,9 @@ func (m *Manager) invalidateChatGate(chatID string) {
 func (m *Manager) chatBudget(chatID string) error {
 	if _, exp, _ := m.chatGate(chatID); exp != nil {
 		return m.experimentLimit(chatID, "before_call")
+	}
+	if s := m.FailedCallsStopped(chatID); s != "" {
+		return errors.New(s) // #217: no model call either, a subagent or a wake-up would otherwise go on
 	}
 	return m.planBudget(chatID)
 }

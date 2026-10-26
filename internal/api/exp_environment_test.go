@@ -69,3 +69,28 @@ func TestExpEnvironmentFillsIdentity(t *testing.T) {
 		t.Fatalf("instruction checksum: %s", env.InstructionSHA256)
 	}
 }
+
+// #217: the limits for failed tool calls in a row are in the config (0 = off).
+func TestConfigFailedCallLimits(t *testing.T) {
+	s := &Server{M: chat.NewManager(nil, nil, nil, nil, nil, chat.Options{MaxFailedCalls: 20, MaxFailedSameTool: 5})}
+	w := httptest.NewRecorder()
+	s.config(w, httptest.NewRequest("GET", "/api/config", nil))
+	var cfg struct {
+		Total *int `json:"max_failed_tool_calls"`
+		Same  *int `json:"max_failed_same_tool"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Total == nil || *cfg.Total != 20 || cfg.Same == nil || *cfg.Same != 5 {
+		t.Fatalf("limits: %+v", cfg)
+	}
+	s = &Server{M: chat.NewManager(nil, nil, nil, nil, nil, chat.Options{})}
+	w = httptest.NewRecorder()
+	s.config(w, httptest.NewRequest("GET", "/api/config", nil))
+	cfg.Total, cfg.Same = nil, nil
+	_ = json.Unmarshal(w.Body.Bytes(), &cfg)
+	if cfg.Total == nil || *cfg.Total != 0 || cfg.Same == nil || *cfg.Same != 0 {
+		t.Fatalf("off: %+v", cfg)
+	}
+}

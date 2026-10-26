@@ -23,15 +23,25 @@ const (
 	AbortTurnLimit = "turn_limit"
 	// AbortSubagentLimit: more subagents ran at the same time than allowed (Options.MaxSubagents).
 	AbortSubagentLimit = "subagent_limit"
+	// AbortFailedCalls: too many failed tool calls in a row (Options.MaxFailedCalls, Options.MaxFailedSameTool; #217).
+	AbortFailedCalls = "failed_calls"
 )
 
-// markTurnAborted records why the turn now running was cut short. The first reason wins (store.SetTurnAbortReason),
+// pauseReasonFor is the pause reason of an autonomous plan that a stop of the gateway pauses (plans.pause_reason).
+func pauseReasonFor(abortReason string) string {
+	if abortReason == AbortFailedCalls {
+		return "failed_calls"
+	}
+	return "abort"
+}
+
+// markTurnAborted records why the turn now running was cut short. The first reason wins (store.SetTurnAbort),
 // so a turn ended by the time limit and only afterwards moved to the trash keeps the time limit.
 //
 // Nothing is recorded when no turn runs: aborting an idle chat (or one that is only being torn down, or is already
 // moving to the trash) must not make a finished turn look stopped — that would be exactly the wrong claim this issue
 // is about (F9). "Running" is the manager's own view of a turn in flight, the same one the UI shows.
-func (m *Manager) markTurnAborted(chatID string, l *live, reason string) {
+func (m *Manager) markTurnAborted(chatID string, l *live, reason, detail string) {
 	if l == nil {
 		return
 	}
@@ -51,7 +61,7 @@ func (m *Manager) markTurnAborted(chatID string, l *live, reason string) {
 	if id == 0 {
 		return
 	}
-	if err := m.st.SetTurnAbortReason(context.Background(), id, reason); err != nil {
+	if err := m.st.SetTurnAbort(context.Background(), id, reason, detail); err != nil {
 		slog.Warn("abort reason not stored", "chat", chatID, "turn", id, "reason", reason, "err", err)
 	}
 }

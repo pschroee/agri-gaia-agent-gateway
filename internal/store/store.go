@@ -176,6 +176,8 @@ type Message struct {
 	// AbortReason: why the turn this message belongs to was aborted (issue #120, L3), from chat_turns. Empty for
 	// turns that were not aborted and for rows from before this change.
 	AbortReason string `json:"abort_reason,omitempty"`
+	// AbortDetail: what exactly stopped the turn, in a sentence (#217); empty for most reasons.
+	AbortDetail string `json:"abort_detail,omitempty"`
 }
 
 // Billing is the cost of a reply as computed by the orchestrator.
@@ -980,7 +982,7 @@ RETURNING seq`, chatID, role.Role, []byte(msg), cost, peak, turn, trigger, origi
 // L3), so a reloaded chat still shows why a step was stopped.
 func (s *Store) Messages(ctx context.Context, chatID string) ([]Message, error) {
 	rows, err := s.pool.Query(ctx, `SELECT m.seq, m.role, m.message, m.cost, m.peak, m.created_at, m.turn_id,
-       COALESCE(m.trigger,''), COALESCE(m.origin,''), m.sources, COALESCE(t.abort_reason,'')
+       COALESCE(m.trigger,''), COALESCE(m.origin,''), m.sources, COALESCE(t.abort_reason,''), COALESCE(t.abort_detail,'')
 FROM chat_messages m LEFT JOIN chat_turns t ON t.id = m.turn_id
 WHERE m.chat_id=$1 ORDER BY m.seq`, chatID)
 	if err != nil {
@@ -991,7 +993,7 @@ WHERE m.chat_id=$1 ORDER BY m.seq`, chatID)
 	for rows.Next() {
 		var m Message
 		var raw, src []byte
-		if err := rows.Scan(&m.Seq, &m.Role, &raw, &m.Cost, &m.Peak, &m.CreatedAt, &m.TurnID, &m.Trigger, &m.Origin, &src, &m.AbortReason); err != nil {
+		if err := rows.Scan(&m.Seq, &m.Role, &raw, &m.Cost, &m.Peak, &m.CreatedAt, &m.TurnID, &m.Trigger, &m.Origin, &src, &m.AbortReason, &m.AbortDetail); err != nil {
 			return nil, err
 		}
 		m.Message = raw
@@ -1601,13 +1603,14 @@ WHERE chat_id=$1 AND run_id=$2 AND stopped_by=''`, chatID, runID, by)
 	return err
 }
 
-// SetTurnAbortReason records why a turn was aborted (issue #120, L3): user, trash, time_limit, turn_limit or
-// subagent_limit. The first reason wins; a later call for the same turn changes nothing. Only the gateway calls it.
-func (s *Store) SetTurnAbortReason(ctx context.Context, turnID int64, reason string) error {
+// SetTurnAbort records why a turn was aborted (issue #120, L3): user, trash, time_limit, turn_limit, subagent_limit
+// or failed_calls, and a sentence that says what exactly happened (detail, may be empty; #217). The first reason wins
+// together with its detail; a later call for the same turn changes nothing. Only the gateway calls it.
+func (s *Store) SetTurnAbort(ctx context.Context, turnID int64, reason, detail string) error {
 	if turnID == 0 || reason == "" {
 		return nil
 	}
-	_, err := s.pool.Exec(ctx, `UPDATE chat_turns SET abort_reason=$2 WHERE id=$1 AND abort_reason IS NULL`, turnID, reason)
+	_, err := s.pool.Exec(ctx, `UPDATE chat_turns SET abort_reason=$2, abort_detail=NULLIF($3,'') WHERE id=$1 AND abort_reason IS NULL`, turnID, reason, detail)
 	return err
 }
 

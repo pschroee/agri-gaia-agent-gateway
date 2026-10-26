@@ -568,7 +568,7 @@ func onlyPassive(es []store.QueueEntry) bool {
 		return false
 	}
 	for _, e := range es {
-		if e.Kind != store.QueueSystem || (e.Note != store.NoteSubagentUser && e.Note != store.NoteSubagentStop) {
+		if e.Kind != store.QueueSystem || (e.Note != store.NoteSubagentUser && e.Note != store.NoteSubagentStop && e.Note != store.NoteFailedCalls) {
 			return false
 		}
 	}

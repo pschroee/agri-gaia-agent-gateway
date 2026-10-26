@@ -263,13 +263,14 @@ func (s *Store) ListActivity(ctx context.Context, f ActivityFilter) (ActivityPag
 	args := []any{}
 	// The gateway's own reads for approval summaries (op summary_read, issue L2/#119) belong to the platform kind
 	// (they are platform calls the gateway made), but never to the figures: activitySummary counts op = 'platform'
-	// only, so the key numbers of the evaluation stay about the agent.
-	ops := "sc.op IN ('platform', 'summary_read')"
+	// only, so the key numbers of the evaluation stay about the agent. The same holds for the gateway's stop after
+	// failed calls (op failed_calls_limit, #217).
+	ops := "sc.op IN ('platform', 'summary_read', 'failed_calls_limit')"
 	switch f.Kind {
 	case KindInternet:
 		ops = "sc.op IN ('internet', 'internet_off', 'internet_set', 'internet_end')"
 	case KindAll:
-		ops = "sc.op IN ('platform', 'summary_read', 'internet', 'internet_off', 'internet_set', 'internet_end')"
+		ops = "sc.op IN ('platform', 'summary_read', 'failed_calls_limit', 'internet', 'internet_off', 'internet_set', 'internet_end')"
 	}
 	where := append([]string{ops, "(sc.chat_id IS NOT NULL OR sc.deleted_chat IS NOT NULL)"}, activityWhere(f, "sc", activityOwner, &args)...)
 	if f.Outcome != "" {
@@ -326,9 +327,10 @@ func (s *Store) ListActivity(ctx context.Context, f ActivityFilter) (ActivityPag
 			return page, err
 		}
 		switch c.Op {
-		case "platform", "summary_read":
+		case "platform", "summary_read", "failed_calls_limit":
 			// summary_read: the gateway's own reads for a summary (issue L2/#119) are platform calls of the system,
-			// not of the agent; the frontend tells them apart by the op.
+			// not of the agent; the frontend tells them apart by the op. failed_calls_limit (#217) is the gateway's
+			// stop after too many failed calls; it is listed, but never counted.
 			c.Kind = KindPlatform
 		default:
 			c.Kind, c.Outcome, c.Internet = KindInternet, "", &in

@@ -146,6 +146,8 @@ services:
       AGW_POOL_SIZE: ${AGW_POOL_SIZE:-2} # lower than the default 4 on a development machine
       AGW_COMPACT_RESERVE_TOKENS: ${AGW_COMPACT_RESERVE_TOKENS:-16384}
       AGW_COMPACT_KEEP_RECENT_TOKENS: ${AGW_COMPACT_KEEP_RECENT_TOKENS:-20000}
+      AGW_MAX_FAILED_TOOL_CALLS: ${AGW_MAX_FAILED_TOOL_CALLS:-20}
+      AGW_MAX_FAILED_SAME_TOOL: ${AGW_MAX_FAILED_SAME_TOOL:-5}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - sockets:/run/agw

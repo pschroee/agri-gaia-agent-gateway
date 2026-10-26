@@ -59,6 +59,8 @@ const (
 	HoldAbort     = "abort"      // the user aborted
 	HoldWakeLimit = "wake_limit" // wake-ups per hour used up (BgWakesPerHour)
 	HoldAutoTurns = "auto_turns" // too many turns in a row without the user (AutoTurnsMax)
+	// HoldFailedCalls: the gateway stopped the agent after too many failed tool calls in a row (#217).
+	HoldFailedCalls = "failed_calls"
 )
 
 // AutoHeldEvent is the SSE event "auto_held": notes stay queued because a limit for turns without
@@ -502,6 +504,8 @@ func (m *Manager) dispatch(ctx context.Context, chatID string, tm *turnMeta, gen
 	if tm.trigger != store.TriggerWake {
 		// A message from the user lifts the hold (the held entries go along).
 		l.holdQueue, l.holdReason = false, ""
+		// The counters of failed calls and a stop for them end too (#217).
+		m.resetFailedCallsLocked(chatID)
 	}
 	tm.at = time.Now()
 	l.pendingTurns = append(l.pendingTurns, tm)

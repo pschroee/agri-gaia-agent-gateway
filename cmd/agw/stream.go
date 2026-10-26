@@ -247,6 +247,13 @@ func (s *streamer) handle(ctx context.Context, ev agwclient.Event, afterSend boo
 			return true, nil
 		}
 	case "chat":
+	case "failed_calls_limit":
+		var f struct {
+			Detail string `json:"detail"`
+		}
+		if json.Unmarshal(ev.Data, &f) == nil {
+			s.note("stopped by the gateway: %s", f.Detail)
+		}
 	case "resume":
 		var r resumeStep
 		if json.Unmarshal(ev.Data, &r) == nil {

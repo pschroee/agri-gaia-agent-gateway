@@ -457,6 +457,11 @@ type Env struct {
 	// AutoTurnsMax: at most this many consecutive turns without the user per chat
 	// (AGW_AUTO_TURNS_MAX, default 5, 0 = none; Review 3, H2).
 	AutoTurnsMax int
+	// MaxFailedToolCalls: a chat is stopped after this many failed tool calls in a row, of all tools
+	// together (AGW_MAX_FAILED_TOOL_CALLS, default 20, 0 = off; #217). MaxFailedSameTool: the same for the
+	// calls of one tool (AGW_MAX_FAILED_SAME_TOOL, default 5, 0 = off). Negative values count as 0.
+	MaxFailedToolCalls int
+	MaxFailedSameTool  int
 	// TrashRetentionDays: chats in the trash are deleted permanently after this many whole days
 	// (AGW_TRASH_RETENTION_DAYS; default 0 = never, negative counts as 0).
 	TrashRetentionDays int
@@ -701,6 +706,8 @@ func FromEnv() Env {
 		BgWakesPerHour:       wakes(num("AGW_BG_WAKES_PER_HOUR", 10)),
 		BgKeepAlive:          keepAlive(dur("AGW_BG_KEEPALIVE", time.Hour)),
 		AutoTurnsMax:         wakes(num("AGW_AUTO_TURNS_MAX", 5)),
+		MaxFailedToolCalls:   max(0, num("AGW_MAX_FAILED_TOOL_CALLS", 20)),
+		MaxFailedSameTool:    max(0, num("AGW_MAX_FAILED_SAME_TOOL", 5)),
 		TrashRetentionDays:   max(0, num("AGW_TRASH_RETENTION_DAYS", 0)),
 		PlatformAPIURL:       str("AGW_PLATFORM_API_URL", ""),
 		PlatformTokenURL:     str("AGW_PLATFORM_TOKEN_URL", ""),

@@ -55,7 +55,7 @@ func TestChatBgAndStop(t *testing.T) {
 
 // Review 3 (H2): the reason for holding back is shown.
 func TestHoldReasonText(t *testing.T) {
-	for r, want := range map[string]string{"abort": "abort", "wake_limit": "wake-ups", "auto_turns": "without the user", "": ""} {
+	for r, want := range map[string]string{"abort": "abort", "wake_limit": "wake-ups", "auto_turns": "without the user", "failed_calls": "failed tool calls", "": ""} {
 		if got := holdReasonText(r); (want == "") != (got == "") || !strings.Contains(got, want) {
 			t.Errorf("%q: %q", r, got)
 		}

@@ -468,10 +468,13 @@ ALTER TABLE artifacts ADD COLUMN IF NOT EXISTS sent_at timestamptz;
 -- (the chat's own abort, the trash). Only the gateway writes it; UpsertSubagentRun never touches it.
 ALTER TABLE subagent_runs ADD COLUMN IF NOT EXISTS stopped_by text NOT NULL DEFAULT '';
 
--- Why a turn was aborted (issue #120, L3): user, trash, time_limit, turn_limit, subagent_limit. The first reason
+-- Why a turn was aborted (issue #120, L3): user, trash, time_limit, turn_limit, subagent_limit, failed_calls (#217). The first reason
 -- wins (a turn ended by the time limit and then moved to the trash keeps the time limit). NULL for turns that were
 -- not aborted and for rows from before this change.
 ALTER TABLE chat_turns ADD COLUMN IF NOT EXISTS abort_reason text;
+-- What exactly stopped the turn, in a sentence (#217: failed_calls names the tool, the count and the last error).
+-- Set together with abort_reason, the first one wins. NULL when there is nothing to add.
+ALTER TABLE chat_turns ADD COLUMN IF NOT EXISTS abort_detail text;
 
 -- Experiment chats (X0): binding and protection level per chat, set when the chat is created. NULL for product chats.
 ALTER TABLE chats ADD COLUMN IF NOT EXISTS experiment jsonb;

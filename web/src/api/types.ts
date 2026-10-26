@@ -163,7 +163,7 @@ export type Chat = {
   background_running?: number
 }
 
-export type HoldReason = "abort" | "wake_limit" | "auto_turns"
+export type HoldReason = "abort" | "wake_limit" | "auto_turns" | "failed_calls"
 
 /** Trigger of a turn: the user, at the end of a run with a message of the user, without the user (wake-up). */
 export type TurnTrigger = "user" | "queue" | "wake"

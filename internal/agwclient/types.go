@@ -60,6 +60,10 @@ type Config struct {
 
 	// MaxSubagents: subagents at the same time per chat, fixed for the service.
 	MaxSubagents int `json:"max_subagents"`
+	// MaxFailedToolCalls and MaxFailedSameTool: the chat is stopped after this many failed tool calls in a row
+	// (all tools; one tool); 0 = off (#217).
+	MaxFailedToolCalls int `json:"max_failed_tool_calls"`
+	MaxFailedSameTool  int `json:"max_failed_same_tool"`
 
 	// Toolsets: the bindings of every new chat (AGW_TOOLSETS); empty from gateways before issue #29.
 	Toolsets *Variant `json:"toolsets,omitempty"`
@@ -145,7 +149,7 @@ type Chat struct {
 	Resuming         bool            `json:"resuming"`              // is being resumed in a fresh sandbox right now
 	Queued           int             `json:"queued"`                // queued messages not yet handed over
 	QueueHeld        bool            `json:"queue_held"`            // queued items go out only with the next message
-	HoldReason       string          `json:"hold_reason,omitempty"` // abort, wake_limit, auto_turns
+	HoldReason       string          `json:"hold_reason,omitempty"` // abort, wake_limit, auto_turns, failed_calls
 	RunningSince     string          `json:"running_since,omitempty"`
 	// BackgroundRunning: running background tasks (bash with run_in_background).
 	BackgroundRunning int `json:"background_running"`
