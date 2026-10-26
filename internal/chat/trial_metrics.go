@@ -358,7 +358,11 @@ func finishSingleTrial(ctx context.Context, m *Manager, j store.WatchJob, p watc
 	if m.st == nil {
 		return
 	}
-	trialJobs.Delete(j.ID)
+	if _, ok := trialPath(j.Kind); ok {
+		// Only the kinds the hook marks; a job of another kind keeps its mark until its note was decided
+		// (noteJobEnd runs after this hook).
+		trialJobs.Delete(j.ID)
+	}
 	t, err := m.st.TrialByJob(ctx, j.ID)
 	if err != nil {
 		return

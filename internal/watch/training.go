@@ -192,12 +192,16 @@ func logShowsError(tail string) bool {
 
 var logErrorPattern = regexp.MustCompile(`(?i)\b(error|traceback|exception|failed)\b`)
 
+// errorLinePattern also finds the error names of Python (RuntimeError, ValueError, KeyError), which the word
+// boundary of logErrorPattern misses: the line with the exception says more than the line "Traceback …" above it.
+var errorLinePattern = regexp.MustCompile(`(?i)(error|exception)\b|\b(traceback|failed)\b`)
+
 // LastErrorLine is the last line of the log tail that names an error (issue #227), trimmed and clipped; empty when no
 // line does.
 func LastErrorLine(tail string) string {
 	lines := strings.Split(tail, "\n")
 	for i := len(lines) - 1; i >= 0; i-- {
-		if l := strings.TrimSpace(lines[i]); l != "" && logErrorPattern.MatchString(l) {
+		if l := strings.TrimSpace(lines[i]); l != "" && errorLinePattern.MatchString(l) {
 			return ClipRunes(l, 200)
 		}
 	}

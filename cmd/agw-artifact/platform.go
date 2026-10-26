@@ -232,7 +232,7 @@ func toolUsage(w io.Writer, t platform.Tool) {
 // plan asks for none). A reading call says nothing (issue #225).
 func waitLine(tool platform.Tool, in map[string]any) string {
 	switch {
-	case tool.Name == "propose-plan":
+	case tool.Name == "propose_plan":
 		return "Proposing the plan. The gateway checks it first; only a valid plan is shown to the user for approval …"
 	case tool.Write || (tool.Name == "request" && strings.ToUpper(fmt.Sprint(in["method"])) != "GET"):
 		return "Writing call. The gateway checks it and asks the user where it needs a confirmation …"
