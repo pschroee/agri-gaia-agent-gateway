@@ -233,3 +233,81 @@ func TestUnknownArgumentListsParams(t *testing.T) {
 		t.Errorf("got  %s\nwant %s", err.Error(), want)
 	}
 }
+
+const uploadModelStep = `{"tool":"upload_model","args":{"name":"m","description":"d","format":"onnx","model_file":"/workspace/m.onnx"}}`
+
+// A step that does not build no longer hides the uploads of the others: the files of step 1 are still listed.
+func TestFileRefsSkipsBrokenStep(t *testing.T) {
+	raw := []byte(`{"title":"t","steps":[` + uploadModelStep + `,{"tool":"nonsense_tool"},{"method":"POST","path":"/datasets","bogus":1},"text"]}`)
+	refs, err := FileRefs(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(refs) != 1 || len(refs[1]) != 1 || refs[1][0].Path != "/workspace/m.onnx" {
+		t.Fatalf("file refs: %+v", refs)
+	}
+	if _, err := FileRefs([]byte(`not json`)); err == nil {
+		t.Fatal("a proposal that cannot be read at all must be an error")
+	}
+}
+
+// The pins are written on the raw text: a step that does not decode stays as it is, the agent's own values are
+// dropped, a read error is recorded as file_error.
+func TestSetFilePinsRawKeepsBadStep(t *testing.T) {
+	const h = "3333333333333333333333333333333333333333333333333333333333333333"
+	raw := []byte(`{"title":"t","steps":[` + uploadModelStep + `,{"method":"POST","path":"/datasets","bogus":1,"file_sha256":["` + h + `"]},` +
+		`{"tool":"upload_model","args":{"name":"n","description":"d","format":"onnx","model_file":"/workspace/n.onnx"},"file_bytes":[9]},"text"]}`)
+	out, err := SetFilePins(raw, map[int][]FilePin{1: {{SHA256: h, Bytes: 7}}}, map[int]string{3: "/workspace/n.onnx: no such file"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Steps []json.RawMessage `json:"steps"`
+	}
+	if err := json.Unmarshal(out, &got); err != nil || len(got.Steps) != 4 {
+		t.Fatalf("out: %s %v", out, err)
+	}
+	var s1, s2, s3 map[string]json.RawMessage
+	_ = json.Unmarshal(got.Steps[0], &s1)
+	_ = json.Unmarshal(got.Steps[1], &s2)
+	_ = json.Unmarshal(got.Steps[2], &s3)
+	if string(s1["file_sha256"]) != `["`+h+`"]` || string(s1["file_bytes"]) != `[7]` {
+		t.Errorf("step 1 pins: %s", got.Steps[0])
+	}
+	if _, ok := s2["bogus"]; !ok {
+		t.Errorf("a step with an unknown field must stay as it is: %s", got.Steps[1])
+	}
+	if _, ok := s2["file_sha256"]; ok {
+		t.Errorf("the agent's own sum must be dropped: %s", got.Steps[1])
+	}
+	if _, ok := s3["file_bytes"]; ok || string(s3["file_error"]) != `"/workspace/n.onnx: no such file"` {
+		t.Errorf("step 3: %s", got.Steps[2])
+	}
+	if string(got.Steps[3]) != `"text"` {
+		t.Errorf("a step that is text stays: %s", got.Steps[3])
+	}
+	// JSON text of the plan is unpacked.
+	b, _ := json.Marshal(string(raw))
+	if out, err := SetFilePins(b, nil, nil); err != nil || !strings.HasPrefix(string(out), `{"steps":[`) {
+		t.Errorf("text plan: %s %v", out, err)
+	}
+	// Duplicate keys are refused before anything is rewritten.
+	if _, err := SetFilePins([]byte(`{"title":"a","title":"b","steps":[]}`), nil, nil); err == nil {
+		t.Error("duplicate key accepted")
+	}
+}
+
+// A step whose files could not be read is reported with the reason, not with a count of hashes.
+func TestBuildFileErrorReported(t *testing.T) {
+	raw := `{"title":"t","steps":[{"tool":"upload_model","args":{"name":"m","description":"d","format":"onnx","model_file":"/workspace/m.onnx"},"file_error":"/workspace/m.onnx: no such file"},{"tool":"nonsense_tool"}]}`
+	ps, err := problemsOf(t, raw)
+	if err == nil || len(ps) != 2 {
+		t.Fatalf("problems: %v", err)
+	}
+	if ps[0].Step != 1 || ps[0].Msg != "/workspace/m.onnx: no such file" || strings.Contains(err.Error(), "file_sha256") {
+		t.Errorf("first: %+v in %v", ps[0], err)
+	}
+	if ps[1].Step != 2 || !strings.Contains(ps[1].Msg, "unknown tool") {
+		t.Errorf("second: %+v", ps[1])
+	}
+}

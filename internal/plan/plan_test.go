@@ -211,7 +211,7 @@ func TestFileRefsAndSetFilePins(t *testing.T) {
 	if len(refs) != 1 || len(refs[1]) != 1 || refs[1][0].Path != "/workspace/m.onnx" {
 		t.Fatalf("file refs: %+v", refs)
 	}
-	out, err := SetFilePins(raw, map[int][]FilePin{1: {{SHA256: h, Bytes: 7}}})
+	out, err := SetFilePins(raw, map[int][]FilePin{1: {{SHA256: h, Bytes: 7}}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

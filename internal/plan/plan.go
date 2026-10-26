@@ -116,7 +116,7 @@ type Budget struct {
 }
 
 // StepSpec is one step as the agent writes it: either a platform tool with its arguments, or a
-// raw call (method, path, query, body). FileSHA256 and FileBytes are set by the socket, not by the agent.
+// raw call (method, path, query, body). FileSHA256, FileBytes and FileError are set by the socket, not by the agent.
 type StepSpec struct {
 	Tool        string            `json:"tool,omitempty"`
 	Args        json.RawMessage   `json:"args,omitempty"`
@@ -127,6 +127,8 @@ type StepSpec struct {
 	Description string            `json:"description,omitempty"`
 	FileSHA256  []string          `json:"file_sha256,omitempty"`
 	FileBytes   []int64           `json:"file_bytes,omitempty"`
+	// FileError: the socket could not read the files of this step (written by the socket, issue #218).
+	FileError string `json:"file_error,omitempty"`
 	// MaxAttempts: how often an autonomous plan may repeat this step after a failure (1 to 3, A-E1).
 	MaxAttempts int `json:"max_attempts,omitempty"`
 }
@@ -386,6 +388,9 @@ func BuildStep(spec StepSpec, idx int) (store.PlanStep, platform.Request, []int,
 	if req.Path == planPath || req.Path == platform.RightsPath {
 		return fail(fmt.Errorf("%s cannot be a plan step", req.Path))
 	}
+	if spec.FileError != "" {
+		return fail(errors.New(spec.FileError))
+	}
 	if len(spec.FileSHA256) != len(req.Files) {
 		return fail(fmt.Errorf("%d file_sha256 for %d uploads", len(spec.FileSHA256), len(req.Files)))
 	}
@@ -616,17 +621,25 @@ func SameShape(st store.PlanStep, tool string, r platform.Request) bool {
 }
 
 // FileRefs returns the uploads of every step (by step number, from 1) so that the socket can
-// read them and pin their SHA-256.
+// read them and pin their SHA-256. A step that does not read or does not build is left out: Build reports
+// it, and the files of the others are pinned all the same (issue #218). The error says only that the
+// proposal cannot be read at all.
 func FileRefs(raw []byte) (map[int][]platform.File, error) {
-	p, err := parseProposal(raw)
-	if err != nil {
-		return nil, err
+	p, probs := parseProposal(raw)
+	if len(p.Steps) == 0 {
+		if err := probs.err(); err != nil {
+			return nil, err
+		}
+		return nil, errors.New("plan has no steps")
 	}
 	out := map[int][]platform.File{}
 	for i, s := range p.Steps {
+		if p.invalid[i+1] {
+			continue
+		}
 		req, _, err := StepRequest(s)
 		if err != nil {
-			return nil, fmt.Errorf("step %d: %w", i+1, err)
+			continue
 		}
 		if len(req.Files) > 0 {
 			out[i+1] = req.Files
@@ -641,21 +654,72 @@ type FilePin struct {
 	Bytes  int64
 }
 
-// SetFilePins writes the pinned SHA-256 and size of each step's uploads into the proposal and drops every
-// value the agent wrote itself.
-func SetFilePins(raw []byte, pins map[int][]FilePin) ([]byte, error) {
-	p, err := parseProposal(raw)
+// stepFileFields are the fields of a step that only the socket writes.
+var stepFileFields = []string{"file_sha256", "file_bytes", "file_error"}
+
+// SetFilePins writes the pinned SHA-256 and size of each step's uploads into the proposal, and the reason
+// why a step's files could not be read (fileErrs, issue #218), and drops every value the agent wrote itself.
+// It works on the raw text of the steps, so a step that does not read is passed on unchanged and Build
+// reports it; JSON text of a plan, its steps or a step is unpacked first.
+func SetFilePins(raw []byte, pins map[int][]FilePin, fileErrs map[int]string) ([]byte, error) {
+	raw = unwrapText(raw)
+	if _, err := Canonical(raw); err != nil {
+		return nil, fmt.Errorf("plan: %w", err)
+	}
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &top); err != nil || top == nil {
+		return nil, errors.New("plan is not a JSON object")
+	}
+	var steps []json.RawMessage
+	if err := json.Unmarshal(top["steps"], &steps); err != nil {
+		return nil, errors.New("plan has no steps array")
+	}
+	for i := range steps {
+		var m map[string]json.RawMessage
+		if json.Unmarshal(steps[i], &m) != nil || m == nil {
+			continue
+		}
+		for _, f := range stepFileFields {
+			delete(m, f)
+		}
+		var sums []string
+		var sizes []int64
+		for _, pin := range pins[i+1] {
+			sums = append(sums, pin.SHA256)
+			sizes = append(sizes, pin.Bytes)
+		}
+		set := func(key string, v any) error {
+			b, err := json.Marshal(v)
+			if err == nil {
+				m[key] = b
+			}
+			return err
+		}
+		if len(sums) > 0 {
+			if err := set("file_sha256", sums); err != nil {
+				return nil, err
+			}
+			if err := set("file_bytes", sizes); err != nil {
+				return nil, err
+			}
+		}
+		if msg := fileErrs[i+1]; msg != "" {
+			if err := set("file_error", msg); err != nil {
+				return nil, err
+			}
+		}
+		b, err := json.Marshal(m)
+		if err != nil {
+			return nil, err
+		}
+		steps[i] = b
+	}
+	b, err := json.Marshal(steps)
 	if err != nil {
 		return nil, err
 	}
-	for i := range p.Steps {
-		p.Steps[i].FileSHA256, p.Steps[i].FileBytes = nil, nil
-		for _, pin := range pins[i+1] {
-			p.Steps[i].FileSHA256 = append(p.Steps[i].FileSHA256, pin.SHA256)
-			p.Steps[i].FileBytes = append(p.Steps[i].FileBytes, pin.Bytes)
-		}
-	}
-	return json.Marshal(p)
+	top["steps"] = b
+	return json.Marshal(top)
 }
 
 // Matches tells whether a live call is exactly the step: method, path, query, body (canonical
