@@ -5,6 +5,7 @@
 package worker
 
 import (
+	"encoding/json"
 	"regexp"
 	"strings"
 	"testing"
@@ -94,9 +95,40 @@ func TestDockerfileChromiumOffline(t *testing.T) {
 			t.Errorf("netcheck call %d lacks %q: %s", n+1, w, run[n])
 		}
 	}
+	// Hosts that end at the dead port (H1, measured in Chromium 155): update.googleapis.com on every start; MathJax
+	// and Debian's default search only from kaleido's page. Nothing else may be allowed.
 	for n, c := range run {
-		if has := strings.Contains(c, "--allow cdnjs.cloudflare.com"); has != (n == 3) {
-			t.Errorf("--allow cdnjs.cloudflare.com must be on the plotly call only (call %d)", n+1)
+		m := regexp.MustCompile(`--allow (\S+) --`).FindStringSubmatch(c)
+		if m == nil {
+			t.Errorf("netcheck call %d has no --allow list: %s", n+1, c)
+			continue
+		}
+		want := "update.googleapis.com"
+		if n == 3 {
+			want = "update.googleapis.com,cdnjs.cloudflare.com,start.duckduckgo.com"
+		}
+		if m[1] != want {
+			t.Errorf("netcheck call %d allows %q, want %q", n+1, m[1], want)
+		}
+	}
+	pol := strings.Index(exec, "COPY images/agw-basis/chromium/agw-offline.json /etc/chromium/policies/managed/agw-offline.json")
+	if pol < inst {
+		t.Error("the Chromium policy must be copied after Chromium is installed")
+	}
+}
+
+func TestChromiumPolicy(t *testing.T) {
+	var p map[string]any
+	if err := json.Unmarshal([]byte(repoFile(t, "images/agw-basis/chromium/agw-offline.json")), &p); err != nil {
+		t.Fatalf("agw-offline.json: %v", err)
+	}
+	want := map[string]any{
+		"ComponentUpdatesEnabled": false, "BrowserSignin": float64(0), "SyncDisabled": true,
+		"MetricsReportingEnabled": false, "BrowserNetworkTimeQueriesEnabled": false,
+	}
+	for k, v := range want {
+		if p[k] != v {
+			t.Errorf("policy %s = %v, want %v", k, p[k], v)
 		}
 	}
 }
