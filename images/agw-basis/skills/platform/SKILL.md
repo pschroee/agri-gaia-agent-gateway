@@ -175,13 +175,15 @@ online. Without it the way ends at the built image — say that and invent no de
 1. `agw-platform edge-devices` lists the devices with `arch` and `online`; pick an online device whose
    arch matches the image.
 2. `agw-platform image-status <repository> <tag>` gives the image's `entries[].id`, the `image_id`.
-3. Propose both writing steps as **one plan** — `create-deployment <device_id> <repository> <tag>
-   <name> <host_port> --image_id <id>`, then `start-deployment` with `{{step1.id}}` — or run them one by
-   one. Only images built in this chat or from your own namespace can be deployed; host ports only
-   18100-18199; the name (without `agw-`) is free to choose.
-4. The start asks **on its own** (compute, also inside a plan): the device pulls the image (several GB
-   the first time) and runs the container with network access, its ports open on every interface of the
-   device. Nothing runs before that.
+3. Propose the writing steps as one plan. If the plan also builds the image, give `create-deployment
+   <device_id> <repository> <tag> <name> <host_port> --image_id "{{stepN.id}}"` of the build step;
+   otherwise use `entries[].id` from `image-status`. Then `start-deployment` with the placeholder of
+   `create-deployment`. Only images built in this chat or from your own namespace can be deployed; host
+   ports only 18100-18199; the name (without `agw-`) is free to choose.
+4. Starting runs the image with network access on the device. In a plan the start is covered by the
+   plan's approval only when the image comes from a build step of the same plan (or of the plan named in
+   "replaces"); otherwise it asks on its own. The device pulls the image (several GB the first time);
+   its ports open on every interface of the device. Nothing runs before that.
 5. Follow it with `agw-platform deployment-status <deployment_id> --task_id <id>`; `deployed`, or a
    `hint`. After a failed start do not start again — create a new deployment with another name and port
    and tell the user that the leftover container needs manual removal.

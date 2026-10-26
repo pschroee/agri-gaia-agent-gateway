@@ -299,6 +299,8 @@ refer to this repository.
 - **`plan_steps.confirm_each` exists because of this:** `delegation.Access.ConfirmEach` is a trait of the route, and
   without the column a plan loaded from the database treated such a step as covered — it would have run the deploy of a
   container deployment without asking. Whoever adds a field to a plan step re-checks `scanPlanStep` against `BuildStep`.
+  `store.StepCovered` is the one rule (#219); `plan.Build`, `plan.ImageOrigins` and `scanPlanStep` call it. A deployment
+  start on a confirm-each route is covered only when `ImageOrigin` is set, and only `plan.ImageOrigins` sets it.
 - **The answer of a call that starts a watched job tells the agent to end its turn** (`Result.Note`, set in
   `PlatformCall` from `watchNote`): otherwise the agent holds its turn open and polls `/tasks/<id>` itself, which keeps
   the sandbox alive and the chat `active` for the whole job — seen live on 16.10.2026, with no wake-up entry in the log

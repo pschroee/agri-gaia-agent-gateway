@@ -539,7 +539,7 @@ func platformsText(entries []imageEntry) string {
 var startDeploymentTool = Tool{
 	Name: "start_deployment", CLI: "start-deployment",
 	Desc: "Starts a deployment created in this chat: the edge device pulls the image (several GB the first time) and starts the container with network access. " +
-		"Effect compute: the user approves every start, also inside a plan, and it counts against the compute calls of the chat. " +
+		"Effect compute: the user approves every start on its own, except as a step of a plan that also builds the image (build_inference_image, then create_deployment with image_id \"{{stepN.id}}\", then start_deployment); it counts against the compute calls of the chat. " +
 		"Response: the task (/tasks/<id>); follow it with {{tool:deployment_status}}.",
 	Write:  true,
 	Params: []Param{{Name: "deployment_id", Type: "integer", Desc: "id of the deployment ({{tool:list_deployments}} or the answer of {{tool:create_deployment}})", Required: true}},
