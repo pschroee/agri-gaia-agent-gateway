@@ -410,3 +410,65 @@ func TestEdgeToolsInAllBindings(t *testing.T) {
 		}
 	}
 }
+
+// With only image_id (a plan that builds the image cannot know the repository, issue #218) the tool reads the
+// image list, takes repository and tag of the entry with that id, and goes on with every check as before.
+func TestCreateDeploymentImageIDOnly(t *testing.T) {
+	list := Result{Status: "ok", HTTPStatus: 200, Body: `[` +
+		`{"id":4,"repository":"agent-test/other","tag":"v2","platform":"linux/amd64","exposed_ports":[]},` +
+		`{"id":5,"repository":"agent-test/mnist-triton","tag":"v1","platform":"linux/amd64","exposed_ports":[]}]`}
+	created := Result{Status: "ok", HTTPStatus: 201, Body: `{"id":9,"name":"agw-mnist","status":"created"}`}
+	answers := map[string]Result{
+		"GET /edge-devices":                                {Status: "ok", HTTPStatus: 200, Body: oneOnlineDevice()},
+		"GET /container-images":                            list,
+		"GET /container-images/agent-test/mnist-triton:v1": {Status: "ok", HTTPStatus: 200, Body: imageListJSON(5, "agent-test/mnist-triton", "v1", "linux/amd64")},
+		"POST /container-deployments":                      created,
+	}
+	res, refused, calls := runEdgeTool(t, "create_deployment", `{"device_id":1,"name":"mnist","host_port":18100,"image_id":5}`, answers)
+	if refused != "" || res.Status != "ok" {
+		t.Fatalf("image_id only: %+v refused=%q", res, refused)
+	}
+	if !reachedCall(calls, "GET /container-images/agent-test/mnist-triton:v1") {
+		t.Fatalf("the image of the entry was not checked: %v", calls)
+	}
+	post := ""
+	for _, c := range calls {
+		if strings.HasPrefix(c, "POST /container-deployments") {
+			post = c
+		}
+	}
+	if !strings.Contains(post, `"container_image_id":5`) || !strings.Contains(post, `"name":"agw-mnist"`) {
+		t.Fatalf("body: %s", post)
+	}
+	// An id that is not in the list is refused before anything is written.
+	res, refused, calls = runEdgeTool(t, "create_deployment", `{"device_id":1,"name":"mnist","host_port":18100,"image_id":99}`, answers)
+	if !strings.Contains(refused, "image 99 is not in the platform's image list") || res.Status != "error" || reachedCall(calls, "POST /container-deployments") {
+		t.Fatalf("unknown id: %+v refused=%q calls=%v", res, refused, calls)
+	}
+	// Repository and tag together with the id keep working: the id has to belong to the image.
+	_, refused, _ = runEdgeTool(t, "create_deployment", `{"device_id":1,"repository":"agent-test/mnist-triton","tag":"v1","name":"mnist","host_port":18100,"image_id":4}`, answers)
+	if !strings.Contains(refused, "image_id 4 does not belong") {
+		t.Fatalf("id of another image: %q", refused)
+	}
+}
+
+func TestCreateDeploymentNeedsRepoOrImageID(t *testing.T) {
+	tool := mustLookup(t, "create_deployment")
+	for name, args := range map[string]string{
+		"nothing":         `{"device_id":1,"name":"mnist","host_port":18100}`,
+		"repository only": `{"device_id":1,"repository":"agent-test/mnist-triton","name":"mnist","host_port":18100}`,
+		"tag only":        `{"device_id":1,"tag":"v1","name":"mnist","host_port":18100}`,
+	} {
+		if _, err := tool.Build(json.RawMessage(args)); err == nil || !strings.Contains(err.Error(), "give repository and tag, or image_id") {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	for name, args := range map[string]string{
+		"image_id only":      `{"device_id":1,"name":"mnist","host_port":18100,"image_id":5}`,
+		"repository and tag": edgeArgs,
+	} {
+		if _, err := tool.Build(json.RawMessage(args)); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+}

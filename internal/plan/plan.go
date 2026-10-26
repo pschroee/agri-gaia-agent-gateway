@@ -565,7 +565,7 @@ func Build(p Proposal, classify Classify) ([]store.PlanStep, error) {
 		built[idx] = st
 		out = append(out, st)
 	}
-	checkImageSteps(p.Steps, built, &probs)
+	checkImageSteps(built, &probs)
 	if len(probs) > 0 {
 		return out, probs
 	}
