@@ -203,7 +203,8 @@ var splitDataset = Tool{
 		"(train_share is a whole percentage — 50, 60, 70, 80 or 90, default 70 — of the images per class that go into a new " +
 		"dataset, by default named <dataset>-train; the rest is kept back and the gateway alone decides which). Train on the training dataset afterwards: only then can {{tool:assess_model}} measure " +
 		"the model on images it did not see. Needs approval: it creates a dataset and downloads the source, which also " +
-		"syncs its CVAT annotations. The answer names both counts.",
+		"syncs its CVAT annotations. The answer names both counts and check_images (the validation and held-out images the later check will find; it needs at least 5 and 20); " +
+		"when they are too few it carries check_warning and, if a smaller train_share would do, suggested_train_share.",
 	Write: true,
 	Params: []Param{
 		{Name: "dataset_id", Type: "integer", Desc: "id of the annotated classification dataset (one tag per image)", Required: true},
