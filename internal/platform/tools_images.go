@@ -21,9 +21,6 @@ func init() {
 	Tools = append(Tools, listTemplates, importTemplate, validateModel, buildInferenceImage, containerImageStatus)
 }
 
-// AllowedTemplateGitURL is the one repository the agent may import a template from (exact match).
-const AllowedTemplateGitURL = "https://github.com/hsos-ai-lab/agri-gaia-inference-container-template"
-
 // Checks of the arguments that go into paths and bodies; the platform accepts more, these are the
 // fixed limits of this binding.
 var (
@@ -50,18 +47,51 @@ type inferenceTemplate struct {
 
 var listTemplates = Tool{
 	Name: "list_templates", CLI: "templates",
-	Desc:   "Lists the inference container templates installed on the platform (id, name, source, git_url, git_ref). {{tool:build_inference_image}} needs the id of a template; {{tool:import_template}} fetches the official one.",
+	Desc:   "Lists the inference container templates installed on the platform (id, name, source, git_url, git_ref, runtime). runtime is triton, ovms or other. {{tool:build_inference_image}} needs the id of a template; {{tool:import_template}} fetches an official one.",
 	Params: pagingParams,
 	build:  get(templatesPath),
+	steps:  listTemplatesSteps,
+}
+
+// listTemplatesSteps passes the platform's list through and adds the runtime of each template (triton, ovms or other).
+// An answer that is no JSON array goes through unchanged.
+func listTemplatesSteps(ctx context.Context, _ Args, final Request, do Doer) (Result, string, error) {
+	final.Full = true
+	res, err := do(ctx, final)
+	if err != nil || res.Status != "ok" || res.HTTPStatus < 200 || res.HTTPStatus >= 300 {
+		return res, "", err
+	}
+	var list []map[string]any
+	if json.Unmarshal([]byte(res.Body), &list) != nil {
+		return res, "", nil
+	}
+	for _, t := range list {
+		url, _ := t["git_url"].(string)
+		ref, _ := t["git_ref"].(string)
+		rt := TemplateRuntime(url, ref)
+		if rt == "" {
+			rt = "other"
+		}
+		t["runtime"] = rt
+	}
+	b, err := json.Marshal(list)
+	if err != nil {
+		return res, "", nil
+	}
+	res.Body = string(b)
+	return res, "", nil
 }
 
 var importTemplate = Tool{
 	Name: "import_template", CLI: "import-template",
-	Desc: "Imports the official inference container template from its one allowed repository (" + AllowedTemplateGitURL + "; branch triton holds the Triton template, main none). " +
-		"Refuses if a template from that URL and branch is installed already. Other repositories, access tokens, changing and deleting templates are blocked. Writes; the user must approve.",
+	Desc: "Imports an official inference container template (writes; the user must approve). " +
+		"runtime triton: NVIDIA Triton from " + templateURL(RuntimeTriton) + ", branch " + templateRef(RuntimeTriton) + "; " +
+		"runtime ovms: OpenVINO Model Server (CPU, amd64) from " + templateURL(RuntimeOVMS) + ", branch " + templateRef(RuntimeOVMS) + ". " +
+		"Without runtime the setup's default. Refuses if that template is installed already. Other repositories, access tokens, changing and deleting templates are blocked.",
 	Params: []Param{
-		{Name: "name", Type: "string", Desc: "name of the new template, e.g. triton-inference", Required: true},
-		{Name: "git_ref", Type: "string", Desc: "branch or tag of the template repository (default triton)"},
+		{Name: "name", Type: "string", Desc: "name of the new template, e.g. triton-inference or ovms-inference", Required: true},
+		runtimeParam,
+		{Name: "git_ref", Type: "string", Desc: "branch of the template repository; must be the branch of the runtime (default: that branch)"},
 	},
 	Write: true,
 	build: func(a Args) (Request, error) {
@@ -72,38 +102,49 @@ var importTemplate = Tool{
 		if !templateNameRe.MatchString(name) {
 			return Request{}, fmt.Errorf("name %q is not valid (letters, digits, space, _ . -; at most 64 characters)", name)
 		}
-		ref, err := gitRef(a)
+		rt, src, err := importSource(a)
 		if err != nil {
 			return Request{}, err
 		}
 		return Request{Method: http.MethodPost, Path: templatesPath + "/create/git", Form: map[string][]string{
 			"name":        {name},
-			"description": {"Imported by the agent from " + AllowedTemplateGitURL + " (" + ref + ")"},
-			"git_url":     {AllowedTemplateGitURL},
-			"git_ref":     {ref},
+			"description": {"Imported by the agent from " + src.GitURL + " (" + src.GitRef + ", runtime " + rt + ")"},
+			"git_url":     {src.GitURL},
+			"git_ref":     {src.GitRef},
 		}}, nil
 	},
 	steps: importTemplateSteps,
 }
 
-// gitRef reads the branch of the template repository; triton is the default.
-func gitRef(a Args) (string, error) {
+func templateURL(rt string) string { s, _ := TemplateSourceOf(rt); return s.GitURL }
+func templateRef(rt string) string { s, _ := TemplateSourceOf(rt); return s.GitRef }
+
+// importSource reads runtime and git_ref of an import and answers the source to import from. A git_ref must be
+// the branch of the runtime, so that the agent cannot bring in other branches of the repositories.
+func importSource(a Args) (rt string, src TemplateSource, err error) {
+	rt, _, err = runtimeArg(a)
+	if err != nil {
+		return "", TemplateSource{}, err
+	}
+	src, _ = TemplateSourceOf(rt)
 	ref, ok, err := a.str("git_ref")
 	if err != nil {
-		return "", err
+		return "", TemplateSource{}, err
 	}
-	if !ok {
-		return "triton", nil
+	if ok {
+		if !gitRefRe.MatchString(ref) || strings.Contains(ref, "..") {
+			return "", TemplateSource{}, fmt.Errorf("git_ref %q is not valid", ref)
+		}
+		if ref != src.GitRef {
+			return "", TemplateSource{}, fmt.Errorf("git_ref %q: the %s template lives on branch %s", ref, rt, src.GitRef)
+		}
 	}
-	if !gitRefRe.MatchString(ref) || strings.Contains(ref, "..") {
-		return "", fmt.Errorf("git_ref %q is not valid", ref)
-	}
-	return ref, nil
+	return rt, src, nil
 }
 
 // importTemplateSteps refuses a second copy of the same template; otherwise it sends the import.
 func importTemplateSteps(ctx context.Context, a Args, final Request, do Doer) (Result, string, error) {
-	ref, err := gitRef(a)
+	_, src, err := importSource(a)
 	if err != nil {
 		return Refuse("%s", err.Error())
 	}
@@ -112,7 +153,7 @@ func importTemplateSteps(ctx context.Context, a Args, final Request, do Doer) (R
 		return res, "", err
 	}
 	for _, t := range installed {
-		if t.GitURL == AllowedTemplateGitURL && t.GitRef == ref {
+		if t.GitURL == src.GitURL && t.GitRef == src.GitRef {
 			return Refuse("template %s (id %s) is already installed from %s at %s; use its id", t.Name, t.ID, t.GitURL, t.GitRef)
 		}
 	}
@@ -122,7 +163,7 @@ func importTemplateSteps(ctx context.Context, a Args, final Request, do Doer) (R
 
 var validateModel = Tool{
 	Name: "validate_model", CLI: "validate-model",
-	Desc: "Checks whether a model can become an inference container (reads only): ONNX format, tensor metadata, a name that Triton can address over HTTP, output labels. " +
+	Desc: "Checks whether a model can become an inference container (reads only): ONNX format, tensor metadata, a name that the inference server can address over HTTP, output labels. " +
 		"The answer has ready, problems and warnings. {{tool:build_inference_image}} runs the same checks before it builds.",
 	Params: []Param{{Name: "model_id", Type: "integer", Desc: "id of the model ({{tool:list_models}})", Required: true}},
 	build:  byID(http.MethodGet, "/models", "model_id", ""),
@@ -163,7 +204,7 @@ func modelReadiness(m map[string]any) (problems, warnings []string) {
 	}
 	name, _ := m["name"].(string)
 	if !TritonNameRe.MatchString(name) {
-		problems = append(problems, fmt.Sprintf("name %q cannot be addressed by Triton over HTTP (spaces, brackets, commas and the like); "+
+		problems = append(problems, fmt.Sprintf("name %q cannot be addressed by the inference server over HTTP (spaces, brackets, commas and the like); "+
 			"rename the model with {{tool:update_model}} to letters, digits, _ . - only, e.g. mnist_efficientnet", name))
 	}
 	if strings.Contains(name, "None Acc.") {
@@ -177,7 +218,8 @@ func modelReadiness(m map[string]any) (problems, warnings []string) {
 
 var buildInferenceImage = Tool{
 	Name: "build_inference_image", CLI: "build-image",
-	Desc: "Builds an inference container image from a model and an installed template into the platform's registry (several minutes, about 9 GB). " +
+	Desc: "Builds an inference container image from a model and an installed template into the platform's registry (several minutes; Triton about 9 GB, OVMS about 0.3 GB). " +
+		"runtime picks the server: triton (default unless the setup says otherwise) or ovms (OpenVINO, CPU only, amd64 only, tag must end in -ovms). The template must be the one of that runtime. " +
 		"Before the build it checks: the model is ready ({{tool:validate_model}}), the template is installed, the repository (the owner of the model, then /name) and <name>:<tag> is not in the registry yet " +
 		"(the platform would overwrite it silently), and no build of that image is running. Writes; the user must approve. " +
 		"The answer has repository, tag and the task (/tasks/<id>); follow the task with {{tool:task_status}} and then check {{tool:container_image_status}}. " +
@@ -187,7 +229,8 @@ var buildInferenceImage = Tool{
 		{Name: "model_id", Type: "integer", Desc: "id of the model ({{tool:list_models}})", Required: true},
 		{Name: "name", Type: "string", Desc: "name of the image: lowercase letters, digits and . _ -, e.g. mnist-triton", Required: true},
 		{Name: "tag", Type: "string", Desc: "tag, e.g. v1", Required: true},
-		{Name: "architecture", Type: "string", Desc: "amd64 or arm64", Required: true},
+		{Name: "architecture", Type: "string", Desc: "amd64 or arm64 (ovms: amd64 only)", Required: true},
+		runtimeParam,
 	},
 	Write: true,
 	build: func(a Args) (Request, error) {
@@ -201,6 +244,9 @@ var buildInferenceImage = Tool{
 		}
 		name, tag, arch, err := imageArgs(a)
 		if err != nil {
+			return Request{}, err
+		}
+		if _, _, err := runtimeArg(a); err != nil {
 			return Request{}, err
 		}
 		b, err := json.Marshal(map[string]any{
@@ -263,8 +309,26 @@ func buildInferenceImageSteps(ctx context.Context, a Args, _ Request, do Doer) (
 	if res, stop, err := ReadJSON(ctx, do, Request{Method: http.MethodGet, Path: templatesPath, Query: map[string]string{"limit": "1000"}}, &installed); stop {
 		return res, "", err
 	}
-	if !slices.ContainsFunc(installed, func(t inferenceTemplate) bool { return t.ID.String() == strconv.FormatInt(tid, 10) }) {
-		return Refuse("container template %d is not installed; {{tool:list_templates}} lists them, {{tool:import_template}} imports the official one", tid)
+	ti := slices.IndexFunc(installed, func(t inferenceTemplate) bool { return t.ID.String() == strconv.FormatInt(tid, 10) })
+	if ti < 0 {
+		return Refuse("container template %d is not installed; {{tool:list_templates}} lists them, {{tool:import_template}} imports an official one", tid)
+	}
+	rt, explicit, err := runtimeArg(a)
+	if err != nil {
+		return Refuse("%s", err.Error())
+	}
+	trt := TemplateRuntime(installed[ti].GitURL, installed[ti].GitRef)
+	switch {
+	case trt != "" && trt != rt:
+		return Refuse("template %d is the %s template, the runtime is %s; use the %s template ({{tool:list_templates}}) or give runtime %s", tid, trt, rt, rt, trt)
+	case trt == "" && explicit:
+		return Refuse("template %d is none of the official templates, its runtime is unknown; import the %s template with {{tool:import_template}}", tid, rt)
+	case rt == RuntimeOVMS && arch != "amd64":
+		return Refuse("runtime ovms: the OpenVINO image exists for amd64 only; use triton for arm64")
+	case rt == RuntimeOVMS && !strings.HasSuffix(tag, OVMSTagSuffix):
+		return Refuse("an ovms image needs a tag ending in -ovms, e.g. v1-ovms")
+	case rt == RuntimeTriton && trt == RuntimeTriton && strings.HasSuffix(tag, OVMSTagSuffix):
+		return Refuse("the tag suffix -ovms is reserved for ovms images")
 	}
 
 	image := repo + ":" + tag
@@ -306,7 +370,11 @@ func buildInferenceImageSteps(ctx context.Context, a Args, _ Request, do Doer) (
 	if err != nil || res.Status != "ok" || res.HTTPStatus < 200 || res.HTTPStatus >= 300 {
 		return res, "", err
 	}
-	res.Body = jsonBody(map[string]any{"repository": repo, "tag": tag, "task": res.Location})
+	answerRuntime := trt
+	if answerRuntime == "" {
+		answerRuntime = "other"
+	}
+	res.Body = jsonBody(map[string]any{"repository": repo, "tag": tag, "task": res.Location, "runtime": answerRuntime})
 	return res, "", nil
 }
 
@@ -380,8 +448,8 @@ func blockedCall(r Request) string {
 		switch {
 		case len(r.Body) > 0 || len(r.Files) > 0:
 			return "importing a template takes form fields only"
-		case len(r.Form["git_url"]) != 1 || r.Form["git_url"][0] != AllowedTemplateGitURL:
-			return "templates can only be imported from " + AllowedTemplateGitURL
+		case len(r.Form["git_url"]) != 1 || !AllowedTemplateURL(r.Form["git_url"][0]):
+			return "templates can only be imported from " + allowedTemplateURLs()
 		case hasKey(r.Form, "git_username") || hasKey(r.Form, "git_access_token"):
 			return "templates are imported without credentials"
 		}
@@ -435,4 +503,13 @@ func jsonResult(v any) (Result, string, error) {
 func jsonBody(v map[string]any) string {
 	b, _ := json.Marshal(v)
 	return string(b)
+}
+
+// allowedTemplateURLs lists the repositories of TemplateSources for a message.
+func allowedTemplateURLs() string {
+	urls := make([]string, 0, len(TemplateSources))
+	for _, s := range TemplateSources {
+		urls = append(urls, s.GitURL)
+	}
+	return strings.Join(urls, ", ")
 }
