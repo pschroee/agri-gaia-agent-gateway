@@ -764,5 +764,10 @@ func modelCheckOf(row store.Assessment) (ModelCheck, error) {
 	if len(rep.Reasons) > 0 {
 		out.Reason = rep.Reasons[0]
 	}
+	for _, r := range rep.Reasons {
+		if strings.HasPrefix(r, ReasonOutputLabelsPrefix) {
+			out.LabelOrderWrong = true
+		}
+	}
 	return out, nil
 }

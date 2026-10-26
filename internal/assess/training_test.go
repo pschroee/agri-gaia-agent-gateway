@@ -573,3 +573,139 @@ func TestModelCheckLine(t *testing.T) {
 		}
 	}
 }
+
+// --- the output_labels of a training model (#226) ---
+
+// swappedInput is a model whose outputs mean "1" first and "0" second.
+func swappedInput(labels []string) JudgeInput {
+	in := judgeInput()
+	in.Mapping = map[int]string{0: "1", 1: "0"}
+	in.OutputLabels = labels
+	return in
+}
+
+// output_labels in another order than the outputs show make the training model questionable, and the
+// suggestion names the labels the model has to carry.
+func TestJudgeOutputLabelsOrderDiffers(t *testing.T) {
+	rep := JudgeClassification(swappedInput([]string{"0", "1"}))
+	if rep.Verdict != Questionable {
+		t.Fatalf("verdict: %s %v", rep.Verdict, rep.Reasons)
+	}
+	want := `the output_labels of the model (["0","1"]) name the outputs in another order than the model shows on the images it saw (["1","0"])`
+	if len(rep.Reasons) != 1 || rep.Reasons[0] != want {
+		t.Errorf("reasons: %v", rep.Reasons)
+	}
+	var fix *Suggestion
+	for i := range rep.Suggestions {
+		if rep.Suggestions[i].ID == "fix_output_labels" {
+			fix = &rep.Suggestions[i]
+		}
+	}
+	if fix == nil || !strings.Contains(fix.Text, `set output_labels to ["1","0"] with {{tool:update_model}}`) {
+		t.Errorf("suggestions: %+v", rep.Suggestions)
+	}
+	if f, ok := rep.Figures.(*TrainingFigures); !ok || len(f.OutputLabels) != 2 || f.OutputLabels[0] != "0" {
+		t.Errorf("figures: %+v", rep.Figures)
+	}
+}
+
+// The same order: no reason, the verdict is the one without labels.
+func TestJudgeOutputLabelsMatch(t *testing.T) {
+	in := judgeInput()
+	in.OutputLabels = []string{"0", "1"}
+	rep := JudgeClassification(in)
+	if rep.Verdict != Usable || len(rep.Reasons) != 0 {
+		t.Fatalf("verdict: %s %v", rep.Verdict, rep.Reasons)
+	}
+	for _, h := range rep.Hints {
+		if strings.Contains(h, "output_labels") {
+			t.Errorf("hint: %v", rep.Hints)
+		}
+	}
+}
+
+// No labels recorded: a hint with the order the model shows, the verdict does not change.
+func TestJudgeOutputLabelsAbsentHint(t *testing.T) {
+	rep := JudgeClassification(swappedInput(nil))
+	if rep.Verdict != Usable {
+		t.Fatalf("verdict: %s %v", rep.Verdict, rep.Reasons)
+	}
+	want := `the model has no output_labels; in the order the model shows they are ["1","0"] (set them with {{tool:update_model}})`
+	if !containsString(rep.Hints, want) {
+		t.Errorf("hints: %v", rep.Hints)
+	}
+}
+
+// An unclear class order: only the existing reason, the labels are not compared.
+func TestJudgeOutputLabelsMappingUnclear(t *testing.T) {
+	in := swappedInput([]string{"0", "1"})
+	in.MappingOK, in.MappingReason = false, "the outputs are not clear"
+	rep := JudgeClassification(in)
+	if rep.Verdict != Questionable || len(rep.Reasons) == 0 {
+		t.Fatalf("verdict: %s %v", rep.Verdict, rep.Reasons)
+	}
+	for _, r := range rep.Reasons {
+		if strings.HasPrefix(r, ReasonOutputLabelsPrefix) {
+			t.Errorf("the labels were compared: %v", rep.Reasons)
+		}
+	}
+}
+
+// An own model keeps the comparison with the declared class names and ignores output_labels (#113).
+func TestJudgeOwnModelDeclaredUnchanged(t *testing.T) {
+	in := swappedInput([]string{"0", "1"})
+	in.Kind = KindOwnModel
+	in.DeclaredClassNames = []string{"1", "0"}
+	rep := JudgeClassification(in)
+	if rep.Verdict != Usable {
+		t.Fatalf("verdict: %s %v", rep.Verdict, rep.Reasons)
+	}
+	in.DeclaredClassNames = []string{"0", "1"}
+	rep = JudgeClassification(in)
+	if rep.Verdict != Questionable || rep.Reasons[0] != ReasonDeclaredClassOrder {
+		t.Fatalf("verdict: %s %v", rep.Verdict, rep.Reasons)
+	}
+}
+
+// The check reads output_labels from the platform record into the figures.
+func TestRunTrainingCheckReadsOutputLabels(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+	chat := testChat(t, st, "output labels")
+	f := newFakePlatform(t)
+	f.dataset(7, "mnist-check-120", classImages(10))
+	f.model(3, "mnist-effnet", "onnx", []byte("onnx-bytes"))
+	md := f.models[3]
+	md.outputLabels = []string{"0", "1"}
+	f.models[3] = md
+	f.trainLog(9, "Epoch 2\n"+lightningLog)
+	if err := st.RecordModelOrigin(ctx, store.ModelOrigin{ModelID: 3, ChatID: chat.ID,
+		Source: store.OriginTraining, TrainContainerID: 9, SeenDatasetIDs: []int64{7}}); err != nil {
+		t.Fatal(err)
+	}
+	svc := New(NewRunner(&fakeRuntime{answer: goodAnswer}, "img"), st, 12)
+	svc.Plat = f.client()
+	rep, err := svc.runTrainingCheck(ctx, chat.ID, "", assessRequest{ModelID: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	figures, ok := rep.Figures.(*TrainingFigures)
+	if !ok || len(figures.OutputLabels) != 2 || figures.OutputLabels[0] != "0" || figures.OutputLabels[1] != "1" {
+		t.Fatalf("figures: %+v", rep.Figures)
+	}
+}
+
+// A stored report with the reason sets LabelOrderWrong; one without does not.
+func TestModelCheckOfLabelOrderWrong(t *testing.T) {
+	reason := OutputLabelsOrder([]string{"0", "1"}, map[int]string{0: "1", 1: "0"})
+	body, _ := json.Marshal(map[string]any{"verdict": "questionable", "measured_images": 40,
+		"reasons": []string{"another reason", reason}})
+	c, err := modelCheckOf(store.Assessment{Final: true, Report: body})
+	if err != nil || !c.LabelOrderWrong {
+		t.Fatalf("check: %+v %v", c, err)
+	}
+	c, err = modelCheckOf(store.Assessment{Final: true, Report: []byte(`{"verdict":"usable","measured_images":40}`)})
+	if err != nil || c.LabelOrderWrong {
+		t.Fatalf("check: %+v %v", c, err)
+	}
+}
