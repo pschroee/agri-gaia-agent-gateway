@@ -61,6 +61,7 @@ func TestSingleTrialSubject(t *testing.T) {
 	f.status["GET /datasets/177"] = 500
 	f.mu.Unlock()
 	_, subject = e.m.singleRunInfo(ctx, j, store.SearchPathTemplate, watch.Progress{})
+	b = SearchBase{}
 	_ = json.Unmarshal(subject, &b)
 	if subjectText(b) != "efficientnet_v2_s on dataset 177" {
 		t.Errorf("title without the dataset name: %q", subjectText(b))

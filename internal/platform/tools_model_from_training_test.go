@@ -85,7 +85,8 @@ func TestModelFromTrainingSteps(t *testing.T) {
 	if got.ID.String() != "21" || got.Format != "onnx" || !got.TensorMetadata {
 		t.Errorf("summary = %+v", got)
 	}
-	if len(got.Warnings) != 1 || !strings.Contains(got.Warnings[0], "{{tool:assess_model}}") {
+	// The score warning and, since the answer has no output_labels at an output of [1,2], the class order (#226).
+	if len(got.Warnings) != 2 || !strings.Contains(got.Warnings[0], "{{tool:assess_model}}") || !strings.Contains(got.Warnings[1], "no class order") {
 		t.Errorf("warnings = %v", got.Warnings)
 	}
 }
