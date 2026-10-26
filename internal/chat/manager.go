@@ -5,6 +5,7 @@ package chat
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -2658,8 +2659,9 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 	// nil step: nothing to record. A step that waits for an observed platform job from here on says so in
 	// the answer (A-E2, D2.1): the gateway watches the job and wakes the agent, so the agent ends its turn
 	// instead of holding it open and polling the platform itself (seen live on 16.10.2026).
-	if jobID := m.planFinish(ctx, chatID, step, access, req, res, err); jobID != "" && step != nil {
-		res.Note = m.watchNote(ctx, step, jobID)
+	planJob := m.planFinish(ctx, chatID, step, access, req, res, err)
+	if planJob != "" && step != nil {
+		res.Note = m.watchNote(ctx, step, planJob)
 	}
 	jobID, outsideKind := "", ""
 	if step == nil && err == nil {
@@ -2677,6 +2679,12 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 	// The outcome of a call of a search's trial: after the job of a started run is observed, so that the trial can
 	// name it (issue #168). A nil claim does nothing.
 	m.searchFinish(ctx, chatID, claim, access, req, res, err, jobID)
+	// A training started by this call is listed at once, not at the first poll of its container (issue #227).
+	if err == nil && claim == nil {
+		if id := cmp.Or(planJob, jobID); id != "" {
+			m.declareTrainingEarly(ctx, chatID, id)
+		}
+	}
 	// A job outside a plan tells the agent that the gateway watches it and will say when it ends (#212); the trials
 	// of a search have notes of their own.
 	if jobID != "" && claim == nil && watch.AnnouncedOutsidePlan(outsideKind) && !isTrialJob(jobID) {
