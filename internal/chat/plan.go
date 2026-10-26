@@ -116,7 +116,7 @@ func (m *Manager) ProposePlan(ctx context.Context, chatID, slotID, via string, r
 	if n := len([]rune(preview)); n > maxPlatformPreview {
 		return platform.Result{Status: "error", Message: fmt.Sprintf("plan too large for an approval (%d characters, at most %d); split it", n, maxPlatformPreview)}, nil
 	}
-	session := store.SessionFrom(ctx)
+	session := planSession(ctx)
 	pl, err := m.st.CreatePlan(ctx, store.Plan{ChatID: chatID, Title: p.Title, Session: session, ToolCallID: store.ToolCallFrom(ctx), Via: via, Steps: steps,
 		Mode: mode, Budget: budget, Grant: grant, Replaces: p.Replaces})
 	if err != nil {
@@ -235,6 +235,17 @@ func (m *Manager) summaryReader(chatID string) platform.Doer {
 	}
 }
 
+// planSession is the session a plan belongs to and is looked up by. The CLI names its session ("main" or a
+// subagent run); the MCP and REST extensions of pi send none, so their calls count as the main session. Without
+// this a plan proposed over MCP (session "") never matched the CLI upload of its first step, and every step after
+// it asked on its own (demo run of 26.10.2026, #218).
+func planSession(ctx context.Context) string {
+	if s := store.SessionFrom(ctx); s != "" {
+		return s
+	}
+	return "main"
+}
+
 // planMatch returns the next step of the session's approved plan if the call is exactly that step.
 // A covered step is claimed (open to running) and the caller runs it without a new approval; an
 // irreversible step is returned unclaimed, so the call still asks the user. nil: no match.
@@ -247,7 +258,7 @@ func (m *Manager) planMatch(ctx context.Context, chatID string, req platform.Req
 // names the first part of the call that is not the step ("files" when only the uploads differ, issue #172);
 // both are empty/zero without an active plan or on a match.
 func (m *Manager) planNext(ctx context.Context, chatID string, req platform.Request) (*store.PlanStep, int, string) {
-	p, err := m.st.ActivePlan(ctx, chatID, store.SessionFrom(ctx))
+	p, err := m.st.ActivePlan(ctx, chatID, planSession(ctx))
 	if err != nil {
 		if !errors.Is(err, store.ErrNotFound) {
 			slog.Error("active plan not readable", "chat", chatID, "error", err)

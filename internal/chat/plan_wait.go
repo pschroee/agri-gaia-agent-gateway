@@ -36,7 +36,7 @@ func planWaitGuard(ctx context.Context, m *Manager, chatID string, req platform.
 	if a.Effect == delegation.EffectRead && !req.Writes() {
 		return "", nil
 	}
-	p, err := m.st.ActivePlan(ctx, chatID, store.SessionFrom(ctx))
+	p, err := m.st.ActivePlan(ctx, chatID, planSession(ctx))
 	if err != nil {
 		return "", nil // no plan, or not readable: planMatch decides
 	}
