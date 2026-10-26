@@ -357,6 +357,7 @@ type SocketCall struct {
 	ApprovalID        string          `json:"approval_id,omitempty"`
 	ApprovalDecision  string          `json:"approval_decision,omitempty"`
 	PlanStep          *int            `json:"plan_step,omitempty"`
+	PlanID            string          `json:"plan_id,omitempty"`
 }
 
 // CallRecord is what the orchestrator writes into socket_calls (X5). The old LogCall signatures build one from
@@ -377,6 +378,7 @@ type CallRecord struct {
 	WithinDelegation                        *bool
 	ApprovalID, ApprovalDecision            string
 	PlanStep                                *int
+	PlanID                                  string
 }
 
 type Store struct {
@@ -1227,7 +1229,7 @@ func (s *Store) AddSocketCall(ctx context.Context, c SocketCall) (SocketCall, er
 		Decision: c.Decision, Reason: c.Reason, Rule: c.Rule, Body: c.Body, BodyTruncated: c.BodyTruncated,
 		BodyInSHA256: c.BodyInSHA256, CallRef: c.CallRef, CallRefSource: c.CallRefSource, CallRefCandidates: c.CallRefCandidates,
 		CallRefClaimed: c.CallRefClaimed, WithinDelegation: c.WithinDelegation, ApprovalID: c.ApprovalID,
-		ApprovalDecision: c.ApprovalDecision, PlanStep: c.PlanStep})
+		ApprovalDecision: c.ApprovalDecision, PlanStep: c.PlanStep, PlanID: c.PlanID})
 	if err != nil {
 		return c, err
 	}
@@ -1264,15 +1266,15 @@ func (s *Store) AddSocketCallRecord(ctx context.Context, c CallRecord) (SocketCa
 		Decision: c.Decision, Reason: c.Reason, Rule: c.Rule, Body: c.Body, BodyTruncated: c.BodyTruncated,
 		BodyInSHA256: c.BodyInSHA256, CallRef: c.CallRef, CallRefSource: c.CallRefSource,
 		CallRefCandidates: c.CallRefCandidates, CallRefClaimed: c.CallRefClaimed, WithinDelegation: c.WithinDelegation,
-		ApprovalID: c.ApprovalID, ApprovalDecision: c.ApprovalDecision, PlanStep: c.PlanStep}
+		ApprovalID: c.ApprovalID, ApprovalDecision: c.ApprovalDecision, PlanStep: c.PlanStep, PlanID: c.PlanID}
 	err := s.pool.QueryRow(ctx, `INSERT INTO socket_calls (chat_id, slot_id, via, op, detail, result, session, tool_call_id,
 duration_ms, effect, decision, reason, rule, body, body_truncated, body_in_sha256, call_ref, call_ref_source,
-call_ref_candidates, call_ref_claimed, within_delegation, approval_id, approval_decision, plan_step)
+call_ref_candidates, call_ref_claimed, within_delegation, approval_id, approval_decision, plan_step, plan_id)
 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NULLIF($10,''),NULLIF($11,''),NULLIF($12,''),$13,$14,$15,NULLIF($16,''),
-NULLIF($17,''),NULLIF($18,''),$19,NULLIF($20,''),$21,$22,NULLIF($23,''),$24) RETURNING id, created_at`,
+NULLIF($17,''),NULLIF($18,''),$19,NULLIF($20,''),$21,$22,NULLIF($23,''),$24,NULLIF($25,'')::uuid) RETURNING id, created_at`,
 		chat, c.SlotID, c.Via, c.Op, c.Detail, c.Result, c.Session, c.ToolCallID, c.DurationMs, c.Effect,
 		c.Decision, c.Reason, rule, c.Body, c.BodyTruncated, c.BodyInSHA256, c.CallRef, c.CallRefSource,
-		candidates, c.CallRefClaimed, c.WithinDelegation, approval, c.ApprovalDecision, planStep).Scan(&out.ID, &out.CreatedAt)
+		candidates, c.CallRefClaimed, c.WithinDelegation, approval, c.ApprovalDecision, planStep, c.PlanID).Scan(&out.ID, &out.CreatedAt)
 	return out, err
 }
 
@@ -1280,7 +1282,7 @@ func (s *Store) ListSocketCalls(ctx context.Context, chatID string) ([]SocketCal
 	rows, err := s.pool.Query(ctx, `SELECT id, COALESCE(chat_id::text,''), slot_id, via, op, detail, result, created_at, session,
 tool_call_id, duration_ms, COALESCE(effect,''), COALESCE(decision,''), COALESCE(reason,''), rule, body, body_truncated,
 COALESCE(body_in_sha256,''), COALESCE(call_ref,''), COALESCE(call_ref_source,''), call_ref_candidates,
-COALESCE(call_ref_claimed,''), within_delegation, COALESCE(approval_id::text,''), COALESCE(approval_decision,''), plan_step
+COALESCE(call_ref_claimed,''), within_delegation, COALESCE(approval_id::text,''), COALESCE(approval_decision,''), plan_step, COALESCE(plan_id::text,'')
 FROM socket_calls WHERE chat_id=$1 ORDER BY id`, chatID)
 	if err != nil {
 		return nil, err
@@ -1293,7 +1295,7 @@ FROM socket_calls WHERE chat_id=$1 ORDER BY id`, chatID)
 		if err := rows.Scan(&c.ID, &c.ChatID, &c.SlotID, &c.Via, &c.Op, &c.Detail, &c.Result, &c.CreatedAt, &c.Session,
 			&c.ToolCallID, &c.DurationMs, &c.Effect, &c.Decision, &c.Reason, &rule, &c.Body, &c.BodyTruncated,
 			&c.BodyInSHA256, &c.CallRef, &c.CallRefSource, &candidates, &c.CallRefClaimed, &c.WithinDelegation,
-			&c.ApprovalID, &c.ApprovalDecision, &c.PlanStep); err != nil {
+			&c.ApprovalID, &c.ApprovalDecision, &c.PlanStep, &c.PlanID); err != nil {
 			return nil, err
 		}
 		c.Rule = rule

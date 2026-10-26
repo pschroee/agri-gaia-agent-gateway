@@ -329,6 +329,11 @@ func (m *Manager) planFinish(ctx context.Context, chatID string, st *store.PlanS
 	result := fmt.Sprintf("%s %d", res.Status, res.HTTPStatus)
 	if callErr != nil {
 		result = callErr.Error()
+	} else if res.Status != "ok" || res.HTTPStatus < 200 || res.HTTPStatus >= 300 {
+		// A failed call keeps the platform's own words, so the plan view can say why (issue #221).
+		if line := failureLine(res); line != "" {
+			result += ": " + line
+		}
 	} else if res.Status == "ok" && res.HTTPStatus >= 200 && res.HTTPStatus < 300 {
 		to = plan.StepDone
 		if r, i, ok := delegation.Created(access, res); ok {
@@ -736,4 +741,37 @@ func (m *Manager) stepResolve(ctx context.Context, chatID string, steps []store.
 		ok, err := m.st.IsDelegationObject(ctx, chatID, ref.CreatedResource, ref.CreatedID)
 		return ref.CreatedID, err == nil && ok
 	}
+}
+
+// failureLine is the platform's reason for a failed call as one short line: the gateway's message, else the
+// detail of the JSON body (text, or the first msg of a list as FastAPI sends validation errors). Tokens are
+// redacted and the line is clipped. Empty when the platform said nothing usable.
+func failureLine(res platform.Result) string {
+	line := strings.TrimSpace(res.Message)
+	if line == "" && res.Body != "" {
+		var doc struct {
+			Detail json.RawMessage `json:"detail"`
+		}
+		if json.Unmarshal([]byte(res.Body), &doc) == nil && len(doc.Detail) > 0 {
+			var text string
+			var list []struct {
+				Msg string `json:"msg"`
+			}
+			if json.Unmarshal(doc.Detail, &text) == nil {
+				line = text
+			} else if json.Unmarshal(doc.Detail, &list) == nil {
+				for _, e := range list {
+					if e.Msg != "" {
+						line = e.Msg
+						break
+					}
+				}
+			}
+		}
+	}
+	if line == "" {
+		return ""
+	}
+	line = strings.Join(strings.Fields(line), " ")
+	return watch.ClipRunes(platform.RedactText(line), 200)
 }

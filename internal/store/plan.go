@@ -123,6 +123,11 @@ type PlanStep struct {
 	LogTail     string        `json:"log_tail,omitempty"`
 	Outputs     []WatchOutput `json:"outputs,omitempty"`
 	JobStarted  *time.Time    `json:"started_at,omitempty"`
+	// StepStartedAt: when the step was last claimed for execution (issue #221); started_at above is the start of
+	// its job, a later moment.
+	StepStartedAt *time.Time `json:"step_started_at,omitempty"`
+	// LastEpoch: the last training epoch the job reported (EpochFigures as JSON), for a training run.
+	LastEpoch json.RawMessage `json:"last_epoch,omitempty"`
 	// PlanID: the plan the step belongs to (not part of the JSON; the plan carries it).
 	PlanID string `json:"-"`
 }
@@ -142,7 +147,7 @@ const planCols = `id::text, chat_id::text, approval_id, title, session, tool_cal
 // first, then the fields of watch_jobs, so that the plan API carries them for every step at once.
 // The columns of the job are COALESCEd: a step without an observed job joins onto no row at all, and NULL
 // would be readable only into pointers.
-const planStepCols = `s.idx, s.summary, COALESCE(s.summary_proposed,''), s.description, s.tool, s.args, s.method, s.path, s.query, s.body, s.body_sha256, s.form, s.form_sha256, s.files, s.effect, s.confirm_each, s.state, s.result, s.created_resource, s.created_id, s.done_at, s.max_attempts, s.attempts, s.watch_job, s.parked_approval, w.progress, COALESCE(w.message,''), w.eta, COALESCE(w.log_tail,''), COALESCE(w.outputs,'[]'), w.started_at`
+const planStepCols = `s.idx, s.summary, COALESCE(s.summary_proposed,''), s.description, s.tool, s.args, s.method, s.path, s.query, s.body, s.body_sha256, s.form, s.form_sha256, s.files, s.effect, s.confirm_each, s.state, s.result, s.created_resource, s.created_id, s.done_at, s.max_attempts, s.attempts, s.watch_job, s.parked_approval, w.progress, COALESCE(w.message,''), w.eta, COALESCE(w.log_tail,''), COALESCE(w.outputs,'[]'), w.started_at, s.claimed_at, NULLIF(w.last_epoch,'')`
 
 func scanPlan(row interface{ Scan(...any) error }) (Plan, error) {
 	var p Plan
@@ -165,11 +170,15 @@ func rawOrNil(s string) json.RawMessage {
 func scanPlanStep(row interface{ Scan(...any) error }) (PlanStep, error) {
 	var st PlanStep
 	var query, body, form, files, args, outputs string
+	var lastEpoch *string
 	err := row.Scan(&st.Idx, &st.Summary, &st.SummaryProposed, &st.Description, &st.Tool, &args, &st.Method, &st.Path, &query, &body, &st.BodySHA256, &form, &st.FormSHA256, &files,
 		&st.Effect, &st.ConfirmEach, &st.State, &st.Result, &st.CreatedResource, &st.CreatedID, &st.DoneAt, &st.MaxAttempts, &st.Attempts,
-		&st.WatchJob, &st.ParkedApproval, &st.Progress, &st.ProgressMsg, &st.ETA, &st.LogTail, &outputs, &st.JobStarted)
+		&st.WatchJob, &st.ParkedApproval, &st.Progress, &st.ProgressMsg, &st.ETA, &st.LogTail, &outputs, &st.JobStarted, &st.StepStartedAt, &lastEpoch)
 	if err != nil {
 		return st, err
+	}
+	if lastEpoch != nil {
+		st.LastEpoch = rawOrNil(*lastEpoch)
 	}
 	st.Args = rawOrNil(args)
 	st.Query = rawOrNil(query)
@@ -381,7 +390,7 @@ func (s *Store) ClaimPlanStep(ctx context.Context, planID string, idx int) (bool
 	if !isUUID(planID) {
 		return false, ErrNotFound
 	}
-	tag, err := s.pool.Exec(ctx, `UPDATE plan_steps SET state='running', attempts=attempts+1 WHERE plan_id=$1 AND idx=$2 AND state='open'`, planID, idx)
+	tag, err := s.pool.Exec(ctx, `UPDATE plan_steps SET state='running', attempts=attempts+1, claimed_at=now() WHERE plan_id=$1 AND idx=$2 AND state='open'`, planID, idx)
 	return tag.RowsAffected() > 0, err
 }
 

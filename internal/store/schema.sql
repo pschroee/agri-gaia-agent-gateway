@@ -521,3 +521,6 @@ CREATE TABLE IF NOT EXISTS llm_toolsets (
     tools      jsonb NOT NULL,
     created_at timestamptz NOT NULL DEFAULT now()
 );
+-- The plan a platform call belonged to (issue #221); with plan_step it names the step. NULL for calls outside a plan.
+ALTER TABLE socket_calls ADD COLUMN IF NOT EXISTS plan_id uuid;
+CREATE INDEX IF NOT EXISTS socket_calls_plan ON socket_calls (plan_id, plan_step) WHERE plan_id IS NOT NULL;

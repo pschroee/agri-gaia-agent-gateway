@@ -46,3 +46,5 @@ ALTER TABLE watch_jobs ADD COLUMN IF NOT EXISTS stopped_by text NOT NULL DEFAULT
 -- (job created, job seen ended).
 ALTER TABLE watch_jobs ADD COLUMN IF NOT EXISTS run_started_at timestamptz;
 ALTER TABLE watch_jobs ADD COLUMN IF NOT EXISTS run_ended_at timestamptz;
+-- Last training epoch as JSON {epoch, epochs, values, at} (issue #221); empty until a poll reports one.
+ALTER TABLE watch_jobs ADD COLUMN IF NOT EXISTS last_epoch text NOT NULL DEFAULT '';

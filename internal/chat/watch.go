@@ -20,11 +20,14 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"net/http"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"golang.org/x/sync/singleflight"
 
@@ -214,6 +217,7 @@ func (m *Manager) pollJob(ctx context.Context, j store.WatchJob, kind watch.Kind
 
 		RunStartedAt: p.RunStartedAt,
 		RunEndedAt:   p.RunEndedAt,
+		LastEpoch:    lastEpochJSON(p.Metrics),
 	}
 	changed, err := m.st.UpdateJobProgress(ctx, j.ID, prog)
 	if err != nil {
@@ -226,6 +230,9 @@ func (m *Manager) pollJob(ctx context.Context, j store.WatchJob, kind watch.Kind
 	j.Progress, j.Message, j.LogTail, j.ETA = prog.Percent, prog.Message, prog.LogTail, prog.ETA
 	j.Outputs = prog.Outputs
 	j.Link = prog.Link
+	if len(prog.LastEpoch) > 0 {
+		j.LastEpoch = prog.LastEpoch
+	}
 	if prog.RunStartedAt != nil {
 		j.RunStartedAt = prog.RunStartedAt
 	}
@@ -1018,3 +1025,43 @@ func (m *Manager) StopPlanStep(ctx context.Context, chatID, planID string, idx i
 var ErrNotStoppable = errors.New("this job cannot be stopped")
 
 func timePtr(t time.Time) *time.Time { return &t }
+
+// Limits of the figures kept for the last epoch (issue #221): a few numbers with short names, nothing else.
+const (
+	maxEpochValues   = 8
+	maxEpochKeyRunes = 40
+)
+
+// lastEpochJSON turns the last epoch of a poll into the JSON stored in watch_jobs.last_epoch (store.EpochFigures):
+// at most maxEpochValues finite figures with names of at most maxEpochKeyRunes characters, in name order. nil when
+// the poll read no epoch (the stored value then stays).
+func lastEpochJSON(m *watch.Metrics) []byte {
+	if m == nil || len(m.Epochs) == 0 {
+		return nil
+	}
+	last := m.Epochs[len(m.Epochs)-1]
+	keys := make([]string, 0, len(last.Values))
+	for k, v := range last.Values {
+		if k == "" || utf8.RuneCountInString(k) > maxEpochKeyRunes || math.IsNaN(v) || math.IsInf(v, 0) {
+			continue
+		}
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	if len(keys) > maxEpochValues {
+		keys = keys[:maxEpochValues]
+	}
+	e := store.EpochFigures{Epoch: last.Epoch, Epochs: last.Epochs, Values: make(map[string]float64, len(keys))}
+	for _, k := range keys {
+		e.Values[k] = last.Values[k]
+	}
+	if !last.At.IsZero() {
+		at := last.At
+		e.At = &at
+	}
+	b, err := json.Marshal(e)
+	if err != nil {
+		return nil
+	}
+	return b
+}
