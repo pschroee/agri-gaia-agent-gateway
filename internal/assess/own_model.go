@@ -728,16 +728,40 @@ func (s *Service) checkOfSubjects(ctx context.Context, chatID string, subjects .
 			best = &r
 		}
 	}
+	// The newest finished check of any kind: the order of output_labels is part of the model's metadata, not
+	// of the held-out images, so an interim check after the final one sees the labels as they are now (#226).
+	var latest *store.Assessment
+	for _, subject := range subjects {
+		row, found, err := s.St.LastFinishedCheck(ctx, chatID, subject)
+		if err != nil {
+			return ModelCheck{}, err
+		}
+		if found && (latest == nil || row.CreatedAt.After(latest.CreatedAt)) {
+			r := row
+			latest = &r
+		}
+	}
+	labelsWrong := false
+	if latest != nil {
+		lc, err := modelCheckOf(*latest)
+		if err != nil {
+			return ModelCheck{}, err
+		}
+		labelsWrong = lc.LabelOrderWrong
+	}
 	if best != nil {
-		return modelCheckOf(*best)
+		out, err := modelCheckOf(*best)
+		if err != nil {
+			return ModelCheck{}, err
+		}
+		if latest != nil && latest.CreatedAt.After(best.CreatedAt) {
+			out.LabelOrderWrong = labelsWrong
+		}
+		return out, nil
 	}
 	// No final check: an interim one is not a verdict, but the wording may say that there is one (L8).
-	for _, subject := range subjects {
-		if _, found, err := s.St.LastFinishedCheck(ctx, chatID, subject); err != nil {
-			return ModelCheck{}, err
-		} else if found {
-			return ModelCheck{Found: true}, nil
-		}
+	if latest != nil {
+		return ModelCheck{Found: true, LabelOrderWrong: labelsWrong}, nil
 	}
 	return ModelCheck{}, nil
 }

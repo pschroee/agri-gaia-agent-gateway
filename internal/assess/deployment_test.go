@@ -18,6 +18,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"agw/internal/config"
 	"agw/internal/platform"
@@ -841,5 +842,34 @@ func TestDeploymentCheckLabelOrder(t *testing.T) {
 	}
 	if fig.ModelCheck == nil || !fig.ModelCheck.LabelOrderWrong {
 		t.Errorf("model check: %+v", fig.ModelCheck)
+	}
+}
+
+// The final check was usable; an interim check after it (final=false, the held-out images are used up) found
+// the output_labels swapped. The deployment check still names the wrong order: it is metadata, not a measure
+// on held-out images (#226, Phase B).
+func TestDeploymentCheckLabelOrderFromInterimCheck(t *testing.T) {
+	d := deploymentSetup(t)
+	ctx := context.Background()
+	c := testChat(t, d.svg.St, "label order interim")
+	finishedCheck(t, d.svg.St, store.Assessment{ChatID: c.ID, Kind: KindTrainingModel,
+		Subject: "model:5", Final: true}, `{"verdict":"usable","measured_images":40}`)
+	time.Sleep(5 * time.Millisecond)
+	reason := OutputLabelsOrder([]string{"1", "0"}, map[int]string{0: "0", 1: "1"})
+	body, _ := json.Marshal(map[string]any{"verdict": "questionable", "measured_images": 40, "reasons": []string{reason}})
+	finishedCheck(t, d.svg.St, store.Assessment{ChatID: c.ID, Kind: KindTrainingModel,
+		Subject: "model:5", Final: false}, string(body))
+
+	a := d.check(t, ctx, c.ID, "5")
+	rep, fig := report(t, a)
+	if rep.Verdict != Questionable || !hasText(rep.Reasons, ReasonLabelOrderFromCheck) {
+		t.Fatalf("verdict %q: %v", rep.Verdict, rep.Reasons)
+	}
+	if fig.ModelCheck == nil || !fig.ModelCheck.Final || fig.ModelCheck.Verdict != Usable || !fig.ModelCheck.LabelOrderWrong {
+		t.Errorf("model check: %+v", fig.ModelCheck)
+	}
+	ids := suggestionIDs(rep)
+	if !containsString(ids, "fix_output_labels") || !containsString(ids, "rebuild_image") {
+		t.Errorf("suggestions: %v", ids)
 	}
 }
