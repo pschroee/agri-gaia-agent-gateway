@@ -102,6 +102,10 @@ func TestPlansAcrossRedactsAndUsage(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// A failed step fails an interactive plan (the manager does so after the call); the store alone does not.
+	if ok, err := st.FinishPlan(ctx, inter.ID, "failed"); err != nil || !ok {
+		t.Fatalf("finish plan: %v %v", ok, err)
+	}
 	code, body := call(t, a, "GET", srv.URL+"/api/plans", "")
 	if code != 200 {
 		t.Fatalf("%d %s", code, body)

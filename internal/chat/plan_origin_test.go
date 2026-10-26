@@ -13,6 +13,7 @@ import (
 	"sync"
 	"testing"
 
+	"agw/internal/delegation"
 	"agw/internal/plan"
 	"agw/internal/platform"
 	"agw/internal/store"
@@ -87,6 +88,14 @@ func finishSteps(t *testing.T, e *env, ctx context.Context, planID string, n int
 	}
 }
 
+// ownDeployment records deployment id as created in the chat, as the creating call would (edge guard D-E1).
+func ownDeployment(t *testing.T, e *env, ctx context.Context, chatID, id string) {
+	t.Helper()
+	if err := e.st.AddDelegationObject(ctx, chatID, delegation.ContainerDeployment, id); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // The plan builds the image and starts it: the start is covered, one approval for all three steps.
 func TestProposeBuildAndDeployOneApproval(t *testing.T) {
 	e := setup(t)
@@ -103,6 +112,7 @@ func TestProposeBuildAndDeployOneApproval(t *testing.T) {
 		t.Fatalf("start step: %+v", start)
 	}
 	finishSteps(t, e, ctx, p.ID, 2)
+	ownDeployment(t, e, ctx, c.ID, "9")
 	r, err := e.m.PlatformCall(ctx, c.ID, slot, "cli", liveCall(t, "PUT", "/container-deployments/9/deploy", ""))
 	if err != nil || r.Status != "ok" {
 		t.Fatalf("start: %+v %v", r, err)
@@ -174,6 +184,7 @@ func TestDeployOutsidePlanStillAsks(t *testing.T) {
 	ctx := store.WithSession(context.Background(), "main")
 	c, _ := e.m.Create(ctx, NewChat{})
 	slot := e.m.live[c.ID].slot.ID
+	ownDeployment(t, e, ctx, c.ID, "9")
 	done := make(chan platform.Result, 1)
 	go func() {
 		r, _ := e.m.PlatformCall(ctx, c.ID, slot, "cli", liveCall(t, "PUT", "/container-deployments/9/deploy", ""))
