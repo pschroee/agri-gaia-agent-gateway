@@ -978,6 +978,7 @@ func (m *Manager) blockedState(ctx context.Context, chatID string) (*BlockedView
 	since := m.blockedSince(chatID)
 	n, last, err := m.st.ChatBlocked(ctx, chatID, since, 3)
 	if err != nil {
+		slog.Warn("refusal counter not read", "chat", chatID, "error", err)
 		return nil, err
 	}
 	v := &BlockedView{Count: n, Since: since, Last: []BlockedConnection{}}
