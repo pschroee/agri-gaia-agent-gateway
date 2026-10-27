@@ -764,3 +764,31 @@ func TestReportFinalSet(t *testing.T) {
 		}
 	}
 }
+
+// overall carries the number of wrong images; a confusion table gives it, and without one it follows from the accuracy
+// and the measured images (#254, E4).
+func TestOverallWrongCount(t *testing.T) {
+	in := judgeInput() // 40 hold-out images, accuracy 0.90
+	in.Confusion = map[string]map[string]int{"0": {"0": 19, "1": 1}, "1": {"0": 2, "1": 18}}
+	f := JudgeClassification(in).Figures.(*TrainingFigures)
+	if f.Overall.Wrong != 3 || f.Overall.Correct != 37 {
+		t.Errorf("2 classes: %+v", f.Overall)
+	}
+	in.Confusion = nil
+	f = JudgeClassification(in).Figures.(*TrainingFigures)
+	if f.Overall.Wrong != 4 || f.Overall.Correct != 36 {
+		t.Errorf("no confusion: %+v", f.Overall)
+	}
+	// ten classes, one image wrong of 40: the count is 1, whatever precision and recall look like
+	in = judgeInput()
+	in.Confusion = map[string]map[string]int{}
+	for c := 0; c < 10; c++ {
+		k := fmt.Sprint(c)
+		in.Confusion[k] = map[string]int{k: 4}
+	}
+	in.Confusion["3"] = map[string]int{"3": 3, "5": 1}
+	f = JudgeClassification(in).Figures.(*TrainingFigures)
+	if f.Overall.Wrong != 1 || f.Overall.Correct != 39 {
+		t.Errorf("10 classes: %+v", f.Overall)
+	}
+}

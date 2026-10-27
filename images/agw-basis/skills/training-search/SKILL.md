@@ -1,6 +1,6 @@
 ---
 name: training-search
-description: Training search - use it when a task needs several training rounds (tuning hyperparameters, trying architectures or augmentation) - propose ONE search with propose_search instead of single trainings. Rules - split the dataset first (split_dataset) so that a held-back test set exists; keep the search space small and say why; before every trial read search_status and never repeat a trial; declare each trial with search_next and a one-sentence reason, then make exactly the calls it names; in the notebook way the code is one notebook (.ipynb) that reads params.json and writes outputs/metrics.jsonl (one JSON line per epoch with epoch, epochs, train_loss, val_loss, train_acc, val_acc), and only params.json changes between trials; choose by the validation value only; when the search ends run the final test once for the winner.
+description: Training search - prepare with one plan (upload, split, base container and search together, never as single calls) - use it when a task needs several training rounds (tuning hyperparameters, trying architectures or augmentation) - propose ONE search with propose_search instead of single trainings. Rules - split the dataset first (split_dataset) so that a held-back test set exists; keep the search space small and say why; before every trial read search_status and never repeat a trial; declare each trial with search_next and a one-sentence reason, then make exactly the calls it names; in the notebook way the code is one notebook (.ipynb) that reads params.json and writes outputs/metrics.jsonl (one JSON line per epoch with epoch, epochs, train_loss, val_loss, train_acc, val_acc), and only params.json changes between trials; choose by the validation value only; when the search ends run the final test once for the winner.
 ---
 
 # Training search with a budget
@@ -10,6 +10,9 @@ A task like "find a good learning rate" needs several trainings. Do not propose 
 without asking again. Anything outside the approved space is refused.
 
 ## 1. Prepare
+
+Upload, split, the base training container and the search are always **one** plan (section 5), also when the task ends
+with the search; never make them single calls. Without a plan the user approves three to five cards for one task.
 
 ```bash
 agw-platform capabilities
