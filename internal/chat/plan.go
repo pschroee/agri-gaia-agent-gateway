@@ -261,6 +261,24 @@ func (m *Manager) planMatch(ctx context.Context, chatID string, req platform.Req
 	return st
 }
 
+// planStepLeftOut names the fields of the body of step idx of the session's active plan that the call leaves out
+// (or sends as null), when that is its only difference from the step (B26); nil otherwise.
+func (m *Manager) planStepLeftOut(ctx context.Context, chatID string, idx int, req platform.Request) []string {
+	p, err := m.st.ActivePlan(ctx, chatID, planSession(ctx))
+	if err != nil {
+		return nil
+	}
+	for _, st := range p.Steps {
+		if st.Idx != idx || plan.IsToolStep(st) {
+			continue
+		}
+		if missing, ok := plan.OnlyLeftOut(st, req, m.stepResolve(ctx, chatID, p.Steps)); ok {
+			return missing
+		}
+	}
+	return nil
+}
+
 // planNext is planMatch with what a refusal needs: next is the number of the plan's next open step and differs
 // names the first part of the call that is not the step ("files" when only the uploads differ, issue #172);
 // both are empty/zero without an active plan or on a match.
