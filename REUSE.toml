@@ -15,3 +15,9 @@ path = ["third_party/pi-subagents/**", "third_party/pi-intercom/**"]
 precedence = "override"
 SPDX-FileCopyrightText = ["2026 Nico Bailon", "2026 Philipp Schröer (changes listed in VENDORED.md)"]
 SPDX-License-Identifier = "MIT"
+
+[[annotations]]
+path = "third_party/searxng-suite/**"
+precedence = "override"
+SPDX-FileCopyrightText = "2026 Fedor Vasilev"
+SPDX-License-Identifier = "MIT"
