@@ -2351,7 +2351,7 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 	if access.Effect != delegation.EffectRead || req.Writes() {
 		var nextStep int
 		var differs string
-		step, nextStep, differs = m.planNext(ctx, chatID, req) // nil: no plan step applies
+		step, nextStep, differs, req = m.planNext(ctx, chatID, req) // nil: no plan step applies
 		if step == nil && differs == "files" && len(req.Uploads) > 0 {
 			// The call is the next step but for its files: the user approved other files (issue #172). Not a
 			// fall-back to a single approval, so that the agent notices it left the plan; the step stays open.
