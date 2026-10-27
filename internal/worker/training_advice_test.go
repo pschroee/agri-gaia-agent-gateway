@@ -5,6 +5,8 @@
 package worker
 
 import (
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -86,5 +88,38 @@ func TestPiArgsTrainingAdviceSkill(t *testing.T) {
 		if strings.Contains(strings.Join(args, " "), flag) {
 			t.Errorf("variant %s loads the skill training-advice, it must not", v)
 		}
+	}
+}
+
+// B26 (demo of 27.10.2026, evening): every create-training example in the skills sends export_config. The platform
+// skill's example left it out, the agent copied it, the call differed from its plan step and no inference container
+// could have been built from the model.
+func TestSkillCreateTrainingExamplesSendExport(t *testing.T) {
+	re := regexp.MustCompile("agw-platform create-training [^`\n]*")
+	dirs, err := os.ReadDir(filepath.Join("..", "..", "images/agw-basis/skills"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, d := range dirs {
+		if !d.IsDir() {
+			continue
+		}
+		path := "images/agw-basis/skills/" + d.Name() + "/SKILL.md"
+		if _, err := os.Stat(filepath.Join("..", "..", path)); err != nil {
+			continue
+		}
+		for _, ex := range re.FindAllString(repoFile(t, path), -1) {
+			if !strings.Contains(ex, "@") { // a mention of the command, not an example call
+				continue
+			}
+			n++
+			if !strings.Contains(ex, "--export_config") {
+				t.Errorf("%s: example without --export_config: %s", path, ex)
+			}
+		}
+	}
+	if n == 0 {
+		t.Fatal("no create-training example found")
 	}
 }

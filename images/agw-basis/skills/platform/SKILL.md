@@ -34,8 +34,10 @@ The output is `HTTP <code>` followed by JSON. Exit code 0 ok, 3 rejected by the 
    default values of the `train_config`).
 2. Write the `train_config` as a file, starting from the default values, changing only what the task
    requires (size epochs and images for the hardware named in the line *Platform trainings* of the system note, or in the `capabilities` entry compute).
-3. Create: `agw-platform create-training Torchvision EfficientNet Classification <dataset_id> @train_config.json`
-   — the platform builds the training image in the background. The response names `Location: /tasks/<id>`.
+3. Write the `export_config` as a file too (example in `agw-platform create-training --help`; `input_shapes` follow
+   the img-size) and create: `agw-platform create-training Torchvision EfficientNet Classification <dataset_id> @train_config.json --export_config @export_config.json`
+   — the platform builds the training image in the background. In a plan, the call must carry the same
+   `export_config` as the step. The response names `Location: /tasks/<id>`.
 4. Follow the build: `agw-platform task <id>` until `status` is `completed` or `failed` (not in a tight
    loop; wait at least 20 seconds between queries). When the task is completed, its message names the
    training container ("Train Container #<id> created."); `agw-platform trainings` shows it too.
