@@ -142,7 +142,9 @@ type Chat = {
 // "background" (end of a background task) or "sandbox" (ended with the sandbox), refs the
 // tasks concerned; text is then the orchestrator's header line, below it the data from the sandbox
 // (command, output), which only go to pi fenced (see "Origin of instructions"). System entries can
-// be removed like messages as long as they are open.
+// be removed like messages as long as they are open. Note "job" (#212, #252): the end of an observed job outside a plan; for a check
+// (kind "assessment") refs are [job id, check id] and the text reads "Check <id> finished: <header of the report>" or
+// "Check <id> failed: <error>"; the final test of an ended search also wakes a resting chat, other checks only a live one.
 type QueueEntry = { id: string; chat_id: string; text: string; attachments: string[]; created_at: string; kind: "user" | "system"; note?: string; refs?: string[]; context?: PageContext /* user entries, see "Page context" */; subagent?: SubagentNote /* only note "subagent_user", see "Messages to subagents" */ };
 // Readable part of a passive note about a message to a subagent (note "subagent_user", issue #82). text_head: the first
 // 200 characters of the user's text, then " …" when cut; text of the entry keeps the whole note.

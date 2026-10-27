@@ -6,6 +6,7 @@ package chat
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
@@ -103,8 +104,22 @@ func TestOutsidePlanTrialNoJobNote(t *testing.T) {
 	if err != nil || len(jobs) != 1 {
 		t.Fatalf("jobs: %+v %v", jobs, err)
 	}
-	trialJobs.Store(jobs[0].ID, struct{}{})
-	t.Cleanup(func() { trialJobs.Delete(jobs[0].ID) })
+	// The row of the trial names the job (#252); the mark of the hook is not what decides.
+	s, err := runningSearchIn(t, e, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tr, err := e.st.DeclareTrial(ctx, store.Trial{ChatID: c.ID, SearchID: s.ID, Path: s.Path, Params: json.RawMessage(`{"lr":0.1}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// SetTrialJob only touches a running trial (the hook runs after the start)
+	if ok, err := e.st.ClaimTrialStart(ctx, tr.ID, ""); err != nil || !ok {
+		t.Fatalf("claim: %v %v", ok, err)
+	}
+	if err := e.st.SetTrialJob(ctx, tr.ID, "7", jobs[0].ID); err != nil {
+		t.Fatal(err)
+	}
 	f.set("GET /tasks/7", `{"status":"completed","completion_percentage":1.0}`)
 	runWatchersOnce(t, e)
 	if notes := queueNotes(t, e, c.ID, store.NoteJob); len(notes) != 0 {

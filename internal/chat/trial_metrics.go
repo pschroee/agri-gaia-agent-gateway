@@ -48,7 +48,8 @@ func init() {
 // trialJobs are the jobs the hook has recognised as a trial's; the watcher reads them faster (trialPollEvery).
 var trialJobs sync.Map
 
-// isTrialJob reports whether the job is a trial's, as far as the hook has seen it.
+// isTrialJob reports whether the job is a trial's, as far as the hook has seen it. It only speeds up polling and
+// keeps the observed reads apart; whether a job's end gets a note is decided from the database (isSearchTrialJob).
 func isTrialJob(jobID string) bool {
 	_, ok := trialJobs.Load(jobID)
 	return ok
