@@ -137,3 +137,31 @@ func TestPlanSearchStepGrant(t *testing.T) {
 		t.Fatalf("rules: %+v", del.Rules)
 	}
 }
+
+// B20 (demo 6 of 27.10.2026): the agent's own title and note of a search step are no part of the match – the plan
+// said "Laeufe", the call "Läufe". Everything that decides rights or compute stays exact.
+func TestPlanSearchStepIgnoresFreeText(t *testing.T) {
+	step := `{"tool":"propose_search","args":{"title":"Suche Laeufe","note":"Genau 3 Laeufe","path":"template","base_container_id":"{{step1.id}}",` +
+		`"space":{"lr":{"type":"float","min":0.001,"max":0.1,"scale":"log"}},"budget":` + okBudget + `}}`
+	steps := build(t, `{"title":"t","steps":[`+searchTrainStep+`,`+step+`]}`)
+	tool, _ := platform.Lookup("propose_search")
+	call := func(title, note, budget, space string) platform.Request {
+		args := `{"title":"` + title + `","note":"` + note + `","path":"template","base_container_id":63,"space":` + space + `,"budget":` + budget + `}`
+		r, err := tool.Build(json.RawMessage(args))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return r
+	}
+	space := `{"lr":{"type":"float","min":0.001,"max":0.1,"scale":"log"}}`
+	resolve := func(n int) (string, bool) { return "63", n == 1 }
+	if ok, why := Matches(steps[1], call("Suche Läufe", "Genau 3 Läufe, kein Abbruch", okBudget, space), resolve); !ok {
+		t.Fatalf("other free text of the agent made the call differ: %s", why)
+	}
+	if ok, _ := Matches(steps[1], call("Suche Laeufe", "Genau 3 Laeufe", `{"max_runs":3,"max_compute_minutes":60}`, space), resolve); ok {
+		t.Fatal("another compute budget matched")
+	}
+	if ok, _ := Matches(steps[1], call("Suche Laeufe", "Genau 3 Laeufe", okBudget, `{"lr":{"type":"float","min":0.001,"max":0.5,"scale":"log"}}`), resolve); ok {
+		t.Fatal("another space matched")
+	}
+}
