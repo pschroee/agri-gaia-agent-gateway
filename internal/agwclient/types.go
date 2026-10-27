@@ -409,6 +409,8 @@ type ExpRun struct {
 	ImageExec      string `json:"image_exec,omitempty"`
 	CatalogSHA256  string `json:"catalog_sha256,omitempty"`
 	SkillsSHA256   string `json:"skills_sha256,omitempty"`
+	// InferenceRuntime (#237): the inference runtime of the setup the run was made with.
+	InferenceRuntime string `json:"inference_runtime,omitempty"`
 }
 
 // ExpUsage is GET /api/exp/usage (#161): what a plan has consumed so far. Tokens are input + output
@@ -429,6 +431,7 @@ type ExpEnvironment struct {
 	SkillsSHA256      string               `json:"skills_sha256"`
 	InstructionSHA256 string               `json:"instruction_sha256"`
 	APIIndexSHA256    string               `json:"api_index_sha256"`
+	InferenceRuntime  string               `json:"inference_runtime,omitempty"` // #237
 	ImagesPi          []string             `json:"images_pi"`
 	ImagesExec        []string             `json:"images_exec"`
 	Slots             []ExpEnvironmentSlot `json:"slots"`

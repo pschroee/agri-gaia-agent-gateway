@@ -31,7 +31,8 @@ CREATE TABLE IF NOT EXISTS exp_runs (
     image_pi        text NOT NULL DEFAULT '',       -- X8.2, image ID the run's slot used
     image_exec      text NOT NULL DEFAULT '',
     catalog_sha256  text NOT NULL DEFAULT '',
-    skills_sha256   text NOT NULL DEFAULT ''
+    skills_sha256   text NOT NULL DEFAULT '',
+    inference_runtime text NOT NULL DEFAULT ''      -- #237, AGW_INFERENCE_RUNTIME the run was made with
 );
 CREATE INDEX IF NOT EXISTS exp_runs_plan ON exp_runs (plan, cell, position);
 CREATE INDEX IF NOT EXISTS exp_runs_key ON exp_runs (run_key);
@@ -41,3 +42,4 @@ ALTER TABLE exp_runs ADD COLUMN IF NOT EXISTS image_pi text NOT NULL DEFAULT '';
 ALTER TABLE exp_runs ADD COLUMN IF NOT EXISTS image_exec text NOT NULL DEFAULT '';
 ALTER TABLE exp_runs ADD COLUMN IF NOT EXISTS catalog_sha256 text NOT NULL DEFAULT '';
 ALTER TABLE exp_runs ADD COLUMN IF NOT EXISTS skills_sha256 text NOT NULL DEFAULT '';
+ALTER TABLE exp_runs ADD COLUMN IF NOT EXISTS inference_runtime text NOT NULL DEFAULT '';

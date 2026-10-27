@@ -40,6 +40,7 @@ type PlanRun struct {
 	ImageExec          string
 	CatalogSHA256      string
 	SkillsSHA256       string
+	InferenceRuntime   string
 	StartedAt, EndedAt *time.Time
 	DurationMs         *int64
 }
@@ -50,7 +51,7 @@ func (s *Store) PlanRuns(ctx context.Context, plan string) ([]PlanRun, error) {
  pass, COALESCE(end_reason,''), COALESCE(superseded_by,''), COALESCE(status,''), started_at, ended_at,
  CASE WHEN ended_at IS NOT NULL THEN (extract(epoch FROM ended_at-started_at)*1000)::bigint END,
  COALESCE(gateway_version,''), COALESCE(plan_sha256,''),
- COALESCE(image_pi,''), COALESCE(image_exec,''), COALESCE(catalog_sha256,''), COALESCE(skills_sha256,'')
+ COALESCE(image_pi,''), COALESCE(image_exec,''), COALESCE(catalog_sha256,''), COALESCE(skills_sha256,''), COALESCE(inference_runtime,'')
 FROM exp_runs WHERE plan=$1 ORDER BY position, run_key, id`, plan)
 	if err != nil {
 		return nil, err
@@ -62,7 +63,7 @@ FROM exp_runs WHERE plan=$1 ORDER BY position, run_key, id`, plan)
 		var pass *bool
 		if err := rows.Scan(&r.ID, &r.RunID, &r.Cell, &r.Task, &r.Rep, &r.ChatID, &r.Model, &pass, &r.EndReason,
 			&r.SupersededBy, &r.Status, &r.StartedAt, &r.EndedAt, &r.DurationMs, &r.GatewayVersion, &r.PlanSHA256,
-			&r.ImagePi, &r.ImageExec, &r.CatalogSHA256, &r.SkillsSHA256); err != nil {
+			&r.ImagePi, &r.ImageExec, &r.CatalogSHA256, &r.SkillsSHA256, &r.InferenceRuntime); err != nil {
 			return nil, err
 		}
 		r.Pass = pass
@@ -189,7 +190,7 @@ func (s *Store) exportRuns(ctx context.Context, plan string) (*ExportTable, erro
 	}
 	cols := []string{"run_id", "cell", "task", "rep", "id", "chat_id", "model", "model_role", "pass", "end_reason", "status",
 		"superseded_by", "binding", "protection", "attack", "started_at", "ended_at", "duration_ms", "gateway_version", "plan_sha256",
-		"image_pi", "image_exec", "catalog_sha256", "skills_sha256"}
+		"image_pi", "image_exec", "catalog_sha256", "skills_sha256", "inference_runtime"}
 	out := &ExportTable{Name: "runs", Columns: cols}
 	for _, r := range runs {
 		binding, protection, attack, role := cellParts(r.Cell)
@@ -203,7 +204,7 @@ func (s *Store) exportRuns(ctx context.Context, plan string) (*ExportTable, erro
 		}
 		out.Rows = append(out.Rows, []any{r.RunID, r.Cell, r.Task, r.Rep, r.ID, r.ChatID, r.Model, role, pass,
 			r.EndReason, r.Status, r.SupersededBy, binding, protection, attack, r.StartedAt, r.EndedAt, dur, r.GatewayVersion, r.PlanSHA256,
-			r.ImagePi, r.ImageExec, r.CatalogSHA256, r.SkillsSHA256})
+			r.ImagePi, r.ImageExec, r.CatalogSHA256, r.SkillsSHA256, r.InferenceRuntime})
 	}
 	return out, nil
 }

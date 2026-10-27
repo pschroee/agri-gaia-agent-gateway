@@ -17,6 +17,7 @@ import (
 	"agw/internal/chat"
 	"agw/internal/config"
 	"agw/internal/exp"
+	"agw/internal/platform"
 	"agw/internal/version"
 )
 
@@ -55,6 +56,7 @@ func (s *Server) environment() exp.Environment {
 	if out.APIIndexSHA256 == "" {
 		out.APIIndexSHA256 = s.APIIndex.SHA256()
 	}
+	out.InferenceRuntime = platform.DefaultRuntime() // #237: a setting, not part of the build
 	out.Slots = nil
 	out.ImagesPi, out.ImagesExec = nil, nil
 	piImages, execImages := map[string]bool{}, map[string]bool{}
