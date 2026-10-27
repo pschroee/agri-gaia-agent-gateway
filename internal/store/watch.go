@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -72,6 +73,97 @@ type WatchJob struct {
 	// LastEpoch: the last training epoch a poll reported (EpochFigures as JSON); empty for other kinds and
 	// before the first epoch (issue #221).
 	LastEpoch json.RawMessage `json:"last_epoch,omitempty"`
+	// History is the list of phases the job went through, oldest first (issue #246); filled by the list of a
+	// chat's jobs, empty elsewhere.
+	History []WatchEvent `json:"history,omitempty"`
+}
+
+// MaxJobEvents is how many phase entries one job keeps (issue #246).
+const MaxJobEvents = 30
+
+// WatchEvent is one phase of a job: when it began, its text, the state of the job then and the percent if known.
+type WatchEvent struct {
+	At      time.Time `json:"at"`
+	Text    string    `json:"text"`
+	State   string    `json:"state,omitempty"`
+	Percent *float64  `json:"percent,omitempty"`
+}
+
+// PhaseKey is what makes two texts the same phase: the text up to the first " · " without a trailing
+// parenthesis, so that "Training (epoch 3/10)" and "Building the image · step 2/7 · RUN x" stay one phase each.
+func PhaseKey(text string) string {
+	if i := strings.Index(text, " · "); i >= 0 {
+		text = text[:i]
+	}
+	if i := strings.Index(text, " ("); i >= 0 && strings.HasSuffix(text, ")") {
+		text = text[:i]
+	}
+	return strings.TrimSpace(text)
+}
+
+// RecordJobPhase appends an entry to the history of a job when its phase (PhaseKey of text) or its state differs from
+// the last entry's, and keeps at most MaxJobEvents entries by dropping the oldest intermediate one. It returns whether an
+// entry was added. An empty text adds nothing.
+func (s *Store) RecordJobPhase(ctx context.Context, jobID, text, state string, percent *float64) (bool, error) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return false, nil
+	}
+	if state == "" {
+		state = JobRunning
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback(ctx)
+	// One writer per job at a time: the lock sits on the job's row.
+	if _, err := tx.Exec(ctx, `SELECT 1 FROM watch_jobs WHERE id=$1 FOR UPDATE`, jobID); err != nil {
+		return false, err
+	}
+	var last, lastState string
+	err = tx.QueryRow(ctx, `SELECT text, state FROM watch_job_events WHERE job_id=$1 ORDER BY seq DESC LIMIT 1`, jobID).Scan(&last, &lastState)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return false, err
+	}
+	if err == nil && PhaseKey(last) == PhaseKey(text) && lastState == state {
+		return false, nil
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO watch_job_events (job_id, text, state, percent) VALUES ($1,$2,$3,$4)`, jobID, text, state, percent); err != nil {
+		return false, err
+	}
+	// Over the cap: drop the oldest entry that is neither the first nor the last.
+	if _, err := tx.Exec(ctx, `DELETE FROM watch_job_events WHERE seq = (
+SELECT seq FROM watch_job_events WHERE job_id=$1 AND seq > (SELECT min(seq) FROM watch_job_events WHERE job_id=$1)
+AND seq < (SELECT max(seq) FROM watch_job_events WHERE job_id=$1) ORDER BY seq LIMIT 1)
+AND (SELECT count(*) FROM watch_job_events WHERE job_id=$1) > $2`, jobID, MaxJobEvents); err != nil {
+		return false, err
+	}
+	return true, tx.Commit(ctx)
+}
+
+// JobEvents returns the history of one job, oldest first.
+func (s *Store) JobEvents(ctx context.Context, jobID string) ([]WatchEvent, error) {
+	m, err := s.jobEventsOf(ctx, `job_id=$1`, jobID)
+	return m[jobID], err
+}
+
+func (s *Store) jobEventsOf(ctx context.Context, where string, arg any) (map[string][]WatchEvent, error) {
+	rows, err := s.pool.Query(ctx, `SELECT job_id, at, text, state, percent FROM watch_job_events WHERE `+where+` ORDER BY seq`, arg)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string][]WatchEvent{}
+	for rows.Next() {
+		var id string
+		var e WatchEvent
+		if err := rows.Scan(&id, &e.At, &e.Text, &e.State, &e.Percent); err != nil {
+			return nil, err
+		}
+		out[id] = append(out[id], e)
+	}
+	return out, rows.Err()
 }
 
 // EpochFigures is the last epoch of a training run: the number, the planned number of epochs and the figures
@@ -207,7 +299,19 @@ func (s *Store) ChatWatchJobs(ctx context.Context, chatID string) ([]WatchJob, e
 		}
 		out = append(out, j)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+	// The phases of all jobs of the chat in one query (issue #246).
+	events, err := s.jobEventsOf(ctx, `job_id IN (SELECT id FROM watch_jobs WHERE chat_id=$1)`, chatID)
+	if err != nil {
+		return nil, err
+	}
+	for i := range out {
+		out[i].History = events[out[i].ID]
+	}
+	return out, nil
 }
 
 // SetJobProgress writes what a poll found and marks the row as checked (see UpdateJobProgress).

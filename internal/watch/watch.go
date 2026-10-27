@@ -42,6 +42,9 @@ type Progress struct {
 	State   string   // "running" | "done" | "failed"
 	Percent *float64 // 0..100, nil = unknown
 	Message string   // one line, from the platform, at most 200 runes
+	// Phase is the text the history of the job (issue #246) records when the kind works out its phases itself
+	// (a training run); empty: the history takes Message.
+	Phase   string
 	LogTail string   // at most 20 lines / 4000 runes
 	Outputs []Output // objects the job produced: {Resource, ID, Label}
 	// Created is the object a later plan step means by {{stepN.id}}; only with StateDone, read by the

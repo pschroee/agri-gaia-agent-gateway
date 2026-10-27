@@ -97,7 +97,35 @@ func pollTrainingRun(ctx context.Context, j Job, read Reader) (Progress, error) 
 		p.State = StateFailed
 	}
 	p.Percent = MetricsPercent(p.Metrics, p.State == StateDone)
+	p.Phase = trainingPhase(doc.Status, p.State, p.Metrics)
 	return p, nil
+}
+
+// trainingPhase is the phase of a training run for the history of its job (issue #246): "Pulling the image" while the
+// container is not running yet, "Training (epoch n/m)" while the epochs go on, "Saving the model" once the last
+// epoch is in and the container still runs, "Finished" or "Failed" at the end. The epoch numbers change inside one
+// phase (store.PhaseKey), so they add no entry.
+func trainingPhase(dockerStatus, state string, m *Metrics) string {
+	switch state {
+	case StateDone:
+		return "Finished"
+	case StateFailed:
+		return "Failed"
+	}
+	if dockerStatus != "running" {
+		return "Pulling the image"
+	}
+	if m == nil || len(m.Epochs) == 0 {
+		return "Training"
+	}
+	last := m.Epochs[len(m.Epochs)-1]
+	if last.Epochs < 1 {
+		return "Training"
+	}
+	if last.Epoch >= last.Epochs {
+		return "Saving the model"
+	}
+	return fmt.Sprintf("Training (epoch %d/%d)", last.Epoch, last.Epochs)
 }
 
 // metricsDoc is the answer to GET /train/containers/<id>/metrics (issue #168, backend fork): the lines of

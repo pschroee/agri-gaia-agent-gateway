@@ -48,3 +48,15 @@ ALTER TABLE watch_jobs ADD COLUMN IF NOT EXISTS run_started_at timestamptz;
 ALTER TABLE watch_jobs ADD COLUMN IF NOT EXISTS run_ended_at timestamptz;
 -- Last training epoch as JSON {epoch, epochs, values, at} (issue #221); empty until a poll reports one.
 ALTER TABLE watch_jobs ADD COLUMN IF NOT EXISTS last_epoch text NOT NULL DEFAULT '';
+
+-- History of the phases of a job (issue #246): one row when the phase or the state of a job changes, at most 30
+-- per job (the oldest intermediate phases fall away, the first and the last stay).
+CREATE TABLE IF NOT EXISTS watch_job_events (
+    seq     bigserial PRIMARY KEY,
+    job_id  text NOT NULL REFERENCES watch_jobs(id) ON DELETE CASCADE,
+    at      timestamptz NOT NULL DEFAULT now(),
+    text    text NOT NULL,
+    state   text NOT NULL DEFAULT 'running',
+    percent double precision
+);
+CREATE INDEX IF NOT EXISTS watch_job_events_job ON watch_job_events (job_id, seq);
