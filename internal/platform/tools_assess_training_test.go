@@ -32,12 +32,12 @@ func TestAssessTrainingToolsInTable(t *testing.T) {
 	if string(req.Body) != `{"dataset_id":12,"name":"mnist-train","train_share":80}` {
 		t.Errorf("split body: %s", req.Body)
 	}
-	// The default name and share are the gateway's (nothing is sent for them).
+	// The default share is written into the call (issue #236); the default name is the gateway's, derived from the source.
 	req, err = split.Build(json.RawMessage(`{"dataset_id":12}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(req.Body) != `{"dataset_id":12}` {
+	if string(req.Body) != `{"dataset_id":12,"train_share":70}` {
 		t.Errorf("split body without name and share: %s", req.Body)
 	}
 	for _, raw := range []string{`{}`, `{"dataset_id":0}`, `{"dataset_id":"x"}`,
