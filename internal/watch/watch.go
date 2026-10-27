@@ -103,6 +103,9 @@ type Kind struct {
 	Resource string
 	Poll     func(ctx context.Context, j Job, read Reader) (Progress, error)
 	Stop     func(j Job) (platform.Request, bool)
+	// EndNote: the end of a job of this kind is told to the agent outside a plan (#252). The start is not: the
+	// call that starts such a job has its own answer.
+	EndNote bool
 }
 
 // Ref reads the job's reference (e.g. the task id) out of a call and its answer.
@@ -172,6 +175,16 @@ var outsidePlanKinds = map[string]bool{kindPlatformTask: true, kindTrainingRun: 
 // AnnouncedOutsidePlan reports whether a job of this kind outside a plan gets a note in the answer of the call
 // that started it and a note at its end (#212).
 func AnnouncedOutsidePlan(kind string) bool { return outsidePlanKinds[kind] }
+
+// TellsEndOutsidePlan reports whether the end of a job of this kind outside a plan is told to the agent: the kinds
+// of AnnouncedOutsidePlan, and every registered kind that asks for it with Kind.EndNote (#252).
+func TellsEndOutsidePlan(kind string) bool {
+	if outsidePlanKinds[kind] {
+		return true
+	}
+	k, ok := Lookup(kind)
+	return ok && k.EndNote
+}
 
 var (
 	taskReadRe     = regexp.MustCompile(`^/tasks/([0-9]+)$`)

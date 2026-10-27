@@ -262,7 +262,7 @@ func (s *Service) assessOwnFile(ctx context.Context, chatID string, body assessR
 		return errResult(err.Error()), nil
 	}
 	return jsonResult(assessAnswer{CheckID: id, State: store.AssessQueued,
-		Note: "follow it with {{tool:assess_status}}; the gateway also wakes you when it is done"})
+		Note: "follow it with {{tool:assess_status}}; the gateway tells you when it is done while this chat is open (a resting chat is woken for the final test of a search and for plan steps)"})
 }
 
 // defaultEvalDatasetForSeen names the dataset a check measures on when the agent names none (R1.5, R2.2):
