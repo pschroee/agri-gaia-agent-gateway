@@ -39,6 +39,9 @@ func TestPlanToolsStaticDefaultsSameCall(t *testing.T) {
 		{"annotation_rollback", `{"source_id":"run-1"}`, `{"source_id":"run-1","scope":"all"}`},
 		{"assess_model", `{"model_id":3}`, `{"model_id":3,"final":false}`},
 		{"split_dataset", `{"dataset_id":5}`, `{"dataset_id":5,"train_share":70}`},
+		{"annotation_fill", `{"dataset_id":5,"function":"f"}`, `{"dataset_id":5,"function":"f","min_confidence":50,"limit":1000}`},
+		{"notebook_run", `{"files":["/workspace/train.py"],"entry":"train.py"}`, `{"files":["/workspace/train.py"],"entry":"train.py","timeout_minutes":120}`},
+		{"upload_dataset", `{"name":"d","description":"x","files":["/workspace/a.png"]}`, `{"name":"d","description":"x","files":["/workspace/a.png"],"dataset_type":"AgriImageDataResource","metadata":{}}`},
 	}
 	for _, c := range cases {
 		tool, ok := Lookup(c.tool)
@@ -52,8 +55,11 @@ func TestPlanToolsStaticDefaultsSameCall(t *testing.T) {
 			t.Errorf("%s: build failed: %v / %v", c.tool, errA, errB)
 			continue
 		}
-		if a.Method != b.Method || a.Path != b.Path || string(a.Body) != string(b.Body) {
-			t.Errorf("%s: minimal %s %s %s, explicit %s %s %s", c.tool, a.Method, a.Path, a.Body, b.Method, b.Path, b.Body)
+		// the whole request (method, path, query, body, form and files of the multipart uploads)
+		ja, _ := json.Marshal(a)
+		jb, _ := json.Marshal(b)
+		if string(ja) != string(jb) {
+			t.Errorf("%s: minimal %s, explicit %s", c.tool, ja, jb)
 		}
 	}
 }

@@ -112,7 +112,7 @@ func TestModelNamesRenameBeforeBuild(t *testing.T) {
 	if _, err := problemsOf(t, imagePlan(imgModelStep, rename, build)); err != nil {
 		t.Fatalf("with update_model: %v", err)
 	}
-	if _, err := problemsOf(t, imagePlan(imgModelStep, build, rename)); err == nil || !strings.Contains(err.Error(), "Triton") {
+	if _, err := problemsOf(t, imagePlan(imgModelStep, build, rename)); err == nil || !strings.Contains(err.Error(), "inference server cannot address") {
 		t.Fatalf("a rename after the build does not count: %v", err)
 	}
 }
