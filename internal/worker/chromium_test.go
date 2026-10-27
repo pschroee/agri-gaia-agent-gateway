@@ -74,10 +74,17 @@ func TestDockerfileChromiumOffline(t *testing.T) {
 	for _, w := range []string{
 		"COPY images/agw-basis/chromium/netcheck.py /opt/agw/chromium/netcheck.py",
 		"rm -f /etc/chromium.d/extensions /etc/chromium.d/apikeys",
-		"plotly==7.1.0", "kaleido==1.5.0", "choreographer==1.4.0",
 	} {
 		if !strings.Contains(exec, w) {
 			t.Errorf("Dockerfile stage exec lacks %q", w)
+		}
+	}
+	// plotly, kaleido and choreographer are pinned in the hashed lock (#242); kaleido's switches and MathJax host are
+	// what the allow list below depends on.
+	lock := repoFile(t, "images/agw-basis/python/requirements.lock")
+	for _, w := range []string{"\nplotly==7.1.0 ", "\nkaleido==1.5.0 ", "\nchoreographer==1.4.0 "} {
+		if !strings.Contains(lock, w) {
+			t.Errorf("requirements.lock lacks %q", strings.TrimSpace(w))
 		}
 	}
 	calls := regexp.MustCompile(`netcheck\.py[^\n]*`).FindAllString(exec, -1)

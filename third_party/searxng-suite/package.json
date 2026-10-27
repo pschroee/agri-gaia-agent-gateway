@@ -1,0 +1,53 @@
+{
+  "name": "@blazer2k/searxng-suite",
+  "version": "0.2.3",
+  "description": "SearxNG-based web search with category filtering and multi-format URL extraction for pi.",
+  "type": "module",
+  "keywords": [
+    "pi",
+    "pi-package",
+    "searxng",
+    "web-search",
+    "web-fetch"
+  ],
+  "author": "Fedor Vasilev",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/blazer2k/pi-blz.git",
+    "directory": "packages/searxng-suite"
+  },
+  "bugs": {
+    "url": "https://github.com/blazer2k/pi-blz/issues"
+  },
+  "homepage": "https://github.com/blazer2k/pi-blz/tree/main/packages/searxng-suite#readme",
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "src",
+    "images",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "dependencies": {
+    "linkedom": "^0.18.12",
+    "turndown": "^7.2.4",
+    "unpdf": "^1.6.2"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  },
+  "devDependencies": {
+    "@types/turndown": "^5.0.6"
+  },
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ],
+    "image": "https://raw.githubusercontent.com/blazer2k/pi-blz/main/packages/searxng-suite/images/bg.jpg"
+  }
+}

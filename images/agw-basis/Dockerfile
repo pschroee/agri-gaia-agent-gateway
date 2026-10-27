@@ -5,7 +5,7 @@
 #   --target exec  agwpoc/agw-basis   Execution sandbox: Python, Typst, tools, agw-artifact.
 #                                     No pi. All of the agent's tools run here.
 
-FROM golang:1.26-bookworm AS build
+FROM golang:1.26-bookworm@sha256:632dff7351799a5a9954a48dc06670ade72ee44e8c351cdc0e5a57af2fea21af AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
@@ -19,34 +19,36 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/agw-artifact ./cmd
 
 # ---------------------------------------------------------------------------
 # pi container. Node.js LTS (24, active LTS since October 2025); pi requires at least 22.19.
-FROM node:24-bookworm-slim AS pi
+FROM node:24-bookworm-slim@sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b346054fdc8ee9957a2b55d205 AS pi
 ARG PI_VERSION=0.87.1
 RUN npm install -g @earendil-works/pi-coding-agent@${PI_VERSION} \
  && npm cache clean --force
 # The agent's task list: tool `todo` from rpiv-todo (choice justified in docs/design.md,
 # "Tasks"). The state lives in the tool results of the pi session, not in files.
-# Before pi-subagents, because `pi install` via npm removes unlisted packages in the same prefix.
 ARG RPIV_TODO_VERSION=2.11.0
 # Web search: web_search and web_extract from searxng-suite (MIT, unchanged; published as pi-searxng-suite until the
 # author unpublished it on 2026-10-25 and released the same code as @blazer2k/searxng-suite, sources under src/). The requests go
 # through the orchestrator's web proxy to our own SearXNG or to the web, only with internet;
 # ext/web-tools.ts loads it and sets fuller tool texts; web-gate.ts hides the tools without internet (docs/design.md, "Web search").
+# Our own copy third_party/searxng-suite, because the package can be unpublished at any time (#242).
 ARG SEARXNG_SUITE_VERSION=0.2.3
 # Messages between the sessions of a slot (main agent and subagents): pi-intercom (MIT),
-# tool intercom; the broker runs in the pi container over a Unix socket in the home. pi install
-# fetches the package and its dependencies (tsx); our own copy third_party/pi-intercom then
-# replaces the package's files (change: VENDORED.md).
+# tool intercom; the broker runs in the pi container over a Unix socket in the home. Our own copy
+# third_party/pi-intercom (change: VENDORED.md); only its dependency tsx comes from npm.
 ARG PI_INTERCOM_VERSION=0.15.0
-RUN PI_CODING_AGENT_DIR=/opt/agw/pihome pi install npm:@juicesharp/rpiv-todo@${RPIV_TODO_VERSION} \
- && PI_CODING_AGENT_DIR=/opt/agw/pihome pi install npm:@blazer2k/searxng-suite@${SEARXNG_SUITE_VERSION} \
- && PI_CODING_AGENT_DIR=/opt/agw/pihome pi install npm:pi-intercom@${PI_INTERCOM_VERSION} \
- && test -f /opt/agw/pihome/npm/node_modules/pi-intercom/index.ts \
- && test -f /opt/agw/pihome/npm/node_modules/@juicesharp/rpiv-todo/index.ts \
- && test -f /opt/agw/pihome/npm/node_modules/@blazer2k/searxng-suite/src/index.ts \
+# Where `pi install` would put the packages: /opt/agw/pihome/npm. Nothing is fetched by `pi install` any more (#242):
+# rpiv-todo and the dependencies of the two copies below come from images/agw-basis/pi-packages (package-lock.json
+# with integrity, npm ci), the copies from third_party. At runtime pi loads the extensions explicitly via -e.
+COPY images/agw-basis/pi-packages /opt/agw/pihome/npm
+RUN cd /opt/agw/pihome/npm \
+ && npm ci --omit=dev --ignore-scripts --no-audit --no-fund \
  && npm cache clean --force
+COPY third_party/searxng-suite /opt/agw/pihome/npm/node_modules/@blazer2k/searxng-suite
 COPY third_party/pi-intercom /opt/agw/pihome/npm/node_modules/pi-intercom
 RUN grep -q '"version": "0.15.0"' /opt/agw/pihome/npm/node_modules/pi-intercom/package.json \
- && grep -q "PI_INTERCOM_REFUSE_WHEN_BUSY" /opt/agw/pihome/npm/node_modules/pi-intercom/index.ts
+ && grep -q "PI_INTERCOM_REFUSE_WHEN_BUSY" /opt/agw/pihome/npm/node_modules/pi-intercom/index.ts \
+ && node /opt/agw/pihome/npm/check.mjs \
+ && rm /opt/agw/pihome/npm/check.mjs
 COPY images/agw-basis/ext /opt/agw/ext
 # Subagents: our own copy of pi-subagents in the repo (third_party/pi-subagents, 0.73.1 with one
 # change, see third_party/pi-subagents/VENDORED.md): it takes the worker for workflowScript from
@@ -97,7 +99,7 @@ ENTRYPOINT ["/usr/local/bin/agw-exec", "pi-entry"]
 
 # ---------------------------------------------------------------------------
 # Execution sandbox: Debian, Node (for the agent's node/npm), Python and common tools.
-FROM node:24-bookworm-slim AS exec
+FROM node:24-bookworm-slim@sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b346054fdc8ee9957a2b55d205 AS exec
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       python3 python3-pip python3-venv curl jq ripgrep git ca-certificates procps \
@@ -110,36 +112,56 @@ RUN apt-get update \
 # matplotlib draws without a display (Agg); the agent saves charts as PNG and shows
 # them via Markdown (skill charts). The font cache is created on the first import in
 # ~/.cache/matplotlib (tmpfs, writable, about 0.5 s).
-# onnxruntime pinned (R0.15): the result checks run a model in a container of this image with it, and a
-# rebuild must not pull another version (unpinned broke the build once, see CLAUDE.md). Side effect: the
-# agent can load ONNX models in its sandbox as well.
-# plotly, kaleido and choreographer pinned (#229): the Chromium network check depends on kaleido's switches and its
-# MathJax host.
-RUN pip3 install --no-cache-dir --break-system-packages numpy pandas matplotlib jinja2 \
-    plotly==7.1.0 kaleido==1.5.0 choreographer==1.4.0 openpyxl \
-    onnxruntime==1.20.1 \
+# All Python packages come from one lock with hashes (#242): images/agw-basis/python/requirements.lock lists every
+# package, direct or transitive, with its exact version and the sha256 of its wheels (CPython 3.11, x86_64 and aarch64);
+# --require-hashes makes pip refuse anything that is missing or different, --no-deps and --only-binary keep it from
+# resolving or building. To bump see the header of the lock and python/hash-lock.py.
+# onnxruntime (R0.15): the result checks run a model in a container of this image with it, and a rebuild must not pull
+# another version (unpinned broke the build once, see CLAUDE.md). The image has run with 1.30.0 (the version
+# markitdown's dependencies needed) since October 2026; the earlier pin 1.20.1 was overridden by it and is gone. Side
+# effect: the agent can load ONNX models in its sandbox as well.
+# plotly, kaleido and choreographer (#229): the Chromium network check depends on kaleido's switches and its MathJax
+# host. nbformat, nbclient and ipykernel (issue #193): the same versions as the notebook server image, so that a
+# notebook tested here runs the same there. markitdown converts documents to Markdown for the agent (skill documents):
+# Word (docx), Excel (xlsx, xls), PowerPoint (pptx), Outlook (msg), PDF as a fallback to pdftotext; HTML, CSV, EPUB,
+# JSON and XML need no extra. Internet is off in the sandbox, so it has to be in the image. The check converts a
+# generated workbook.
+ARG MARKITDOWN_VERSION=0.1.8
+COPY images/agw-basis/python/requirements.lock /tmp/requirements.lock
+RUN pip3 install --no-cache-dir --break-system-packages --require-hashes --no-deps --only-binary :all: \
+      -r /tmp/requirements.lock \
+ && rm -f /tmp/requirements.lock \
+ && pip3 check \
  && MPLBACKEND=Agg python3 -c "import numpy, pandas, matplotlib.pyplot" \
- && python3 -c "import onnxruntime, PIL; print('onnxruntime', onnxruntime.__version__)"
+ && python3 -c "import onnxruntime, PIL; print('onnxruntime', onnxruntime.__version__)" \
+ && python3 -c "import nbformat, nbclient, ipykernel; print('nbclient', nbclient.__version__)" \
+ && cd /tmp \
+ && python3 -c "import openpyxl; wb = openpyxl.Workbook(); wb.active.append(['Pen', 'Pigs']); wb.active.append(['B3', 42]); wb.save('t.xlsx')" \
+ && markitdown t.xlsx | grep -q '| B3 | 42 |' \
+ && rm -f t.xlsx \
+ && markitdown --version | grep -q "${MARKITDOWN_VERSION}"
 ENV MPLBACKEND=Agg
-# Notebook runs (issue #193): the same versions as the notebook server image, so that a notebook tested here runs the
-# same there. agw-run-notebook is the starter the notebook server uses, too (one file, embedded in the gateway).
-RUN pip3 install --no-cache-dir --break-system-packages nbformat==5.10.4 nbclient==0.10.4 ipykernel==7.2.0 \
- && python3 -c "import nbformat, nbclient, ipykernel; print('nbclient', nbclient.__version__)"
+# agw-run-notebook is the starter the notebook server uses, too (one file, embedded in the gateway).
 COPY internal/notebook/launcher/agw_run_notebook.py /usr/local/bin/agw-run-notebook
 RUN chmod 0755 /usr/local/bin/agw-run-notebook
 # Typst (pinned version) and a fixed selection of packages. The packages are
 # loaded at build time into a cache that is read-only at runtime: exactly these
 # work in the sandbox, others cannot be fetched.
+# The tarball is checked against the sha256 of the release asset (#242), per architecture.
 ARG TYPST_VERSION=0.14.2
+ARG TYPST_SHA256_AMD64=a6044cbad2a954deb921167e257e120ac0a16b20339ec01121194ff9d394996d
+ARG TYPST_SHA256_ARM64=491b101aa40a3a7ea82a3f8a6232cabb4e6a7e233810082e5ac812d43fdcd47a
 ARG TARGETARCH
 COPY images/agw-basis/typst/packages.txt /opt/typst/packages.txt
 RUN case "${TARGETARCH:-$(dpkg --print-architecture)}" in \
-      arm64) T=aarch64 ;; amd64) T=x86_64 ;; *) echo "architecture not supported" >&2; exit 1 ;; \
+      arm64) T=aarch64 S="${TYPST_SHA256_ARM64}" ;; amd64) T=x86_64 S="${TYPST_SHA256_AMD64}" ;; \
+      *) echo "architecture not supported" >&2; exit 1 ;; \
     esac \
- && curl -fsSL "https://github.com/typst/typst/releases/download/v${TYPST_VERSION}/typst-${T}-unknown-linux-musl.tar.xz" \
-    | tar -xJ -C /tmp \
+ && curl -fsSL -o /tmp/typst.tar.xz "https://github.com/typst/typst/releases/download/v${TYPST_VERSION}/typst-${T}-unknown-linux-musl.tar.xz" \
+ && echo "${S}  /tmp/typst.tar.xz" | sha256sum -c - \
+ && tar -xJf /tmp/typst.tar.xz -C /tmp \
  && install -m 0755 /tmp/typst-${T}-unknown-linux-musl/typst /usr/local/bin/typst \
- && rm -rf /tmp/typst-* \
+ && rm -rf /tmp/typst-* /tmp/typst.tar.xz \
  && cd /tmp && grep -vE '^\s*(#|$)' /opt/typst/packages.txt \
     | awk '{print "#import \"@preview/" $1 "\""}' > warm.typ && echo "ok" >> warm.typ \
  && TYPST_PACKAGE_CACHE_PATH=/opt/typst/packages typst compile warm.typ warm.pdf \
@@ -151,16 +173,28 @@ ENV TYPST_PACKAGE_CACHE_PATH=/opt/typst/packages
 # Debian instead of Puppeteer's download. The mmdc command is a wrapper that passes the
 # Puppeteer settings: --no-sandbox, because the container is the boundary and Chromium's
 # own sandbox would need namespaces; --disable-dev-shm-usage, because /dev/shm has only 64 MB.
+# The whole dependency tree comes from images/agw-basis/mmdc/package-lock.json (npm ci, integrity; #242), installed
+# into the layout `npm install -g` would give (the package in /usr/local/lib/node_modules/@mermaid-js/mermaid-cli with its
+# dependencies in its own node_modules), so the package list the gateway reports shows one package, not hundreds.
+# puppeteer is the peer dependency of mermaid-cli, pinned in the same package.json.
 ARG MERMAID_CLI_VERSION=12.0.0
+COPY images/agw-basis/mmdc/package.json images/agw-basis/mmdc/package-lock.json /tmp/mmdc/
 RUN apt-get update \
  && apt-get install -y --no-install-recommends chromium fonts-liberation fonts-noto-core \
  && rm -rf /var/lib/apt/lists/* \
- && PUPPETEER_SKIP_DOWNLOAD=1 npm install -g --no-fund --no-audit @mermaid-js/mermaid-cli@${MERMAID_CLI_VERSION} \
+ && cd /tmp/mmdc \
+ && PUPPETEER_SKIP_DOWNLOAD=1 npm ci --omit=dev --ignore-scripts --no-fund --no-audit \
+ && mkdir -p /usr/local/lib/node_modules/@mermaid-js \
+ && mv node_modules/@mermaid-js/mermaid-cli /usr/local/lib/node_modules/@mermaid-js/mermaid-cli \
+ && mv node_modules /usr/local/lib/node_modules/@mermaid-js/mermaid-cli/node_modules \
+ && chmod 0755 /usr/local/lib/node_modules/@mermaid-js/mermaid-cli/src/cli.js \
+ && ln -s ../lib/node_modules/@mermaid-js/mermaid-cli/src/cli.js /usr/local/bin/mmdc-real \
+ && grep -q "\"version\": \"${MERMAID_CLI_VERSION}\"" /usr/local/lib/node_modules/@mermaid-js/mermaid-cli/package.json \
+ && cd / && rm -rf /tmp/mmdc \
  && npm cache clean --force \
  && mkdir -p /opt/agw/mmdc \
  && printf '%s\n' '{"executablePath":"/usr/bin/chromium","args":["--no-sandbox","--disable-gpu","--disable-dev-shm-usage"]}' \
       > /opt/agw/mmdc/puppeteer.json \
- && mv /usr/local/bin/mmdc /usr/local/bin/mmdc-real \
  && printf '%s\n' '#!/bin/sh' 'exec /usr/local/bin/mmdc-real -p /opt/agw/mmdc/puppeteer.json "$@"' > /usr/local/bin/mmdc \
  && chmod 0755 /usr/local/bin/mmdc \
  && printf 'flowchart LR\n  A["Größe prüfen"] --> B["fertig"]\n' > /tmp/t.mmd \
@@ -196,29 +230,20 @@ RUN rm -f /etc/chromium.d/extensions /etc/chromium.d/apikeys \
  && test -s n.png && test -s n-plotly.png && rm -f n.mmd n.png n-plotly.png
 # fd for the find tool (M2): pi calls fd with fixed arguments and otherwise downloads it itself;
 # here is a pinned version (the one pi 0.87.1 pins for darwin/x64).
+# The tarball is checked against the sha256 of the release asset (#242), per architecture.
 ARG FD_VERSION=10.3.0
+ARG FD_SHA256_AMD64=2b6bfaae8c48f12050813c2ffe1884c61ea26e750d803df9c9114550a314cd14
+ARG FD_SHA256_ARM64=996b9b1366433b211cb3bbedba91c9dbce2431842144d925428ead0adf32020b
 RUN case "${TARGETARCH:-$(dpkg --print-architecture)}" in \
-      arm64) T=aarch64 ;; amd64) T=x86_64 ;; *) echo "architecture not supported" >&2; exit 1 ;; \
+      arm64) T=aarch64 S="${FD_SHA256_ARM64}" ;; amd64) T=x86_64 S="${FD_SHA256_AMD64}" ;; \
+      *) echo "architecture not supported" >&2; exit 1 ;; \
     esac \
- && curl -fsSL "https://github.com/sharkdp/fd/releases/download/v${FD_VERSION}/fd-v${FD_VERSION}-${T}-unknown-linux-musl.tar.gz" \
-    | tar -xz -C /tmp \
+ && curl -fsSL -o /tmp/fd.tar.gz "https://github.com/sharkdp/fd/releases/download/v${FD_VERSION}/fd-v${FD_VERSION}-${T}-unknown-linux-musl.tar.gz" \
+ && echo "${S}  /tmp/fd.tar.gz" | sha256sum -c - \
+ && tar -xzf /tmp/fd.tar.gz -C /tmp \
  && install -m 0755 /tmp/fd-v${FD_VERSION}-${T}-unknown-linux-musl/fd /usr/local/bin/fd \
- && rm -rf /tmp/fd-* \
+ && rm -rf /tmp/fd-* /tmp/fd.tar.gz \
  && fd --version
-# markitdown converts documents to Markdown for the agent (skill documents): Word (docx), Excel
-# (xlsx, xls), PowerPoint (pptx), Outlook (msg), PDF as a fallback to pdftotext; HTML, CSV, EPUB,
-# JSON and XML need no extra. Pinned; internet is off in the sandbox, so it has to be in the image.
-# Its dependencies are pinned in markitdown/constraints.txt. The check converts a generated workbook.
-ARG MARKITDOWN_VERSION=0.1.8
-COPY images/agw-basis/markitdown/constraints.txt /tmp/markitdown-constraints.txt
-RUN pip3 install --no-cache-dir --break-system-packages -c /tmp/markitdown-constraints.txt \
-      "markitdown[docx,xlsx,xls,pptx,outlook,pdf]==${MARKITDOWN_VERSION}" \
- && rm -f /tmp/markitdown-constraints.txt \
- && cd /tmp \
- && python3 -c "import openpyxl; wb = openpyxl.Workbook(); wb.active.append(['Pen', 'Pigs']); wb.active.append(['B3', 42]); wb.save('t.xlsx')" \
- && markitdown t.xlsx | grep -q '| B3 | 42 |' \
- && rm -f t.xlsx \
- && markitdown --version
 # Dedicated unprivileged user; the home is in the tmpfs at runtime.
 RUN useradd --uid 10001 --create-home --shell /bin/bash agent \
  && mkdir -p /workspace /run/agw && chown agent:agent /workspace

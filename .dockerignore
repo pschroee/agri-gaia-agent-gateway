@@ -6,3 +6,5 @@ web/dist
 third_party/**/node_modules
 images/agw-basis/pi-subagents-deps/node_modules
 third_party/pi-subagents/test-agw
+images/agw-basis/pi-packages/node_modules
+images/agw-basis/mmdc/node_modules
