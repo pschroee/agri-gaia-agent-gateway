@@ -196,7 +196,7 @@ func TestEdgeSummaryIntelCPU(t *testing.T) {
 		{Name: "sim-edge-01", Arch: "amd64", Tags: []string{"simulated", platform.IntelCPUTag}},
 		{Name: "jetson-01", Arch: "arm64"},
 	}
-	got := edgeDeviceSummary(online)
+	got := edgeDeviceSummary(online, false)
 	if got != "2 devices online: sim-edge-01 (simulated, amd64, intel-cpu), jetson-01 (arm64)" {
 		t.Fatalf("summary = %q", got)
 	}
