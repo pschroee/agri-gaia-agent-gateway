@@ -110,6 +110,28 @@ func TestCompareEnvironmentReportsEachDeviation(t *testing.T) {
 	}
 }
 
+// #237: the lock compares the inference runtime when it has one; an older lock without the value does not.
+func TestCompareEnvironmentInferenceRuntime(t *testing.T) {
+	env := Environment{
+		GatewayCommit: "abc123", GatewayDescribe: "abc123",
+		CatalogSHA256: "cat", SkillsSHA256: "skills", InstructionSHA256: "instr", APIIndexSHA256: "api",
+		ImagesPi: []string{"sha256:pi"}, ImagesExec: []string{"sha256:exec"}, InferenceRuntime: "triton",
+	}
+	lock := testLock()
+	lock.InferenceRuntime = "triton"
+	if problems := CompareEnvironment(lock, env); len(problems) != 0 {
+		t.Fatalf("same runtime: %v", problems)
+	}
+	env.InferenceRuntime = "ovms"
+	problems := CompareEnvironment(lock, env)
+	if len(problems) != 1 || !strings.Contains(problems[0].String(), "inference_runtime") {
+		t.Fatalf("other runtime: %v", problems)
+	}
+	if problems := CompareEnvironment(testLock(), env); len(problems) != 0 {
+		t.Fatalf("lock without the value: %v", problems)
+	}
+}
+
 func TestCompareEnvironmentNeedsWarmSlots(t *testing.T) {
 	env := Environment{GatewayCommit: "abc123", GatewayDescribe: "abc123", CatalogSHA256: "cat",
 		SkillsSHA256: "skills", InstructionSHA256: "instr", APIIndexSHA256: "api"}

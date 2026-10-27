@@ -12,6 +12,28 @@ import (
 	"time"
 )
 
+// #237: the inference runtime of the setup is recorded with the run when its chat is linked.
+func TestSetExpRunChatInferenceRuntime(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	run := ExpRun{ID: "pilot/api/t/1", Key: "pilot/api/t/1", Plan: "pilot", Cell: "api", Task: "t", Rep: 1}
+	if err := s.StartExpRun(ctx, run); err != nil {
+		t.Fatal(err)
+	}
+	const chatID = "00000000-0000-0000-0000-000000000002"
+	if err := s.SetExpRunChat(ctx, run.ID, chatID, ExpRunEnvironment{InferenceRuntime: "triton"}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.GetExpRun(ctx, run.ID)
+	if err != nil || got.InferenceRuntime != "triton" {
+		t.Fatalf("inference runtime: %+v %v", got, err)
+	}
+	list, err := s.ListExpRuns(ctx, "pilot", "")
+	if err != nil || len(list) != 1 || list[0].InferenceRuntime != "triton" {
+		t.Fatalf("list: %+v %v", list, err)
+	}
+}
+
 func TestRunLifecycle(t *testing.T) {
 	s := open(t)
 	ctx := context.Background()

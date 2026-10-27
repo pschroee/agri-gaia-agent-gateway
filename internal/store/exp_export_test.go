@@ -31,6 +31,9 @@ func TestExportOnlyPlanChats(t *testing.T) {
 		Plan: "pilot", Cell: "api-service-none-model-a", Task: "t1", Rep: 1, ChatID: mine.ID, Model: "model-a"}); err != nil {
 		t.Fatal(err)
 	}
+	if err := s.SetExpRunChat(ctx, "pilot/api-service-none-model-a/t1/1", mine.ID, ExpRunEnvironment{InferenceRuntime: "triton"}); err != nil {
+		t.Fatal(err)
+	}
 	passed := true
 	if err := s.EndExpRun(ctx, "pilot/api-service-none-model-a/t1/1", ExpRunEnd{Status: ExpDone, EndReason: "done", Pass: &passed}); err != nil {
 		t.Fatal(err)
@@ -77,6 +80,9 @@ func TestExportOnlyPlanChats(t *testing.T) {
 	if runs.Rows[0][idx(runs.Columns, "binding")] != "api" || runs.Rows[0][idx(runs.Columns, "protection")] != "service" ||
 		runs.Rows[0][idx(runs.Columns, "attack")] != "none" {
 		t.Fatalf("cell factors: %+v", runs.Rows[0])
+	}
+	if runs.Rows[0][idx(runs.Columns, "inference_runtime")] != "triton" || runs.Columns[len(runs.Columns)-1] != "inference_runtime" {
+		t.Fatalf("inference_runtime (#237): %+v", runs.Rows[0])
 	}
 	if runs.Rows[0][idx(runs.Columns, "pass")] != true || runs.Rows[0][idx(runs.Columns, "end_reason")] != "done" {
 		t.Fatalf("result: %+v", runs.Rows[0])

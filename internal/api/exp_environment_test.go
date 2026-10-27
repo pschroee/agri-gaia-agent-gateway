@@ -71,6 +71,29 @@ func TestExpEnvironmentFillsIdentity(t *testing.T) {
 	}
 }
 
+// #237: the environment names the runtime of the setup, whatever the stored environment says.
+func TestExpEnvironmentInferenceRuntime(t *testing.T) {
+	t.Cleanup(func() { _ = platform.SetDefaultRuntime(platform.RuntimeTriton) })
+	read := func() string {
+		w := httptest.NewRecorder()
+		(&Server{}).expEnvironment(w, httptest.NewRequest("GET", "/api/exp/environment", nil))
+		var env exp.Environment
+		if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
+			t.Fatal(err)
+		}
+		return env.InferenceRuntime
+	}
+	if got := read(); got != platform.RuntimeTriton {
+		t.Fatalf("default: %q", got)
+	}
+	if err := platform.SetDefaultRuntime(platform.RuntimeOVMS); err != nil {
+		t.Fatal(err)
+	}
+	if got := read(); got != platform.RuntimeOVMS {
+		t.Fatalf("ovms: %q", got)
+	}
+}
+
 // #230: the default runtime of inference images is in the config.
 func TestConfigInferenceRuntime(t *testing.T) {
 	t.Cleanup(func() { _ = platform.SetDefaultRuntime(platform.RuntimeTriton) })
