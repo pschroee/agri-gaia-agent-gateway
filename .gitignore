@@ -5,3 +5,7 @@ third_party/pi-subagents/node_modules/
 node_modules/
 web/dist/
 /agw-artifact
+
+# Python bytecode
+__pycache__/
+*.pyc
