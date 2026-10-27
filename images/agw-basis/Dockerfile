@@ -25,28 +25,30 @@ RUN npm install -g @earendil-works/pi-coding-agent@${PI_VERSION} \
  && npm cache clean --force
 # The agent's task list: tool `todo` from rpiv-todo (choice justified in docs/design.md,
 # "Tasks"). The state lives in the tool results of the pi session, not in files.
-# Before pi-subagents, because `pi install` via npm removes unlisted packages in the same prefix.
 ARG RPIV_TODO_VERSION=2.11.0
 # Web search: web_search and web_extract from searxng-suite (MIT, unchanged; published as pi-searxng-suite until the
 # author unpublished it on 2026-10-25 and released the same code as @blazer2k/searxng-suite, sources under src/). The requests go
 # through the orchestrator's web proxy to our own SearXNG or to the web, only with internet;
 # ext/web-tools.ts loads it and sets fuller tool texts; web-gate.ts hides the tools without internet (docs/design.md, "Web search").
+# Our own copy third_party/searxng-suite, because the package can be unpublished at any time (#242).
 ARG SEARXNG_SUITE_VERSION=0.2.3
 # Messages between the sessions of a slot (main agent and subagents): pi-intercom (MIT),
-# tool intercom; the broker runs in the pi container over a Unix socket in the home. pi install
-# fetches the package and its dependencies (tsx); our own copy third_party/pi-intercom then
-# replaces the package's files (change: VENDORED.md).
+# tool intercom; the broker runs in the pi container over a Unix socket in the home. Our own copy
+# third_party/pi-intercom (change: VENDORED.md); only its dependency tsx comes from npm.
 ARG PI_INTERCOM_VERSION=0.15.0
-RUN PI_CODING_AGENT_DIR=/opt/agw/pihome pi install npm:@juicesharp/rpiv-todo@${RPIV_TODO_VERSION} \
- && PI_CODING_AGENT_DIR=/opt/agw/pihome pi install npm:@blazer2k/searxng-suite@${SEARXNG_SUITE_VERSION} \
- && PI_CODING_AGENT_DIR=/opt/agw/pihome pi install npm:pi-intercom@${PI_INTERCOM_VERSION} \
- && test -f /opt/agw/pihome/npm/node_modules/pi-intercom/index.ts \
- && test -f /opt/agw/pihome/npm/node_modules/@juicesharp/rpiv-todo/index.ts \
- && test -f /opt/agw/pihome/npm/node_modules/@blazer2k/searxng-suite/src/index.ts \
+# Where `pi install` would put the packages: /opt/agw/pihome/npm. Nothing is fetched by `pi install` any more (#242):
+# rpiv-todo and the dependencies of the two copies below come from images/agw-basis/pi-packages (package-lock.json
+# with integrity, npm ci), the copies from third_party. At runtime pi loads the extensions explicitly via -e.
+COPY images/agw-basis/pi-packages /opt/agw/pihome/npm
+RUN cd /opt/agw/pihome/npm \
+ && npm ci --omit=dev --ignore-scripts --no-audit --no-fund \
  && npm cache clean --force
+COPY third_party/searxng-suite /opt/agw/pihome/npm/node_modules/@blazer2k/searxng-suite
 COPY third_party/pi-intercom /opt/agw/pihome/npm/node_modules/pi-intercom
 RUN grep -q '"version": "0.15.0"' /opt/agw/pihome/npm/node_modules/pi-intercom/package.json \
- && grep -q "PI_INTERCOM_REFUSE_WHEN_BUSY" /opt/agw/pihome/npm/node_modules/pi-intercom/index.ts
+ && grep -q "PI_INTERCOM_REFUSE_WHEN_BUSY" /opt/agw/pihome/npm/node_modules/pi-intercom/index.ts \
+ && node /opt/agw/pihome/npm/check.mjs \
+ && rm /opt/agw/pihome/npm/check.mjs
 COPY images/agw-basis/ext /opt/agw/ext
 # Subagents: our own copy of pi-subagents in the repo (third_party/pi-subagents, 0.73.1 with one
 # change, see third_party/pi-subagents/VENDORED.md): it takes the worker for workflowScript from

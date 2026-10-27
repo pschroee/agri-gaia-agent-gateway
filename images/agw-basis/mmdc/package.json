@@ -1,0 +1,9 @@
+{
+  "name": "agw-mmdc",
+  "private": true,
+  "description": "Mermaid CLI of the execution image with its whole dependency tree at pinned integrity (npm ci in images/agw-basis/Dockerfile). puppeteer is the peer dependency npm would install automatically; its browser download is skipped, Chromium comes from Debian.",
+  "dependencies": {
+    "@mermaid-js/mermaid-cli": "12.0.0",
+    "puppeteer": "25.16.0"
+  }
+}

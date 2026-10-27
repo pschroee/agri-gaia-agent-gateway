@@ -1,0 +1,13 @@
+{
+  "name": "agw-pi-packages",
+  "private": true,
+  "description": "Packages of the pi container's extension directory (/opt/agw/pihome/npm) with pinned integrity: rpiv-todo and the dependencies of the vendored searxng-suite and pi-intercom (third_party). Installed by npm ci in the Dockerfile; check.mjs verifies the result.",
+  "dependencies": {
+    "@juicesharp/rpiv-todo": "2.11.0",
+    "linkedom": "0.18.14",
+    "turndown": "7.2.4",
+    "unpdf": "1.9.1",
+    "tsx": "4.23.15",
+    "typebox": "1.4.3"
+  }
+}
