@@ -36,7 +36,7 @@ import (
 // share in steps of ten percent (position mod 10), so only such a share is accepted: a share of 55 would
 // silently mean 50.
 const (
-	DefaultTrainShare = 70
+	DefaultTrainShare = platform.SplitTrainShareDefault
 	MinTrainShare     = 50
 	MaxTrainShare     = 90
 	// ShareStep is the step the accepted shares move in (50, 60, 70, 80, 90).
@@ -457,7 +457,7 @@ func (s *Service) splitDataset(ctx context.Context, chatID string, req platform.
 		return resultOf(err), nil
 	}
 	if body.Name == "" {
-		body.Name = source.Name + "-train"
+		body.Name = platform.SplitDefaultName(source.Name)
 	}
 	files, err := s.datasetFiles(ctx, chatID, body.DatasetID)
 	if err != nil {

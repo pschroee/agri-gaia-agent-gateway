@@ -723,6 +723,68 @@ func SetFilePins(raw []byte, pins map[int][]FilePin, fileErrs map[int]string) ([
 	return json.Marshal(top)
 }
 
+// WithDerived is the one loosening of Matches (issue #236): a call that differs from the step only in whether it
+// names field is the step, when the value named is derived — the value the gateway's own handler gives field when a
+// call leaves it out. It returns the call in the step's form, so that what runs is the approved call and the handler
+// derives the value again. ok is false in every other case; the caller keeps r and its difference.
+func WithDerived(st store.PlanStep, r platform.Request, resolve Resolve, field, derived string) (platform.Request, bool) {
+	if derived == "" || len(st.Body) == 0 || len(bytes.TrimSpace(r.Body)) == 0 {
+		return r, false
+	}
+	want, ok := substJSON(string(st.Body), resolve, true)
+	if !ok {
+		return r, false
+	}
+	step, err1 := jsonObject([]byte(want))
+	live, err2 := jsonObject(r.Body)
+	if err1 != nil || err2 != nil {
+		return r, false
+	}
+	sv, inStep := step[field]
+	lv, inLive := live[field]
+	switch {
+	case inLive && !inStep:
+		if s, isStr := lv.(string); !isStr || s != derived {
+			return r, false
+		}
+		delete(live, field)
+	case inStep && !inLive:
+		if s, isStr := sv.(string); !isStr || s != derived {
+			return r, false
+		}
+		live[field] = derived
+	default:
+		return r, false
+	}
+	b, err := json.Marshal(live)
+	if err != nil {
+		return r, false
+	}
+	out := r
+	out.Body = b
+	if same, _ := Matches(st, out, resolve); !same {
+		return r, false
+	}
+	return out, true
+}
+
+// jsonObject decodes raw as one JSON object with numbers kept as written; anything else is an error.
+func jsonObject(raw []byte) (map[string]any, error) {
+	d := json.NewDecoder(bytes.NewReader(raw))
+	d.UseNumber()
+	var m map[string]any
+	if err := d.Decode(&m); err != nil {
+		return nil, err
+	}
+	if m == nil {
+		return nil, errors.New("not a JSON object")
+	}
+	if d.More() {
+		return nil, errors.New("trailing data after the JSON object")
+	}
+	return m, nil
+}
+
 // Matches tells whether a live call is exactly the step: method, path, query, body (canonical
 // form), form and uploads. why names the first difference.
 func Matches(st store.PlanStep, r platform.Request, resolve Resolve) (bool, string) {

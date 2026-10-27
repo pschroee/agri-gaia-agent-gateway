@@ -250,26 +250,26 @@ func planSession(ctx context.Context) string {
 // A covered step is claimed (open to running) and the caller runs it without a new approval; an
 // irreversible step is returned unclaimed, so the call still asks the user. nil: no match.
 func (m *Manager) planMatch(ctx context.Context, chatID string, req platform.Request) *store.PlanStep {
-	st, _, _ := m.planNext(ctx, chatID, req)
+	st, _, _, _ := m.planNext(ctx, chatID, req)
 	return st
 }
 
 // planNext is planMatch with what a refusal needs: next is the number of the plan's next open step and differs
 // names the first part of the call that is not the step ("files" when only the uploads differ, issue #172);
 // both are empty/zero without an active plan or on a match.
-func (m *Manager) planNext(ctx context.Context, chatID string, req platform.Request) (*store.PlanStep, int, string) {
+func (m *Manager) planNext(ctx context.Context, chatID string, req platform.Request) (*store.PlanStep, int, string, platform.Request) {
 	p, err := m.st.ActivePlan(ctx, chatID, planSession(ctx))
 	if err != nil {
 		if !errors.Is(err, store.ErrNotFound) {
 			slog.Error("active plan not readable", "chat", chatID, "error", err)
 		}
-		return nil, 0, ""
+		return nil, 0, "", req
 	}
 	if p.ExpiresAt != nil && !planNow().Before(*p.ExpiresAt) {
 		if ok, err := m.st.SetPlanState(ctx, p.ID, plan.StateApproved, plan.StateExpired); err == nil && ok {
 			m.publishPlan(ctx, p.ID)
 		}
-		return nil, 0, ""
+		return nil, 0, "", req
 	}
 	var cur *store.PlanStep
 	for i := range p.Steps {
@@ -279,11 +279,11 @@ func (m *Manager) planNext(ctx context.Context, chatID string, req platform.Requ
 		}
 	}
 	if cur == nil {
-		return nil, 0, ""
+		return nil, 0, "", req
 	}
 	if cur.State != plan.StepOpen {
 		slog.Info("call while the plan's next step is not open", "chat", chatID, "plan", p.ID, "step", cur.Idx, "state", cur.State)
-		return nil, 0, ""
+		return nil, 0, "", req
 	}
 	resolve := m.stepResolve(ctx, chatID, p.Steps)
 	var ok bool
@@ -299,22 +299,29 @@ func (m *Manager) planNext(ctx context.Context, chatID string, req platform.Requ
 		}
 	} else {
 		ok, why = plan.Matches(*cur, req, resolve)
+		if !ok && why == "body" {
+			// A call that names a default the gateway derives itself is the step (issue #236); the step runs.
+			if r2, hit := m.matchDerived(ctx, chatID, *cur, req, resolve); hit {
+				req, ok, why = r2, true, ""
+				slog.Info("call matches the plan step with the gateway's default", "chat", chatID, "plan", p.ID, "step", cur.Idx, "field", "name")
+			}
+		}
 	}
 	if !ok {
 		slog.Info("call is not the plan's next step", "chat", chatID, "plan", p.ID, "step", cur.Idx, "differs_in", why)
-		return nil, cur.Idx, why
+		return nil, cur.Idx, why, req
 	}
 	if !cur.Covered {
-		return cur, cur.Idx, ""
+		return cur, cur.Idx, "", req
 	}
 	claimed, err := m.st.ClaimPlanStep(ctx, p.ID, cur.Idx)
 	if err != nil || !claimed {
-		return nil, cur.Idx, ""
+		return nil, cur.Idx, "", req
 	}
 	cur.State = plan.StepRunning
 	cur.Attempts++
 	m.publishPlan(context.WithoutCancel(ctx), p.ID)
-	return cur, cur.Idx, ""
+	return cur, cur.Idx, "", req
 }
 
 // planFinish records the outcome of a step. A created object enters the provenance register, so a
