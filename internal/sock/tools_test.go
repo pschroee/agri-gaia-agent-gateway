@@ -360,6 +360,17 @@ func (g *gateRunner) Run(ctx context.Context, req execproto.Request, onData func
 	return execproto.Frame{Done: true, Result: b}, nil
 }
 
+func waitFor(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timeout: %s", what)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 // N4: many concurrent large reads of a chat do not tie up several GB in the orchestrator;
 // per slot at most two operations with large content run at once, the rest waits.
 func TestToolConcurrencyBoundedPerSlot(t *testing.T) {
@@ -387,13 +398,18 @@ func TestToolConcurrencyBoundedPerSlot(t *testing.T) {
 			}
 		}(i)
 	}
-	time.Sleep(500 * time.Millisecond)
+	waitFor(t, "two concurrent reads", func() bool {
+		g.mu.Lock()
+		defer g.mu.Unlock()
+		return g.maxSeen >= 2
+	})
+	time.Sleep(100 * time.Millisecond) // negative check: no third read gets through
 	g.mu.Lock()
 	seen := g.maxSeen
 	g.mu.Unlock()
 	close(g.release)
 	wg.Wait()
-	if seen > 2 || seen == 0 {
+	if seen != 2 {
 		t.Fatalf("%d concurrent reads", seen)
 	}
 }
