@@ -1485,6 +1485,11 @@ merged (strand G-B), an approved plan does not yet change how the steps are appr
   the match of a call with its step: `description` of `upload_dataset` and `upload_model`, `title` and `note` of
   `propose_search`, `note` of `search_next`, `end_search` and `notebook_run` (an explicit list per step kind,
   `internal/plan/freetext.go`). Names, ids, paths, parameters, labels, files, hashes and budgets stay exact.
+- **A step with left-out fields (B26):** a call that is the plan's next step (method, path, query) but whose body only
+  leaves out fields of the step's body, or sends them as `null` (one level into nested objects), is refused at once
+  with `refused: this call is plan step N but leaves out what the approved step has: <field (the step has …)>; …`,
+  reason `plan_step_incomplete`, decision `denied_fixed`; nothing is sent, the step stays open and no approval is
+  asked. A changed or added value is still a changed call with its own approval.
 - **Capability `compute`, platform hardware (#253):** the system note carries one line, `compute: Platform trainings: ...`,
   from `AGW_PLATFORM_GPU` (`expected`: the platform has a GPU; `none`: CPU only, 4 vCPU; empty: not configured, give
   runtimes for both cases). The live entry of the tool `capabilities` repeats it as the field `platform_gpu` and adds

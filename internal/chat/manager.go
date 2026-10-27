@@ -2368,6 +2368,18 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 					"since the plan was approved); nothing was sent. Restore the files, or propose a new plan", nextStep),
 				Decision: platform.DecisionDeniedFixed, Reason: "files_changed", Rule: rule, WithinDelegation: within}, nil
 		}
+		if step == nil && differs == "body" && nextStep > 0 {
+			// The call is the next step but leaves out fields of its body (B26): the agent forgot part of the approved
+			// call. Refused at once with the fields, not a single approval that blocks the turn for 10 minutes; a
+			// changed or added value still asks the user.
+			if missing := m.planStepLeftOut(ctx, chatID, nextStep, req); len(missing) > 0 {
+				return platform.Result{Status: "error", Message: platform.RefusedPrefix + fmt.Sprintf(
+					"this call is plan step %d but leaves out what the approved step has: %s. Nothing was sent and the step "+
+						"is still open: repeat the call with exactly the step's parameters, or propose a new plan",
+					nextStep, strings.Join(missing, "; ")),
+					Decision: platform.DecisionDeniedFixed, Reason: "plan_step_incomplete", Rule: rule, WithinDelegation: within}, nil
+			}
+		}
 	}
 	// A call that is the next call of a trial of the running training search (issue #168) is covered by the
 	// approval of the search, as far as the search says so; only a call no plan step claims is asked.

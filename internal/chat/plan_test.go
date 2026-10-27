@@ -669,3 +669,32 @@ func TestPlanWithoutSessionHeaderIsMain(t *testing.T) {
 		})
 	}
 }
+
+// B26 (demo of 27.10.2026, evening): a call that is the plan's next step but leaves out fields of its body (the agent
+// sent create_training with export_config null) is refused at once and names them – no single approval that blocks the
+// agent for 10 minutes; the step stays open and the exact call afterwards is covered.
+func TestPlanLeftOutFieldsRefusedAtOnce(t *testing.T) {
+	e := setup(t)
+	withPlanPlatform(t, e)
+	ctx := store.WithSession(context.Background(), "main")
+	c, _ := e.m.Create(ctx, NewChat{})
+	slot := e.m.live[c.ID].slot.ID
+	const body = `{"architecture":"EfficientNet","category":"Classification","dataset_id":5,"provider":"Torchvision","export_config":{"opset_version":18},"train_config":{"epochs":20,"img-size":64}}`
+	if r, _ := proposeAndDecide(t, e, ctx, c.ID, slot, `{"title":"Train","steps":[{"method":"POST","path":"/train/config","body":`+body+`}]}`, true); r.Status != "ok" {
+		t.Fatalf("plan: %+v", r)
+	}
+	short := liveCall(t, "POST", "/train/config", `{"architecture":"EfficientNet","category":"Classification","dataset_id":5,"provider":"Torchvision","export_config":null,"train_config":{"epochs":20,"img-size":64}}`)
+	r, err := e.m.PlatformCall(ctx, c.ID, slot, "cli", short)
+	if err != nil || r.Status != "error" || r.Reason != "plan_step_incomplete" || !strings.Contains(r.Message, "export_config") || !strings.Contains(r.Message, "step 1") {
+		t.Fatalf("left-out call: %+v %v", r, err)
+	}
+	if aps, _ := e.st.ListApprovals(ctx, store.ApprovalPending, c.ID); len(aps) != 0 {
+		t.Fatalf("no approval may be asked: %+v", aps)
+	}
+	if p := onlyPlan(t, e, ctx, c.ID); p.Steps[0].State != plan.StepOpen {
+		t.Fatalf("step 1 after the refusal: %+v", p.Steps[0])
+	}
+	if r, err := e.m.PlatformCall(ctx, c.ID, slot, "cli", liveCall(t, "POST", "/train/config", body)); err != nil || r.Status != "ok" {
+		t.Fatalf("exact call after the refusal: %+v %v", r, err)
+	}
+}
