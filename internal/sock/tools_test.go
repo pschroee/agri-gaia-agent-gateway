@@ -374,6 +374,25 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 // N4: many concurrent large reads of a chat do not tie up several GB in the orchestrator;
 // per slot at most two operations with large content run at once, the rest waits.
 func TestToolConcurrencyBoundedPerSlot(t *testing.T) {
+	// Each read reserves its body length plus max from the byte budget (2*(MaxFileBytes+toolBodySlack)); with 50 MiB
+	// two fit, a third does not.
+	const readMax = 50 << 20
+	if seen := maxConcurrentReads(t, map[string]any{"op": "read", "path": "/workspace/a", "max": readMax}); seen != 2 {
+		t.Fatalf("%d concurrent reads", seen)
+	}
+}
+
+// Issue #240: reads without max reserve MaxFileBytes plus the body each; two of them fit the budget, a third does not.
+func TestToolDefaultReadsTwoAtOnce(t *testing.T) {
+	if seen := maxConcurrentReads(t, map[string]any{"op": "read", "path": "/workspace/a"}); seen != 2 {
+		t.Fatalf("%d concurrent reads", seen)
+	}
+}
+
+// maxConcurrentReads starts eight reads with the given request, holds them in the runner and returns the highest
+// number that ran at once (after waiting for two and checking that no third gets through).
+func maxConcurrentReads(t *testing.T, req map[string]any) int {
+	t.Helper()
 	b := &fakeBackend{chat: "chat-1"}
 	g := &gateRunner{release: make(chan struct{})}
 	dir, _ := os.MkdirTemp("", "agwsockpi")
@@ -386,15 +405,12 @@ func TestToolConcurrencyBoundedPerSlot(t *testing.T) {
 	c := &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 		return (&net.Dialer{}).DialContext(ctx, "unix", filepath.Join(dir, SocketName))
 	}}, Timeout: 20 * time.Second}
-	// Each read reserves its body length plus max from the byte budget (2*MaxFileBytes); with 50 MiB two fit, a
-	// third does not. A read without max reserves MaxFileBytes plus the body, and then only one fits at a time.
-	const readMax = 50 << 20
 	var wg sync.WaitGroup
 	for i := 0; i < 8; i++ {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			body, _ := json.Marshal(map[string]any{"toolCallId": fmt.Sprintf("call_%d", i), "tool": "read", "req": map[string]any{"op": "read", "path": "/workspace/a", "max": readMax}})
+			body, _ := json.Marshal(map[string]any{"toolCallId": fmt.Sprintf("call_%d", i), "tool": "read", "req": req})
 			resp, err := c.Post("http://agw/tool/op", "application/json", strings.NewReader(string(body)))
 			if err == nil {
 				resp.Body.Close()
@@ -412,9 +428,7 @@ func TestToolConcurrencyBoundedPerSlot(t *testing.T) {
 	g.mu.Unlock()
 	close(g.release)
 	wg.Wait()
-	if seen != 2 {
-		t.Fatalf("%d concurrent reads", seen)
-	}
+	return seen
 }
 
 // H1: the orchestrator derives the path of the full output from the toolCallId; what the bridge
