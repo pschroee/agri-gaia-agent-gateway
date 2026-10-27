@@ -1585,7 +1585,11 @@ model can change within a chat; what counts is `model` per row in `llm_calls`, n
 
 **Title.** A chat without a title is first called "New chat <date>", right after the first question
 like that question (whitespace collapsed, at most 60 characters), and a few seconds later as the
-model phrases it (at most six words, once per chat, package `titler`). This call goes directly from
+model phrases it (at most six words, once per chat, package `titler`). The gateway, not the model, decides the
+language: the first message's if it reads clearly as German or English, else the chat's browser language
+(`language`), else English; the prompt names it. A title in another script than that language's or the
+message's, or in the other of German and English, is rejected; the shortened question stays, and the call
+is recorded with the error in `aux_llm_calls` (#238). This call goes directly from
 the orchestrator to the provider and is recorded in **`aux_llm_calls`**, not in `llm_calls`: cost
 and call counts per chat still contain only the agent's work. Model: the chat's, or
 `AGW_TITLE_MODEL` (`provider/model`, `off` switches it off); the supported API type is

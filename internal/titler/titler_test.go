@@ -3,6 +3,7 @@ package titler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -46,7 +47,7 @@ func TestTitleRequestAndUsage(t *testing.T) {
 		TitleRequest: json.RawMessage(`{"thinking":{"type":"disabled"}}`),
 		Models:       []config.Model{{ID: "flash"}},
 	}}}
-	r, err := New(cat, "").Title(context.Background(), "ds/flash", "how do I merge two dataframes?")
+	r, err := New(cat, "").Title(context.Background(), "ds/flash", "how do I merge two dataframes?", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +70,7 @@ func TestTitleRequestAndUsage(t *testing.T) {
 
 	// A dedicated title model takes precedence; an unknown API kind is rejected.
 	cat.Providers = append(cat.Providers, config.Provider{ID: "an", API: "anthropic-messages", Models: []config.Model{{ID: "m"}}})
-	if _, err := New(cat, "an/m").Title(context.Background(), "ds/flash", "x"); err == nil || !strings.Contains(err.Error(), "not supported") {
+	if _, err := New(cat, "an/m").Title(context.Background(), "ds/flash", "x", ""); err == nil || !strings.Contains(err.Error(), "not supported") {
 		t.Fatalf("anthropic: %v", err)
 	}
 }
@@ -81,8 +82,53 @@ func TestTitleHTTPError(t *testing.T) {
 	}))
 	defer srv.Close()
 	cat := &config.Catalog{Providers: []config.Provider{{ID: "ds", Upstream: srv.URL, API: "openai-completions", Models: []config.Model{{ID: "flash"}}}}}
-	r, err := New(cat, "").Title(context.Background(), "ds/flash", "x")
+	r, err := New(cat, "").Title(context.Background(), "ds/flash", "x", "")
 	if err == nil || r.Status != 429 || r.Title != "" {
 		t.Fatalf("error case: %+v %v", r, err)
+	}
+}
+
+func titleServer(t *testing.T, content string, got *map[string]any) *config.Catalog {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(b, got)
+		out, _ := json.Marshal(map[string]any{
+			"choices": []any{map[string]any{"message": map[string]any{"content": content}}},
+			"usage":   map[string]any{"prompt_tokens": 155, "completion_tokens": 10},
+		})
+		w.Write(out)
+	}))
+	t.Cleanup(srv.Close)
+	return &config.Catalog{Providers: []config.Provider{{ID: "ds", Upstream: srv.URL, API: "openai-completions", Models: []config.Model{{ID: "flash"}}}}}
+}
+
+func TestTitlePromptNamesLanguage(t *testing.T) {
+	var got map[string]any
+	cat := titleServer(t, "Datensätze auflisten", &got)
+	r, err := New(cat, "").Title(context.Background(), "ds/flash", "Liste bitte die Datensätze auf und zeig mir die Namen", "en-US")
+	if err != nil {
+		t.Fatal(err)
+	}
+	msgs, _ := got["messages"].([]any)
+	sys := msgs[0].(map[string]any)["content"].(string)
+	user := msgs[1].(map[string]any)["content"].(string)
+	if strings.Count(sys, "in German") != 2 {
+		t.Errorf("system prompt: %s", sys)
+	}
+	if !strings.HasSuffix(user, "Title language: German") {
+		t.Errorf("user part: %s", user)
+	}
+	if got["temperature"] != float64(0) || r.Language != "de" {
+		t.Errorf("temperature %v, language %q", got["temperature"], r.Language)
+	}
+}
+
+func TestTitleRejectsForeignScript(t *testing.T) {
+	var got map[string]any
+	cat := titleServer(t, "上传 mnist-mini 并训练 EfficientNet", &got)
+	r, err := New(cat, "").Title(context.Background(), "ds/flash", "Unzip the attached mnist-mini.zip and upload its contents as a new dataset", "en-US")
+	if !errors.Is(err, ErrLanguage) || r.Title != "" || r.Status != 200 || r.Usage.Input != 155 || r.Usage.Output != 10 {
+		t.Fatalf("result %+v, error %v", r, err)
 	}
 }
