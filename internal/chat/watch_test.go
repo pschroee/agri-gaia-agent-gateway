@@ -1110,3 +1110,47 @@ func TestWakesChatRule(t *testing.T) {
 		}
 	}
 }
+
+// #251 (Phase B, demo of 27.10.2026): the step ends of an approved interactive plan wake the chat against the plan's own
+// count, also when the wake-ups of a search step used up AutoTurnsMax; an expired interactive plan does not.
+func TestInteractivePlanWakeBeyondAutoTurnsMax(t *testing.T) {
+	e := setup(t)
+	ctx := store.WithSession(context.Background(), "main")
+	e.m.opt.AutoTurnsMax = 0
+	e.m.opt.BgWakesPerHour = 0
+	newFakeJobs(t, e, "/tasks/5")
+	c, _, p := autonomousChat(t, e, ctx, watchInteractiveBody)
+	if p.Mode != plan.ModeInteractive {
+		t.Fatalf("the plan should be interactive: %+v", p)
+	}
+	if _, err := e.st.ExtendPlan(ctx, p.ID, watchNow().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	entry, err := e.st.EnqueueSystem(ctx, c.ID, store.NotePlanStep, []string{p.ID, "1"}, "Plan step 1 finished.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, limited := e.m.autoLimit(ctx, c.ID, []store.QueueEntry{entry}); limited {
+		t.Fatal("the step end of a valid interactive plan was held by the gateway's limits")
+	}
+	pl, err := e.st.GetPlan(ctx, p.ID)
+	if err != nil || pl.AutoTurns != 1 {
+		t.Fatalf("the wake-up was not counted on the plan: %+v %v", pl, err)
+	}
+	// two wake-ups per step at most: then the gateway's limits apply again
+	for i := 0; i < 2; i++ {
+		if _, err := e.st.IncPlanAutoTurns(ctx, p.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, limited := e.m.autoLimit(ctx, c.ID, []store.QueueEntry{entry}); !limited {
+		t.Error("an interactive plan woke the chat beyond two wake-ups per step")
+	}
+	// an expired plan: the gateway's limits
+	if _, err := e.st.ExtendPlan(ctx, p.ID, watchNow().Add(-time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if _, limited := e.m.autoLimit(ctx, c.ID, []store.QueueEntry{entry}); !limited {
+		t.Error("the step end of an expired interactive plan passed the gateway's limits")
+	}
+}
