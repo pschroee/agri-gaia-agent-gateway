@@ -386,12 +386,15 @@ func TestToolConcurrencyBoundedPerSlot(t *testing.T) {
 	c := &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 		return (&net.Dialer{}).DialContext(ctx, "unix", filepath.Join(dir, SocketName))
 	}}, Timeout: 20 * time.Second}
+	// Each read reserves its body length plus max from the byte budget (2*MaxFileBytes); with 50 MiB two fit, a
+	// third does not. A read without max reserves MaxFileBytes plus the body, and then only one fits at a time.
+	const readMax = 50 << 20
 	var wg sync.WaitGroup
 	for i := 0; i < 8; i++ {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			body, _ := json.Marshal(map[string]any{"toolCallId": fmt.Sprintf("call_%d", i), "tool": "read", "req": map[string]any{"op": "read", "path": "/workspace/a"}})
+			body, _ := json.Marshal(map[string]any{"toolCallId": fmt.Sprintf("call_%d", i), "tool": "read", "req": map[string]any{"op": "read", "path": "/workspace/a", "max": readMax}})
 			resp, err := c.Post("http://agw/tool/op", "application/json", strings.NewReader(string(body)))
 			if err == nil {
 				resp.Body.Close()

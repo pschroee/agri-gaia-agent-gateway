@@ -408,13 +408,14 @@ func TestExpHideDeviceTags(t *testing.T) {
 	}
 }
 
-// Through PlatformCall the experiment chat does not see the tag; the product chat does.
+// Through PlatformCall the experiment chat does not see the tag; the product chat does. GET /edge-devices/{id} is
+// blocked for the agent anyway (it registers the device with Portainer, edge_blocks.go), so only the list goes through.
 func TestExpHideDeviceTagsThroughPlatformCall(t *testing.T) {
 	e := setup(t)
 	withExpRuntimePlatform(t, e)
 	expID, expSlot := expRuntimeChat(t, e, true)
 	prodID, prodSlot := expRuntimeChat(t, e, false)
-	for _, path := range []string{"/edge-devices", "/edge-devices/1"} {
+	for _, path := range []string{"/edge-devices"} {
 		req := platform.Request{Method: http.MethodGet, Path: path}
 		r, err := e.m.PlatformCall(context.Background(), expID, expSlot, "api", req)
 		if err != nil || r.Status != "ok" || strings.Contains(r.Body, platform.IntelCPUTag) || !strings.Contains(r.Body, "simulated") {
