@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"agw/internal/platform"
+	"agw/internal/search"
 	"agw/internal/store"
 )
 
@@ -116,5 +117,54 @@ func TestDerivedDefaultsOnlyGatewayPaths(t *testing.T) {
 		if !strings.HasPrefix(path, "/_agw/") {
 			t.Errorf("derived default for %q: only paths the gateway answers itself may be entered", path)
 		}
+	}
+}
+
+// B19 (demo 5 of 27.10.2026): the final test in a plan leaves eval_dataset_id out; the agent names the source of the
+// split explicitly, which is the dataset the check takes without it. That call is the step; any other id is not.
+func TestPlanCheckDefaultEvalDatasetCovered(t *testing.T) {
+	for _, tc := range []struct {
+		call string
+		want bool
+	}{
+		{`{"final":true,"model_id":51,"eval_dataset_id":212}`, true},
+		{`{"final":true,"model_id":51}`, true},
+		{`{"final":true,"model_id":51,"eval_dataset_id":213}`, false},
+		{`{"final":true,"model_id":51,"eval_dataset_id":999}`, false},
+	} {
+		e := setup(t)
+		withDatasetPlatform(t, e, http.StatusOK, `{"name":"demo"}`)
+		ctx := store.WithSession(context.Background(), "main")
+		c, err := e.m.Create(ctx, NewChat{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		// dataset 212 was split into 213; model 51 was trained on 213
+		if err := e.st.RecordSplit(ctx, store.Split{ChatID: c.ID, SourceDatasetID: 212, TrainDatasetID: 213, TrainImages: 210, KeptImages: 90}); err != nil {
+			t.Fatal(err)
+		}
+		if err := e.st.RecordModelOrigin(ctx, store.ModelOrigin{ModelID: 51, ChatID: c.ID, Source: "training", TrainContainerID: 156, SeenDatasetIDs: []int64{213}}); err != nil {
+			t.Fatal(err)
+		}
+		approvedPlan(t, e, ctx, c.ID, `{"title":"Check","steps":[{"method":"POST","path":"`+platform.AssessCheckPath+`","body":{"final":true,"model_id":51}}]}`)
+		st, _, differs, _ := e.m.planNext(ctx, c.ID, liveCall(t, http.MethodPost, platform.AssessCheckPath, tc.call))
+		if got := st != nil; got != tc.want {
+			t.Errorf("%s: covered=%v, want %v (differs in %q)", tc.call, got, tc.want, differs)
+		}
+	}
+}
+
+// B19: the note at the end of a search inside a plan points to the plan's next steps and suggests no extra argument.
+func TestPlanSearchEndTextNoFreeHints(t *testing.T) {
+	score := 0.9
+	got := planSearchEndText(store.Search{ID: "s0123456789ab", Path: store.SearchPathTemplate},
+		search.Objective{Metric: "val_acc", Mode: "max"}, "budget_runs", &store.Trial{Idx: 2, Ref: "156", Score: &score}, 4)
+	for _, want := range []string{"step 4 of the approved plan", "{{step4.id}} is now training container 156", "exactly as approved", "do not add eval_dataset_id"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in %q", want, got)
+		}
+	}
+	if strings.Contains(got, "eval_dataset_id=") || strings.Contains(got, "propose_plan") {
+		t.Errorf("a free hint in the plan's end note: %q", got)
 	}
 }

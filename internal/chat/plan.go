@@ -303,7 +303,7 @@ func (m *Manager) planNext(ctx context.Context, chatID string, req platform.Requ
 			// A call that names a default the gateway derives itself is the step (issue #236); the step runs.
 			if r2, hit := m.matchDerived(ctx, chatID, *cur, req, resolve); hit {
 				req, ok, why = r2, true, ""
-				slog.Info("call matches the plan step with the gateway's default", "chat", chatID, "plan", p.ID, "step", cur.Idx, "field", "name")
+				slog.Info("call matches the plan step with the gateway's default", "chat", chatID, "plan", p.ID, "step", cur.Idx)
 			}
 		}
 	}

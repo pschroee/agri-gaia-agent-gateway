@@ -1243,9 +1243,10 @@ func TestJobNoteOfStepWakesAgainstPlanCount(t *testing.T) {
 		f.set("GET /tasks/5", `{"status":"completed","completion_percentage":1.0,"message":"done"}`)
 		runWatchersOnce(t, e)
 		waitWoken(t, e, c.ID)
-		pl, err := e.st.GetPlan(ctx, p.ID)
-		if err != nil || pl.AutoTurns < 1 {
-			t.Fatalf("%s: the wake-up was not counted on the plan: %+v %v", p.Mode, pl, err)
-		}
+		// the resumed chat delivers its queue a moment after it is active; the count follows the delivery
+		waitFor(t, func() bool {
+			pl, err := e.st.GetPlan(ctx, p.ID)
+			return err == nil && pl.AutoTurns >= 1
+		})
 	}
 }

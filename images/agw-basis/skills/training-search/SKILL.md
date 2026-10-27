@@ -110,7 +110,8 @@ Example (MNIST, three trials):
 3. `propose_search` with `path "template"`, `base_container_id "{{step2.id}}"`, a small `space`, `budget`
    `{"max_runs": 3, "max_compute_minutes": 30}`
 4. `create_model_from_training` with `train_container_id "{{step3.id}}"`
-5. `assess_model` with `model_id "{{step4.id}}"`, `final=true`, `eval_dataset_id` of the held-back set
+5. `assess_model` with `model_id "{{step4.id}}"` and `final=true`, without `eval_dataset_id` (the gateway takes the
+   held-back set; in the plan and in the call alike)
 6. `update_model` with `model_id "{{step4.id}}"` and only `name`
 7. `build_inference_image` with `model_id "{{step4.id}}"`
 8. `create_deployment` with `image_id "{{step7.id}}"`
