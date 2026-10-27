@@ -29,6 +29,8 @@ import (
 var (
 	cloneCallRe = regexp.MustCompile(`^/train/containers/([0-9]+)/clone$`)
 	startCallRe = regexp.MustCompile(`^/train/containers/([0-9]+)/run$`)
+	// takeoverCallRe is the call of create_model_from_training (a GET that writes).
+	takeoverCallRe = regexp.MustCompile(`^/train/containers/([0-9]+)/model$`)
 )
 
 func init() { registerGuard(searchFinalGuard) }
@@ -69,6 +71,9 @@ func searchFinalGuard(ctx context.Context, m *Manager, chatID string, req platfo
 func (m *Manager) searchMatch(ctx context.Context, chatID string, req platform.Request) *trialClaim {
 	if b, ok := finalCheck(req); ok {
 		return m.matchFinal(ctx, chatID, b)
+	}
+	if req.Method == http.MethodGet && takeoverCallRe.MatchString(req.Path) {
+		return m.matchTakeover(ctx, chatID, takeoverCallRe.FindStringSubmatch(req.Path)[1])
 	}
 	s, err := m.st.RunningSearch(ctx, chatID)
 	if err != nil {
@@ -311,6 +316,46 @@ func (m *Manager) matchFinal(ctx context.Context, chatID string, b finalCheckBod
 	return &trialClaim{SearchID: s.ID, TrialID: w.ID, Kind: claimFinal, Covered: true}
 }
 
+// matchTakeover covers the model takeover (create_model_from_training) of the training container of the winner of
+// the chat's last ended search, once (issue #244, E6): the takeover is the precondition of the final test the
+// search already covers, and it only adds a model entry. Any other container, or a second call, is not covered.
+func (m *Manager) matchTakeover(ctx context.Context, chatID, container string) *trialClaim {
+	list, err := m.st.ListSearches(ctx, chatID)
+	if err != nil {
+		return nil
+	}
+	var s *store.Search
+	for i := len(list) - 1; i >= 0; i-- {
+		if list[i].State == store.SearchEnded {
+			s = &list[i]
+			break
+		}
+	}
+	if s == nil || s.WinnerIdx == nil || s.Path != store.SearchPathTemplate {
+		return nil
+	}
+	events, err := m.st.SearchEvents(ctx, s.ID)
+	if err != nil {
+		return nil
+	}
+	for _, e := range events {
+		if e.Kind == "takeover" {
+			return nil
+		}
+	}
+	trials, err := m.st.ListTrials(ctx, chatID)
+	if err != nil {
+		return nil
+	}
+	for i := range trials {
+		t := trials[i]
+		if t.SearchID == s.ID && t.Idx == *s.WinnerIdx && t.State == store.TrialDone && t.Ref == container {
+			return &trialClaim{SearchID: s.ID, TrialID: t.ID, Kind: claimTakeover, Covered: true}
+		}
+	}
+	return nil
+}
+
 // reserveClaim reserves the trial of a covered claim right before the call goes out, so that a second call cannot
 // use the same declaration; a call that returns before that reserves nothing. false: the trial is not available
 // any more, and the call must not go out as the search's.
@@ -389,6 +434,10 @@ func (m *Manager) searchFinish(ctx context.Context, chatID string, c *trialClaim
 			}
 		case c.Covered:
 			_ = m.st.ReleaseTrialStart(bg, c.TrialID)
+		}
+	case claimTakeover:
+		if ok {
+			m.addSearchEvent(bg, c.SearchID, "takeover", map[string]any{"trial": c.TrialID})
 		}
 	case claimFinal:
 		if !ok {

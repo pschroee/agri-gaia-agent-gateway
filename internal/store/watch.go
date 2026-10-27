@@ -402,6 +402,26 @@ WHERE plan_id=$1 AND idx=$2 AND state IN ('running','open')`, planID, idx, jobID
 	return tag.RowsAffected() > 0, err
 }
 
+// WaitPlanStepSearch sets a claimed search step to "waiting" and names the search it waits for (issue #244). The
+// step is done when the search ends (FinishPlanStepOfSearch). ok is false if the step was neither running nor open.
+func (s *Store) WaitPlanStepSearch(ctx context.Context, planID string, idx int, searchID, result string) (bool, error) {
+	if !isUUID(planID) {
+		return false, ErrNotFound
+	}
+	tag, err := s.pool.Exec(ctx, `UPDATE plan_steps SET state='waiting', search_id=$3, result=$4
+WHERE plan_id=$1 AND idx=$2 AND state IN ('running','open')`, planID, idx, searchID, result)
+	return tag.RowsAffected() > 0, err
+}
+
+// PlanStepOfSearch returns the plan step that waits for a training search; ErrNotFound if there is none.
+func (s *Store) PlanStepOfSearch(ctx context.Context, searchID string) (planID string, idx int, err error) {
+	err = s.pool.QueryRow(ctx, `SELECT plan_id::text, idx FROM plan_steps WHERE search_id=$1 AND state='waiting' LIMIT 1`, searchID).Scan(&planID, &idx)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", 0, ErrNotFound
+	}
+	return planID, idx, err
+}
+
 // ParkApproval marks a step as waiting for a parked approval (D2.8): the user decides later, the
 // gateway repeats the stored call on approval. ok is false if the step is not open or running.
 func (s *Store) ParkApproval(ctx context.Context, planID string, idx int, approvalID string) (bool, error) {

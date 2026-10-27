@@ -122,6 +122,8 @@ type PlanStep struct {
 	WatchJob string `json:"watch_job,omitempty"`
 	// ParkedApproval names the approval a non-covered step of an autonomous plan waits for (D2.8).
 	ParkedApproval string `json:"parked_approval,omitempty"`
+	// SearchID names the training search a search step started (issue #244); empty for every other step.
+	SearchID string `json:"search_id,omitempty"`
 	// The progress of the step's job, read with the step out of watch_jobs (A-E2): the percent, one line
 	// the platform reported, the estimated end, the last lines of its log and the objects it produced.
 	Progress    *float64      `json:"progress,omitempty"`
@@ -154,7 +156,7 @@ const planCols = `id::text, chat_id::text, approval_id, title, session, tool_cal
 // first, then the fields of watch_jobs, so that the plan API carries them for every step at once.
 // The columns of the job are COALESCEd: a step without an observed job joins onto no row at all, and NULL
 // would be readable only into pointers.
-const planStepCols = `s.idx, s.summary, COALESCE(s.summary_proposed,''), s.summary_run, s.description, s.tool, s.args, s.method, s.path, s.query, s.body, s.body_sha256, s.form, s.form_sha256, s.files, s.effect, s.confirm_each, s.state, s.result, s.created_resource, s.created_id, s.done_at, s.max_attempts, s.attempts, s.watch_job, s.parked_approval, s.image_origin_plan, s.image_origin_step, w.progress, COALESCE(w.message,''), w.eta, COALESCE(w.log_tail,''), COALESCE(w.outputs,'[]'), w.started_at, s.claimed_at, NULLIF(w.last_epoch,'')`
+const planStepCols = `s.idx, s.summary, COALESCE(s.summary_proposed,''), s.summary_run, s.description, s.tool, s.args, s.method, s.path, s.query, s.body, s.body_sha256, s.form, s.form_sha256, s.files, s.effect, s.confirm_each, s.state, s.result, s.created_resource, s.created_id, s.done_at, s.max_attempts, s.attempts, s.watch_job, s.parked_approval, s.search_id, s.image_origin_plan, s.image_origin_step, w.progress, COALESCE(w.message,''), w.eta, COALESCE(w.log_tail,''), COALESCE(w.outputs,'[]'), w.started_at, s.claimed_at, NULLIF(w.last_epoch,'')`
 
 func scanPlan(row interface{ Scan(...any) error }) (Plan, error) {
 	var p Plan
@@ -181,7 +183,7 @@ func scanPlanStep(row interface{ Scan(...any) error }) (PlanStep, error) {
 	var lastEpoch *string
 	err := row.Scan(&st.Idx, &st.Summary, &st.SummaryProposed, &st.SummaryRun, &st.Description, &st.Tool, &args, &st.Method, &st.Path, &query, &body, &st.BodySHA256, &form, &st.FormSHA256, &files,
 		&st.Effect, &st.ConfirmEach, &st.State, &st.Result, &st.CreatedResource, &st.CreatedID, &st.DoneAt, &st.MaxAttempts, &st.Attempts,
-		&st.WatchJob, &st.ParkedApproval, &originPlan, &originStep, &st.Progress, &st.ProgressMsg, &st.ETA, &st.LogTail, &outputs, &st.JobStarted, &st.StepStartedAt, &lastEpoch)
+		&st.WatchJob, &st.ParkedApproval, &st.SearchID, &originPlan, &originStep, &st.Progress, &st.ProgressMsg, &st.ETA, &st.LogTail, &outputs, &st.JobStarted, &st.StepStartedAt, &lastEpoch)
 	if err != nil {
 		return st, err
 	}
