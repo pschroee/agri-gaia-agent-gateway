@@ -8,6 +8,8 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"strconv"
+	"strings"
 	"time"
 
 	"agw/internal/platform"
@@ -129,7 +131,7 @@ func (m *Manager) searchView(ctx context.Context, s store.Search) (SearchView, e
 	if err != nil {
 		return SearchView{Search: s}, err
 	}
-	s = m.withFinalResult(ctx, s)
+	s = m.withFinalResult(ctx, m.withLinkedFinalCheck(ctx, s))
 	v := SearchView{Search: s, Used: st.used, BestIdx: st.bestIdx, ComputeLeft: m.computeLeft(ctx, s.ChatID)}
 	if s.State == store.SearchEnded && s.EndReason == endByAgent {
 		v.EndNote = m.endNoteOf(ctx, s.ID)
@@ -297,6 +299,72 @@ type FinalResult struct {
 	Accuracy *float64 `json:"accuracy,omitempty"`
 	Images   int      `json:"images,omitempty"`
 	Verdict  string   `json:"verdict,omitempty"`
+}
+
+// withLinkedFinalCheck links the final test of an ended template search that still says "pending" to the check that
+// ran it outside the search's own matching (B29): a final check (final=true) of the winner's model on the search's
+// held-back set, started after the search ended. Until B29 a final test run as a plan step was not recorded, and the
+// search of Demo 12 showed "Final test pending" for good; reading the search records the link once, with a "final"
+// event. A check that did not run the held-back images (#181) is not the final test.
+func (m *Manager) withLinkedFinalCheck(ctx context.Context, s store.Search) store.Search {
+	if s.State != store.SearchEnded || s.WinnerIdx == nil || s.EndedAt == nil || s.Path != store.SearchPathTemplate || len(s.Holdout) == 0 {
+		return s
+	}
+	var ho SearchHoldout
+	if json.Unmarshal(s.Holdout, &ho) != nil || !ho.Available || ho.FinalState != "pending" || ho.CheckID != "" || ho.EvalDataset == nil {
+		return s
+	}
+	trials, err := m.st.ListTrials(ctx, s.ChatID)
+	if err != nil {
+		return s
+	}
+	winnerRef := ""
+	for _, t := range trials {
+		if t.SearchID == s.ID && t.Idx == *s.WinnerIdx && t.State == store.TrialDone {
+			winnerRef = t.Ref
+		}
+	}
+	if winnerRef == "" {
+		return s
+	}
+	checks, err := m.st.Assessments(ctx, s.ChatID)
+	if err != nil {
+		return s
+	}
+	var found *store.Assessment
+	for i := range checks {
+		a := checks[i]
+		if !a.Final || !a.HoldoutMeasured || a.EvalDatasetID != ho.EvalDataset.ID || a.CreatedAt.Before(*s.EndedAt) ||
+			!strings.HasPrefix(a.Subject, "model:") {
+			continue
+		}
+		id, err := strconv.ParseInt(strings.TrimPrefix(a.Subject, "model:"), 10, 64)
+		if err != nil {
+			continue
+		}
+		o, err := m.st.ModelOriginOf(ctx, s.ChatID, id)
+		if err != nil || strconv.FormatInt(o.TrainContainerID, 10) != winnerRef {
+			continue
+		}
+		if found == nil || a.CreatedAt.After(found.CreatedAt) {
+			found = &a
+		}
+	}
+	if found == nil {
+		return s
+	}
+	ho.FinalState, ho.CheckID = "started", found.ID
+	out, err := json.Marshal(ho)
+	if err != nil {
+		return s
+	}
+	if err := m.st.SetSearchHoldout(ctx, s.ID, out); err != nil {
+		slog.Warn("final check of a search not linked", "search", s.ID, "error", err)
+		return s
+	}
+	m.addSearchEvent(ctx, s.ID, "final", map[string]any{"check_id": found.ID, "trial": s.WinnerIdx, "linked": "read"})
+	s.Holdout = out
+	return s
 }
 
 // withFinalResult fills holdout.result of a search whose final test has ended, from the check the search names
