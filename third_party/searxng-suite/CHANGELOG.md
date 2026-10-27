@@ -1,0 +1,55 @@
+# Changelog
+
+## [Unreleased]
+
+### Fixed
+
+- Guard against `null`/`undefined` `query` in `buildToolCallText` — prevents rendering the literal string `"undefined"` in tool call text
+
+## [0.2.2] – 2026-05-17
+
+### Changed
+
+- Converted screenshot images from PNG to WebP
+
+## [0.2.1] – 2026-05-17
+
+### Fixed
+
+- Accept `null` values in SearxNG response fields (`content`, `title`, `url`, `engine`) — image search results with null fields no longer throw "Invalid SearxNG response shape"
+
+## [0.2.0] – 2026-05-17
+
+### Added
+
+- **Search categories** – LLM can target searches to specific SearxNG categories: `general`, `images`, `videos`, `news`, `it`, `science`, `files`, `social media`
+- **LLM limit override** – When enabled, the LLM can request fewer results than the configured maximum per search
+- **`llmCanPickCategory` setting** – Toggle to allow/disallow LLM category selection (default: `true`)
+- **`llmCanOverrideLimit` setting** – Toggle to allow/disallow LLM limit override (default: `false`)
+
+### Changed
+
+- Search category is shown inline in tool call rendering (e.g. `search "query" (news)`)
+
+## [0.1.2] – 2026-05-15
+
+### Fixed
+
+- Updated imports from `@mariozechner` to `@earendil-works` scope
+- Added `@types/turndown` dev dependency
+
+## [0.1.1] – 2026-05-14
+
+### Added
+
+- Gallery preview image for pi extension marketplace
+
+## [0.1.0] – 2026-05-14
+
+### Added
+
+- **`web_search` tool** – SearxNG-powered web search with configurable limits, timeouts, and SafeSearch
+- **`web_extract` tool** – URL content extraction supporting HTML, plain text, PDF, and images
+- **Config system** – JSON-based config with TypeBox validation, self-repair, and default values
+- **Runtime settings UI** – `/search-config` command to adjust settings without restarting
+- **Security** – Private IP blocking, content size limits, untrusted content flagging
