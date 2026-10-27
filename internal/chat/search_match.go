@@ -69,11 +69,8 @@ func searchFinalGuard(ctx context.Context, m *Manager, chatID string, req platfo
 // asked after the plan match and only for a call no plan step claims. A covered claim reserves the trial it
 // belongs to; searchFinish releases or completes it.
 func (m *Manager) searchMatch(ctx context.Context, chatID string, req platform.Request) *trialClaim {
-	if b, ok := finalCheck(req); ok {
-		return m.matchFinal(ctx, chatID, b)
-	}
-	if req.Method == http.MethodGet && takeoverCallRe.MatchString(req.Path) {
-		return m.matchTakeover(ctx, chatID, takeoverCallRe.FindStringSubmatch(req.Path)[1])
+	if c, ok := m.endedSearchMatch(ctx, chatID, req); ok {
+		return c
 	}
 	s, err := m.st.RunningSearch(ctx, chatID)
 	if err != nil {
@@ -259,6 +256,33 @@ func fileChanges(old, next store.SearchCode, changed []string) []SearchFileChang
 // maxFinalRetries is how often a final test is covered again after a check that did not run the hold-out
 // images (#181).
 const maxFinalRetries = 3
+
+// endedSearchMatch is the claim of the chat's last ended search on its takeover or its final test; ok false: the
+// call is neither. A plan step that is one of them is recorded as the search's too (B29), so that the search names
+// its final test whichever approval covered the call.
+func (m *Manager) endedSearchMatch(ctx context.Context, chatID string, req platform.Request) (*trialClaim, bool) {
+	if b, ok := finalCheck(req); ok {
+		return m.matchFinal(ctx, chatID, b), true
+	}
+	if req.Method == http.MethodGet && takeoverCallRe.MatchString(req.Path) {
+		return m.matchTakeover(ctx, chatID, takeoverCallRe.FindStringSubmatch(req.Path)[1]), true
+	}
+	return nil, false
+}
+
+// planStepSearchFinish records a plan step that is the takeover or the final test of the chat's last ended search
+// as that search's (B29, Demo 12): before, only a call no plan step claimed was matched against the search, and a
+// final test run as a plan step left the search's card at "Final test pending" for good. The claim is only
+// recorded; the plan step's approval stays what covered the call.
+func (m *Manager) planStepSearchFinish(ctx context.Context, chatID string, access delegation.Access, req platform.Request,
+	res platform.Result, callErr error) {
+	if callErr != nil || res.Status != "ok" {
+		return
+	}
+	if c, ok := m.endedSearchMatch(ctx, chatID, req); ok && c != nil {
+		m.searchFinish(ctx, chatID, c, access, req, res, nil, "")
+	}
+}
 
 // matchFinal covers assess_model final=true when the chat's last search ended with a winner and the call checks
 // exactly that winner on the test set the split held back.

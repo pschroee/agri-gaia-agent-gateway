@@ -2712,6 +2712,9 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 	// The outcome of a call of a search's trial: after the job of a started run is observed, so that the trial can
 	// name it (issue #168). A nil claim does nothing.
 	m.searchFinish(ctx, chatID, claim, access, req, res, err, jobID)
+	if step != nil {
+		m.planStepSearchFinish(ctx, chatID, access, req, res, err)
+	}
 	// A training started by this call is listed at once, not at the first poll of its container (issue #227).
 	if err == nil && claim == nil {
 		if id := cmp.Or(planJob, jobID); id != "" {
