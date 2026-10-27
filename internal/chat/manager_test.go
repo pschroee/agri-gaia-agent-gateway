@@ -1596,14 +1596,20 @@ type fakeTitler struct {
 	release chan struct{}
 	mu      sync.Mutex
 	calls   []string
+	langs   []string // chat language per call
+	err     error    // returned with an empty title
 }
 
-func (f *fakeTitler) Title(_ context.Context, model, text string) (titler.Result, error) {
+func (f *fakeTitler) Title(_ context.Context, model, text, lang string) (titler.Result, error) {
 	f.mu.Lock()
 	f.calls = append(f.calls, model+"|"+text)
+	f.langs = append(f.langs, lang)
 	f.mu.Unlock()
 	if f.release != nil {
 		<-f.release
+	}
+	if f.err != nil {
+		return titler.Result{Model: model, Status: 200, Usage: config.Usage{Input: 100, Output: 5}, Cost: 0.00002, Started: time.Now()}, f.err
 	}
 	return titler.Result{Title: "Dataset: size", Model: model, Status: 200, Usage: config.Usage{Input: 100, Output: 5}, Cost: 0.00002, Started: time.Now()}, nil
 }
@@ -1662,6 +1668,50 @@ func TestModelTitle(t *testing.T) {
 		t.Fatalf("model title overwrites /rename: %q", got.Title)
 	}
 	waitSettled(t, e, d.ID)
+}
+
+// The chat's browser language reaches the titler.
+func TestModelTitleGetsChatLanguage(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	ft := &fakeTitler{}
+	e.m.opt.Titler = ft
+	c, _ := e.m.Create(ctx, NewChat{Language: "de-DE"})
+	if _, err := e.m.Send(ctx, c.ID, "ok"); err != nil {
+		t.Fatal(err)
+	}
+	waitSettled(t, e, c.ID)
+	waitUntil(t, "model title", func() bool { got, _ := e.st.GetChat(ctx, c.ID); return got.Title == "Dataset: size" })
+	ft.mu.Lock()
+	defer ft.mu.Unlock()
+	if len(ft.langs) != 1 || ft.langs[0] != "de-DE" {
+		t.Fatalf("languages passed to the titler: %v", ft.langs)
+	}
+}
+
+// A title the titler rejects for its language leaves the shortened question; the call is recorded
+// with the error in aux_llm_calls, not in llm_calls.
+func TestModelTitleRejectedKeepsQuestion(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	ft := &fakeTitler{err: fmt.Errorf("%w: wanted English, found Han script", titler.ErrLanguage)}
+	e.m.opt.Titler = ft
+	c, _ := e.m.Create(ctx, NewChat{})
+	q := "How big is the dataset?"
+	if _, err := e.m.Send(ctx, c.ID, q); err != nil {
+		t.Fatal(err)
+	}
+	waitSettled(t, e, c.ID)
+	waitUntil(t, "call recorded", func() bool { a, _ := e.st.AuxCalls(ctx, c.ID); return len(a) == 1 })
+	aux, _ := e.st.AuxCalls(ctx, c.ID)
+	llm, _ := e.st.ListLLMCalls(ctx, c.ID)
+	got, _ := e.st.GetChat(ctx, c.ID)
+	if got.Title != titleFrom(q) {
+		t.Fatalf("title %q, want %q", got.Title, titleFrom(q))
+	}
+	if !strings.HasPrefix(aux[0].Error, "title in another language") || len(llm) != 0 {
+		t.Fatalf("aux_llm_calls %+v, llm_calls %d", aux, len(llm))
+	}
 }
 
 // /model switches the model in pi and in the database; /effort sets the thinking level and refuses

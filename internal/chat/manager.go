@@ -1946,7 +1946,7 @@ func (m *Manager) Rename(ctx context.Context, chatID, title string) (ChatView, e
 
 // Titler phrases a chat title (package titler).
 type Titler interface {
-	Title(ctx context.Context, chatModel, text string) (titler.Result, error)
+	Title(ctx context.Context, chatModel, text, chatLang string) (titler.Result, error)
 }
 
 // autoTitle names a chat with a placeholder title after the user's first question: immediately with
@@ -1978,13 +1978,13 @@ func (m *Manager) autoTitle(ctx context.Context, chatID, text string) {
 		// model would distort the run's tokens and cost.
 		return
 	}
-	go m.modelTitle(chatID, c.Model, text)
+	go m.modelTitle(chatID, c.Model, c.Language, text)
 }
 
-func (m *Manager) modelTitle(chatID, model, text string) {
+func (m *Manager) modelTitle(chatID, model, lang, text string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
-	r, err := m.opt.Titler.Title(ctx, model, text)
+	r, err := m.opt.Titler.Title(ctx, model, text, lang)
 	call := store.AuxCall{ChatID: chatID, Purpose: "title", Model: r.Model, Status: r.Status,
 		Input: r.Usage.Input, Output: r.Usage.Output, CacheRead: r.Usage.CacheRead, Cost: r.Cost, Peak: r.Peak,
 		StartedAt: r.Started, DurationMs: r.Duration.Milliseconds()}
@@ -1993,7 +1993,11 @@ func (m *Manager) modelTitle(chatID, model, text string) {
 	}
 	if err != nil {
 		call.Error = err.Error()
-		slog.Warn("title from the model not received", "chat", chatID, "error", err)
+		if errors.Is(err, titler.ErrLanguage) {
+			slog.Info("title from the model rejected, the question stays", "chat", chatID, "language", r.Language, "error", err)
+		} else {
+			slog.Warn("title from the model not received", "chat", chatID, "error", err)
+		}
 	}
 	if err := m.st.RecordAuxCall(ctx, call); err != nil {
 		slog.Warn("title call not recorded", "chat", chatID, "error", err)
