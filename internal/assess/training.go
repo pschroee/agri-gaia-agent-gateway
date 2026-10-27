@@ -192,6 +192,9 @@ type TrainingFigures struct {
 	Overall        OverallFigures          `json:"overall"`
 	Baseline       BaselineFigures         `json:"baseline"`
 	SeenSample     SeenSample              `json:"seen_sample"`
+	// Confusion: truth -> prediction -> number of images over the classes of the data, zero cells
+	// included. It is for the check card only: the agent's route of the check strips it (#248).
+	Confusion map[string]map[string]int `json:"confusion,omitempty"`
 	// Mapping: the class every output of the model means, as the gateway derived it (P9).
 	Mapping map[string]string `json:"mapping"`
 	// OutputLabels: the output_labels of the platform record of the model (training models only).
@@ -240,10 +243,12 @@ type JudgeInput struct {
 	// Classes: the classes of the data.
 	Classes  []string
 	PerClass map[string]ClassFigures
-	Accuracy float64
-	MacroF1  float64
-	Baseline Baseline
-	PValue   float64
+	// Confusion: truth -> prediction -> number of images (see TrainingFigures.Confusion).
+	Confusion map[string]map[string]int
+	Accuracy  float64
+	MacroF1   float64
+	Baseline  Baseline
+	PValue    float64
 	// Mapping and MappingOK: the class every output means, derived from seen images (R0.6, P9).
 	Mapping       map[int]string
 	MappingOK     bool
@@ -287,7 +292,7 @@ func JudgeClassification(in JudgeInput) Report {
 	}
 	return judgeReport(in, &TrainingFigures{
 		Model: in.Model, EvalDataset: in.EvalDataset, SeenDatasets: in.SeenDatasets,
-		MeasuredImages: measuredImages(in), PerClass: in.PerClass,
+		MeasuredImages: measuredImages(in), PerClass: in.PerClass, Confusion: in.Confusion,
 		Overall:      OverallFigures{Accuracy: in.Accuracy, MacroF1: in.MacroF1},
 		Baseline:     BaselineFigures{Kind: "majority", Class: in.Baseline.Class, Accuracy: in.Baseline.Accuracy, MacroF1: in.Baseline.MacroF1, PValue: in.PValue},
 		SeenSample:   SeenSample{Images: in.SeenImages, Accuracy: in.SeenAccuracy},
@@ -328,6 +333,7 @@ func judgeReport(in JudgeInput, figures ModelFigures) Report {
 		set = SetHoldout
 	}
 	rep := NewReport(in.Kind, set, measuredImages(in))
+	rep.Final = in.Final
 	rep.ImageReview = imageReviewOf(in)
 	rep.Figures = figures
 
@@ -835,6 +841,7 @@ func (s *Service) runTrainingCheck(ctx context.Context, chatID, checkID string, 
 // right after the model was downloaded (L6).
 func notMeasuredReport(in JudgeInput, reason string) Report {
 	rep := NewReport(in.Kind, SetValidation, 0)
+	rep.Final = in.Final
 	rep.Verdict = NotMeasured
 	rep.Reasons = []string{reason}
 	rep.ImageReview = imageReviewOf(in)
@@ -929,6 +936,7 @@ func (s *Service) measure(in *JudgeInput, out Output, sample, measured []checkIm
 	in.Classes = classesOf(seen, measured)
 	figures := ClassMetrics(truth, pred, in.Classes)
 	in.PerClass = figures.PerClass
+	in.Confusion = fullConfusion(figures.Confusion, in.Classes)
 	in.Accuracy, in.MacroF1 = figures.Accuracy, figures.MacroF1
 	counts := map[string]int{}
 	for _, it := range seen {
@@ -1368,4 +1376,41 @@ func (s *Service) modelCheck(ctx context.Context, chatID string, req platform.Re
 		return platform.Result{}, err
 	}
 	return jsonResult(map[string]any{"model_id": id, "line": c.Text()})
+}
+
+// fullConfusion completes the confusion table with the zero cells over the classes of the data (and every
+// further class that occurs), so that the check card draws a square without guessing (#248).
+func fullConfusion(conf map[string]map[string]int, classes []string) map[string]map[string]int {
+	all := append([]string(nil), classes...)
+	known := map[string]bool{}
+	for _, c := range classes {
+		known[c] = true
+	}
+	var extra []string
+	for t, row := range conf {
+		for _, c := range append([]string{t}, keysOf(row)...) {
+			if !known[c] {
+				known[c] = true
+				extra = append(extra, c)
+			}
+		}
+	}
+	sort.Strings(extra)
+	all = append(all, extra...)
+	out := make(map[string]map[string]int, len(all))
+	for _, t := range all {
+		out[t] = make(map[string]int, len(all))
+		for _, p := range all {
+			out[t][p] = conf[t][p]
+		}
+	}
+	return out
+}
+
+func keysOf(m map[string]int) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
 }

@@ -395,3 +395,54 @@ func TestAssessmentWatchKind(t *testing.T) {
 		t.Error("an answer without a check id gives a reference")
 	}
 }
+
+// The agent's route of a check never hands out the confusion matrix; the stored row (the UI route) keeps it
+// (#248).
+func TestAgentCheckRouteOmitsConfusion(t *testing.T) {
+	st := testStore(t)
+	svc := New(NewRunner(&fakeRuntime{answer: goodAnswer}, "img"), st, 12)
+	ctx := context.Background()
+	c := testChat(t, st, "confusion")
+	id, err := svc.Start(ctx, c.ID, "training_model", "model:7", 0, false, func(context.Context, string) (Report, error) {
+		rep := NewReport("training_model", SetValidation, 40)
+		rep.Verdict = Usable
+		rep.Figures = &TrainingFigures{PerClass: map[string]ClassFigures{"0": {Support: 20}},
+			Confusion: map[string]map[string]int{"0": {"0": 19, "1": 1}, "1": {"0": 3, "1": 17}}}
+		rep.Finish()
+		return rep, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the report", func() bool {
+		row, err := st.Assessment(ctx, c.ID, id)
+		return err == nil && row.State == store.AssessFinished
+	})
+	row, _ := st.Assessment(ctx, c.ID, id)
+	if !strings.Contains(string(row.Report), `"confusion"`) {
+		t.Fatalf("the stored report lacks the matrix: %s", row.Report)
+	}
+	res, err := svc.Do(ctx, c.ID, platform.Request{Method: http.MethodGet, Path: platform.AssessPrefix + "/checks/" + id})
+	if err != nil || res.Status != "ok" {
+		t.Fatalf("status: %+v %v", res, err)
+	}
+	if strings.Contains(res.Body, "confusion") {
+		t.Errorf("the agent's route hands out the matrix: %s", res.Body)
+	}
+	if !strings.Contains(res.Body, `"per_class"`) || !strings.Contains(res.Body, `"verdict":"usable"`) {
+		t.Errorf("the rest of the report must stay: %s", res.Body)
+	}
+}
+
+func TestWithoutConfusion(t *testing.T) {
+	in := json.RawMessage(`{"verdict":"usable","figures":{"per_class":{"0":{}},"confusion":{"0":{"0":1}},"overall":{"accuracy":1}}}`)
+	out := WithoutConfusion(in)
+	if strings.Contains(string(out), "confusion") || !strings.Contains(string(out), `"overall"`) || !strings.Contains(string(out), `"verdict":"usable"`) {
+		t.Errorf("stripped: %s", out)
+	}
+	for _, same := range []string{``, `null`, `[1]`, `{"verdict":"usable"}`, `{"figures":null}`, `{"figures":{"per_class":{}}}`, `not json`} {
+		if got := WithoutConfusion(json.RawMessage(same)); string(got) != same {
+			t.Errorf("%q changed to %q", same, got)
+		}
+	}
+}

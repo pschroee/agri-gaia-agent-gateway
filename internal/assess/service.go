@@ -172,7 +172,7 @@ func (s *Service) status(ctx context.Context, chatID string, req platform.Reques
 		CheckID:  row.ID,
 		Kind:     row.Kind,
 		State:    row.State,
-		Report:   row.Report,
+		Report:   WithoutConfusion(row.Report),
 		Progress: progressOf(row),
 		Error:    row.Error,
 	})
@@ -396,4 +396,39 @@ func TrimMessage(s string) string {
 		return s
 	}
 	return string([]rune(s)[:199]) + "…"
+}
+
+// WithoutConfusion removes figures.confusion from a stored report. The matrix belongs to the check card;
+// the agent's route of the check never hands it out, so the agent cannot describe the checked set per
+// class (#248). A report without it, or one that is not an object, comes back unchanged.
+func WithoutConfusion(report json.RawMessage) json.RawMessage {
+	if len(report) == 0 {
+		return report
+	}
+	var top map[string]json.RawMessage
+	if json.Unmarshal(report, &top) != nil {
+		return report
+	}
+	rawFigures, ok := top["figures"]
+	if !ok {
+		return report
+	}
+	var figures map[string]json.RawMessage
+	if json.Unmarshal(rawFigures, &figures) != nil {
+		return report
+	}
+	if _, has := figures["confusion"]; !has {
+		return report
+	}
+	delete(figures, "confusion")
+	f, err := json.Marshal(figures)
+	if err != nil {
+		return report
+	}
+	top["figures"] = f
+	out, err := json.Marshal(top)
+	if err != nil {
+		return report
+	}
+	return out
 }

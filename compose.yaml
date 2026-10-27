@@ -149,6 +149,7 @@ services:
       AGW_MAX_FAILED_TOOL_CALLS: ${AGW_MAX_FAILED_TOOL_CALLS:-20}
       AGW_MAX_FAILED_SAME_TOOL: ${AGW_MAX_FAILED_SAME_TOOL:-5}
       AGW_INFERENCE_RUNTIME: ${AGW_INFERENCE_RUNTIME:-triton}
+      AGW_PLATFORM_GPU: ${AGW_PLATFORM_GPU:-}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - sockets:/run/agw

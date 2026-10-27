@@ -112,9 +112,11 @@ type OwnModelFigures struct {
 	SeenDatasets   []DatasetRef            `json:"seen_datasets"`
 	MeasuredImages int                     `json:"measured_images"`
 	PerClass       map[string]ClassFigures `json:"per_class"`
-	Overall        OverallFigures          `json:"overall"`
-	Baseline       BaselineFigures         `json:"baseline"`
-	SeenSample     SeenSample              `json:"seen_sample"`
+	// Confusion: truth -> prediction -> number of images (see TrainingFigures.Confusion).
+	Confusion  map[string]map[string]int `json:"confusion,omitempty"`
+	Overall    OverallFigures            `json:"overall"`
+	Baseline   BaselineFigures           `json:"baseline"`
+	SeenSample SeenSample                `json:"seen_sample"`
 	// Mapping: the class every output of the model means, as the gateway derived it (P9). The order the
 	// agent declared is only compared with it (R2.4).
 	Mapping    map[string]string  `json:"mapping"`
@@ -141,7 +143,7 @@ func JudgeOwnModel(in JudgeInput, file FileRef, pre PreprocessFigures, basic *Ba
 	}
 	return judgeReport(in, &OwnModelFigures{
 		File: file, Model: model, EvalDataset: in.EvalDataset, SeenDatasets: in.SeenDatasets,
-		MeasuredImages: measuredImages(in), PerClass: in.PerClass,
+		MeasuredImages: measuredImages(in), PerClass: in.PerClass, Confusion: in.Confusion,
 		Overall:    OverallFigures{Accuracy: in.Accuracy, MacroF1: in.MacroF1},
 		Baseline:   BaselineFigures{Kind: "majority", Class: in.Baseline.Class, Accuracy: in.Baseline.Accuracy, MacroF1: in.Baseline.MacroF1, PValue: in.PValue},
 		SeenSample: SeenSample{Images: in.SeenImages, Accuracy: in.SeenAccuracy},

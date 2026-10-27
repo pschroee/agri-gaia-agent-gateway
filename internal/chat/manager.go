@@ -283,6 +283,10 @@ type Options struct {
 	MaxFailedCalls    int
 	MaxFailedSameTool int
 
+	// PlatformGPU: "expected" when the platform's backend should have a GPU, "none" when it has none, empty when
+	// unknown (AGW_PLATFORM_GPU, #248).
+	PlatformGPU string
+
 	// SearchMaxHours: a training search ends after this many hours at the latest (0: config.DefaultSearchMaxHours).
 	SearchMaxHours int
 

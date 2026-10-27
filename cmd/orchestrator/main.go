@@ -302,7 +302,8 @@ func run() error {
 		AutoCompactDefault: env.AutoCompactDefault, CompactReserveTokens: env.CompactReserveTokens, CompactKeepRecent: env.CompactKeepRecent,
 		BgWakesPerHour: env.BgWakesPerHour, BgKeepAlive: env.BgKeepAlive, AutoTurnsMax: env.AutoTurnsMax,
 		MaxFailedCalls: env.MaxFailedToolCalls, MaxFailedSameTool: env.MaxFailedSameTool, // #217
-		Titler: newTitler(cat, env.TitleModel), Platform: plat, Toolsets: toolsets,
+		PlatformGPU: env.PlatformGPU, // #248
+		Titler:      newTitler(cat, env.TitleModel), Platform: plat, Toolsets: toolsets,
 		ExperimentUsers: env.ExperimentUsers, // X0.2: who may create experiment chats
 		Sessions:        sessionKeeper(auth), // A-E3: keeps the login of plan owners fresh
 		Notebook:        notebooker,
@@ -383,6 +384,7 @@ func run() error {
 
 	// The training search (issue #168): its paths below /_agw/search are answered by the manager itself.
 	m.RegisterVirtual(platform.SearchPrefix, m.SearchDoer())
+	m.RegisterVirtual(platform.CurvesPath, m.SearchDoer()) // training_curves (issue #248)
 
 	// R0 — the check paths are answered by the gateway itself (G1.5): delegation, effect class and log
 	// run as for every other call, and the gateway decides what a check runs on. Checks are observed like

@@ -31,10 +31,16 @@ var searchPathRe = regexp.MustCompile(`^` + regexp.QuoteMeta(platform.SearchPref
 
 // isSearchControl reports whether a call is one of the search's own paths below the prefix.
 func isSearchControl(req platform.Request) bool {
-	return searchPathRe.MatchString(req.Path)
+	return searchPathRe.MatchString(req.Path) || req.Path == platform.CurvesPath
 }
 
 func (d searchDoer) Do(ctx context.Context, chatID string, req platform.Request) (platform.Result, error) {
+	if req.Path == platform.CurvesPath {
+		if req.Method != http.MethodGet {
+			return searchErr("method not allowed for " + req.Path)
+		}
+		return d.m.trainingCurves(ctx, chatID, req.Query)
+	}
 	mm := searchPathRe.FindStringSubmatch(req.Path)
 	if mm == nil {
 		return searchErr("not a training search path")

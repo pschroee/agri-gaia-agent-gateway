@@ -22,7 +22,7 @@ func buildTool(t *testing.T, name, args string) (Request, error) {
 const searchSpaceArg = `{"learning-rate":{"type":"float","min":0.0001,"max":0.1,"scale":"log"}}`
 
 func TestSearchToolsRegistered(t *testing.T) {
-	for _, n := range []string{"propose_search", "search_next", "search_status", "end_search", "clone_training"} {
+	for _, n := range []string{"propose_search", "search_next", "search_status", "end_search", "clone_training", "training_curves"} {
 		tool, ok := Lookup(n)
 		if !ok || tool.Desc == "" {
 			t.Errorf("%s is not in the table", n)
@@ -151,5 +151,29 @@ func TestSearchPathsRefusedForRawCalls(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "search tools") {
 			t.Errorf("%s: %v", p, err)
 		}
+	}
+}
+
+// training_curves reads the per-epoch figures through the virtual path; exactly one of the two arguments (#248).
+func TestTrainingCurvesBuild(t *testing.T) {
+	r, err := buildTool(t, "training_curves", `{"train_container_id":145}`)
+	if err != nil || r.Method != "GET" || r.Path != CurvesPath || r.Query["train_container_id"] != "145" || len(r.Query) != 1 {
+		t.Errorf("by container: %+v %v", r, err)
+	}
+	r, err = buildTool(t, "training_curves", `{"search_id":"s0123456789ab"}`)
+	if err != nil || r.Path != CurvesPath || r.Query["search_id"] != "s0123456789ab" || len(r.Query) != 1 {
+		t.Errorf("by search: %+v %v", r, err)
+	}
+	for _, bad := range []string{`{}`, `{"train_container_id":145,"search_id":"s0123456789ab"}`, `{"search_id":"x"}`, `{"train_container_id":0}`} {
+		if _, err := buildTool(t, "training_curves", bad); err == nil {
+			t.Errorf("%s accepted", bad)
+		}
+	}
+	tool, _ := Lookup("training_curves")
+	if !strings.Contains(tool.Desc, "never the held-out set") {
+		t.Errorf("description: %s", tool.Desc)
+	}
+	if SearchCallRefusal(Request{Method: "GET", Path: CurvesPath}) == "" {
+		t.Error("a raw call to the curves path must be refused")
 	}
 }

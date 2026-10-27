@@ -644,6 +644,9 @@ func (m *Manager) noteJobEnd(ctx context.Context, j store.WatchJob, st *store.Pl
 	} else {
 		note = JobNote(j, st, p.State, dur, p.Created)
 	}
+	if extra := m.trainingEndLines(ctx, j, p.State); extra != "" {
+		note.Summary += " " + extra
+	}
 	if _, err := m.st.EnqueueSystem(ctx, j.ChatID, note.Type, note.Refs, note.Text()); err != nil {
 		slog.Error("note about the end of a job not queued", "chat", j.ChatID, "job", j.ID, "error", err)
 		return

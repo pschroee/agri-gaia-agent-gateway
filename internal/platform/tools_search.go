@@ -43,8 +43,8 @@ func init() {
 // gateway alone decides what a trial may run, so only the search tools may go there.
 func SearchCallRefusal(r Request) string {
 	p := strings.ToLower(r.Path)
-	if p == SearchPrefix || strings.HasPrefix(p, SearchPrefix+"/") {
-		return "training search calls go through the search tools ({{tool:propose_search}}, {{tool:search_next}}, {{tool:search_status}}, {{tool:end_search}})"
+	if p == SearchPrefix || strings.HasPrefix(p, SearchPrefix+"/") || p == CurvesPath {
+		return "training search calls go through the search tools ({{tool:propose_search}}, {{tool:search_next}}, {{tool:search_status}}, {{tool:end_search}}, {{tool:training_curves}})"
 	}
 	return ""
 }
