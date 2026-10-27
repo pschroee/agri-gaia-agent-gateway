@@ -653,6 +653,8 @@ func (s *Server) config(w http.ResponseWriter, r *http.Request) {
 		"max_failed_same_tool":  o.MaxFailedSameTool,
 		// Default runtime of inference images the agent builds when a call names none (AGW_INFERENCE_RUNTIME, #230).
 		"inference_runtime": platform.DefaultRuntime(),
+		// Whether the platform should have a GPU: expected | none | "" = unknown (AGW_PLATFORM_GPU, #248).
+		"platform_gpu": o.PlatformGPU,
 		// The longest a training search runs (#168): the approval card says "ends after {h} h at the latest".
 		"search_max_hours": s.M.SearchMaxHours(),
 		// Tools whose execution is evidenced at the socket (E9, L6): the UI matches against them

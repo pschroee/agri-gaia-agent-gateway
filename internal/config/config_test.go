@@ -317,6 +317,19 @@ func TestFailedCallLimitsEnv(t *testing.T) {
 	}
 }
 
+// #248: AGW_PLATFORM_GPU knows expected and none; anything else is unknown.
+func TestPlatformGPUEnv(t *testing.T) {
+	if e := FromEnv(); e.PlatformGPU != "" {
+		t.Fatalf("default: %q", e.PlatformGPU)
+	}
+	for in, want := range map[string]string{"expected": "expected", " None ": "none", "yes": "", "": ""} {
+		t.Setenv("AGW_PLATFORM_GPU", in)
+		if e := FromEnv(); e.PlatformGPU != want {
+			t.Errorf("%q: %q", in, e.PlatformGPU)
+		}
+	}
+}
+
 func TestCheckAuth(t *testing.T) {
 	tok := strings.Repeat("a", 32)
 	oidc := Env{AuthMode: AuthOIDC, OIDCIssuer: "https://kc.example/realms/r", OIDCClientID: "agw-agent", OIDCClientSecret: "s", PublicURL: "https://agent.example"}

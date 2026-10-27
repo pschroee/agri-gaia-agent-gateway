@@ -76,7 +76,8 @@ The answer of `search-status` names the reason (budget, target, patience, you, t
 
 1. Run the final test **once**, for the winner only, on the held-back part (`assess-model` with `final=true`, skill
    `result-check`). Before the end, the gateway refuses it.
-2. Report the table of trials (parameters, validation value, state), the winner, the reason the search ended and
+2. Show the learning curves of the trials unasked (`training-curves --search-id <id>`, skill `charts`, section
+   Evaluation charts; with fewer than 3 trials the table is enough). Report the table of trials (parameters, validation value, state), the winner, the reason the search ended and
    the figure of the final test. If the final figure is far below the validation value, say so.
 3. Take over the winner's model only if the user wants it (`model-from-training`).
 

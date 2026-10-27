@@ -94,6 +94,9 @@ func searchTrialEnded(ctx context.Context, m *Manager, j store.WatchJob, p watch
 		}
 	}
 	head += "."
+	if w := m.cpuRunLine(t); w != "" {
+		head += " " + w
+	}
 	if startFailedTwice(st.trials) {
 		m.finishSearch(ctx, s, endStartFailed, nil, "")
 		return
@@ -220,6 +223,7 @@ func (m *Manager) endText(s store.Search, obj search.Objective, reason string, w
 		b.WriteString(fmt.Sprintf(" (%s %s)", obj.Metric, strconv.FormatFloat(*wt.Score, 'g', 6, 64)))
 	}
 	b.WriteString(".")
+	b.WriteString(" " + curvesLineSearch(s.ID))
 	if ho.FinalState != "pending" {
 		b.WriteString(" There is no held-back test set (the dataset was not split first); report the validation value only.")
 		return b.String()

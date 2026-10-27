@@ -25,6 +25,10 @@ many images of a class are in it. The gateway holds that back on purpose, so tha
 a measurement. The sentence "statistics only, no image review" is part of the header; take it over
 word for word when the gateway wrote it.
 
+The check card shows the confusion matrix and the figures per class to the user. You do not get the matrix
+(`assess-status` omits it) and you draw no chart about the checked set; learning curves of the training itself are
+another matter (skill `charts`, section Evaluation charts).
+
 ## Budget
 
 Checks do not count against the compute calls of a chat: training, notebook runs, image builds and

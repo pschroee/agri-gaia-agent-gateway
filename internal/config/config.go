@@ -462,6 +462,9 @@ type Env struct {
 	// calls of one tool (AGW_MAX_FAILED_SAME_TOOL, default 5, 0 = off). Negative values count as 0.
 	MaxFailedToolCalls int
 	MaxFailedSameTool  int
+	// PlatformGPU: whether the platform's backend is meant to have a GPU (AGW_PLATFORM_GPU: expected | none,
+	// default empty = unknown; #248). With expected, a training run that sampled no GPU gets a warning note.
+	PlatformGPU string
 	// InferenceRuntime: the runtime of inference images the agent builds when a call names none
 	// (AGW_INFERENCE_RUNTIME: triton (default) or ovms; #230). Checked at the start by platform.SetDefaultRuntime.
 	InferenceRuntime string
@@ -712,6 +715,7 @@ func FromEnv() Env {
 		MaxFailedToolCalls:   max(0, num("AGW_MAX_FAILED_TOOL_CALLS", 20)),
 		MaxFailedSameTool:    max(0, num("AGW_MAX_FAILED_SAME_TOOL", 5)),
 		InferenceRuntime:     str("AGW_INFERENCE_RUNTIME", "triton"),
+		PlatformGPU:          platformGPU(str("AGW_PLATFORM_GPU", "")),
 		TrashRetentionDays:   max(0, num("AGW_TRASH_RETENTION_DAYS", 0)),
 		PlatformAPIURL:       str("AGW_PLATFORM_API_URL", ""),
 		PlatformTokenURL:     str("AGW_PLATFORM_TOKEN_URL", ""),
@@ -947,4 +951,13 @@ func dur(k string, def time.Duration) time.Duration {
 func notebookGPU(v string) bool {
 	v = strings.TrimSpace(v)
 	return v != "" && !strings.EqualFold(v, "none")
+}
+
+// platformGPU normalises AGW_PLATFORM_GPU: "expected" and "none" stand, anything else means unknown (empty).
+func platformGPU(v string) string {
+	switch v = strings.ToLower(strings.TrimSpace(v)); v {
+	case "expected", "none":
+		return v
+	}
+	return ""
 }

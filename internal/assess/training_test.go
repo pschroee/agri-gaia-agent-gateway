@@ -709,3 +709,58 @@ func TestModelCheckOfLabelOrderWrong(t *testing.T) {
 		t.Fatalf("check: %+v %v", c, err)
 	}
 }
+
+// The report of a training check carries the confusion matrix over the classes of the data, zero cells included
+// (#248), and the report states whether it is the final one (B11).
+func TestTrainingFiguresConfusion(t *testing.T) {
+	in := judgeInput()
+	in.Confusion = fullConfusion(map[string]map[string]int{"0": {"0": 19, "1": 1}, "1": {"1": 17, "0": 3}}, in.Classes)
+	rep := JudgeClassification(in)
+	f, ok := rep.Figures.(*TrainingFigures)
+	if !ok {
+		t.Fatalf("figures: %T", rep.Figures)
+	}
+	if f.Confusion["0"]["0"] != 19 || f.Confusion["1"]["0"] != 3 {
+		t.Errorf("confusion: %v", f.Confusion)
+	}
+	raw, err := json.Marshal(rep)
+	if err != nil || !strings.Contains(string(raw), `"confusion":{"0":{"0":19,"1":1}`) {
+		t.Errorf("report json: %s %v", raw, err)
+	}
+	// A class the model never predicts still has its column, with zeros.
+	z := fullConfusion(map[string]map[string]int{"a": {"a": 2}}, []string{"a", "b"})
+	if len(z) != 2 || len(z["a"]) != 2 || z["b"]["a"] != 0 || z["a"]["b"] != 0 {
+		t.Errorf("zero cells: %v", z)
+	}
+	// A class outside the list that occurs is added.
+	if x := fullConfusion(map[string]map[string]int{"a": {"c": 1}}, []string{"a"}); x["a"]["c"] != 1 || len(x["c"]) != 2 {
+		t.Errorf("extra class: %v", x)
+	}
+}
+
+// The figures of an own-model check carry the matrix too.
+func TestOwnModelFiguresConfusion(t *testing.T) {
+	in := judgeInput()
+	in.Kind = KindOwnModel
+	in.Confusion = fullConfusion(map[string]map[string]int{"0": {"0": 20}, "1": {"1": 20}}, in.Classes)
+	rep := JudgeOwnModel(in, FileRef{Name: "m.onnx"}, PreprocessFigures{}, nil)
+	f, ok := rep.Figures.(*OwnModelFigures)
+	if !ok || f.Confusion["1"]["1"] != 20 {
+		t.Fatalf("figures: %T %+v", rep.Figures, rep.Figures)
+	}
+}
+
+// Report.Final follows JudgeInput.Final, for a measured and for a not measured report (B11).
+func TestReportFinalSet(t *testing.T) {
+	for _, final := range []bool{true, false} {
+		in := judgeInput()
+		in.Final = final
+		if rep := JudgeClassification(in); rep.Final != final {
+			t.Errorf("final=%v: report.final=%v", final, rep.Final)
+		}
+		in.HoldoutImages = 3
+		if rep := JudgeClassification(in); rep.Verdict != NotMeasured || rep.Final != final {
+			t.Errorf("not measured, final=%v: %v %v", final, rep.Verdict, rep.Final)
+		}
+	}
+}

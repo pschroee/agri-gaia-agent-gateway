@@ -72,9 +72,10 @@ const (
 var restCases = map[string]restCase{
 	"propose_search": {"POST", "/_agw/search", nil, `{"title":"lr","path":"template","space":{"lr":{"type":"float","min":0.0001,"max":0.1,"scale":"log"}},"base_container_id":3,"note":"n"}`,
 		`{"title":"lr","path":"template","space":{"lr":{"type":"float","min":0.0001,"max":0.1,"scale":"log"}},"base_container_id":3,"note":"n"}`},
-	"search_next":   {"POST", "/_agw/search/" + cSearch + "/trials", nil, `{"params":{"lr":0.01},"note":"x"}`, `{"search_id":"` + cSearch + `","params":{"lr":0.01},"note":"x"}`},
-	"search_status": {"GET", "/_agw/search/" + cSearch, nil, ``, `{"search_id":"` + cSearch + `"}`},
-	"end_search":    {"POST", "/_agw/search/" + cSearch + "/end", nil, `{"note":"done"}`, `{"search_id":"` + cSearch + `","note":"done"}`},
+	"search_next":     {"POST", "/_agw/search/" + cSearch + "/trials", nil, `{"params":{"lr":0.01},"note":"x"}`, `{"search_id":"` + cSearch + `","params":{"lr":0.01},"note":"x"}`},
+	"search_status":   {"GET", "/_agw/search/" + cSearch, nil, ``, `{"search_id":"` + cSearch + `"}`},
+	"training_curves": {"GET", "/_agw/curves", map[string]string{"search_id": cSearch}, ``, `{"search_id":"` + cSearch + `"}`},
+	"end_search":      {"POST", "/_agw/search/" + cSearch + "/end", nil, `{"note":"done"}`, `{"search_id":"` + cSearch + `","note":"done"}`},
 
 	"assess_status":    {"GET", "/_agw/assess/checks/" + cUUID, nil, ``, `{"check_id":"` + cUUID + `"}`},
 	"split_dataset":    {"POST", "/_agw/assess/splits", nil, `{"dataset_id":5,"train_share":80}`, `{"dataset_id":5,"train_share":80}`},

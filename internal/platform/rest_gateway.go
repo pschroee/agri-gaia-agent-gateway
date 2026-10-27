@@ -54,6 +54,8 @@ var restCalls = map[string]RESTCall{
 	"search_next":   {Method: "POST", Path: "/_agw/search/{search_id}/trials", Example: "/_agw/search/" + restSearch + "/trials"},
 	"search_status": {Method: "GET", Path: "/_agw/search/{search_id}", Example: "/_agw/search/" + restSearch},
 	"end_search":    {Method: "POST", Path: "/_agw/search/{search_id}/end", Example: "/_agw/search/" + restSearch + "/end"},
+	"training_curves": {Method: "GET", Path: "/_agw/curves", Query: []string{"train_container_id", "search_id"},
+		Example: "/_agw/curves"},
 
 	"assess_status": {Method: "GET", Path: "/_agw/assess/checks/{check_id}", Example: "/_agw/assess/checks/" + restUUID},
 	"split_dataset": {Method: "POST", Path: "/_agw/assess/splits", Example: "/_agw/assess/splits"},

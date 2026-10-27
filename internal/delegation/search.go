@@ -33,6 +33,9 @@ func init() {
 	searchPrefix := regexp.QuoteMeta(platform.SearchPrefix)
 	routes = append(routes,
 		r(http.MethodGet, searchPrefix+`/`+searchSeg, Read, Search, 0),
+		// training_curves: the per-epoch figures of this chat's trainings (issue #248); the gateway reads its own
+		// tables and answers only runs of the calling chat.
+		r(http.MethodGet, regexp.QuoteMeta(platform.CurvesPath), Read, Search, 0),
 		// Declaring a trial and ending a search change nothing on the platform and need no approval of their own
 		// (the chat answers them itself); the class is write so that a read-only delegation does not allow them.
 		r(http.MethodPost, searchPrefix+`/`+searchSeg+`/trials`, Update, Search, 0).as(EffectWrite),
@@ -110,7 +113,10 @@ func searchPathCases() []Case {
 	next := platform.Request{Method: http.MethodPost, Path: platform.SearchPrefix + "/" + id + "/trials", Body: []byte(`{"params":{"lr":0.01}}`)}
 	status := platform.Request{Method: http.MethodGet, Path: platform.SearchPrefix + "/" + id}
 	end := platform.Request{Method: http.MethodPost, Path: platform.SearchPrefix + "/" + id + "/end", Body: []byte(`{}`)}
+	curves := platform.Request{Method: http.MethodGet, Path: platform.CurvesPath, Query: map[string]string{"search_id": id}}
 	return []Case{
+		{Name: "training curves without rule", Req: curves, Group: "search"},
+		{Name: "training curves with rule (control)", Req: curves, Allowed: true, Group: "control", Rules: searchReadOnlyRules},
 		{Name: "search status without rule", Req: status, Group: "search"},
 		{Name: "search status with rule (control)", Req: status, Allowed: true, Group: "control", Rules: searchPathRules},
 		{Name: "declare a trial without rule", Req: next, Group: "search"},

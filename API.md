@@ -380,7 +380,7 @@ type ActivityPage = { calls: ActivityCall[]; chats: Record<string, { id: string;
 |---|---|---|
 | `GET /api/models` | `Model[]` | selectable models |
 | `GET /api/variants` | `Variant[]` | every combination of bindings; `active` marks the one new chats get (`AGW_TOOLSETS`) |
-| `GET /api/config` | `{internet_default: boolean, approval_timeout_s: number, artifact_max_mb: number, idle_timeout_s: number, auto_compact_default: boolean, compact_reserve_tokens: number, compact_keep_recent_tokens: number, max_subagents: number /* at the same time per chat, fixed */, max_subagents_default: number /* deprecated, = max_subagents */, max_subagents_limit: number /* deprecated, = max_subagents */, workspace_max_mb: number /* 0 = workspace is not backed up */, bg_wakes_per_hour: number /* 0 = never wake */, bg_keepalive_s: number, auto_turns_max: number /* consecutive turns without the user, 0 = none */, max_failed_tool_calls: number /* failed tool calls in a row, all tools, 0 = off (#217) */, max_failed_same_tool: number /* the same for one tool, 0 = off (#217) */, inference_runtime: string /* default runtime of inference images (AGW_INFERENCE_RUNTIME, #230) */, search_max_hours: number /* the longest a training search runs (#168) */, executed_tools: string[] /* tools whose execution is proven at the socket, sorted */, toolsets: Variant /* bindings of every new chat (AGW_TOOLSETS) */, gateway_version: string, gateway_commit: string, gateway_describe: string /* identity of this build, X8.1 */}` | defaults for the UI |
+| `GET /api/config` | `{internet_default: boolean, approval_timeout_s: number, artifact_max_mb: number, idle_timeout_s: number, auto_compact_default: boolean, compact_reserve_tokens: number, compact_keep_recent_tokens: number, max_subagents: number /* at the same time per chat, fixed */, max_subagents_default: number /* deprecated, = max_subagents */, max_subagents_limit: number /* deprecated, = max_subagents */, workspace_max_mb: number /* 0 = workspace is not backed up */, bg_wakes_per_hour: number /* 0 = never wake */, bg_keepalive_s: number, auto_turns_max: number /* consecutive turns without the user, 0 = none */, max_failed_tool_calls: number /* failed tool calls in a row, all tools, 0 = off (#217) */, max_failed_same_tool: number /* the same for one tool, 0 = off (#217) */, inference_runtime: string /* default runtime of inference images (AGW_INFERENCE_RUNTIME, #230) */, platform_gpu: string /* expected | none | "" = unknown (AGW_PLATFORM_GPU, #248) */, search_max_hours: number /* the longest a training search runs (#168) */, executed_tools: string[] /* tools whose execution is proven at the socket, sorted */, toolsets: Variant /* bindings of every new chat (AGW_TOOLSETS) */, gateway_version: string, gateway_commit: string, gateway_describe: string /* identity of this build, X8.1 */}` | defaults for the UI |
 | `GET /api/pool` | `Pool` | pool status (the UI polls every second) |
 | `GET /api/platform` | `{configured: boolean, api_url?, login?: "user" \| "account", account?: string /* login account only */, client_id?, token_exchange?: boolean, probe?: {reachable, http_status?, latency_ms, error?, checked_at}, last_exchange?: {chat_id, at, ok, error?}}` | binding to the platform, read-only. `probe`: unauthenticated `GET` on the API base, any HTTP answer counts as reachable, cached 10 s. `last_exchange`: newest token exchange among the user's own chats, also a failed one (e.g. the user's login expired); in memory only, empty after a restart until the next platform call. `{configured: false}` without `AGW_PLATFORM_API_URL` |
 | `GET /api/exp/usage?plan=<plan>` | `{tokens_total, duration_total, runs}` | what the plan has consumed so far (#161): `input + output` of its chats from `llm_calls` without cache reads, the wall-clock time of its attempts (`duration_total`, Go duration such as `1h2m3s`) and their number. The runner checks the plan's `tokens_total` and `duration_total` before every run; `agw exp export` puts the sums into `manifest.json` |
@@ -2250,6 +2250,10 @@ report form and rules.
   `check calls go through the assess tools (assess_status, split_dataset, assess_model, deployment_check)` — because the gateway decides what a check runs on and the
   agent must not be able to name or read the measured set (P11).
 - **Delegation.** `assessment` is a resource of its own; a delegation without a rule for it forbids every check call.
+- **`figures.confusion` (#248).** A training and an own-model report carry the confusion matrix (truth → prediction →
+  number of images, over the classes of the data, zero cells included) in `figures.confusion`, and `final` is set from the
+  check's `final` flag. The agent's route (`GET /_agw/assess/checks/{id}`, `assess_status`) removes `figures.confusion`
+  (`assess.WithoutConfusion`); the UI route `GET /api/chats/{id}/assessments` returns it for the check card.
 - **The check container** (P6, R0.11) is a fresh container of the execution image (`AGW_IMAGE`) with no network
   (`InternalNet: "none"`), no socket, no volume, a read-only root, a 1 GB `tmpfs` on `/tmp`, 1 CPU, 2 GB and 64
   processes. It runs `python3 /opt/agw/check/predict.py` with the model, the images and the job as one tar on stdin and
@@ -2578,8 +2582,15 @@ without it every path answers `unavailable: training search is not available in 
 | `search_next` (`search-next`) | `POST /_agw/search/{id}/trials` | declares a trial | no, inside the approved search |
 | `search_status` (`search-status`) | `GET /_agw/search/{id}` | read | no |
 | `end_search` (`end-search`) | `POST /_agw/search/{id}/end` | ends the search | no |
+| `training_curves` (`training-curves`) | `GET /_agw/curves?train_container_id=…` or `?search_id=…` | `read search` | no |
 | `clone_training` (`clone-training`) | `POST /train/containers/{id}/clone` (backend fork) | `create training`, `also read training {id}`, effect `write` | yes, unless a trial of a running search announced it |
 
+- **`training_curves` (#248)** answers `{"runs":[{"label","trial","state","params","epochs":[{"epoch","train_loss","val_loss",
+  "train_acc","val_acc",…}]}],"note"}` from `trial_epochs`, for the runs of the calling chat only (a container of another
+  chat or search of another chat answers "not found"); per run at most 200 epochs (thinned evenly, first and last kept). It
+  holds the figures of the training and of the template's validation split inside the training dataset, never the held-out
+  set of a check. The end notes of a training ("Show the learning curves …") and of a search name the tool; the skill
+  `charts` (section Evaluation charts) says how to draw them.
 - **Raw calls** to `/_agw/search…` through `platform_request` are refused (`SearchCallRefusal`): the proposal reads files
   of the sandbox, and the gateway alone decides what a trial may run.
 - **`train_config` of a copy** goes through the same shell-injection check as `create_training` (`blockedCall`, issue

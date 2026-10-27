@@ -1,6 +1,6 @@
 ---
 name: charts
-description: Create charts and graphics (line, bar, scatter, histogram, heatmap charts) and show them to the user in the chat. Use when data is to be visualised, plotted or presented as a graphic/image. In replies name files by their file name, never by sandbox path.
+description: Create charts and graphics (line, bar, scatter, histogram, heatmap charts) and show them to the user in the chat. Use when data is to be visualised, plotted or presented as a graphic/image, and after a training or a training search to show the learning curves unasked (section Evaluation charts). In replies name files by their file name, never by sandbox path.
 ---
 
 # Creating and showing charts
@@ -75,3 +75,28 @@ plt.close(fig)
 ```
 
 Then in the answer: `![Sinus und Kosinus über 10 s](/workspace/oscillations.png)`
+
+## Evaluation charts
+
+After a training or a training search, draw the learning curves **unasked** and show them in the answer. The data
+comes from `agw-platform training-curves` (`--train-container-id <id>` for one training, `--search-id <id>` for the trials
+of a search): per run the epochs with `train_loss`, `val_loss`, `train_acc`, `val_acc` as the run wrote them. It
+holds figures of the training dataset and of the template's validation split **inside** it, never the held-out set.
+
+| Situation | Chart | Note |
+|---|---|---|
+| After a training | two panels: loss and accuracy per epoch, training against validation, x = epoch | draw only the series the run wrote; a run without per-epoch figures gets a sentence, no chart |
+| After a search | the learning curves of all trials in one panel per metric, the winner emphasised; or the target value per trial | from 3 trials a chart, with fewer a table |
+| Flow of a plan, split of a dataset | a Mermaid diagram (skill `mermaid`) | Mermaid is for flows, not for figures |
+| Regression, other numeric results of your own code | prediction against actual value (with diagonal), residuals | every point shown, also with few points |
+
+Rules:
+
+- **No chart about the check.** The check card shows the confusion matrix and the figures per class; never draw or
+  describe the checked set (skill `result-check`). Do not draw ROC, PR or calibration curves either: the gateway
+  hands out no per-image scores.
+- **Never show images of the held-out or validation set to a model**, and do not use them in a chart.
+- With a small number of images or epochs name the number next to the value ("92 % of 40 images"), and do not
+  smooth curves.
+- Title, axis labels and legend in the language of the user, with decimal comma in German (see the example above).
+
