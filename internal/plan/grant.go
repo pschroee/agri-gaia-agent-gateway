@@ -224,7 +224,7 @@ func rawOrEmpty(s string) json.RawMessage {
 func ComputeSteps(steps []store.PlanStep) int {
 	n := 0
 	for _, st := range steps {
-		if st.Effect == EffectCompute {
+		if st.Effect == EffectCompute && !IsSearchStep(st) {
 			att := st.MaxAttempts
 			if att < 1 {
 				att = 1

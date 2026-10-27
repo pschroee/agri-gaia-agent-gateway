@@ -558,6 +558,9 @@ func Build(p Proposal, classify Classify) ([]store.PlanStep, error) {
 		if st.Tool == SearchTool {
 			// A training search creates one object, the training container of its winner (issue #244).
 			actions[idx] = delegation.Create
+			// Its trials train on the platform (B25): the card names it compute. ComputeSteps counts the trials by
+			// the budget, not the step itself.
+			effect = EffectCompute
 		}
 		st.Effect = effect
 		// The confirm-each trait is stored with the step (A-E2): a step that is loaded again has to be
