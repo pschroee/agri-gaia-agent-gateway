@@ -929,6 +929,11 @@ func (m *Manager) autoLimitTurns(ctx context.Context, chatID string) (AutoHeldEv
 func planStepWake(open []store.QueueEntry) string {
 	planID := ""
 	for _, e := range open {
+		// the end note of a platform job may ride along (a trial's run ended a moment before the step, demo of
+		// 27.10.2026): it starts no turn of its own here, the plan step does
+		if e.Kind == store.QueueSystem && e.Note == store.NoteJob {
+			continue
+		}
 		if e.Kind != store.QueueSystem || e.Note != store.NotePlanStep {
 			return ""
 		}

@@ -1133,6 +1133,18 @@ func TestInteractivePlanWakeBeyondAutoTurnsMax(t *testing.T) {
 	if _, limited := e.m.autoLimit(ctx, c.ID, []store.QueueEntry{entry}); limited {
 		t.Fatal("the step end of a valid interactive plan was held by the gateway's limits")
 	}
+	// the end note of a trial's job may ride along with the step note (demo 2 of 27.10.2026)
+	job, err := e.st.EnqueueSystem(ctx, c.ID, store.NoteJob, []string{"w-trial"}, "Platform job w-trial finished (training_run).")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if planID := planStepWake([]store.QueueEntry{job, entry}); planID != p.ID {
+		t.Fatalf("a job note beside the step note: planStepWake = %q, want %q", planID, p.ID)
+	}
+	if planID := planStepWake([]store.QueueEntry{job}); planID != "" {
+		t.Fatalf("a job note alone counts on a plan: %q", planID)
+	}
+
 	pl, err := e.st.GetPlan(ctx, p.ID)
 	if err != nil || pl.AutoTurns != 1 {
 		t.Fatalf("the wake-up was not counted on the plan: %+v %v", pl, err)
