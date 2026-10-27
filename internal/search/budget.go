@@ -24,6 +24,9 @@ type Budget struct {
 	MaxComputeMinutes *int     `json:"max_compute_minutes"`
 	Target            *float64 `json:"target"`
 	Patience          *int     `json:"patience"`
+	// MinRuns: target and patience only end the search once this many trials have ended (1…max_runs); a first lucky
+	// trial then does not end a search that was meant to compare (#251, B8).
+	MinRuns *int `json:"min_runs"`
 }
 
 // Used is what a search has used so far: finished and running trials, compute time over all of them in minutes,
@@ -32,6 +35,8 @@ type Used struct {
 	Runs             int     `json:"runs"`
 	ComputeMinutes   float64 `json:"compute_minutes"`
 	SinceImprovement int     `json:"since_improvement"`
+	// Finished counts the trials that have ended (done, failed or stopped), the running one not; min_runs counts them.
+	Finished int `json:"finished"`
 }
 
 // ParseBudget reads a budget; null and missing fields are not set. Numbers must be positive and finite.
@@ -45,7 +50,7 @@ func ParseBudget(raw []byte) (Budget, error) {
 		return b, fmt.Errorf("budget: %w", err)
 	}
 	if err := strictDecode(canon, &b); err != nil {
-		return b, fmt.Errorf("budget: %w (fields: max_runs, max_compute_minutes, target, patience)", err)
+		return b, fmt.Errorf("budget: %w (fields: max_runs, max_compute_minutes, target, patience, min_runs)", err)
 	}
 	return b, b.Validate()
 }
@@ -64,6 +69,15 @@ func (b Budget) Validate() error {
 	if b.Patience != nil && *b.Patience < 1 {
 		return fmt.Errorf("budget.patience must be at least 1")
 	}
+	if b.MinRuns != nil {
+		ceiling := MaxRunsCeiling
+		if b.MaxRuns != nil {
+			ceiling = *b.MaxRuns
+		}
+		if *b.MinRuns < 1 || *b.MinRuns > ceiling {
+			return fmt.Errorf("budget.min_runs must be between 1 and %d (max_runs)", ceiling)
+		}
+	}
 	return nil
 }
 
@@ -79,13 +93,16 @@ func Admit(b Budget, u Used, best *float64, obj Objective, now, endsBy time.Time
 		return false, "budget_runs"
 	case b.MaxComputeMinutes != nil && u.ComputeMinutes >= float64(*b.MaxComputeMinutes):
 		return false, "budget_time"
-	case b.Target != nil && best != nil && obj.Reached(*best, *b.Target):
+	case b.Target != nil && best != nil && obj.Reached(*best, *b.Target) && b.minRunsDone(u):
 		return false, "target_reached"
-	case b.Patience != nil && u.SinceImprovement >= *b.Patience:
+	case b.Patience != nil && u.SinceImprovement >= *b.Patience && b.minRunsDone(u):
 		return false, "patience"
 	}
 	return true, ""
 }
+
+// minRunsDone says whether enough trials have ended for target and patience to count (always when min_runs is not set).
+func (b Budget) minRunsDone(u Used) bool { return b.MinRuns == nil || u.Finished >= *b.MinRuns }
 
 // ExhaustedText is the answer to a search_next beyond the budget, in the plan's wording.
 func ExhaustedText(reason string) string {

@@ -8,6 +8,7 @@ package sock
 //	POST /tool/op      a file operation or search, JSON response
 //	POST /tool/bash    command, response as an NDJSON stream; closing the connection aborts
 //	POST /tool/upload  mcp_upload_artifact: file from the execution sandbox to the user (artifact, no approval)
+//	POST /tool/cancel  pi aborted an MCP call: it stops waiting, its approval ends as cancelled (issue #251)
 //	POST /tool/workflow workflowScript of pi-subagents: worker in the execution sandbox,
 //	                   NDJSON in both directions on one connection (closing aborts)
 //	POST /tool/bg/start  bash with run_in_background: start a background task, immediate response
@@ -211,6 +212,7 @@ func NewPiHandlerFg(slotID string, b Backend, maxBytes int64, run ToolRunner, re
 	mux.HandleFunc("POST /tool/op", th.op)
 	mux.HandleFunc("POST /tool/bash", th.bash)
 	mux.HandleFunc("POST /tool/upload", th.upload)
+	mux.HandleFunc("POST /tool/cancel", h.cancelCall)
 	mux.HandleFunc("POST /tool/workflow", th.workflow)
 	mux.HandleFunc("POST /tool/bg/start", th.bgStart)
 	mux.HandleFunc("POST /tool/bg/output", th.bgOutput)

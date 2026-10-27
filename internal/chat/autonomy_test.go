@@ -470,3 +470,35 @@ func TestPlanControlsWrongState(t *testing.T) {
 		t.Fatalf("unknown plan: %v", err)
 	}
 }
+
+// #251 (B3): a waiting call that is aborted ends its approval as cancelled; the card is gone and a later click
+// decides nothing (no rejection nobody receives).
+func TestAbortedCallCancelsApproval(t *testing.T) {
+	e := setup(t)
+	withPlanPlatform(t, e)
+	ctx := store.WithSession(context.Background(), "main")
+	c, err := e.m.Create(ctx, NewChat{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	slot := e.m.live[c.ID].slot.ID
+	cctx, cancel := context.WithCancel(ctx)
+	done := make(chan platform.Result, 1)
+	go func() {
+		r, _ := e.m.PlatformCall(cctx, c.ID, slot, "mcp", liveCall(t, "PATCH", "/datasets/16", `{"name":"x"}`))
+		done <- r
+	}()
+	ap := pendingApproval(t, e, c.ID)
+	cancel() // pi aborted the call
+	<-done
+	got, err := e.st.GetApproval(ctx, ap.ID)
+	if err != nil || got.State != store.ApprovalCancelled {
+		t.Fatalf("approval after the abort: %+v %v", got, err)
+	}
+	if aps, _ := e.st.ListApprovals(ctx, store.ApprovalPending, c.ID); len(aps) != 0 {
+		t.Fatalf("the card must be gone: %+v", aps)
+	}
+	if d, err := e.m.Decide(ctx, ap.ID, false); err == nil && d.State != store.ApprovalCancelled {
+		t.Fatalf("a later click must not turn it into a rejection: %+v", d)
+	}
+}

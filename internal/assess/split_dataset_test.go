@@ -434,3 +434,13 @@ func TestSplitDatasetSuggestsShare(t *testing.T) {
 		t.Errorf("check_warning: %q", answer.CheckWarning)
 	}
 }
+
+// #251 (B9): the answer of the split names the two check sets.
+func TestSplitAnswerNamesSets(t *testing.T) {
+	answer, _ := runSplit(t, 20, `{"dataset_id":7,"train_share":70}`)
+	for _, want := range []string{"validation images (for interim checks by the gateway)", "held-out images (final test)"} {
+		if !strings.Contains(answer.CheckImagesNote, want) {
+			t.Errorf("check_images_note misses %q: %q", want, answer.CheckImagesNote)
+		}
+	}
+}

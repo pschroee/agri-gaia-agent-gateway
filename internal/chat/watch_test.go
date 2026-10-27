@@ -1034,3 +1034,78 @@ func TestParkedStepNotAskedTwice(t *testing.T) {
 		t.Fatalf("something ran: %v", f.writeCalls())
 	}
 }
+
+// watchInteractiveBody is an interactive plan (no mode) whose one step starts a platform task.
+const watchInteractiveBody = `{"title":"Watch","steps":[{"method":"POST","path":"/train/config"}]}`
+
+// #251 (B2): the end of a step of an approved interactive plan wakes the resting chat, as an autonomous plan does;
+// otherwise a long step (a cold build) leaves the plan standing until the user writes.
+func TestInteractivePlanStepEndWakesDormantChat(t *testing.T) {
+	e := setup(t)
+	ctx := store.WithSession(context.Background(), "main")
+	c, slot, p, f := watchedChat(t, e, ctx, watchInteractiveBody)
+	if p.Mode != plan.ModeInteractive {
+		t.Fatalf("the plan should be interactive: %+v", p)
+	}
+	startWatchedStep(t, e, ctx, c, slot)
+	if _, err := e.m.Suspend(ctx, c.ID); err != nil {
+		t.Fatal(err)
+	}
+	// The watcher's test clock runs an hour ahead; keep the approval valid beyond it.
+	if _, err := e.st.ExtendPlan(ctx, p.ID, time.Now().Add(6*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	f.set("GET /tasks/5", `{"status":"completed","completion_percentage":1.0,"message":"done"}`)
+	runWatchersOnce(t, e)
+	waitWoken(t, e, c.ID)
+	waitFor(t, func() bool {
+		for i := 0; i < 4; i++ {
+			if a := e.agent(i); a != nil && strings.Contains(strings.Join(a.prompts(), "\n"), "Plan step 1") {
+				return true
+			}
+		}
+		return false
+	})
+}
+
+// #251 (B2): an interactive plan whose approval has run out does not wake the chat (D2.6 stays for it); the note
+// waits in the queue for the next message.
+func TestExpiredInteractivePlanDoesNotWake(t *testing.T) {
+	e := setup(t)
+	ctx := store.WithSession(context.Background(), "main")
+	c, slot, _, f := watchedChat(t, e, ctx, watchInteractiveBody)
+	startWatchedStep(t, e, ctx, c, slot)
+	if _, err := e.m.Suspend(ctx, c.ID); err != nil {
+		t.Fatal(err)
+	}
+	// runWatchersOnce moves the clock an hour ahead; the approval (30 minutes) has run out by then.
+	f.set("GET /tasks/5", `{"status":"completed","completion_percentage":1.0,"message":"done"}`)
+	runWatchersOnce(t, e)
+	time.Sleep(300 * time.Millisecond)
+	if v, _ := e.m.View(ctx, c.ID); v.State != store.StateDormant {
+		t.Fatalf("an expired interactive plan must not wake the chat: %+v", v)
+	}
+}
+
+// #251 (B2): the rule itself.
+func TestWakesChatRule(t *testing.T) {
+	now := time.Now()
+	later, earlier := now.Add(time.Minute), now.Add(-time.Minute)
+	cases := []struct {
+		name string
+		pl   store.Plan
+		want bool
+	}{
+		{"autonomous approved", store.Plan{Mode: plan.ModeAutonomous, State: plan.StateApproved}, true},
+		{"interactive approved, valid", store.Plan{Mode: plan.ModeInteractive, State: plan.StateApproved, ExpiresAt: &later}, true},
+		{"interactive approved, expired", store.Plan{Mode: plan.ModeInteractive, State: plan.StateApproved, ExpiresAt: &earlier}, false},
+		{"interactive approved, no expiry", store.Plan{Mode: plan.ModeInteractive, State: plan.StateApproved}, false},
+		{"interactive cancelled", store.Plan{Mode: plan.ModeInteractive, State: plan.StateRejected, ExpiresAt: &later}, false},
+		{"autonomous paused", store.Plan{Mode: plan.ModeAutonomous, State: plan.StatePaused}, false},
+	}
+	for _, c := range cases {
+		if got := wakesChat(c.pl, now); got != c.want {
+			t.Errorf("%s: %v, want %v", c.name, got, c.want)
+		}
+	}
+}

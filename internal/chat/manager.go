@@ -2876,9 +2876,15 @@ func (m *Manager) settle(ctx context.Context, chatID, id string, approved bool, 
 		}
 		return store.ApprovalRejected
 	}
-	a, ok, err := m.st.DecideApproval(ctx, id, store.ApprovalExpired)
+	// A wait that ended because its call was aborted (the user's stop) is cancelled, not expired; a wait that ran
+	// out of time is expired (issue #251, B3).
+	state := store.ApprovalExpired
+	if errors.Is(werr, context.Canceled) {
+		state = store.ApprovalCancelled
+	}
+	a, ok, err := m.st.DecideApproval(ctx, id, state)
 	if err != nil {
-		return store.ApprovalExpired
+		return state
 	}
 	if ok {
 		m.publish(chatID, Event{Kind: "approval", Data: a})

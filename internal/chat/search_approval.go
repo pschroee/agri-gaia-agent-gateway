@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -33,8 +34,11 @@ type SearchAutonomy struct {
 type SearchNamed struct {
 	ID   int64  `json:"id"`
 	Name string `json:"name,omitempty"`
-	// Images and Classes come from the metadata of the dataset; left out when the platform does not say.
+	// Images is what the gateway counted in the dataset (images only, the annotation file not); Files is the
+	// platform's filecount (every file, the annotation among them), named instead when the count failed (#251, B4).
+	// Classes comes from the metadata of the dataset. All are left out when unknown.
 	Images  int `json:"images,omitempty"`
+	Files   int `json:"files,omitempty"`
 	Classes int `json:"classes,omitempty"`
 }
 
@@ -45,6 +49,9 @@ type SearchBase struct {
 	Category     string       `json:"category,omitempty"`
 	Architecture string       `json:"architecture,omitempty"`
 	Dataset      *SearchNamed `json:"dataset,omitempty"`
+	// ValImages: about how many images the template's validation split holds (the training dataset's images times
+	// the share the template keeps for validation); 0 when it cannot be told (#251, B8).
+	ValImages int `json:"val_images,omitempty"`
 }
 
 // SearchHoldout says whether the search has a test set the agent never sees: the images a split held back.
@@ -129,10 +136,18 @@ func budgetText(b search.Budget) string {
 		parts = append(parts, fmt.Sprintf("at most %d minutes of compute time", *b.MaxComputeMinutes))
 	}
 	if b.Target != nil {
-		parts = append(parts, "stop at "+strconv.FormatFloat(*b.Target, 'g', -1, 64))
+		if b.MinRuns != nil {
+			parts = append(parts, fmt.Sprintf("stop at ≥ %s after at least %d trials", strconv.FormatFloat(*b.Target, 'g', -1, 64), *b.MinRuns))
+		} else {
+			parts = append(parts, "stop at "+strconv.FormatFloat(*b.Target, 'g', -1, 64))
+		}
 	}
 	if b.Patience != nil {
-		parts = append(parts, fmt.Sprintf("stop after %d trials without improvement", *b.Patience))
+		if b.MinRuns != nil {
+			parts = append(parts, fmt.Sprintf("stop after %d trials without improvement, not before %d trials have ended", *b.Patience, *b.MinRuns))
+		} else {
+			parts = append(parts, fmt.Sprintf("stop after %d trials without improvement", *b.Patience))
+		}
 	}
 	if len(parts) == 0 {
 		return "no limit of its own (only the compute calls left in this chat and the time limit)"
@@ -144,8 +159,8 @@ func budgetText(b search.Budget) string {
 // the end and marked as not verified.
 func searchSummary(d SearchApprovalData) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "Training search %q: the agent runs trial after trial inside this space and budget, chosen by %s (%s).\n",
-		d.Title, d.Objective.Metric, d.Objective.Mode)
+	fmt.Fprintf(&b, "Training search %q: the agent runs trial after trial inside this space and budget, chosen by %s (%s; %s).\n",
+		d.Title, d.Objective.Metric, validationMeaning(d.Objective.Metric), d.Objective.Mode)
 	b.WriteString("Search space:\n")
 	for _, name := range d.Space.Names() {
 		fmt.Fprintf(&b, "  %s: %s\n", name, d.Space[name].String())
@@ -171,12 +186,17 @@ func searchSummary(d SearchApprovalData) string {
 			fmt.Fprintf(&b, " on dataset %s", namedText(*d.Base.Dataset))
 			if d.Base.Dataset.Images > 0 {
 				fmt.Fprintf(&b, ", %d images", d.Base.Dataset.Images)
+			} else if d.Base.Dataset.Files > 0 {
+				fmt.Fprintf(&b, ", %d files", d.Base.Dataset.Files)
 			}
 			if d.Base.Dataset.Classes > 0 {
 				fmt.Fprintf(&b, ", %d classes", d.Base.Dataset.Classes)
 			}
 		}
 		b.WriteString(", with other settings; no new image is built.\n")
+		if d.Base.ValImages > 0 && d.Base.ValImages < smallValidation {
+			b.WriteString(smallValidationHint(d.Base.ValImages) + "\n")
+		}
 	case len(d.Code) > 0:
 		b.WriteString("Each trial runs the same code in the notebook server; only params.json changes between trials. Another code asks you again.\n")
 	}
@@ -193,6 +213,43 @@ func searchSummary(d SearchApprovalData) string {
 	return platform.VisibleControls(b.String())
 }
 
+// smallValidation is the size below which the approval warns that the validation value is coarse.
+const smallValidation = 50
+
+// validationMeaning says what the objective measures: the validation values of a search come from the template's own
+// validation split inside the training dataset, not from the images the split held back (#251, B9).
+func validationMeaning(metric string) string {
+	if strings.HasPrefix(metric, "val_") {
+		return "the template's validation split inside the training dataset"
+	}
+	return "the metric of the template"
+}
+
+// wilsonLowerAllCorrect is the lower end of the 95 % Wilson interval when all n validation images are right.
+func wilsonLowerAllCorrect(n int) float64 {
+	const z2 = 1.96 * 1.96
+	return float64(n) / (float64(n) + z2)
+}
+
+// smallValidationHint warns that a validation value on few images is coarse.
+func smallValidationHint(n int) string {
+	return fmt.Sprintf("The validation value rests on about %d images; 1.00 on %d images means at least %.2f with 95 %% confidence.", n, n, wilsonLowerAllCorrect(n))
+}
+
+// validationImages is the size of the template's validation split: the images of the training dataset times the
+// share the template does not train on ("train-split"); 0 when either is unknown or the share varies in the search.
+func validationImages(images int, fixed map[string]json.RawMessage) int {
+	raw, ok := fixed["train-split"]
+	if !ok || images <= 0 {
+		return 0
+	}
+	var share float64
+	if json.Unmarshal(raw, &share) != nil || share <= 0 || share >= 1 {
+		return 0
+	}
+	return int(math.Round(float64(images) * (1 - share)))
+}
+
 func namedText(n SearchNamed) string {
 	if n.Name != "" {
 		return strconv.Quote(n.Name) + " (#" + strconv.FormatInt(n.ID, 10) + ")"
@@ -200,7 +257,8 @@ func namedText(n SearchNamed) string {
 	return "#" + strconv.FormatInt(n.ID, 10)
 }
 
-// readNamed reads the name of a dataset for the approval; a failed read leaves the name empty.
+// readNamed reads the name of a dataset for the approval; a failed read leaves the name empty. The images are
+// counted like the split counts them when the context carries a counter; if that fails, the files are named.
 func readNamed(ctx context.Context, read platform.Doer, id int64) SearchNamed {
 	n := SearchNamed{ID: id}
 	if read == nil || id <= 0 {
@@ -218,7 +276,12 @@ func readNamed(ctx context.Context, read platform.Doer, id int64) SearchNamed {
 	if json.Unmarshal([]byte(res.Body), &d) == nil {
 		n.Name = platform.VisibleControls(d.Name)
 		if d.Filecount > 0 {
-			n.Images = d.Filecount
+			n.Files = d.Filecount
+			if count := imageCounterFrom(ctx); count != nil {
+				if c, err := count(ctx, id); err == nil && c > 0 {
+					n.Images = c
+				}
+			}
 		}
 		n.Classes = len(d.Labels)
 	}

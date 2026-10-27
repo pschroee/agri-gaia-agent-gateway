@@ -75,7 +75,7 @@ var proposeSearch = Tool{
 	Name: "propose_search", CLI: "propose-search",
 	Desc: `Proposes a training search for ONE approval by the user: the user approves a search space and a budget, and you then run trial after trial on your own. ` +
 		`space maps each hyperparameter that may change to {"type":"float"|"int","min","max","scale":"log"|"linear"} or {"type":"choice","values":[…]} or {"type":"bool"}; ` +
-		`everything else stays as in the base. budget = {"max_runs","max_compute_minutes","target","patience"}, each optional, the first one reached ends the search; ` +
+		`everything else stays as in the base. budget = {"max_runs","max_compute_minutes","target","patience","min_runs"}, each optional, the first one reached ends the search; min_runs (1 to max_runs) holds target and patience back until that many trials have ended, so set it when the user wants trials compared; ` +
 		`every trial uses one compute call. path "template": base_container_id is a built training container of this chat, each trial is a copy of it with other train_config values. ` +
 		`path "notebook": the files are fixed for the whole search (SHA-256); a trial may only change params.json, any code change asks the user again. ` +
 		`The winner is chosen by the validation metric only; when the search ends you run the final test once for the winner ({{tool:assess_model}} final=true). Call {{tool:capabilities}} first.`,
@@ -83,7 +83,7 @@ var proposeSearch = Tool{
 		{Name: "title", Type: "string", Required: true, Desc: "short title of the search (at most 120 characters)"},
 		{Name: "path", Type: "string", Required: true, Desc: `"template" (copies of a built training container) or "notebook" (your code in the notebook server)`},
 		{Name: "space", Type: "object", Required: true, Desc: `the parameters that may change, each as {"type":"float"|"int","min","max","scale"} or {"type":"choice","values":[…]} or {"type":"bool"}; at most 8`},
-		{Name: "budget", Type: "object", Desc: `{"max_runs","max_compute_minutes","target","patience"}, each optional`},
+		{Name: "budget", Type: "object", Desc: `{"max_runs","max_compute_minutes","target","patience","min_runs"}, each optional; min_runs: target and patience count only after this many ended trials`},
 		{Name: "objective", Type: "object", Desc: `{"metric":"val_acc"|"val_loss"|"val_f1"} (default val_acc); a validation figure, nothing the model was trained on`},
 		{Name: "base_container_id", Type: "integer", Desc: `path "template": id of a built training container of this chat`},
 		{Name: "files", Type: "array", Path: true, Desc: `path "notebook": files from the sandbox that stay fixed for the whole search (code and small config files; params.json is not one of them)`},

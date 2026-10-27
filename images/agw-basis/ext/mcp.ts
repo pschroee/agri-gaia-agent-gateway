@@ -101,6 +101,24 @@ function parseResponse(data: string, contentType: string): any {
 	return msg.result;
 }
 
+// A call of the model can wait a long time (the user reads a plan before approving it). There is no time limit on this
+// path: no request timeout here (timeout: 0), none at the socket server (only ReadHeaderTimeout), none in the MCP
+// handler. If pi aborts the call (the user stops the turn), the orchestrator is told, so that a waiting approval
+// ends as cancelled; the message says how long the call had waited and why pi aborted it (issue #251, B3).
+async function cancelCall(toolCallId: string): Promise<void> {
+	try {
+		await postJSON("/tool/cancel", { toolCallId });
+	} catch {
+		// the call is aborted anyway; the orchestrator also notices when the chat ends
+	}
+}
+
+function abortReason(signal?: AbortSignal): string {
+	const r: any = signal?.reason;
+	if (r === undefined || r === null) return "no reason given";
+	return r instanceof Error ? `${r.name}: ${r.message}` : String(r);
+}
+
 export default async function (pi: ExtensionAPI) {
 	let tools: any[] = [];
 	try {
@@ -153,7 +171,25 @@ export default async function (pi: ExtensionAPI) {
 					if (r.status !== "stored") throw new Error(text);
 					return { content: [{ type: "text", text }], details: { structured: null } };
 				}
-				const result = await rpc("tools/call", { name: tool.name, arguments: args }, signal, toolCallId);
+				const startedAt = Date.now();
+				const onAbort = () => {
+					const waited = Math.round((Date.now() - startedAt) / 1000);
+					console.error(`[agw-mcp] ${tool.name} aborted by pi after ${waited} s (${abortReason(signal)})`);
+					void cancelCall(toolCallId);
+				};
+				signal?.addEventListener("abort", onAbort, { once: true });
+				let result: any;
+				try {
+					result = await rpc("tools/call", { name: tool.name, arguments: args }, signal, toolCallId);
+				} catch (e) {
+					if (signal?.aborted) {
+						const waited = Math.round((Date.now() - startedAt) / 1000);
+						throw new Error(`${(e as Error).message} (the call waited ${waited} s; pi aborted it: ${abortReason(signal)})`);
+					}
+					throw e;
+				} finally {
+					signal?.removeEventListener("abort", onAbort);
+				}
 				const content = (result?.content ?? []).map((c: any) =>
 					c.type === "text" ? { type: "text", text: c.text } : { type: "text", text: JSON.stringify(c) },
 				);
