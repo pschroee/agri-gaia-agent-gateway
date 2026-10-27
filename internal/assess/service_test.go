@@ -446,3 +446,12 @@ func TestWithoutConfusion(t *testing.T) {
 		}
 	}
 }
+
+// The agent's route removes the confusion table but keeps the counts of right and wrong images (#254, E4).
+func TestAgentRouteKeepsWrongCount(t *testing.T) {
+	in := json.RawMessage(`{"figures":{"confusion":{"0":{"0":1}},"overall":{"accuracy":0.9,"correct":36,"wrong":4}}}`)
+	out := string(WithoutConfusion(in))
+	if strings.Contains(out, "confusion") || !strings.Contains(out, `"wrong":4`) || !strings.Contains(out, `"correct":36`) {
+		t.Errorf("stripped: %s", out)
+	}
+}

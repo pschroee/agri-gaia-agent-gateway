@@ -7,6 +7,7 @@ package store
 import (
 	"context"
 	"testing"
+	"time"
 )
 
 // summaryTestChat creates a chat for the tests of issue L2/#119.
@@ -135,5 +136,36 @@ func TestPlanByApproval(t *testing.T) {
 	}
 	if _, err := s.PlanByApproval(ctx, "00000000-0000-0000-0000-000000000000"); err != ErrNotFound {
 		t.Fatalf("approval without a plan: %v", err)
+	}
+}
+
+// Only approved single approvals of writing calls inside the window are counted (#254).
+func TestCountSingleApprovalsSince(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	c := summaryTestChat(t, s, ctx)
+	mk := func(kind, search string, approve bool) {
+		ap, err := s.CreateApproval(ctx, Approval{ChatID: c.ID, Kind: kind, Via: "cli", Name: "x", PendingKey: "-", Search: []byte(search)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if approve {
+			if _, _, err := s.DecideApproval(ctx, ap.ID, ApprovalApproved); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	since := time.Now().Add(-time.Minute)
+	mk("platform_write", "", true)
+	mk("platform_write", "", true)
+	mk("platform_write", "", false)           // still pending
+	mk("plan", "", true)                      // a plan is not a single approval
+	mk("platform_write", `{"trial":1}`, true) // the trial of a search
+	n, err := s.CountSingleApprovalsSince(ctx, c.ID, since)
+	if err != nil || n != 2 {
+		t.Fatalf("count: %d %v", n, err)
+	}
+	if n, _ := s.CountSingleApprovalsSince(ctx, c.ID, time.Now().Add(time.Minute)); n != 0 {
+		t.Fatalf("count in the future: %d", n)
 	}
 }

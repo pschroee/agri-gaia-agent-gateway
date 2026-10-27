@@ -144,7 +144,7 @@ func JudgeOwnModel(in JudgeInput, file FileRef, pre PreprocessFigures, basic *Ba
 	return judgeReport(in, &OwnModelFigures{
 		File: file, Model: model, EvalDataset: in.EvalDataset, SeenDatasets: in.SeenDatasets,
 		MeasuredImages: measuredImages(in), PerClass: in.PerClass, Confusion: in.Confusion,
-		Overall:    OverallFigures{Accuracy: in.Accuracy, MacroF1: in.MacroF1},
+		Overall:    overallFigures(in),
 		Baseline:   BaselineFigures{Kind: "majority", Class: in.Baseline.Class, Accuracy: in.Baseline.Accuracy, MacroF1: in.Baseline.MacroF1, PValue: in.PValue},
 		SeenSample: SeenSample{Images: in.SeenImages, Accuracy: in.SeenAccuracy},
 		Mapping:    mappingNames(in.Mapping),

@@ -14,7 +14,9 @@ that verdict; you never compute, estimate or invent a figure yourself.
 Start your reply with the header the gateway returned, word for word (`Result: usable`,
 `Result: questionable`, `Result: not measured – …`). Then, in this order:
 
-1. the sample size (how many images or test requests the figures rest on),
+1. the sample size (how many images or test requests the figures rest on): the sample size is `measured_images`; the
+   number of wrong images is `overall.wrong`; never derive counts from precision and recall (one wrong image lowers
+   the recall of its true class and the precision of the class it was taken for),
 2. what was measured (the set the gateway names, e.g. "statistics only, no image review"),
 3. the baseline and what the model reaches next to it,
 4. the figures per class (accuracy, per-class hit rate; the card paints the values the gateway named),

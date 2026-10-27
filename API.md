@@ -1495,6 +1495,10 @@ merged (strand G-B), an approved plan does not yet change how the steps are appr
   the sent call differs from the stored one; never when the call is unchanged or a read for the text failed or took
   longer than 5 s. A step of a single approval given in the same call takes over the text of that approval. Plans from
   before this change have none.
+- **Hint after two single approvals (#254):** the answer of a writing call that the user approved singly (no plan step,
+  no trial of a search) carries the note "This is the second single approval in a row: propose the remaining writing
+  steps of this task as ONE plan …" when it is the second such approval of the chat within 30 minutes; once per 30
+  minutes and chat.
 - **Endpoint:** `GET /api/chats/{id}/plans` → `Plan[]`, oldest first; 404 for foreign and unknown chats. SSE
   `GET /api/chats/{id}/events` sends `plan` with the `Plan` on every change of state. `plan` is not a cross-chat kind.
 - **Limits of the design:** the session is taken from a header in the CLI, which the agent can change; MCP and REST
@@ -2390,7 +2394,8 @@ report form and the figures are those of the result checks (R0); this section na
   or Ultralytics' `all …` line (`mAP50-95`); its `note` says what it is worth: "measured by the template on
   its own internal test split of about N images; the gateway cannot see which images".
 - **`figures`** of a training check: `model {id, name}`, `eval_dataset {id, name}`, `seen_datasets`,
-  `measured_images`, `per_class`, `overall {accuracy, macro_f1}`, `baseline {kind, class, accuracy,
+  `measured_images`, `per_class`, `overall {accuracy, macro_f1, correct, wrong}` (`wrong` is the number of wrongly
+  recognised images of the measured set), `baseline {kind, class, accuracy,
   macro_f1, p_value}`, `seen_sample {images, accuracy}`, `mapping {"0": "<class>", …}`, `platform_figure`,
   `log_nan` and — with a previous check — `previous` and `delta`. Never a file name or a SHA-256 of the
   measured set (P11). The `note` names the dataset and what was skipped, not the images.
@@ -2548,7 +2553,7 @@ names what is R2's own.
   images`).
 - **The figures** (`assess.OwnModelFigures`): `file {name, sha256, run_id, path}`, `model {id, name}` (only
   when the file was uploaded already), `eval_dataset`, `seen_datasets`, `measured_images`, `per_class`,
-  `overall`, `baseline`, `seen_sample`, `mapping`, `preprocess`, `basic` and, like R1, `previous`/`delta`.
+  `overall {accuracy, macro_f1, correct, wrong}`, `baseline`, `seen_sample`, `mapping`, `preprocess`, `basic` and, like R1, `previous`/`delta`.
   There is no platform figure: an own model has no training log.
 - **After the upload** the model keeps the origin of its file: the gateway writes `model_origins` with the
   source `notebook` and the SHA-256 of the bytes it read (`model_origins.source_sha`), and a file it never
