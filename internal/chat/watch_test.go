@@ -1250,3 +1250,27 @@ func TestJobNoteOfStepWakesAgainstPlanCount(t *testing.T) {
 		})
 	}
 }
+
+// B21 (demo 7 of 27.10.2026): the note of the last step of an interactive plan (the plan is completed by then) is not
+// held at AutoTurnsMax; the agent still has the task to finish (deployment check, model card).
+func TestLastStepNoteOfInteractivePlanWakes(t *testing.T) {
+	e := setup(t)
+	ctx := store.WithSession(context.Background(), "main")
+	e.m.opt.AutoTurnsMax = 0
+	e.m.opt.BgWakesPerHour = 0
+	c, slot, p, f := watchedChat(t, e, ctx, watchInteractiveBody)
+	startWatchedStep(t, e, ctx, c, slot)
+	if _, err := e.m.Suspend(ctx, c.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.st.ExtendPlan(ctx, p.ID, time.Now().Add(watchOffset+6*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	f.set("GET /tasks/5", `{"status":"completed","completion_percentage":1.0,"message":"done"}`)
+	runWatchersOnce(t, e)
+	waitWoken(t, e, c.ID)
+	waitFor(t, func() bool { return promptsContain(e, "Plan step 1") })
+	if pl, err := e.st.GetPlan(ctx, p.ID); err != nil || pl.State != plan.StateCompleted {
+		t.Fatalf("plan: %+v %v", pl, err)
+	}
+}
