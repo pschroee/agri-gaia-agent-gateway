@@ -1051,8 +1051,9 @@ func TestInteractivePlanStepEndWakesDormantChat(t *testing.T) {
 	if _, err := e.m.Suspend(ctx, c.ID); err != nil {
 		t.Fatal(err)
 	}
-	// The watcher's test clock runs an hour ahead; keep the approval valid beyond it.
-	if _, err := e.st.ExtendPlan(ctx, p.ID, time.Now().Add(6*time.Hour)); err != nil {
+	// The watcher's test clock runs ahead by the hours every earlier runWatchersOnce of the package added, and one more
+	// below; keep the approval valid beyond it (a fixed 6 h failed in the full package run, issue #251).
+	if _, err := e.st.ExtendPlan(ctx, p.ID, time.Now().Add(watchOffset+6*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	f.set("GET /tasks/5", `{"status":"completed","completion_percentage":1.0,"message":"done"}`)
