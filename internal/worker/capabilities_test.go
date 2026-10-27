@@ -60,7 +60,7 @@ func TestSystemNoteCapabilities(t *testing.T) {
 	}
 }
 
-// The factory builds the lines from the catalog and the environment of the orchestrator (G1.9); the
+// The factory builds the lines from the catalog and the environment of the orchestrator (G1.9; compute since #253); the
 // state of a chat is not part of them.
 func TestFactoryCapabilityLines(t *testing.T) {
 	cat, err := config.ParseCatalog([]byte(`{"default":"deepseek/deepseek-flash","providers":[{"id":"deepseek","models":[{"id":"deepseek-flash","name":"DeepSeek Flash"}]}]}`))
@@ -70,7 +70,7 @@ func TestFactoryCapabilityLines(t *testing.T) {
 	f := &Factory{Cat: cat, Env: config.Env{}}
 	lines := f.capabilities("cli")
 	joined := strings.Join(lines, "\n")
-	if len(lines) != 3 || !strings.Contains(joined, "vision: ") || !strings.Contains(joined, "bindings: ") || !strings.Contains(joined, "plans: ") {
+	if len(lines) != 4 || !strings.Contains(joined, "compute: Platform trainings: ") || !strings.Contains(joined, "vision: ") || !strings.Contains(joined, "bindings: ") || !strings.Contains(joined, "plans: ") {
 		t.Fatalf("lines: %v", lines)
 	}
 	// The statically described vision follows the catalog: an image model is reported as such.
