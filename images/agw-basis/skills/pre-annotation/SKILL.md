@@ -103,7 +103,7 @@ done
 The states are `queued`, `started`, `finished`, `failed` and `expired`. `expired` means CVAT no longer
 knows the run; what it already wrote stays in the task, so `annotation-summary` still counts it.
 
-Runtime on this instance (4 vCPU, no GPU): roughly **0.1 to 1 s per image**, so an estimate of a minute
+Measured on the CPU (4 vCPU, 2026-09): roughly **0.1 to 1 s per image**, so an estimate of a minute
 for a few hundred images and an hour for a few thousand. Say that it is an estimate. Large images and
 detection models take longer.
 

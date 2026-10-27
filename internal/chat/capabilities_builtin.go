@@ -19,7 +19,7 @@ import (
 func init() {
 	registerCapability("vision", capabilityVision, setupVision)
 	registerCapability("internet", capabilityInternet)
-	registerCapability("compute", capabilityCompute)
+	registerCapability("compute", capabilityCompute, setupCompute)
 	registerCapability("bindings", capabilityBindings, setupBindings)
 }
 
@@ -152,7 +152,49 @@ func capabilityCompute(ctx context.Context, m *Manager, chatID string) Capabilit
 		Detail:    fmt.Sprintf("%d of %d compute calls left in this chat (building or starting a training)", left, max),
 		Without:   "prepare the training and let the user start it in the platform's UI",
 	}
+	c.PlatformGPU = m.opt.PlatformGPU
+	if last := m.lastTrainingDevice(ctx, chatID); last != "" {
+		c.Detail += "; last training of this chat ran on the " + last
+	}
 	return c
+}
+
+// platformTrainingsLine is the sentence about the hardware of the platform's trainings, from the operator's
+// setting (AGW_PLATFORM_GPU, #248): the same words for the system note and the compute entry.
+func platformTrainingsLine(gpu string) string {
+	switch gpu {
+	case "expected":
+		return "Platform trainings: the platform has a GPU (set by the operator); size epochs and images for a GPU."
+	case "none":
+		return "Platform trainings: no GPU, CPU only (4 vCPU); few epochs, small images."
+	}
+	return "Platform trainings: whether the platform has a GPU is not configured; give runtimes for both cases."
+}
+
+// setupCompute: the hardware of the platform's trainings; the operator knows it and it does not change
+// during a chat.
+func setupCompute(s Setup) Capability {
+	return Capability{Available: true, Detail: platformTrainingsLine(s.Env.PlatformGPU), PlatformGPU: s.Env.PlatformGPU}
+}
+
+// lastTrainingDevice names the device ("GPU" or "CPU") of the latest ended trial of the chat that knows it;
+// empty when there is none. Only the chat's own trials count.
+func (m *Manager) lastTrainingDevice(ctx context.Context, chatID string) string {
+	trials, err := m.st.ListTrials(ctx, chatID)
+	if err != nil {
+		return ""
+	}
+	for i := len(trials) - 1; i >= 0; i-- {
+		t := trials[i]
+		if t.EndedAt == nil || t.GPUAvailable == nil {
+			continue
+		}
+		if *t.GPUAvailable {
+			return "GPU"
+		}
+		return "CPU"
+	}
+	return ""
 }
 
 // capabilityBindings: how this chat reaches the platform. The binding is fixed when the chat is created

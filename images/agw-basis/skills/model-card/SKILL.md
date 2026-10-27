@@ -1,6 +1,6 @@
 ---
 name: model-card
-description: Write a model card for a platform model as MODEL_CARD.md and send it to the user with agw-artifact upload. Rules - use only facts read in this chat with agw-platform model, training, training-logs and dataset (get_model, get_training, training_logs, get_dataset); give quality with the metric name, the value and what it refers to (test split, number of test images), overall and per class when the log has it; state the limits explicitly (data volume, class balance, camera position and setting, few epochs on CPU); write not known for anything these sources do not say instead of estimating; every number in the card must appear in those sources. Use when the user asks for a model card, model documentation or a datasheet for a model. In replies name files by their file name, never by sandbox path.
+description: Write a model card for a platform model as MODEL_CARD.md and send it to the user with agw-artifact upload. Rules - use only facts read in this chat with agw-platform model, training, training-logs and dataset (get_model, get_training, training_logs, get_dataset); give quality with the metric name, the value and what it refers to (test split, number of test images), overall and per class when the log has it; state the limits explicitly (data volume, class balance, camera position and setting, few epochs, if the log shows it); write not known for anything these sources do not say instead of estimating; every number in the card must appear in those sources. Use when the user asks for a model card, model documentation or a datasheet for a model. In replies name files by their file name, never by sandbox path.
 ---
 
 # Model cards
@@ -62,7 +62,7 @@ counts from the sources; otherwise not known.
 - Data volume: …
 - Class balance: …
 - Camera position, lighting, setting: not known unless the user or the dataset says it.
-- Training: epochs, img-size, batch-size, CPU without GPU.
+- Training: epochs, img-size, batch-size, and the device as the training log or the search card names it.
 - Further limits the sources show (for example no ONNX export, missing output labels).
 ```
 
