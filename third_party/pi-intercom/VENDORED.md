@@ -1,8 +1,8 @@
 # pi-intercom: our own copy in the PoC
 
-This directory is a **modified copy** of the npm package `pi-intercom`. It lives in the repo and,
-when building the pi image, replaces the files that `pi install npm:pi-intercom@0.15.0` creates
-(the dependency `tsx` still comes from npm). Changes happen only here.
+This directory is a **modified copy** of the npm package `pi-intercom`. It lives in the repo and the pi image build
+copies it to `/opt/agw/pihome/npm/node_modules/pi-intercom`; nothing is fetched from npm for it any more (#242). Its
+dependency `tsx` comes from the lockfile in `images/agw-basis/pi-packages`. Changes happen only here.
 
 ## Origin
 
