@@ -104,15 +104,20 @@ func capabilityEdge(ctx context.Context, m *Manager, chatID string) Capability {
 			return c
 		}
 		c.Available = true
-		c.Detail = edgeDeviceSummary(online) + "; inference runtime: " + platform.DefaultRuntime() +
+		// #237: an experiment chat builds with the setup's runtime only and does not see the device tag.
+		if exp, _ := m.experimentProfile(ctx, chatID); exp != nil {
+			c.Detail = edgeDeviceSummary(online, true) + "; inference runtime: " + platform.DefaultRuntime()
+			return c
+		}
+		c.Detail = edgeDeviceSummary(online, false) + "; inference runtime: " + platform.DefaultRuntime() +
 			" by default, " + platform.RuntimeOVMS + " for devices tagged " + platform.IntelCPUTag
 		return c
 	}), m)
 }
 
 // edgeDeviceSummary names the online devices: "1 device online: sim-edge-01 (simulated, amd64)".
-// A device marked with the tag simulated runs in a container on the platform host (edge E0).
-func edgeDeviceSummary(online []edgeDeviceState) string {
+// hideIntelCPU leaves the tag intel-cpu out (experiment chats, #237). A device marked with the tag simulated runs in a container on the platform host (edge E0).
+func edgeDeviceSummary(online []edgeDeviceState, hideIntelCPU bool) string {
 	parts := make([]string, 0, len(online))
 	for _, d := range online {
 		kinds := make([]string, 0, 2)
@@ -122,7 +127,7 @@ func edgeDeviceSummary(online []edgeDeviceState) string {
 		if d.Arch != "" {
 			kinds = append(kinds, d.Arch)
 		}
-		if slices.Contains(d.Tags, platform.IntelCPUTag) {
+		if !hideIntelCPU && slices.Contains(d.Tags, platform.IntelCPUTag) {
 			kinds = append(kinds, platform.IntelCPUTag)
 		}
 		if len(kinds) > 0 {

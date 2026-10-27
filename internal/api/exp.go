@@ -128,7 +128,7 @@ func (s *Server) expSetRunChat(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.M.SetExpRunChat(r.Context(), req.ID, req.Chat, store.ExpRunEnvironment{
 		ImagePi: imagePi, ImageExec: imageExec,
-		CatalogSHA256: env.CatalogSHA256, SkillsSHA256: env.SkillsSHA256,
+		CatalogSHA256: env.CatalogSHA256, SkillsSHA256: env.SkillsSHA256, InferenceRuntime: env.InferenceRuntime,
 	}); err != nil {
 		fail(w, err)
 		return

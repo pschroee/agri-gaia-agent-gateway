@@ -63,6 +63,8 @@ type ExpRun struct {
 	ImageExec     string `json:"image_exec,omitempty"`
 	CatalogSHA256 string `json:"catalog_sha256,omitempty"`
 	SkillsSHA256  string `json:"skills_sha256,omitempty"`
+	// InferenceRuntime (#237): the inference runtime of the setup the run was made with.
+	InferenceRuntime string `json:"inference_runtime,omitempty"`
 }
 
 // ExpRunEnvironment is what the gateway records about the environment of a run when its chat is linked
@@ -72,6 +74,8 @@ type ExpRunEnvironment struct {
 	ImageExec     string
 	CatalogSHA256 string
 	SkillsSHA256  string
+	// InferenceRuntime (#237).
+	InferenceRuntime string
 }
 
 // ExpRunEnd is what EndExpRun records.
@@ -111,8 +115,8 @@ func (s *Store) StartExpRun(ctx context.Context, r ExpRun) error {
 // that a crash leaves a visible "started" attempt (X1.5); the chat id follows at once.
 func (s *Store) SetExpRunChat(ctx context.Context, id, chatID string, env ExpRunEnvironment) error {
 	ct, err := s.pool.Exec(ctx, `UPDATE exp_runs SET chat_id=$2::uuid, image_pi=$3, image_exec=$4,
-		catalog_sha256=$5, skills_sha256=$6 WHERE id=$1`,
-		id, chatID, env.ImagePi, env.ImageExec, env.CatalogSHA256, env.SkillsSHA256)
+		catalog_sha256=$5, skills_sha256=$6, inference_runtime=$7 WHERE id=$1`,
+		id, chatID, env.ImagePi, env.ImageExec, env.CatalogSHA256, env.SkillsSHA256, env.InferenceRuntime)
 	if err != nil {
 		return err
 	}
@@ -165,7 +169,7 @@ func (s *Store) SupersedeExpRun(ctx context.Context, id, by string) error {
 func (s *Store) ListExpRuns(ctx context.Context, plan, cell string) ([]ExpRun, error) {
 	rows, err := s.pool.Query(ctx, `SELECT id, run_key, plan, plan_sha256, cell, task, rep, seed, position,
 		COALESCE(chat_id::text, ''), status, end_reason, pass, check_evidence, started_at, ended_at,
-		superseded_by, gateway_version, model, image_pi, image_exec, catalog_sha256, skills_sha256
+		superseded_by, gateway_version, model, image_pi, image_exec, catalog_sha256, skills_sha256, inference_runtime
 		FROM exp_runs WHERE plan=$1 AND ($2='' OR cell=$2) ORDER BY position, started_at`, plan, cell)
 	if err != nil {
 		return nil, err
@@ -216,7 +220,7 @@ func (s *Store) ExpUsage(ctx context.Context, plan string) (ExpUsage, error) {
 func (s *Store) GetExpRun(ctx context.Context, id string) (ExpRun, error) {
 	row := s.pool.QueryRow(ctx, `SELECT id, run_key, plan, plan_sha256, cell, task, rep, seed, position,
 		COALESCE(chat_id::text, ''), status, end_reason, pass, check_evidence, started_at, ended_at,
-		superseded_by, gateway_version, model, image_pi, image_exec, catalog_sha256, skills_sha256
+		superseded_by, gateway_version, model, image_pi, image_exec, catalog_sha256, skills_sha256, inference_runtime
 		FROM exp_runs WHERE id=$1`, id)
 	r, err := scanExpRun(row)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -240,7 +244,7 @@ func scanExpRun(row scanRow) (ExpRun, error) {
 	if err := row.Scan(&r.ID, &r.Key, &r.Plan, &r.PlanSHA256, &r.Cell, &r.Task, &r.Rep, &r.Seed,
 		&r.Position, &r.ChatID, &r.Status, &r.EndReason, &pass, &ev, &r.StartedAt, &ended,
 		&r.SupersededBy, &r.GatewayVersion, &r.Model, &r.ImagePi, &r.ImageExec,
-		&r.CatalogSHA256, &r.SkillsSHA256); err != nil {
+		&r.CatalogSHA256, &r.SkillsSHA256, &r.InferenceRuntime); err != nil {
 		return ExpRun{}, err
 	}
 	r.Pass, r.EndedAt = pass, ended

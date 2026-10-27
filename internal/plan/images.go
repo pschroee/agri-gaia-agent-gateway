@@ -91,7 +91,7 @@ func hasRepoOrTag(st store.PlanStep) bool {
 var fromTrainingRe = regexp.MustCompile(`^/train/containers/[^/]+/model$`)
 
 // checkModelNames: a model taken over from a training gets the platform's name "Architecture (Provider) [dataset,
-// score]", which Triton cannot address (spaces, brackets); validate_model reports it not ready and the agent renames
+// score]", which the inference server cannot address (spaces, brackets); validate_model reports it not ready and the agent renames
 // it outside the plan, a second approval (demo run of 26.10.2026). A plan that builds an image of such a model
 // therefore renames it before the build: an update_model step with model_id "{{stepM.id}}" and only "name".
 func checkModelNames(steps map[int]store.PlanStep, problems *Problems) {
@@ -118,7 +118,7 @@ func checkModelNames(steps map[int]store.PlanStep, problems *Problems) {
 			}
 		}
 		if !renamed {
-			problems.add(idx, fmt.Errorf("the model of step %d keeps the training's name, which Triton cannot address "+
+			problems.add(idx, fmt.Errorf("the model of step %d keeps the training's name, which the inference server cannot address "+
 				"(spaces, brackets); add an {{tool:update_model}} step with model_id \"{{step%d.id}}\" and only \"name\" "+
 				"(letters, digits, _ . -) between step %d and this build", ref, ref, ref))
 		}

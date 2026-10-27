@@ -99,12 +99,12 @@ func TestImageStepsSkipFailedSteps(t *testing.T) {
 	}
 }
 
-// A model taken over in the plan keeps the training's name, which Triton cannot address: the build of it needs an
+// A model taken over in the plan keeps the training's name, which the inference server cannot address: the build of it needs an
 // update_model step with only "name" in between (demo run of 26.10.2026).
 func TestModelNamesRenameBeforeBuild(t *testing.T) {
 	build := `{"tool":"build_inference_image","args":{"template_id":3,"model_id":"{{step1.id}}","name":"mnist-triton","tag":"v1","architecture":"amd64"}}`
 	_, err := problemsOf(t, imagePlan(imgModelStep, build))
-	want := `step 2: the model of step 1 keeps the training's name, which Triton cannot address (spaces, brackets); add an {{tool:update_model}} step with model_id "{{step1.id}}" and only "name"`
+	want := `step 2: the model of step 1 keeps the training's name, which the inference server cannot address (spaces, brackets); add an {{tool:update_model}} step with model_id "{{step1.id}}" and only "name"`
 	if err == nil || !strings.HasPrefix(err.Error(), want) {
 		t.Fatalf("no rename:\n got  %v\n want %s", err, want)
 	}

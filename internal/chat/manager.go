@@ -2657,6 +2657,11 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 	if waitErr != nil {
 		err = waitErr
 	} else {
+		// #237: an experiment chat does not see the device tag intel-cpu; an unreadable profile leaves the tag
+		// visible, the runtime guard holds anyway.
+		if exp, _ := m.experimentProfile(ctx, chatID); exp != nil {
+			req = expHideDeviceTags(req)
+		}
 		res, err = m.platformDo(ctx, chatID, req)
 	}
 	took := time.Since(t0)

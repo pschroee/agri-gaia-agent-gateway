@@ -274,7 +274,7 @@ refer to this repository.
   (fail closed).
 - `AGW_INFERENCE_RUNTIME` (`triton` default | `ovms`, #230): the runtime of inference images when `build_inference_image` /
   `import_template` get no `runtime`; set once at the start (`platform.SetDefaultRuntime`), shown in `GET /api/config`,
-  the start log and the capability `edge`. Templates and their runtime: `internal/platform/runtime.go`.
+  the start log and the capability `edge`. Experiment chats: fixed, other runtimes refused, tag intel-cpu hidden (#237; `internal/chat/exp_runtime.go`). Templates and their runtime: `internal/platform/runtime.go`.
 - The gateway's own refusals start with `platform.RefusedPrefix`; the socket logs them as `refused` in the activity.
   Columns `effect` in `approvals` and `socket_calls`, `chats.compute_calls`; see `API.md`.
 

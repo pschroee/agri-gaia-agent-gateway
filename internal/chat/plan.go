@@ -54,7 +54,7 @@ func (m *Manager) ProposePlan(ctx context.Context, chatID, slotID, via string, r
 		return platform.Result{Status: "error", Message: msg}, nil
 	}
 	steps, berr := plan.Build(p, planClassify)
-	if err := plan.Join(perr, berr, m.deploymentStepProblems(ctx, chatID, steps)); err != nil {
+	if err := plan.Join(perr, berr, m.deploymentStepProblems(ctx, chatID, steps), m.expRuntimeStepProblems(ctx, chatID, steps)); err != nil {
 		return platform.Result{Status: "error", Message: err.Error()}, nil
 	}
 	// #219: trace the image of every deployment start before the autonomous checks, so that the grant and the
