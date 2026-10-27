@@ -264,3 +264,31 @@ func TestStopJobNotStoppable(t *testing.T) {
 		t.Fatalf("a step that is not a number: %d", code)
 	}
 }
+
+// Issue #246: the jobs route carries the history of phases of each job, oldest first.
+func TestJobsAPIHistory(t *testing.T) {
+	st, srv, is, _ := jobsServer(t, "apitest_jobshist")
+	ctx := context.Background()
+	c, err := st.CreateChat(ctx, store.NewChat{Title: "jobs", Model: "p/m", Variant: "cli", Owner: anna.Sub})
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobID, err := st.AddWatchJob(ctx, store.WatchJob{ChatID: c.ID, Kind: "platform_task", Ref: "task:5"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, text := range []string{"Preparing the build", "Building the image · step 1/7 · FROM x", "Pushing the image to the registry"} {
+		if _, err := st.RecordJobPhase(ctx, jobID, text, "running", nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a := loggedIn(t, srv, is, anna)
+	code, body := call(t, a, "GET", srv.URL+"/api/chats/"+c.ID+"/jobs", "")
+	if code != 200 || !strings.Contains(body, `"history":[`) {
+		t.Fatalf("history missing: %d %s", code, body)
+	}
+	i1, i2, i3 := strings.Index(body, "Preparing the build"), strings.Index(body, "Building the image"), strings.Index(body, "Pushing the image")
+	if i1 < 0 || i2 < i1 || i3 < i2 {
+		t.Fatalf("history not oldest first: %s", body)
+	}
+}

@@ -403,7 +403,7 @@ type ActivityPage = { calls: ActivityCall[]; chats: Record<string, { id: string;
 | `POST /api/chats/{id}/plans/{plan}/pause` | `Plan` | pauses a running autonomous plan (`pause_reason` `user`); a running chat is stopped. 404 for a foreign or unknown plan, 409 `{"error":"plan is <state>","state":…}` when it is not `approved`. See *Autonomous plans* |
 | `POST /api/chats/{id}/plans/{plan}/resume` | `Plan` | resumes a `paused` plan and queues a note for the agent (`NotePlan`). 409 when it is not `paused`. Only this route resumes a plan; the agent has no tool for it |
 | `POST /api/chats/{id}/plans/{plan}/cancel` | `Plan` | ends an `approved` or `paused` plan: `cancelled`, its open steps `skipped`, a note queued. 409 otherwise |
-| `GET /api/chats/{id}/jobs` | `WatchJob[]` | observed platform jobs of the chat, newest first (A-E2): state, percent, message, ETA, log tail, outputs (with `size` where the kind knows it), `link` (the address the user can open) and `stopped_by` (who stopped the job; both own code C-E4) and `plan_id`/`step_idx` for the job of a plan step. 404 for foreign and unknown chats. See *Long-running platform jobs* |
+| `GET /api/chats/{id}/jobs` | `WatchJob[]` | observed platform jobs of the chat, newest first (A-E2): state, percent, message, ETA, log tail, outputs (with `size` where the kind knows it), `history` (the phases the job went through, see *Long-running platform jobs*), `link` (the address the user can open) and `stopped_by` (who stopped the job; both own code C-E4) and `plan_id`/`step_idx` for the job of a plan step. 404 for foreign and unknown chats. See *Long-running platform jobs* |
 | `POST /api/chats/{id}/plans/{plan}/steps/{idx}/stop` | `Plan` | the user stops the platform job a waiting step observes (`watch_job`): the call runs with the user's token and is logged as `socket_calls` with `via: "user"`. 404 unknown plan, 409 if the step does not wait or its kind cannot be stopped |
 | `POST /api/chats/{id}/jobs/{job}/stop` | `WatchJob` | the same for a single job outside a plan. 404 unknown job, 409 if it is not running or cannot be stopped |
 | `GET /api/chats/{id}/annotation` | `{cvat_url, runs: AnnotationRun[], jobs: AnnotationJob[]}` | runs and jobs of pre-annotation with their results, oldest first, for the cards in the history (V4); reads the database and never wakes the chat. 404 for foreign and unknown chats. See *Annotation cards in the history (V4)* |
@@ -1576,6 +1576,14 @@ user's token.
   steps only, and the tool call id is a header the client sets. It is written once, by the call that stops, and
   neither a progress update nor a second stop changes it; the hand-over of a row to another kind clears it. A job whose
   kind reports no stopper stays without the field.
+- **`history` (#246)** lists the phases of a job, oldest first, as `{at, text, state, percent}`, in the table
+  `watch_job_events` (`ON DELETE CASCADE` with the job). The gateway adds an entry when the **phase** (the text up to the
+  first ` · `, without a trailing `(…)`) or the state changes, so redrawn build lines and epoch numbers add none; at most
+  30 entries per job (the oldest intermediate ones fall away, the first and the last stay). A training run names its
+  phases itself: `Pulling the image`, `Training (epoch n/m)`, `Saving the model`, `Finished`/`Failed`; a build task passes
+  the backend's phases through (`Preparing the build`, `Building the image · step n/m · …`, `Pushing the image to the
+  registry`, `Creating the training container`, at the end `Train Container #N created.`). The SSE `job` event carries the
+  history too.
 - **`outputs`** name what the job produced (`{resource,id,label,size}`); `size` is in bytes and 0 for a kind that does
   not know it (the result files of a notebook run carry theirs, own code C-E4).
 - **Which call starts a job** is decided by the gateway from the route, never by the agent: `watch.For` matches the call

@@ -393,3 +393,60 @@ func TestJobRunTimesNilForOtherKinds(t *testing.T) {
 		t.Fatalf("run times on a kind without them: %v %v", j.RunStartedAt, j.RunEndedAt)
 	}
 }
+
+// Issue #246: the history of a job gets an entry when the phase or the state changes, not for every poll or epoch,
+// and keeps at most MaxJobEvents entries with the first and the last.
+func TestWatchEventsPhaseChange(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	c := newPlanChat(t, s)
+	jobID, err := s.AddWatchJob(ctx, WatchJob{ChatID: c.ID, Kind: "training_run", Ref: "9"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := func(text, state string) bool {
+		t.Helper()
+		ok, err := s.RecordJobPhase(ctx, jobID, text, state, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ok
+	}
+	if !rec("Pulling the image", "running") || rec("Pulling the image", "running") {
+		t.Fatal("the first text adds an entry, the same text again does not")
+	}
+	if !rec("Training (epoch 1/10)", "running") || rec("Training (epoch 2/10)", "running") || rec("Training", "running") {
+		t.Fatal("epochs inside one phase add nothing")
+	}
+	if !rec("Building the image · step 1/7 · FROM x", "running") || rec("Building the image · step 2/7 · RUN y", "running") {
+		t.Fatal("steps inside the build phase add nothing")
+	}
+	if !rec("Finished", "done") || rec("", "done") {
+		t.Fatal("a new phase adds an entry, an empty text does not")
+	}
+	ev, err := s.JobEvents(ctx, jobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ev) != 4 || ev[0].Text != "Pulling the image" || ev[3].Text != "Finished" || ev[3].State != "done" {
+		t.Fatalf("history: %+v", ev)
+	}
+
+	// Cap: 60 further phases leave MaxJobEvents entries, the first and the last among them.
+	for i := 0; i < 60; i++ {
+		rec("Phase "+strings.Repeat("x", i+1), "running")
+	}
+	rec("Last phase", "done")
+	ev, err = s.JobEvents(ctx, jobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ev) != MaxJobEvents || ev[0].Text != "Pulling the image" || ev[len(ev)-1].Text != "Last phase" {
+		t.Fatalf("cap: %d entries, first %q, last %q", len(ev), ev[0].Text, ev[len(ev)-1].Text)
+	}
+	// The chat's list carries the history.
+	jobs, err := s.ChatWatchJobs(ctx, c.ID)
+	if err != nil || len(jobs) != 1 || len(jobs[0].History) != MaxJobEvents {
+		t.Fatalf("list: %v %+v", err, jobs)
+	}
+}

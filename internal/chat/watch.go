@@ -241,6 +241,7 @@ func (m *Manager) pollJob(ctx context.Context, j store.WatchJob, kind watch.Kind
 	}
 	j.CheckedAt = timePtr(time.Now())
 	j.State = prog.State
+	m.recordPhase(ctx, j, p)
 	m.runJobProgress(ctx, j, p) // seam of the training search (issue #168)
 	m.publishJob(ctx, j, p)
 	if prog.State != watch.StateRunning {
@@ -336,8 +337,23 @@ func storeOutputs(out []watch.Output) []store.WatchOutput {
 	return res
 }
 
+// recordPhase writes the phase of a poll into the history of the job (issue #246): the kind's own phase text, else the
+// platform's message. A failure is only logged, the history is not worth losing a poll for.
+func (m *Manager) recordPhase(ctx context.Context, j store.WatchJob, p watch.Progress) {
+	text := p.Phase
+	if text == "" {
+		text = j.Message
+	}
+	if _, err := m.st.RecordJobPhase(ctx, j.ID, platform.RedactText(text), j.State, j.Progress); err != nil {
+		slog.Warn("job phase not stored", "job", j.ID, "error", err)
+	}
+}
+
 // publishJob distributes a job's new state to the subscribers of its chat.
 func (m *Manager) publishJob(ctx context.Context, j store.WatchJob, p watch.Progress) {
+	if hist, err := m.st.JobEvents(ctx, j.ID); err == nil {
+		j.History = hist
+	}
 	d := JobEvent{Change: "progress", Job: redactWatchText(j)}
 	if p.Next != nil {
 		d.Change = "next"
