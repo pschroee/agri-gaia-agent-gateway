@@ -28,6 +28,8 @@ type fakeServer struct {
 	running    bool
 	script     []string // SSE events after sending; "WAIT_DECISION" waits for a decision
 
+	afterFirstFlush func() // test hook: runs right after the first flush of the event stream
+
 	detail    string // response of GET /api/chats/{id}, empty = default
 	sendReply string // response of POST …/messages, empty = sent
 
@@ -75,13 +77,17 @@ func newFakeServer(t *testing.T) *fakeServer {
 "approvals":[{"id":"a9","chat_id":"c1","kind":"artifact_upload","via":"mcp","name":"data.csv","size":42,"state":"pending"}],"socket_calls":[]}`, f.running)
 	})
 	mux.HandleFunc("GET /api/chats/{id}/events", func(w http.ResponseWriter, r *http.Request) {
+		// Mark the subscription before the first byte: the client can only send after it has read the headers.
+		f.subscribed.Store(true)
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(http.StatusOK)
 		fl := w.(http.Flusher)
 		// An old, completed run before sending must not end the waiting.
 		io.WriteString(w, ": ping\n\ndata: {\"kind\":\"pi\",\"data\":{\"type\":\"agent_settled\"}}\n\n")
 		fl.Flush()
-		f.subscribed.Store(true)
+		if f.afterFirstFlush != nil {
+			f.afterFirstFlush()
+		}
 		select {
 		case <-f.posted:
 		case <-r.Context().Done():
@@ -248,6 +254,25 @@ func TestRunInteractiveReject(t *testing.T) {
 
 func TestSendWait(t *testing.T) {
 	f := newFakeServer(t)
+	f.script = []string{
+		`{"kind":"pi","data":{"type":"agent_start"}}`,
+		`{"kind":"pi","data":{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"Reply"}}}`,
+		`{"kind":"pi","data":{"type":"agent_settled"}}`,
+	}
+	code, out, errw := f.run("chat", "send", "c1", "Hello", "you", "--wait")
+	if code != 0 {
+		t.Fatalf("exit code %d: %s", code, errw)
+	}
+	if !strings.HasPrefix(out, "Reply") {
+		t.Errorf("stdout = %q", out)
+	}
+}
+
+// Regression: the subscription must count as made before the first byte of the stream. With a
+// pause right after the first flush, a marker set only afterwards would be seen as missing.
+func TestSendWaitSubscribedBeforeFirstByte(t *testing.T) {
+	f := newFakeServer(t)
+	f.afterFirstFlush = func() { time.Sleep(200 * time.Millisecond) }
 	f.script = []string{
 		`{"kind":"pi","data":{"type":"agent_start"}}`,
 		`{"kind":"pi","data":{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"Reply"}}}`,
