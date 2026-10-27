@@ -28,6 +28,14 @@ const (
 	AssessCheckPath = AssessPrefix + "/checks"
 )
 
+// SplitTrainShareDefault is the train share a split gets when the call names none. The tool writes it into
+// the call (so a call with and without it are the same call), the preview shows it and the handler uses it.
+const SplitTrainShareDefault = 70
+
+// SplitDefaultName is the name the gateway gives a split without a name: the name of the handler, of the
+// preview and of the plan match (issue #236) come from this one rule.
+func SplitDefaultName(source string) string { return source + "-train" }
+
 func init() {
 	Tools = append(Tools, splitDataset, assessModel)
 	registerDescriber(describeSplitDataset)
@@ -44,7 +52,7 @@ func describeSplitDataset(c SummaryCall, s *summarizer) (string, []string, bool)
 	}
 	id := scalarText(s.body["dataset_id"])
 	name, _ := s.body["name"].(string)
-	share := 70
+	share := SplitTrainShareDefault
 	if v := scalarText(s.body["train_share"]); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
 			share = n
@@ -59,7 +67,7 @@ func describeSplitDataset(c SummaryCall, s *summarizer) (string, []string, bool)
 	if name == "" {
 		switch {
 		case sourceName != "":
-			name = sourceName + "-train"
+			name = SplitDefaultName(sourceName)
 		default:
 			if n, isPh := placeholder(id); isPh {
 				name = fmt.Sprintf("<name of the dataset from step %d>-train", n)
@@ -234,12 +242,13 @@ var splitDataset = Tool{
 		if name != "" {
 			body["name"] = name
 		}
-		if hasShare {
-			if share < 50 || share > 90 || share%10 != 0 {
-				return Request{}, errors.New("train_share must be 50, 60, 70, 80 or 90")
-			}
-			body["train_share"] = share
+		if !hasShare {
+			share = SplitTrainShareDefault
 		}
+		if share < 50 || share > 90 || share%10 != 0 {
+			return Request{}, errors.New("train_share must be 50, 60, 70, 80 or 90")
+		}
+		body["train_share"] = share
 		b, err := json.Marshal(body)
 		return Request{Method: http.MethodPost, Path: AssessSplitPath, Body: b}, err
 	},
