@@ -851,8 +851,11 @@ func (m *Manager) restoreSteered(ctx context.Context, chatID string, lost []*tur
 // themselves. handled is false for a plan that no longer runs — such a note is an ordinary one again.
 func (m *Manager) planWakeLimit(ctx context.Context, chatID, planID string) (ev AutoHeldEvent, limited, handled bool) {
 	p, err := m.st.GetPlan(ctx, planID)
-	if err != nil || p.Mode != plan.ModeAutonomous {
+	if err != nil {
 		return AutoHeldEvent{}, false, false
+	}
+	if p.Mode != plan.ModeAutonomous {
+		return m.interactivePlanWakeLimit(ctx, chatID, p)
 	}
 	switch p.State {
 	case plan.StateApproved:
@@ -885,6 +888,29 @@ func (m *Manager) planWakeLimit(ctx context.Context, chatID, planID string) (ev 
 	// Cancelled, superseded, expired or rejected: the note is an ordinary one again, with the gateway's
 	// own limits.
 	return AutoHeldEvent{}, false, false
+}
+
+// interactivePlanWakeLimit (#251 B2, Phase B): the end of a step of an approved interactive plan that is still valid
+// wakes the chat against the plan's own count, not against AutoTurnsMax. A search step of the plan wakes the agent
+// once per trial (those count against the search, searchWakeLimit), and they used up AutoTurnsMax in the demo of
+// 27.10.2026: the plan stood still after the search with "limit for turns without the user reached". The count is
+// bounded by two wake-ups per step; an expired or ended plan falls back to the gateway's limits.
+func (m *Manager) interactivePlanWakeLimit(ctx context.Context, chatID string, p store.Plan) (ev AutoHeldEvent, limited, handled bool) {
+	if !wakesChat(p, watchNow()) {
+		return AutoHeldEvent{}, false, false
+	}
+	n, err := m.st.IncPlanAutoTurns(ctx, p.ID)
+	if err != nil {
+		slog.Error("wake-up of an interactive plan not counted", "plan", p.ID, "error", err)
+		return AutoHeldEvent{}, false, false
+	}
+	limit := 2 * len(p.Steps)
+	if n > limit {
+		slog.Warn("wake-ups of an interactive plan used up, the gateway's limits apply", "chat", chatID, "plan", p.ID, "turns", n, "limit", limit)
+		return AutoHeldEvent{}, false, false
+	}
+	slog.Info("wake-up of an interactive plan", "chat", chatID, "plan", p.ID, "turns", n, "limit", limit)
+	return AutoHeldEvent{}, false, true
 }
 
 // autoLimitTurns checks only the limit for turns in a row without the user (AutoTurnsMax); for
