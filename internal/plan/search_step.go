@@ -7,9 +7,11 @@ package plan
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"strconv"
 
 	"agw/internal/delegation"
+	"agw/internal/platform"
 	"agw/internal/store"
 )
 
@@ -156,6 +158,9 @@ func checkFormSentinels(form map[string][]string) error {
 // sameForm tells whether the form of a live call is the form of the step. A form that holds a placeholder (the
 // base container of a search step) is compared after the placeholder is replaced by the id it stands for.
 func sameForm(st store.PlanStep, live map[string][]string, resolve Resolve) bool {
+	if isSearchForm(st) {
+		return sameSearchForm(st, live, resolve)
+	}
 	want := string(st.Form)
 	if !anyRefRe.MatchString(want) {
 		return hashOrEmpty(FormJSON(live)) == st.FormSHA256
@@ -165,4 +170,35 @@ func sameForm(st store.PlanStep, live map[string][]string, resolve Resolve) bool
 		return false
 	}
 	return hashOrEmpty(want) == hashOrEmpty(FormJSON(live))
+}
+
+// searchFreeText are the fields of a search step the agent writes for the user and the gateway never verifies or acts
+// on (B20, demo 6 of 27.10.2026): the agent wrote the plan's note with "ae" and the call with "ä", the search asked
+// for an approval of its own. Space, budget, objective, base and path, which decide rights and compute, stay exact.
+var searchFreeText = []string{"note", "title"}
+
+// isSearchForm: the step is the start of a training search (propose_search, POST to the search prefix).
+func isSearchForm(st store.PlanStep) bool {
+	return st.Method == http.MethodPost && st.Path == platform.SearchPrefix
+}
+
+// sameSearchForm compares the form of a search step without its free text; placeholders are resolved first.
+func sameSearchForm(st store.PlanStep, live map[string][]string, resolve Resolve) bool {
+	want, ok := substJSON(string(st.Form), resolve, false)
+	if !ok {
+		return false
+	}
+	var step map[string][]string
+	if err := json.Unmarshal([]byte(want), &step); err != nil {
+		return false
+	}
+	got := make(map[string][]string, len(live))
+	for k, v := range live {
+		got[k] = v
+	}
+	for _, k := range searchFreeText {
+		delete(step, k)
+		delete(got, k)
+	}
+	return FormJSON(step) == FormJSON(got)
 }
