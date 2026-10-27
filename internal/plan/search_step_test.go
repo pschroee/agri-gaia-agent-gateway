@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"agw/internal/delegation"
 	"agw/internal/platform"
 )
 
@@ -183,5 +184,28 @@ func TestPlaceholderInsideTextMessage(t *testing.T) {
 	err := checkFormSentinels(map[string][]string{"title": {"run " + sentinel(1)}})
 	if err == nil || !strings.Contains(err.Error(), "inside a text") {
 		t.Fatalf("message: %v", err)
+	}
+}
+
+// B25 (Phase B #244–#251): the search step of a plan uses compute time – its trials train on the platform – and the
+// card names it compute, not write. Its trials are counted once, by the budget, not once more for the step itself.
+func TestPlanSearchStepEffectCompute(t *testing.T) {
+	gateway := func(r platform.Request) (string, string, bool) {
+		a := delegation.Classify(r)
+		return string(a.Effect), a.Action, a.ConfirmEach
+	}
+	steps, err := Build(proposal(t, `{"title":"t","steps":[`+searchTrainStep+`,`+searchStep(`"{{step1.id}}"`, okBudget, "template")+`]}`), gateway)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if steps[1].Effect != EffectCompute {
+		t.Fatalf("effect of the search step: %q", steps[1].Effect)
+	}
+	if !steps[1].Covered {
+		t.Fatalf("the search step must stay covered by the plan: %+v", steps[1])
+	}
+	// create_training (1) + the search's three trials (budget.max_runs).
+	if n := ComputeSteps(steps); n != 1+3 {
+		t.Fatalf("compute calls of the plan: %d", n)
 	}
 }

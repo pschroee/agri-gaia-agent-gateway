@@ -558,6 +558,9 @@ func Build(p Proposal, classify Classify) ([]store.PlanStep, error) {
 		if st.Tool == SearchTool {
 			// A training search creates one object, the training container of its winner (issue #244).
 			actions[idx] = delegation.Create
+			// Its trials train on the platform (B25): the card names it compute. ComputeSteps counts the trials by
+			// the budget, not the step itself.
+			effect = EffectCompute
 		}
 		st.Effect = effect
 		// The confirm-each trait is stored with the step (A-E2): a step that is loaded again has to be
@@ -811,7 +814,8 @@ func jsonObject(raw []byte) (map[string]any, error) {
 }
 
 // Matches tells whether a live call is exactly the step: method, path, query, body (canonical
-// form), form and uploads. why names the first difference.
+// form), form and uploads. why names the first difference. The free text of the agent that freeTextRules lists
+// for the call (descriptions, notes, titles) is left out of body and form (B23).
 func Matches(st store.PlanStep, r platform.Request, resolve Resolve) (bool, string) {
 	if r.Method != st.Method {
 		return false, "method"
@@ -824,19 +828,33 @@ func Matches(st store.PlanStep, r platform.Request, resolve Resolve) (bool, stri
 	if !ok || q != QueryJSON(r.Query) {
 		return false, "query"
 	}
+	free, inForm := freeTextFields(r.Method, r.Path)
 	if len(st.Body) == 0 {
 		if len(bytes.TrimSpace(r.Body)) > 0 {
 			return false, "body"
 		}
 	} else {
 		want, ok := substJSON(string(st.Body), resolve, true)
-		wc, e1 := Canonical([]byte(want))
-		gc, e2 := Canonical(r.Body)
-		if !ok || e1 != nil || e2 != nil || !bytes.Equal(wc, gc) {
+		if !ok {
 			return false, "body"
 		}
+		if len(free) > 0 && !inForm {
+			if !sameBodyWithout([]byte(want), r.Body, free) {
+				return false, "body"
+			}
+		} else {
+			wc, e1 := Canonical([]byte(want))
+			gc, e2 := Canonical(r.Body)
+			if e1 != nil || e2 != nil || !bytes.Equal(wc, gc) {
+				return false, "body"
+			}
+		}
 	}
-	if !sameForm(st, r.Form, resolve) {
+	if len(free) > 0 && inForm {
+		if !sameFormWithout(string(st.Form), r.Form, resolve, free) {
+			return false, "form"
+		}
+	} else if !sameForm(st, r.Form, resolve) {
 		return false, "form"
 	}
 	if len(r.Files) != len(st.Files) || len(r.Uploads) != len(st.Files) {

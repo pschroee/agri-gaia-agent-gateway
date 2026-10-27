@@ -130,8 +130,12 @@ func (m *Manager) ProposePlan(ctx context.Context, chatID, slotID, via string, r
 	d := &planDecision{apply: func(bg context.Context, final string) (bool, error) {
 		if final != store.ApprovalApproved {
 			state := plan.StateRejected
-			if final == store.ApprovalExpired {
+			switch final {
+			case store.ApprovalExpired:
 				state = plan.StateExpired
+			case store.ApprovalCancelled:
+				// The user stopped the turn while the card was open (B24): nobody rejected the plan.
+				state = plan.StateCancelled
 			}
 			if _, err := m.st.DecidePlan(bg, pl.ID, state, nil); err != nil {
 				slog.Error("plan decision not recorded", "plan", pl.ID, "error", err)
@@ -196,8 +200,11 @@ func (m *Manager) ProposePlan(ctx context.Context, chatID, slotID, via string, r
 	ok, err := d.decide(bg, final)
 	if final != store.ApprovalApproved {
 		msg := "plan not approved by the user; nothing executed. Ask the user what to change and propose a new plan"
-		if final == store.ApprovalExpired {
+		switch final {
+		case store.ApprovalExpired:
 			msg = "no decision on the plan within the waiting time; nothing executed"
+		case store.ApprovalCancelled:
+			msg = "the user stopped the turn before deciding on the plan; nothing executed"
 		}
 		return platform.Result{Status: "rejected", Message: msg}, nil
 	}
