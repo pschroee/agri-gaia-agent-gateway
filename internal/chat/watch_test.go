@@ -1217,3 +1217,35 @@ func TestHeldQueueReleasedByPlanStepNote(t *testing.T) {
 		t.Error("the queue is still held after the plan step's note")
 	}
 }
+
+// #251 (Phase B, demo 4 of 27.10.2026): the note about the end of a step's job names the job, not the plan
+// (JobNote: job id, step). The plan's own wake count must apply to it all the same: with the gateway's limits used up,
+// the real note of a finished step still wakes the resting chat of an interactive plan.
+func TestJobNoteOfStepWakesAgainstPlanCount(t *testing.T) {
+	// two steps, so that the plan still runs when its first step ends
+	two := `"steps":[{"method":"POST","path":"/train/config"},{"method":"PATCH","path":"/datasets/5","body":{"name":"x"}}]}`
+	interactive := `{"title":"Watch",` + two
+	autonomous := `{"title":"Watch","mode":"autonomous","budget":{"max_duration_minutes":60,"max_llm_cost_usd":1,"max_auto_turns":3},` + two
+	_ = autonomous // an autonomous plan's wake is counted where its resume delivers the queue (planWakeLimit, tested above)
+	for _, body := range []string{interactive} {
+		e := setup(t)
+		ctx := store.WithSession(context.Background(), "main")
+		e.m.opt.AutoTurnsMax = 0
+		e.m.opt.BgWakesPerHour = 0
+		c, slot, p, f := watchedChat(t, e, ctx, body)
+		startWatchedStep(t, e, ctx, c, slot)
+		if _, err := e.m.Suspend(ctx, c.ID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := e.st.ExtendPlan(ctx, p.ID, time.Now().Add(watchOffset+6*time.Hour)); err != nil {
+			t.Fatal(err)
+		}
+		f.set("GET /tasks/5", `{"status":"completed","completion_percentage":1.0,"message":"done"}`)
+		runWatchersOnce(t, e)
+		waitWoken(t, e, c.ID)
+		pl, err := e.st.GetPlan(ctx, p.ID)
+		if err != nil || pl.AutoTurns < 1 {
+			t.Fatalf("%s: the wake-up was not counted on the plan: %+v %v", p.Mode, pl, err)
+		}
+	}
+}
