@@ -912,6 +912,15 @@ func (m *Manager) planWakeLimit(ctx context.Context, chatID, planID string) (ev 
 // 27.10.2026: the plan stood still after the search with "limit for turns without the user reached". The count is
 // bounded by two wake-ups per step; an expired or ended plan falls back to the gateway's limits.
 func (m *Manager) interactivePlanWakeLimit(ctx context.Context, chatID string, p store.Plan) (ev AutoHeldEvent, limited, handled bool) {
+	if p.State == plan.StateCompleted || p.State == plan.StateFailed {
+		// The note of the last step (B21, demo 7 of 27.10.2026): the plan has just ended, its note tells the agent to
+		// finish the task (deployment check, model card). Like an autonomous plan's last note it is not held back.
+		if _, err := m.st.IncPlanAutoTurns(ctx, p.ID); err != nil {
+			slog.Error("last wake-up of an interactive plan not counted", "plan", p.ID, "error", err)
+		}
+		slog.Info("last wake-up of an interactive plan", "chat", chatID, "plan", p.ID, "state", p.State)
+		return AutoHeldEvent{}, false, true
+	}
 	if !wakesChat(p, watchNow()) {
 		return AutoHeldEvent{}, false, false
 	}
