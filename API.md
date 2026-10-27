@@ -677,7 +677,11 @@ author's fork, branch `ovms-onnx`; #230) without credentials. `import_template` 
 `AGW_INFERENCE_RUNTIME`) and a `git_ref` only if it is the branch of that runtime. `list_templates` adds `runtime`
 (`triton`, `ovms` or `other`) to each template. `build_inference_image` takes `runtime` too: the template must be the one of
 that runtime (a template of no official source only without `runtime`), `ovms` needs `architecture amd64` and a tag ending in
-`-ovms`, `triton` refuses that suffix; the answer is `{repository, tag, task, runtime}`.
+`-ovms`, `triton` refuses that suffix; the answer is `{repository, tag, task, runtime}`. In an experiment chat (#237) the
+runtime is fixed to `AGW_INFERENCE_RUNTIME`: a guard refuses (`denied_fixed`, reason `guard`) the import of the template of another
+runtime (by repository URL, whatever the ref) and a build from an installed template of another runtime (for the build the
+gateway reads the template list, op `exp_runtime_read`, which is no `platform` call); `propose_plan` refuses such steps too. The
+device tag `intel-cpu` is left out of `GET /edge-devices`, `GET /edge-devices/{id}` and the capability `edge` there.
 
 **Training (issue #93).** The keys and values of `train_config` reach a shell in the privileged training container
 without being checked (`config_to_args.py` builds `--key value` pairs, `docker-entrypoint.sh` evaluates them with `eval`).
@@ -2728,9 +2732,9 @@ the account's `sub` as owner, so ownership checks work unchanged.
 |---|---|
 | `POST /api/chats` | creates an experiment chat: `experiment: {protection, cell, run, seed, trace}` plus `delegation`, `model`, `variant` (binding) and `message` (the task) |
 | `GET /api/models` | the model catalogue; the runner and `agw exp validate` compare the plan's IDs with it (#156) |
-| `GET /api/exp/environment` | `{gateway_version, gateway_commit, gateway_describe, catalog_sha256, skills_sha256, instruction_sha256, images_pi, images_exec, slots: [{id, variant, state, chat_id?, image_pi?, image_exec?}]}` — the identity of the build and the images the warm experiment slots actually run (X8.5); `agw exp environment [--json]` |
+| `GET /api/exp/environment` | `{gateway_version, gateway_commit, gateway_describe, catalog_sha256, skills_sha256, instruction_sha256, inference_runtime, images_pi, images_exec, slots: [{id, variant, state, chat_id?, image_pi?, image_exec?}]}` — the identity of the build and the images the warm experiment slots actually run (X8.5); `agw exp environment [--json]` |
 | `POST /api/exp/runs/start` | records one attempt: `{id, key, plan, plan_sha256, cell, task, rep, seed, position, model}`; `409` if the id exists. The gateway fills `gateway_version` itself (X8.1) |
-| `POST /api/exp/runs/chat` | links the attempt to its chat: `{id, chat}`; the gateway records `image_pi`, `image_exec`, `catalog_sha256` and `skills_sha256` of that slot (X8.2) |
+| `POST /api/exp/runs/chat` | links the attempt to its chat: `{id, chat}`; the gateway records `image_pi`, `image_exec`, `catalog_sha256`, `skills_sha256` of that slot (X8.2) and the `inference_runtime` of the setup (#237; column `inference_runtime` of the table `runs`) |
 | `POST /api/exp/runs/end` | closes the attempt: `{id, status, end_reason, pass, check_evidence}`; status is the end reason (`done`, `limit_cost`, `limit_tokens`, `limit_duration`, `error`, `aborted`) |
 | `POST /api/exp/runs/supersede` | an attempt that a restart replaced: `{id, superseded_by}`; the old row keeps `status: "aborted"` and stays visible |
 | `POST /api/exp/runs/stop` | `{id}`: aborts the run's chat and closes the run as `aborted`; a finished run keeps its outcome |
@@ -2749,7 +2753,7 @@ in `AGW_ALLOWED_HOSTS` there and answers `403 unknown host` (issue #155). It rea
 instead of every cell), checks `plan.lock` for a main plan (X8.5), orders the runs per task and repetition with a seeded shuffle of
 the cells (X1.6) and runs them strictly one after the other (X1.7). For a main plan the check has two parts: the
 SHA-256 of every material file against `plan.lock`, and the environment against
-`GET /api/exp/environment` — gateway commit and describe, `catalog_sha256`, `skills_sha256`, `instruction_sha256`
+`GET /api/exp/environment` — gateway commit and describe, `catalog_sha256`, `skills_sha256`, `instruction_sha256`, `inference_runtime` (when the lock has it)
 and the image IDs of the warm experiment slots. A deviation stops the plan with the list of findings before any
 run starts; after each chat is created the image IDs of its own slot are checked once more (a slot that started
 later may still carry an older image). A pilot plan ignores the lock. A run ends when the chat is quiet
