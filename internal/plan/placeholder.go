@@ -34,7 +34,7 @@ var errPlaceholderText = errors.New("placeholder inside a text (a {{stepN.id}} m
 
 // errPlaceholderAloneInField is the refusal of a placeholder that stands alone as the value of a form field other than
 // base_container_id of a training search (#254): the cause is the field, not a text around the placeholder.
-var errPlaceholderAloneInField = errors.New("a {{stepN.id}} in a form field is only allowed as base_container_id of propose_search; give the id itself or make the step a call without files")
+var errPlaceholderAloneInField = errors.New("a {{stepN.id}} in a form field is only allowed as base_container_id of a training search step; give the id itself or make the step a call without files")
 
 // sentinel is the number that stands for placeholder N while the step is built.
 func sentinel(n int) string { return fmt.Sprintf("98765432%04d", n) }

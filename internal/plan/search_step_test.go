@@ -170,7 +170,7 @@ func TestPlanSearchStepIgnoresFreeText(t *testing.T) {
 // text message (#254, E3).
 func TestPlaceholderAloneInFormFieldMessage(t *testing.T) {
 	err := checkFormSentinels(map[string][]string{"title": {sentinel(1)}})
-	if err == nil || !strings.Contains(err.Error(), "only allowed as base_container_id of propose_search") || strings.Contains(err.Error(), "inside a text") {
+	if err == nil || !strings.Contains(err.Error(), "only allowed as base_container_id of a training search step") || strings.Contains(err.Error(), "inside a text") {
 		t.Fatalf("message: %v", err)
 	}
 	if err := checkFormSentinels(map[string][]string{searchBaseField: {sentinel(1)}}); err != nil {
