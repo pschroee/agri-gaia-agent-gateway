@@ -552,30 +552,93 @@ func TestFinishWebCountsRefusal(t *testing.T) {
 	}
 }
 
+// drainKind empties the channel without blocking and returns the events of the given kind. publish is synchronous,
+// so whatever a call has published is in the buffer when the call returns: no deadline needed.
+func drainKind(ch <-chan Event, kind string) []Event {
+	var out []Event
+	for {
+		select {
+		case ev := <-ch:
+			if ev.Kind == kind {
+				out = append(out, ev)
+			}
+		default:
+			return out
+		}
+	}
+}
+
 // Issue #229: when a grant starts, the counter starts at the grant, so the refusals before it no longer count; the UI
-// is told with count 0 instead of keeping the old number until a reload.
+// is told with count 0 instead of keeping the old number until a reload. Issue #240: one event each, read without a
+// deadline.
 func TestPublishBlockedZeroOnGrantStart(t *testing.T) {
 	e := setup(t)
 	chatID, _ := newChatNoNet(t, e)
 	events, cancel := e.m.Subscribe(chatID)
 	defer cancel()
 	before := time.Now()
-	e.m.RecordWeb(webproxy.Request{ChatID: chatID, Method: "CONNECT", Host: "accounts.google.com", Port: 443, Status: 403, Denied: "blocked: internet is off", Reason: "internet_off", StartedAt: before, Origin: "exec"})
-	if v := waitEvent(t, events, "internet_blocked", "").Data.(*BlockedView); v.Count != 1 {
+	e.m.RecordWeb(webproxy.Request{ChatID: chatID, Method: "CONNECT", Host: "accounts.google.com", Port: 443, Status: 403, Denied: "blocked: internet is off", Reason: "internet_off", StartedAt: before.Add(-time.Minute), Origin: "exec"})
+	evs := drainKind(events, "internet_blocked")
+	if len(evs) != 1 {
+		t.Fatalf("after the refusal: %d events", len(evs))
+	}
+	if v := evs[0].Data.(*BlockedView); v.Count != 1 {
 		t.Fatalf("after the refusal: %+v", v)
 	}
 	startTestGrant(t, e, chatID, "domains", []string{"a.example.org"}, 30, 100)
-	// An event with the old count can still come first (seen once in ./dev.sh test, 27.10.2026); the
-	// grant's own event, with the counter starting at the grant, follows within a few events.
-	var v *BlockedView
-	for i := 0; i < 5; i++ {
-		v = waitEvent(t, events, "internet_blocked", "").Data.(*BlockedView)
-		if v.Count == 0 {
-			break
-		}
+	evs = drainKind(events, "internet_blocked")
+	if len(evs) != 1 {
+		t.Fatalf("after the grant started: %d events", len(evs))
 	}
-	if v.Count != 0 || len(v.Last) != 0 || v.Since.Before(before) {
+	if v := evs[0].Data.(*BlockedView); v.Count != 0 || len(v.Last) != 0 || v.Since.Before(before) {
 		t.Fatalf("after the grant started: %+v", v)
+	}
+}
+
+// Issue #240: the counter starts at the earliest start of the active grants, not at their creation.
+func TestBlockedSinceUsesGrantStart(t *testing.T) {
+	e := setup(t)
+	chatID := "chat-since"
+	t0 := time.Now().Add(-time.Hour).Truncate(time.Second)
+	at := func(d time.Duration) *time.Time { x := t0.Add(d); return &x }
+	e.m.grants.add(store.Grant{ID: 9001, ChatID: chatID, State: store.GrantActive, CreatedAt: t0, StartedAt: at(10 * time.Minute)})
+	if got := e.m.blockedSince(chatID); !got.Equal(t0.Add(10 * time.Minute)) {
+		t.Fatalf("one grant: %v", got)
+	}
+	e.m.grants.add(store.Grant{ID: 9002, ChatID: chatID, State: store.GrantActive, CreatedAt: t0, StartedAt: at(5 * time.Minute)})
+	if got := e.m.blockedSince(chatID); !got.Equal(t0.Add(5 * time.Minute)) {
+		t.Fatalf("two grants: %v", got)
+	}
+	other := "chat-since-2"
+	e.m.grants.add(store.Grant{ID: 9003, ChatID: other, State: store.GrantActive, CreatedAt: t0})
+	if got := e.m.blockedSince(other); !got.Equal(t0) {
+		t.Fatalf("without started_at: %v", got)
+	}
+}
+
+// Issue #240: a requested grant is created at the request but starts at the user's approval; refusals in between do
+// not count.
+func TestBlockedCountStartsAtActivation(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	chatID, _ := newChatNoNet(t, e)
+	g, err := e.st.CreateGrant(ctx, store.Grant{ChatID: chatID, Kind: "domains", Origin: store.GrantByAgent, Domains: []string{"a.example.org"},
+		State: store.GrantPending, MaxMinutes: 30, MaxBytes: 100 << 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.m.RecordWeb(webproxy.Request{ChatID: chatID, Method: "CONNECT", Host: "accounts.google.com", Port: 443, Status: 403, Denied: "blocked: internet is off", Reason: "internet_off", StartedAt: time.Now().Add(-time.Second), Origin: "exec"})
+	events, cancel := e.m.Subscribe(chatID)
+	defer cancel()
+	if _, err := e.m.activateGrant(ctx, g.ID); err != nil {
+		t.Fatal(err)
+	}
+	evs := drainKind(events, "internet_blocked")
+	if len(evs) == 0 {
+		t.Fatal("no internet_blocked event")
+	}
+	if v := evs[len(evs)-1].Data.(*BlockedView); v.Count != 0 {
+		t.Fatalf("after the activation: %+v", v)
 	}
 }
 

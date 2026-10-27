@@ -158,8 +158,10 @@ type toolHandler struct {
 
 const (
 	maxToolRequests = 32
-	// toolByteBudget: two reads at the limit (MaxFileBytes) at once.
-	toolByteBudget = 2 * execproto.MaxFileBytes
+	// toolBodySlack: allowance for the request body of a read (a few hundred bytes), so that two reads at the limit fit.
+	toolBodySlack = 1 << 20
+	// toolByteBudget: two reads at the limit (MaxFileBytes) at once, each with up to toolBodySlack of request body.
+	toolByteBudget = 2 * (execproto.MaxFileBytes + toolBodySlack)
 )
 
 // acquire holds a request until the slot's limits allow it; weight is the

@@ -978,6 +978,7 @@ func (m *Manager) blockedState(ctx context.Context, chatID string) (*BlockedView
 	since := m.blockedSince(chatID)
 	n, last, err := m.st.ChatBlocked(ctx, chatID, since, 3)
 	if err != nil {
+		slog.Warn("refusal counter not read", "chat", chatID, "error", err)
 		return nil, err
 	}
 	v := &BlockedView{Count: n, Since: since, Last: []BlockedConnection{}}
@@ -996,17 +997,21 @@ func (m *Manager) RecentRefusals(chatID string) []store.WebRequest {
 	return last
 }
 
-// blockedSince: where the refusal counter of a chat starts: the oldest active grant, else the default window.
+// blockedSince: where the refusal counter of a chat starts: the earliest start of the active grants (created_at only
+// for rows without started_at), else the default window. started_at and the refusals' started_at both come from
+// the gateway clock.
 func (m *Manager) blockedSince(chatID string) time.Time {
+	start := func(g store.Grant) time.Time {
+		if g.StartedAt != nil {
+			return *g.StartedAt
+		}
+		return g.CreatedAt
+	}
 	since := time.Now().Add(-blockedWindow)
 	if act := m.grants.active(chatID); len(act) > 0 {
-		since = act[0].g.CreatedAt
-		for _, l := range act {
-			t := l.g.CreatedAt
-			if l.g.StartedAt != nil {
-				t = *l.g.StartedAt
-			}
-			if t.Before(since) {
+		since = start(act[0].g)
+		for _, l := range act[1:] {
+			if t := start(l.g); t.Before(since) {
 				since = t
 			}
 		}
