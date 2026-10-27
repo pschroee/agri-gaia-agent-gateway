@@ -55,7 +55,7 @@ const (
 	// Web search: pi-searxng-suite (unchanged) loaded through web-tools.ts, which gives its tools
 	// web_search and web_extract fuller descriptions (issue #44), and the extension that offers
 	// them only with internet.
-	searxExt    = "/opt/agw/pihome/npm/node_modules/pi-searxng-suite/index.ts"
+	searxExt    = "/opt/agw/pihome/npm/node_modules/@blazer2k/searxng-suite/src/index.ts"
 	webToolsExt = "/opt/agw/ext/web-tools.ts"
 	webGateExt  = "/opt/agw/ext/web-gate.ts"
 	// Messages between the main agent and the subagents of a slot (pi-intercom, tool intercom).

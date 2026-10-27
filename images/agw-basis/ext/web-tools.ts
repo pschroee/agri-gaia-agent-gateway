@@ -12,7 +12,7 @@
 // first registration per tool name, so the texts are set while the suite registers, through a
 // proxy of the extension API, not by registering the tools a second time.
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import suite from "/opt/agw/pihome/npm/node_modules/pi-searxng-suite/index.ts";
+import suite from "/opt/agw/pihome/npm/node_modules/@blazer2k/searxng-suite/src/index.ts";
 
 export const SEARCH_DESCRIPTION =
 	"Search the web through our own SearXNG metasearch. Returns up to 10 results, each with title, URL and a " +
