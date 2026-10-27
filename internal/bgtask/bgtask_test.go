@@ -134,6 +134,17 @@ func waitEnded(t *testing.T, n *fakeNotifier) store.BackgroundTask {
 	return store.BackgroundTask{}
 }
 
+func waitFor(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timeout: %s", what)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 func TestStartOutputEnd(t *testing.T) {
 	r, run, n := newReg(t, 2)
 	ctx := context.Background()
@@ -144,7 +155,10 @@ func TestStartOutputEnd(t *testing.T) {
 	if req := run.reqs[0]; req.Op != execproto.OpBg || req.Spill != "/tmp/agw-bg/bg-1.log" || req.Timeout != 5 {
 		t.Fatalf("request: %+v", req)
 	}
-	time.Sleep(20 * time.Millisecond)
+	waitFor(t, "output of bg-1", func() bool {
+		_, full, err := r.Output(ctx, "c1", "bg-1")
+		return err == nil && full == "finish-bg\n"
+	})
 	s, full, err := r.Output(ctx, "c1", "bg-1")
 	if err != nil || full != "finish-bg\n" || s.State != store.BgRunning || s.OutputBytes != 10 {
 		t.Fatalf("Output: %+v %q %v", s, full, err)
@@ -227,7 +241,12 @@ func TestProgressThrottled(t *testing.T) {
 	for i := 0; i < 50; i++ {
 		w([]byte("line\n"))
 	}
-	time.Sleep(400 * time.Millisecond)
+	waitFor(t, "second progress report", func() bool {
+		n.mu.Lock()
+		defer n.mu.Unlock()
+		return len(n.progress) >= 2
+	})
+	time.Sleep(2 * ProgressEvery) // negative check: no further report
 	n.mu.Lock()
 	got := len(n.progress)
 	last := n.progress[len(n.progress)-1]

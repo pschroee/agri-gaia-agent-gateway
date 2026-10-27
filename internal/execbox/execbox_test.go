@@ -109,11 +109,17 @@ func TestReconnectAfterLoss(t *testing.T) {
 	c := New(d.dial)
 	defer c.Close()
 	done := make(chan error, 1)
+	started := make(chan struct{})
+	var once sync.Once
 	go func() {
-		_, err := c.Run(context.Background(), execproto.Request{Op: execproto.OpBash, Command: "sleep 30", Cwd: dir}, nil)
+		_, err := c.Run(context.Background(), execproto.Request{Op: execproto.OpBash, Command: "echo up; sleep 30", Cwd: dir}, func([]byte) { once.Do(func() { close(started) }) })
 		done <- err
 	}()
-	time.Sleep(300 * time.Millisecond)
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("command did not start")
+	}
 	d.mu.Lock()
 	_ = d.procs[0].Process.Kill()
 	d.mu.Unlock()
