@@ -1476,6 +1476,10 @@ merged (strand G-B), an approved plan does not yet change how the steps are appr
   agent's, not verified. Answer after
   approval: `{"plan_id", "state": "approved", "expires_at", "steps": [{"step", "call", "effect", "covered"}], "note"}`
   with status `ok`. A rejected or expired plan answers `rejected` and executes nothing.
+- **Capability `compute`, platform hardware (#253):** the system note carries one line, `compute: Platform trainings: ...`,
+  from `AGW_PLATFORM_GPU` (`expected`: the platform has a GPU; `none`: CPU only, 4 vCPU; empty: not configured, give
+  runtimes for both cases). The live entry of the tool `capabilities` repeats it as the field `platform_gpu` and adds
+  "last training of this chat ran on the GPU / on the CPU" once an ended trial of the chat knows its device.
 - **Capability `plans` (#218):** the tool `capabilities` (and the system note) names the limits: `up to 10 steps;
   autonomous budget at most N minutes, X USD and 50 turns without the user; max_attempts 1-3`, from
   `AGW_PLAN_MAX_DURATION` and `AGW_PLAN_MAX_LLM_COST`; without limits `available: false` with `autonomous plans are not

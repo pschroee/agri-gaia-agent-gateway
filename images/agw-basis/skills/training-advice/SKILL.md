@@ -1,6 +1,6 @@
 ---
 name: training-advice
-description: Advice before creating a platform training - use it before every agw-platform create-training or platform_create_training. Rules - check the task category against the annotation kind of the dataset and say so plainly when they do not match (get_dataset has only the classes, not the kind; take the kind from the annotation file you uploaded or read, CVAT tag means classification, box means object detection, polygon or mask means segmentation, otherwise ask the user); start from the default values of train_options and keep every value inside the schema; justify every change against the defaults in one sentence; always include export_config for ONNX with input_shapes matching img-size; give the runtime only as a range marked as an estimate, based on the measured runs of this instance in this skill (4 vCPU, no GPU); show the proposal first and create the training only after the user agrees.
+description: Advice before creating a platform training - use it before every agw-platform create-training or platform_create_training. Rules - check the task category against the annotation kind of the dataset and say so plainly when they do not match (get_dataset has only the classes, not the kind; take the kind from the annotation file you uploaded or read, CVAT tag means classification, box means object detection, polygon or mask means segmentation, otherwise ask the user); start from the default values of train_options and keep every value inside the schema; justify every change against the defaults in one sentence; always include export_config for ONNX with input_shapes matching img-size; give the runtime only as a range marked as an estimate, based on the measured runs in this skill that match the platform hardware named in the line *Platform trainings* of the system note (or in the `capabilities` entry compute); show the proposal first and create the training only after the user agrees.
 ---
 
 # Training advice
@@ -43,8 +43,10 @@ fits. Never create a training whose category does not fit the annotations.
   every value you change.
 - Show the changes as a table with the columns parameter, default, proposed, reason (one sentence each).
   Values you keep need no row.
-- This instance has no GPU (4 vCPU, 31 GB RAM): few epochs, a small `img-size`, a small `batch-size`. The
-  defaults (for example 50 epochs and 300 px for EfficientNet) are meant for a GPU.
+- Size the values for the hardware the line *Platform trainings* of the system note names (or the `capabilities`
+  entry compute, field `platform_gpu`). On a CPU-only platform: few epochs, a small `img-size`, a small
+  `batch-size`. With a GPU the defaults (for example 50 epochs and 300 px for EfficientNet) are meant for it. If
+  the line says the GPU is not configured, give the numbers for both cases.
 
 ## 4. Always send export_config
 
@@ -61,8 +63,9 @@ Keep `dynamo` false: the torch.export-based exporter cannot trace torchvision de
 
 ## 5. Estimate the runtime
 
-Give the runtime only as a range and call it an estimate. Base it on these measured runs of this instance
-(2026-09-09, MNIST-mini with 30 images of 28 x 28 px in two classes, Torchvision EfficientNet
+Give the runtime only as a range and call it an estimate. Pick the table that matches the line *Platform
+trainings* of the system note (or the `capabilities` entry compute); name which one you used. Without a GPU,
+base it on these measured runs (CPU table; 2026-09-09, MNIST-mini with 30 images of 28 x 28 px in two classes, Torchvision EfficientNet
 `efficientnet_v2_s`, img-size 64, batch-size 8, 4 vCPU, no GPU):
 
 | Step | Measured |
@@ -70,6 +73,17 @@ Give the runtime only as a range and call it an estimate. Base it on these measu
 | Building the training image (`create-training` until its task is completed) | about 4.5 min |
 | Training, 3 epochs, without ONNX export | 12 s |
 | Training with ONNX export | 3 min 45 s (the export takes most of it) |
+
+With a GPU, base it on this second table (2026-10-27, Tesla V100, MNIST with 2 classes and 140 training images,
+`efficientnet_b0` and `efficientnet_v2_s`):
+
+| Step | Measured |
+|---|---|
+| Building the training image (`create-training` until its task is completed) | 11 to 12 min with a warm cache, about 21 min cold |
+| Training | 37 to 65 s |
+| Building a Triton inference image | about 7.5 min |
+
+With a GPU the image build dominates the duration, not the training.
 
 Scale the training part with the number of images and epochs, and say that larger images and detection models
 take longer; do not invent factors that were not measured. If the user's data is far from these runs

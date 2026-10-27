@@ -205,17 +205,21 @@ func TestCapabilitiesRegistered(t *testing.T) {
 			t.Errorf("setup lines without %q: %s", want, joined)
 		}
 	}
-	for _, bad := range []string{"internet", "compute"} {
+	// compute is in the note since #253, but only the operator's hardware line, never the calls left.
+	if !strings.Contains(joined, "compute: Platform trainings: ") || strings.Contains(joined, "calls left") {
+		t.Errorf("compute setup line: %s", joined)
+	}
+	for _, bad := range []string{"internet"} {
 		if strings.Contains(joined, bad) {
 			t.Errorf("setup lines hold state (%s): %s", bad, joined)
 		}
 	}
-	if got := SetupLines(Setup{Catalog: e.cat, Variant: "cli"}); len(got) != 4 {
+	if got := SetupLines(Setup{Catalog: e.cat, Variant: "cli"}); len(got) != 5 {
 		t.Errorf("lines: %v", got)
 	}
-	// Without the feature's static part only vision, bindings and plans are named.
+	// Without the feature's static part only vision, compute, bindings and plans are named.
 	delete(capabilitySetups, "notebook")
-	if got := SetupLines(Setup{Catalog: e.cat, Variant: "cli"}); len(got) != 3 {
+	if got := SetupLines(Setup{Catalog: e.cat, Variant: "cli"}); len(got) != 4 {
 		t.Errorf("lines without the feature: %v", got)
 	}
 }
