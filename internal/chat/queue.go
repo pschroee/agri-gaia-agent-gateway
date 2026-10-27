@@ -671,7 +671,10 @@ func (m *Manager) deliverQueue(chatID string, l *live) {
 	ctx := context.Background()
 	unlock := m.queueLock(chatID)
 	m.mu.Lock()
-	skip := m.sending[chatID] || l.running || l.compacting || l.holdQueue || m.live[chatID] != l
+	// A queue held at a wake limit is looked at again when a new note arrives: a plan step's note that came a moment
+	// after the held one (a trial's job note, demo 3 of 27.10.2026) counts against its plan, not the limit (#251).
+	limitHold := l.holdQueue && l.holdReason != HoldAbort
+	skip := m.sending[chatID] || l.running || l.compacting || (l.holdQueue && !limitHold) || m.live[chatID] != l
 	gen := m.aborts[chatID]
 	m.mu.Unlock()
 	if skip {
@@ -694,6 +697,11 @@ func (m *Manager) deliverQueue(chatID string, l *live) {
 			break
 		}
 	}
+	if limitHold && (trigger != store.TriggerWake || planStepWake(open) == "") {
+		// still nothing but what was held: it waits for the user as before
+		unlock()
+		return
+	}
 	if trigger == store.TriggerWake {
 		if ev, limited := m.autoLimit(ctx, chatID, open); limited {
 			m.mu.Lock()
@@ -705,6 +713,12 @@ func (m *Manager) deliverQueue(chatID string, l *live) {
 			m.publishChat(ctx, chatID)
 			return
 		}
+	}
+	if limitHold {
+		m.mu.Lock()
+		l.holdQueue, l.holdReason = false, ""
+		m.mu.Unlock()
+		slog.Info("held queue released by a plan step note", "chat", chatID)
 	}
 	entries, err := m.st.ClaimQueue(ctx, chatID)
 	if err != nil || len(entries) == 0 {

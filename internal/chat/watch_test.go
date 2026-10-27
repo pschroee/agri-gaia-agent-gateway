@@ -1166,3 +1166,54 @@ func TestInteractivePlanWakeBeyondAutoTurnsMax(t *testing.T) {
 		t.Error("the step end of an expired interactive plan passed the gateway's limits")
 	}
 }
+
+// #251 (Phase B, demo 3 of 27.10.2026): a trial's job note alone is held at AutoTurnsMax; the plan step's note that
+// arrives two seconds later releases the held queue and wakes the chat against the plan's count.
+func TestHeldQueueReleasedByPlanStepNote(t *testing.T) {
+	e := setup(t)
+	ctx := store.WithSession(context.Background(), "main")
+	e.m.opt.AutoTurnsMax = 0
+	e.m.opt.BgWakesPerHour = 0
+	newFakeJobs(t, e, "/tasks/5")
+	c, _, p := autonomousChat(t, e, ctx, watchInteractiveBody)
+	if _, err := e.st.ExtendPlan(ctx, p.ID, watchNow().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.st.EnqueueSystem(ctx, c.ID, store.NoteJob, []string{"w-trial"}, "Platform job w-trial finished (training_run)."); err != nil {
+		t.Fatal(err)
+	}
+	l := e.m.live[c.ID]
+	e.m.deliverQueue(c.ID, l)
+	e.m.mu.Lock()
+	held := l.holdQueue
+	e.m.mu.Unlock()
+	if !held {
+		t.Fatal("a lone job note should be held at the limit")
+	}
+	// another job note alone keeps the hold
+	if _, err := e.st.EnqueueSystem(ctx, c.ID, store.NoteJob, []string{"w-trial-2"}, "Platform job w-trial-2 finished (training_run)."); err != nil {
+		t.Fatal(err)
+	}
+	e.m.deliverQueue(c.ID, l)
+	if len(e.agent(0).prompts()) != 0 {
+		t.Fatal("job notes alone were delivered past the limit")
+	}
+	if _, err := e.st.EnqueueSystem(ctx, c.ID, store.NotePlanStep, []string{p.ID, "1"}, "Plan step 1 finished."); err != nil {
+		t.Fatal(err)
+	}
+	e.m.deliverQueue(c.ID, l)
+	waitFor(t, func() bool {
+		for _, pr := range e.agent(0).prompts() {
+			if strings.Contains(pr, "Plan step 1") {
+				return true
+			}
+		}
+		return false
+	})
+	e.m.mu.Lock()
+	held = l.holdQueue
+	e.m.mu.Unlock()
+	if held {
+		t.Error("the queue is still held after the plan step's note")
+	}
+}
