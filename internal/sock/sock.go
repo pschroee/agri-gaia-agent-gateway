@@ -215,6 +215,10 @@ type handler struct {
 	// fg: the running foreground commands of the slot. On the execution sandbox's socket they give the
 	// execution window that binds a CLI platform call to its tool call (X5.3).
 	fg *Foreground
+	// calls: the contexts of the MCP platform calls that carry a tool call of pi (pi's socket only), by tool call.
+	// The MCP handler of the SDK does not see the client hang up, so a call that pi aborted (stop, new turn) would
+	// wait on for its approval; POST /tool/cancel ends it here (issue #251, B3).
+	calls sync.Map
 }
 
 // maxReason limits the reason of an internet request already at the socket.
@@ -1029,6 +1033,8 @@ func (h *handler) mcpServer() *mcp.Server {
 					return textResult(true, "error: %v", err), nil
 				}
 				cctx := h.callerExtra(ctx, req)
+				cctx, untrack := h.trackCall(cctx, req)
+				defer untrack()
 				res, err := h.counted(cctx, chat, "mcp", t.Name, func() (platform.Result, error) {
 					return h.doPlatform(cctx, chat, "mcp", t, req.Params.Arguments)
 				})
@@ -1039,6 +1045,40 @@ func (h *handler) mcpServer() *mcp.Server {
 			})
 	}
 	return s
+}
+
+// trackCall makes the MCP call cancellable by POST /tool/cancel when it names a tool call of pi. Only pi's socket
+// does: there the header comes from the extension, not from agent-controlled code (trustedRef).
+func (h *handler) trackCall(ctx context.Context, req *mcp.CallToolRequest) (context.Context, func()) {
+	if !h.trustedRef || req == nil || req.Extra == nil || req.Extra.Header == nil {
+		return ctx, func() {}
+	}
+	id := req.Extra.Header.Get("X-Agw-Pi-Tool-Call")
+	if !validToolCallID(id) {
+		return ctx, func() {}
+	}
+	cctx, cancel := context.WithCancel(ctx)
+	h.calls.Store(id, cancel)
+	return cctx, func() { h.calls.Delete(id); cancel() }
+}
+
+// cancelCall is POST /tool/cancel: pi's extension reports that it aborted the MCP call of a tool call, so the call
+// stops waiting (for an approval, for the platform) and its approval ends as cancelled, not as a later rejection
+// nobody receives (issue #251, B3). Unknown or finished calls are no error.
+func (h *handler) cancelCall(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		ToolCallID string `json:"toolCallId"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 4<<10)).Decode(&in); err != nil || !validToolCallID(in.ToolCallID) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid toolCallId"})
+		return
+	}
+	cancelled := false
+	if c, ok := h.calls.Load(in.ToolCallID); ok {
+		c.(context.CancelFunc)()
+		cancelled = true
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"cancelled": cancelled})
 }
 
 // mcpPlatformTools are the platform tools as the MCP server lists them: the references to tools in their

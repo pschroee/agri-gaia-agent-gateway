@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -88,4 +89,56 @@ func TestPlatformWaitLine(t *testing.T) {
 	if l := waitLine(req, map[string]any{"method": "GET"}); l != "" {
 		t.Errorf("reading call: %q", l)
 	}
+}
+
+func parseUpload(t *testing.T, args ...string) (map[string]any, error) {
+	t.Helper()
+	tool, _ := platform.Lookup("upload-dataset")
+	return parseToolArgs(tool, args, strings.NewReader(""))
+}
+
+// K8 B1: a comma list for an array option without a path.
+func TestParseArrayCommaList(t *testing.T) {
+	in, err := parseUpload(t, "d", "x", "a.png", "--annotation_labels", "0,1", "--annotation_labels", "2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := fmtAny(in["annotation_labels"]); got != "0,1,2" {
+		t.Fatalf("labels %q", got)
+	}
+	if got := fmtAny(in["files"]); strings.Contains(got, ",") {
+		t.Fatalf("files must stay a list of paths: %q", got)
+	}
+}
+
+// K8 B1: a JSON array keeps class names with a comma.
+func TestParseArrayJSON(t *testing.T) {
+	in, err := parseUpload(t, "d", "x", "a.png", "--annotation_labels", `["a,b","c"]`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l, _ := in["annotation_labels"].([]any)
+	if len(l) != 2 || l[0] != "a,b" || l[1] != "c" {
+		t.Fatalf("labels %v", in["annotation_labels"])
+	}
+	if _, err := parseUpload(t, "d", "x", "a.png", "--annotation_labels", `["a"`); err == nil {
+		t.Fatal("broken JSON array must fail")
+	}
+}
+
+// K8 B1: a second value after an array option is not a file; the message says how to give a list.
+func TestHintAfterArrayOption(t *testing.T) {
+	_, err := parseUpload(t, "d", "x", "--annotation_labels", "0", "1", "a.png")
+	if err == nil || !strings.Contains(err.Error(), "--annotation_labels takes one value per option: repeat it (--annotation_labels 0 --annotation_labels 1) or give a list (0,1)") {
+		t.Fatalf("hint missing: %v", err)
+	}
+}
+
+func fmtAny(v any) string {
+	l, _ := v.([]any)
+	var s []string
+	for _, x := range l {
+		s = append(s, fmt.Sprint(x))
+	}
+	return strings.Join(s, ",")
 }

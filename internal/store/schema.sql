@@ -55,7 +55,7 @@ CREATE TABLE IF NOT EXISTS approvals (
     content_type text NOT NULL,
     pending_key  text NOT NULL,
     preview      text,
-    state        text NOT NULL DEFAULT 'pending',  -- pending | approved | rejected | expired
+    state        text NOT NULL DEFAULT 'pending',  -- pending | approved | rejected | expired | cancelled
     created_at   timestamptz NOT NULL DEFAULT now(),
     decided_at   timestamptz
 );

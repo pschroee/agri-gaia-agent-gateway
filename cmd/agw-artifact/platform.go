@@ -122,7 +122,20 @@ func parseToolArgs(tool platform.Tool, args []string, stdin io.Reader) (map[stri
 		}
 		if p.Type == "array" {
 			l, _ := out[p.Name].([]any)
-			out[p.Name] = append(l, v)
+			if p.Path {
+				out[p.Name] = append(l, v)
+				return nil
+			}
+			// An array option without a path takes a comma list (0,1), a JSON array (["0","1"]) or one value
+			// per repetition. A class name with a comma goes in as a JSON array.
+			items, err := splitList(p.Name, v)
+			if err != nil {
+				return err
+			}
+			for _, it := range items {
+				l = append(l, it)
+			}
+			out[p.Name] = l
 			return nil
 		}
 		if p.Type != "object" && p.Name != "body" {
@@ -151,8 +164,11 @@ func parseToolArgs(tool platform.Tool, args []string, stdin io.Reader) (map[stri
 		out[p.Name] = x
 		return nil
 	}
+	lastArrayOpt := "" // array option (without a path) that ended directly before the current argument
 	for i := 0; i < len(args); i++ {
 		a := args[i]
+		prevArray := lastArrayOpt
+		lastArrayOpt = ""
 		if name, ok := strings.CutPrefix(a, "--"); ok && name != "" {
 			var val string
 			if n, v, has := strings.Cut(name, "="); has {
@@ -171,6 +187,9 @@ func parseToolArgs(tool platform.Tool, args []string, stdin io.Reader) (map[stri
 			if err := set(p, val); err != nil {
 				return nil, err
 			}
+			if p.Type == "array" && !p.Path {
+				lastArrayOpt = p.Name
+			}
 			continue
 		}
 		var next *platform.Param
@@ -183,6 +202,11 @@ func parseToolArgs(tool platform.Tool, args []string, stdin io.Reader) (map[stri
 		if next == nil {
 			return nil, fmt.Errorf("surplus argument %q", a)
 		}
+		if prevArray != "" && next.Path {
+			if _, err := os.Stat(a); err != nil {
+				return nil, hintAfterArrayOption(prevArray)
+			}
+		}
 		if err := set(*next, a); err != nil {
 			return nil, err
 		}
@@ -193,6 +217,38 @@ func parseToolArgs(tool platform.Tool, args []string, stdin io.Reader) (map[stri
 		}
 	}
 	return out, nil
+}
+
+// splitList turns the value of an array option into its items: a JSON array, or a comma list.
+func splitList(name, v string) ([]string, error) {
+	v = strings.TrimSpace(v)
+	if strings.HasPrefix(v, "[") {
+		var l []any
+		if err := json.Unmarshal([]byte(v), &l); err != nil {
+			return nil, fmt.Errorf("--%s is not a valid JSON array: %v", name, err)
+		}
+		out := make([]string, 0, len(l))
+		for _, x := range l {
+			if s, ok := x.(string); ok {
+				out = append(out, s)
+			} else {
+				out = append(out, fmt.Sprint(x))
+			}
+		}
+		return out, nil
+	}
+	var out []string
+	for _, it := range strings.Split(v, ",") {
+		if it = strings.TrimSpace(it); it != "" {
+			out = append(out, it)
+		}
+	}
+	return out, nil
+}
+
+// hintAfterArrayOption explains the usual slip: a second value after an array option falls through to the file list.
+func hintAfterArrayOption(name string) error {
+	return fmt.Errorf("--%[1]s takes one value per option: repeat it (--%[1]s 0 --%[1]s 1) or give a list (0,1)", name)
 }
 
 // cliRender puts the command line forms in the tool references of a text (#200).

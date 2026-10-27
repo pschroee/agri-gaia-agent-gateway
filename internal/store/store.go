@@ -64,6 +64,9 @@ const (
 	ApprovalApproved = "approved"
 	ApprovalRejected = "rejected"
 	ApprovalExpired  = "expired"
+	// ApprovalCancelled: the call that waited for the decision was aborted (the user stopped the turn); nobody
+	// receives a decision any more, and the card disappears (issue #251).
+	ApprovalCancelled = "cancelled"
 )
 
 type Tokens struct {

@@ -35,7 +35,7 @@ agw-platform propose-search --title "tf-flowers: learning rate and batch size" -
   --base_container_id 41 \
   --space '{"learning-rate":{"type":"float","min":0.0001,"max":0.01,"scale":"log"},
             "batch-size":{"type":"choice","values":[16,32]}}' \
-  --budget '{"max_runs":6,"max_compute_minutes":90,"target":0.9,"patience":3}' \
+  --budget '{"max_runs":6,"max_compute_minutes":90,"target":0.9,"patience":3,"min_runs":3}' \
   --objective '{"metric":"val_acc"}' \
   --note "Learning rate has the largest effect on a short run; the batch size is the cheap second axis."
 ```
@@ -52,7 +52,10 @@ agw-platform propose-search --title "own CNN: width and dropout" --path notebook
 
 `budget` fields are all optional; the first one reached ends the search (`max_runs`, `max_compute_minutes`,
 `target` = validation value that is good enough, `patience` = trials in a row without improvement). Without
-`budget` the compute limit of the chat applies.
+`budget` the compute limit of the chat applies. `min_runs` (1 to `max_runs`) holds `target` and `patience` back until
+that many trials have ended: when you set a `target` and the user wants the trials compared, set `min_runs` too, or
+a first lucky trial ends the search. The validation value comes from the template's own validation split inside the
+training dataset; on few images it is coarse, and the approval says so.
 
 ## 3. Run the trials
 

@@ -79,7 +79,7 @@ func (m *Manager) StopSearch(ctx context.Context, chatID, searchID, scope string
 	return m.viewOf(ctx, chatID, searchID)
 }
 
-// SetSearchBudget replaces the budget of a running search (body: the four fields, null = not set). max_runs can
+// SetSearchBudget replaces the budget of a running search (body: the five fields, null = not set). max_runs can
 // be raised only as far as the trials so far plus the compute calls the chat has left (issue #168, G10).
 func (m *Manager) SetSearchBudget(ctx context.Context, chatID, searchID string, body []byte) (SearchView, error) {
 	s, err := m.controlled(ctx, chatID, searchID)

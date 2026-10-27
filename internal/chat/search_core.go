@@ -94,6 +94,9 @@ func (m *Manager) statsOf(ctx context.Context, s store.Search) (searchStats, err
 			continue
 		}
 		st.used.Runs++
+		if t.State != store.TrialRunning {
+			st.used.Finished++
+		}
 		if t.StartedAt != nil {
 			end := now
 			if t.EndedAt != nil {

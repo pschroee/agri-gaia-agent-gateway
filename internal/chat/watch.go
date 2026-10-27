@@ -399,14 +399,14 @@ func (m *Manager) startWatching(ctx context.Context, chatID string, st *store.Pl
 // and poll the platform itself — the live run of 16.10.2026 showed that it does exactly that without a
 // word, which keeps the sandbox alive and the chat active for the whole job.
 //
-// The promise "you will be woken" is only made when it is kept (D2.6): an autonomous plan that is
-// approved wakes the agent when its step ends, any other plan does not, and then the agent keeps
+// The promise "you will be woken" is only made when it is kept (D2.6): an approved plan (autonomous, or
+// interactive and not run out, #251) wakes the agent when its step ends, any other plan does not, and then the agent keeps
 // following the job itself like before A-E2.
 func (m *Manager) watchNote(ctx context.Context, st *store.PlanStep, jobID string) string {
 	woken := false
 	extra := ""
 	if p, err := m.st.GetPlan(ctx, st.PlanID); err == nil {
-		woken = p.Mode == plan.ModeAutonomous && p.State == plan.StateApproved
+		woken = wakesChat(p, watchNow())
 		if plan.Referenced(p.Steps, st.Idx) > 0 {
 			extra = fmt.Sprintf(" Later steps use {{step%d.id}}: the %s this job creates. The gateway names it when the job ends.",
 				st.Idx, objectName(st))
@@ -534,7 +534,25 @@ func (m *Manager) finishWatched(ctx context.Context, j store.WatchJob, p watch.P
 	m.publishPlan(ctx, j.PlanID)
 	// Whether this note may wake the chat is decided by the plan as it was before this step ended: a step
 	// that finishes the plan completes it right above, and that note is exactly the one the user waits for.
-	m.noteJobEnd(ctx, j, st, p, dur, pl.Mode == plan.ModeAutonomous && pl.State == plan.StateApproved)
+	m.noteJobEnd(ctx, j, st, p, dur, wakesChat(pl, watchNow()))
+}
+
+// wakesChat says whether the end of a step of pl may wake a resting chat (D2.6, #251): the plan was approved while
+// the step ran, and it is autonomous, or interactive and its approval has not run out. An interactive plan with a
+// long step (a cold image build of 20 minutes) would otherwise stand still until the user writes, because the chat
+// rests after AGW_IDLE_TIMEOUT. An expired interactive plan stays asleep: its approval is gone. The wake-up counts
+// against AGW_AUTO_TURNS_MAX like every turn without the user.
+func wakesChat(pl store.Plan, now time.Time) bool {
+	if pl.State != plan.StateApproved {
+		return false
+	}
+	switch pl.Mode {
+	case plan.ModeAutonomous:
+		return true
+	case plan.ModeInteractive:
+		return pl.ExpiresAt != nil && pl.ExpiresAt.After(now)
+	}
+	return false
 }
 
 // objectName names what a step builds, for the texts about it.
@@ -628,8 +646,8 @@ func countLines(s string) int {
 	return strings.Count(strings.TrimRight(s, "\n"), "\n") + 1
 }
 
-// noteJobEnd tells the agent that a watched step ended (D2.5) and wakes a resting chat (D2.6). wake is
-// false for a plan that was not approved while the step ran: its note stays in the queue and goes with
+// noteJobEnd tells the agent that a watched step ended (D2.5) and wakes a resting chat (D2.6). wake (wakesChat) is
+// false for a plan that was not approved while the step ran, and for an expired interactive one: its note stays in the queue and goes with
 // the next message.
 func (m *Manager) noteJobEnd(ctx context.Context, j store.WatchJob, st *store.PlanStep, p watch.Progress, dur time.Duration, wake bool) {
 	var note systemNote
@@ -677,7 +695,7 @@ func (m *Manager) wakeForNote(chatID, planID string) {
 }
 
 // wakeIfLive hands notes to a live chat that is not working; a resting chat stays resting (only an
-// autonomous plan wakes one, D2.6).
+// approved plan that has not run out wakes one, D2.6, #251).
 func (m *Manager) wakeIfLive(chatID string) {
 	m.mu.Lock()
 	l := m.live[chatID]

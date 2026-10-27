@@ -103,6 +103,12 @@ type CheckImages struct {
 	Measurable    bool `json:"measurable"`
 }
 
+// CheckImagesNote is what the answer of the split says about the two sets of check_images (issue #251, B9). The
+// header lines of a check ("validation images", "held-out images") stay as they are; this sentence explains them where the
+// words meet the training's own validation split.
+const CheckImagesNote = "validation = validation images (for interim checks by the gateway); holdout = held-out images (final test). " +
+	"Both are taken from the kept-back images; the training's own validation split lies inside the training dataset."
+
 // CheckSetsOf predicts the check sets of a split: the kept-back images without those whose SHA-256
 // occurs in the training part (the check counts them as seen, P1), partitioned like the check does.
 func CheckSetsOf(train, kept []Item) CheckImages {
@@ -419,16 +425,19 @@ type splitRequest struct {
 
 // splitAnswer is what the split tool answers: the new dataset and the numbers of the real split.
 type splitAnswer struct {
-	TrainDatasetID      int64       `json:"train_dataset_id"`
-	Name                string      `json:"name"`
-	TrainImages         int         `json:"train_images"`
-	KeptImages          int         `json:"kept_images"`
-	SkippedImages       int         `json:"skipped_images"`
-	Classes             []string    `json:"classes"`
-	CheckImages         CheckImages `json:"check_images"`
-	CheckWarning        string      `json:"check_warning,omitempty"`
-	SuggestedTrainShare int         `json:"suggested_train_share,omitempty"`
-	Note                string      `json:"note"`
+	TrainDatasetID int64       `json:"train_dataset_id"`
+	Name           string      `json:"name"`
+	TrainImages    int         `json:"train_images"`
+	KeptImages     int         `json:"kept_images"`
+	SkippedImages  int         `json:"skipped_images"`
+	Classes        []string    `json:"classes"`
+	CheckImages    CheckImages `json:"check_images"`
+	// CheckImagesNote names what the two sets of check_images are, in the words of the approval and the skill; the
+	// "validation" here is not the validation split inside a training (issue #251, B9).
+	CheckImagesNote     string `json:"check_images_note"`
+	CheckWarning        string `json:"check_warning,omitempty"`
+	SuggestedTrainShare int    `json:"suggested_train_share,omitempty"`
+	Note                string `json:"note"`
 }
 
 // splitDataset is POST /_agw/assess/splits (R1.1–R1.3): it reads the source dataset, picks the images of
@@ -505,7 +514,7 @@ func (s *Service) splitDataset(ctx context.Context, chatID string, req platform.
 	answer := splitAnswer{
 		TrainDatasetID: trainID, Name: body.Name, TrainImages: len(train), KeptImages: len(kept),
 		SkippedImages: stats.Skipped, Classes: source.Classes,
-		CheckImages: ci, CheckWarning: warning, SuggestedTrainShare: suggested,
+		CheckImages: ci, CheckImagesNote: CheckImagesNote, CheckWarning: warning, SuggestedTrainShare: suggested,
 		Note: fmt.Sprintf("Training dataset %d is ready; %d images of dataset %d are kept back for checks, and the gateway decides which. Train on the training dataset and check the model afterwards with {{tool:assess_model}}.",
 			trainID, len(kept), body.DatasetID),
 	}

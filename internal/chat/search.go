@@ -117,6 +117,7 @@ func (m *Manager) ProposeSearch(ctx context.Context, chatID, slotID, via string,
 	}
 	rl := &readLog{}
 	read := m.loggedSummaryReader(chatID, rl)
+	ctx = withImageCounter(ctx, m.datasetImageCounter(chatID)) // the approval names images, not files (#251)
 	if p.Path == search.PathNotebook {
 		read = cachedReads(read)
 	}
@@ -324,6 +325,9 @@ func (m *Manager) readTemplateBase(ctx context.Context, chatID string, read plat
 			b.fixed[k] = v
 		}
 	}
+	if b.base.Dataset != nil {
+		b.base.ValImages = validationImages(b.base.Dataset.Images, b.fixed)
+	}
 	b.raw, err = json.Marshal(storedBase{ContainerID: p.BaseContainerID, DatasetID: cfg.DatasetID, Provider: cfg.Provider,
 		Architecture: cfg.Architecture.Name, Config: cfg.Config.Train.Values})
 	return b, cfg.DatasetID, "", err
@@ -427,6 +431,7 @@ func (m *Manager) searchRecheck(chatID, apID string, p search.Proposal, cur *sea
 		}
 		rl := &readLog{}
 		read := m.loggedSummaryReader(chatID, rl)
+		ctx = withImageCounter(ctx, m.datasetImageCounter(chatID))
 		b, _, msg, err := m.readTemplateBase(ctx, chatID, read, p)
 		m.logSummaryReads(ctx, chatID, apID, "approval", rl)
 		if err != nil || msg != "" {

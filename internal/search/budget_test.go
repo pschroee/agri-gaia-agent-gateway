@@ -76,3 +76,47 @@ func TestExhaustedText(t *testing.T) {
 		t.Errorf("text: %s", got)
 	}
 }
+
+// #251 (B8): target and patience count only once min_runs trials have ended; the other limits stay as they are.
+func TestAdmitMinRuns(t *testing.T) {
+	now := time.Now()
+	later := now.Add(time.Hour)
+	obj := Objective{Metric: "val_acc", Mode: ModeMax}
+	best := fp(1.0)
+	cases := []struct {
+		name   string
+		b      Budget
+		u      Used
+		ok     bool
+		reason string
+	}{
+		{"target before min_runs", Budget{Target: fp(0.99), MinRuns: ip(3)}, Used{Runs: 1, Finished: 1}, true, ""},
+		{"target with a trial still running", Budget{Target: fp(0.99), MinRuns: ip(3)}, Used{Runs: 3, Finished: 2}, true, ""},
+		{"target at min_runs", Budget{Target: fp(0.99), MinRuns: ip(3)}, Used{Runs: 3, Finished: 3}, false, "target_reached"},
+		{"patience before min_runs", Budget{Patience: ip(1), MinRuns: ip(3)}, Used{Runs: 2, Finished: 2, SinceImprovement: 1}, true, ""},
+		{"patience at min_runs", Budget{Patience: ip(1), MinRuns: ip(3)}, Used{Runs: 3, Finished: 3, SinceImprovement: 1}, false, "patience"},
+		{"max_runs still ends it", Budget{MaxRuns: ip(2), MinRuns: ip(2)}, Used{Runs: 2, Finished: 2}, false, "budget_runs"},
+		{"without min_runs as before", Budget{Target: fp(0.99)}, Used{Runs: 1, Finished: 1}, false, "target_reached"},
+	}
+	for _, c := range cases {
+		ok, reason := Admit(c.b, c.u, best, obj, now, later, 5)
+		if ok != c.ok || reason != c.reason {
+			t.Errorf("%s: %v %q, want %v %q", c.name, ok, reason, c.ok, c.reason)
+		}
+	}
+}
+
+func TestBudgetMinRunsBounds(t *testing.T) {
+	good := []string{`{"min_runs":1}`, `{"min_runs":50}`, `{"max_runs":5,"min_runs":5}`, `{"max_runs":5,"target":0.9,"min_runs":3}`}
+	for _, g := range good {
+		if _, err := ParseBudget([]byte(g)); err != nil {
+			t.Errorf("%s: %v", g, err)
+		}
+	}
+	bad := []string{`{"min_runs":0}`, `{"min_runs":-1}`, `{"max_runs":3,"min_runs":4}`, `{"min_runs":51}`}
+	for _, b := range bad {
+		if _, err := ParseBudget([]byte(b)); err == nil || !strings.Contains(err.Error(), "min_runs") {
+			t.Errorf("%s: expected an error naming min_runs, got %v", b, err)
+		}
+	}
+}
