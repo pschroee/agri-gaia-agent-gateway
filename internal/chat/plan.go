@@ -54,7 +54,7 @@ func (m *Manager) ProposePlan(ctx context.Context, chatID, slotID, via string, r
 		return platform.Result{Status: "error", Message: msg}, nil
 	}
 	steps, berr := plan.Build(p, planClassify)
-	if err := plan.Join(perr, berr, m.deploymentStepProblems(ctx, chatID, steps), m.expRuntimeStepProblems(ctx, chatID, steps)); err != nil {
+	if err := plan.Join(perr, berr, m.deploymentStepProblems(ctx, chatID, steps), m.expRuntimeStepProblems(ctx, chatID, steps), m.searchStepProblems(ctx, chatID, steps)); err != nil {
 		return platform.Result{Status: "error", Message: err.Error()}, nil
 	}
 	// #219: trace the image of every deployment start before the autonomous checks, so that the grant and the
@@ -139,7 +139,7 @@ func (m *Manager) ProposePlan(ctx context.Context, chatID, slotID, via string, r
 			m.publishPlan(bg, pl.ID)
 			return false, nil
 		}
-		expires := planNow().Add(plan.ValidFor)
+		expires := planNow().Add(m.planExpiry(steps))
 		if p.Autonomous() {
 			// The plan's own duration bounds it (A-E1, D1.8); the validity of an interactive plan does not apply.
 			expires = planNow().Add(time.Duration(p.Budget.MaxDurationMinutes) * time.Minute)

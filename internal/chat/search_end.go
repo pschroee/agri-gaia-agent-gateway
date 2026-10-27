@@ -198,6 +198,7 @@ func (m *Manager) finishSearch(ctx context.Context, s store.Search, reason strin
 		ev["score"] = *wt.Score
 	}
 	m.addSearchEvent(ctx, s.ID, "ended", ev)
+	m.searchStepEnded(ctx, s, wt)
 	text := m.endText(s, st.obj, reason, wt, ho)
 	if reason != endByAgent {
 		m.searchNote(ctx, s, text, "")
@@ -233,6 +234,7 @@ func (m *Manager) endText(s store.Search, obj search.Objective, reason string, w
 	} else {
 		fmt.Fprintf(&b, " Now run the final test once: {{tool:notebook_fetch}} the model file of run %s, then {{tool:assess_model}} with its path and final=true,%s.", wt.Ref, eval)
 	}
+	b.WriteString(" If the user's task goes on after the final test (rename, inference image, deployment, model card), propose the remaining steps as ONE plan with {{tool:propose_plan}}; the model takeover of the winner and its final test are covered by this search.")
 	if s.Path != store.SearchPathTemplate {
 		b.WriteString(" The check takes class names and preprocessing from outputs/model.json of that run.")
 	}

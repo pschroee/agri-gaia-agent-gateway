@@ -2604,6 +2604,27 @@ without it every path answers `unavailable: training search is not available in 
   "epochs","eta","score","points":[{"epoch","at",<figures>}],"gpu":{"at","util","mem_used_mb","mem_total_mb"}}`; `points`
   are the epochs since the last event.
 
+### A search as a plan step (issue #244)
+
+`propose_search` may be a step of a plan (`POST /_agw/plan`), with these rules, all refused at the proposal with the
+other problems (#218): `path` is `template`; `base_container_id` is `"{{stepN.id}}"` of a `create_training` step or a
+plain container id; `budget.max_runs` and `budget.max_compute_minutes` are required; at most one search step; not in an
+experiment chat. The placeholder is allowed in the form field `base_container_id` only. The plan's compute count adds
+`max_runs` of the search (`the plan needs N compute calls (search: M trials), this chat has L left`).
+
+When the agent calls `propose_search` and the call is exactly the next step of the approved plan, `ProposeSearch` runs
+all its usual checks and then starts the search without a card: `searches.approval_id` is the approval of the plan, the
+event `approved` carries `plan` and `step`, and the answer reads `Search … approved by plan <id> step <k>`. The step
+goes to `waiting` and carries the new field **`search_id`** (plan JSON and API; also the column `plan_steps.search_id`).
+When the search ends (`finishSearch`), the step is `done` with `created_resource` `training` and `created_id` = the
+training container of the winner (so `{{stepN.id}}` is that container), or `failed` without a winner (the plan fails).
+A call that does not fit the step (another space or base) asks on its own, as before. An interactive plan with a search
+step is valid for 30 minutes plus `max_compute_minutes` (at most the longest a search runs), counted again from the
+end of the search. An autonomous plan's grant gains `create training`, `run training` (own) and `update search`.
+
+The search also covers, once per search, the model takeover (`create_model_from_training`) of the winner's training
+container (event `takeover`), outside a plan as well, in addition to the final test it covered before.
+
 ### The search service
 
 - **Approval** (`kind: "search"`, `approval.search`): `{kind:"proposal", search_id, title, objective, space, fixed,

@@ -64,6 +64,15 @@ func planWaitGuard(ctx context.Context, m *Manager, chatID string, req platform.
 	if !plan.SameShape(*next, inv.Tool, req) {
 		return "", nil
 	}
+	if wait.SearchID != "" {
+		// A search step ends with the search, not with a job (issue #244): nothing to refresh.
+		if s, serr := m.st.GetSearch(ctx, chatID, wait.SearchID); serr == nil && s.State == store.SearchRunning {
+			return fmt.Sprintf("plan step %d cannot run yet: step %d is the training search %s, which is still running. {{step%d.id}} is the training container of the winner and is known only when the search ends; "+
+				"the gateway's note then names the winner. Run the search with {{tool:search_next}} until it ends, then make the call of step %d.",
+				next.Idx, wait.Idx, wait.SearchID, wait.Idx, next.Idx), nil
+		}
+		return "", nil
+	}
 	m.refreshWaitingJob(ctx, chatID, p.ID, wait.WatchJob, wait.Idx)
 	p2, err := m.st.GetPlan(ctx, p.ID)
 	if err != nil {

@@ -409,8 +409,8 @@ func BuildStep(spec StepSpec, idx int) (store.PlanStep, platform.Request, []int,
 			}
 		}
 	}
-	if sentinelRe.MatchString(FormJSON(req.Form)) {
-		return fail(errPlaceholderText)
+	if err := checkFormSentinels(req.Form); err != nil {
+		return fail(err)
 	}
 	st := store.PlanStep{Idx: idx, Description: spec.Description, Tool: spec.Tool, Method: req.Method}
 	if spec.Tool != "" {
@@ -450,7 +450,10 @@ func BuildStep(spec StepSpec, idx int) (store.PlanStep, platform.Request, []int,
 		st.BodySHA256 = hashOrEmpty(restored)
 	}
 	if len(req.Form) > 0 {
-		f := FormJSON(req.Form)
+		f, err := restoreJSON(FormJSON(req.Form))
+		if err != nil {
+			return fail(err)
+		}
 		st.Form = json.RawMessage(f)
 		st.FormSHA256 = hashOrEmpty(f)
 	}
@@ -552,6 +555,10 @@ func Build(p Proposal, classify Classify) ([]store.PlanStep, error) {
 			}
 		}
 		actions[idx] = action
+		if st.Tool == SearchTool {
+			// A training search creates one object, the training container of its winner (issue #244).
+			actions[idx] = delegation.Create
+		}
 		st.Effect = effect
 		// The confirm-each trait is stored with the step (A-E2): a step that is loaded again has to be
 		// classified the same way, or a reloaded plan would cover a call that asks for every single call.
@@ -567,6 +574,7 @@ func Build(p Proposal, classify Classify) ([]store.PlanStep, error) {
 	}
 	checkImageSteps(built, &probs)
 	checkModelNames(built, &probs)
+	checkSearchSteps(built, &probs)
 	if len(probs) > 0 {
 		return out, probs
 	}
@@ -580,7 +588,7 @@ func Referenced(steps []store.PlanStep, n int) int {
 		if st.Idx <= n {
 			continue
 		}
-		for _, text := range []string{st.Path, string(st.Query), string(st.Body), string(st.Args)} {
+		for _, text := range []string{st.Path, string(st.Query), string(st.Body), string(st.Args), string(st.Form)} {
 			for _, m := range anyRefRe.FindAllStringSubmatch(text, -1) {
 				if k, err := strconv.Atoi(m[1]); err == nil && k == n {
 					return st.Idx
@@ -811,7 +819,7 @@ func Matches(st store.PlanStep, r platform.Request, resolve Resolve) (bool, stri
 			return false, "body"
 		}
 	}
-	if hashOrEmpty(FormJSON(r.Form)) != st.FormSHA256 {
+	if !sameForm(st, r.Form, resolve) {
 		return false, "form"
 	}
 	if len(r.Files) != len(st.Files) || len(r.Uploads) != len(st.Files) {

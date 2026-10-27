@@ -78,7 +78,39 @@ The answer of `search-status` names the reason (budget, target, patience, you, t
    `result-check`). Before the end, the gateway refuses it.
 2. Report the table of trials (parameters, validation value, state), the winner, the reason the search ended and
    the figure of the final test. If the final figure is far below the validation value, say so.
-3. Take over the winner's model only if the user wants it (`model-from-training`).
+3. The model takeover of the winner (`model-from-training`) and its final test are covered by the search: they need no
+   approval of their own, once, for the winner's container only.
+4. If the user's task goes on after the final test (rename the model, inference image, deployment, model card),
+   propose the remaining steps as **one** plan with `propose-plan` instead of asking call by call.
+
+## 5. A search inside a plan
+
+When the whole route from the dataset to the deployment is known, put the search into the plan: **one** approval
+covers the split, the training container, the search, the takeover and test of the winner, the image and the deployment.
+
+- The step is `propose_search` with the arguments of section 2, with these restrictions: `path` is `template`;
+  `base_container_id` is `"{{stepN.id}}"` of a `create_training` step (or the id of a container of this chat); both
+  `budget.max_runs` and `budget.max_compute_minutes` are required, because the approval shows compute calls and
+  duration. One search per plan, none in an experiment chat.
+- Call `propose_search` with exactly the approved arguments when the step is next. It then needs no card: the plan's
+  approval covers it. A changed space, another base or other limits are not the step and ask the user on their own.
+- The step is done when the search ends. `{{stepN.id}}` of the search step is then the **training container of the
+  winner**: use it in `create_model_from_training`. The trials run as in section 3 and cost compute calls of the chat
+  (counted when the plan is proposed).
+- The plan stays valid for the 30 minutes plus the compute minutes of the search.
+
+Example (MNIST, three trials):
+
+1. `split_dataset` with `dataset_id` of the uploaded dataset
+2. `create_training` with `dataset_id "{{step1.id}}"`
+3. `propose_search` with `path "template"`, `base_container_id "{{step2.id}}"`, a small `space`, `budget`
+   `{"max_runs": 3, "max_compute_minutes": 30}`
+4. `create_model_from_training` with `train_container_id "{{step3.id}}"`
+5. `assess_model` with `model_id "{{step4.id}}"`, `final=true`, `eval_dataset_id` of the held-back set
+6. `update_model` with `model_id "{{step4.id}}"` and only `name`
+7. `build_inference_image` with `model_id "{{step4.id}}"`
+8. `create_deployment` with `image_id "{{step7.id}}"`
+9. `start_deployment` with `deployment_id "{{step8.id}}"`
 
 ## Convention for the notebook way
 

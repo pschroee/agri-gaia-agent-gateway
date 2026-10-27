@@ -31,6 +31,9 @@ func Grant(steps []store.PlanStep, sample func(store.PlanStep) (platform.Request
 		// The field rules (a.Problem) are checked when the plan is proposed, for both modes (Build, #218): a step
 		// that would be refused never gets here. The call of a tool that completes its body at run time is only
 		// complete then, so it cannot be judged on the stored step.
+		if IsSearchStep(st) {
+			rules = append(rules, searchGrantRules()...)
+		}
 		a := delegation.Classify(req)
 		for _, x := range append([]delegation.Access{a}, a.Also...) {
 			if x.Effect == delegation.EffectRead || x.Action == delegation.Read {
@@ -188,8 +191,15 @@ func StepCall(st store.PlanStep, resolve Resolve) (platform.Request, json.RawMes
 		req.Query = q
 	}
 	if len(st.Form) > 0 {
+		raw := string(st.Form)
+		if anyRefRe.MatchString(raw) {
+			var ok bool
+			if raw, ok = substJSON(raw, resolve, false); !ok {
+				return platform.Request{}, nil, fmt.Errorf("step %d: form with an unresolved placeholder", st.Idx)
+			}
+		}
 		var f map[string][]string
-		if json.Unmarshal(st.Form, &f) != nil {
+		if json.Unmarshal([]byte(raw), &f) != nil {
 			return platform.Request{}, nil, fmt.Errorf("step %d: form is not readable", st.Idx)
 		}
 		req.Form = f
@@ -222,5 +232,6 @@ func ComputeSteps(steps []store.PlanStep) int {
 			n += att
 		}
 	}
-	return n
+	// The trials of a training search are compute calls too (issue #244).
+	return n + SearchRuns(steps)
 }

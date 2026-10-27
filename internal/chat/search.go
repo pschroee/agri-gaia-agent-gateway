@@ -21,6 +21,7 @@ import (
 	"github.com/google/uuid"
 
 	"agw/internal/delegation"
+	"agw/internal/plan"
 	"agw/internal/platform"
 	"agw/internal/search"
 	"agw/internal/store"
@@ -149,6 +150,15 @@ func (m *Manager) ProposeSearch(ctx context.Context, chatID, slotID, via string,
 	}
 	data.Holdout = m.holdoutOf(ctx, chatID, read, holdoutTrain)
 
+	// A search that is exactly the next step of the chat's approved plan is covered by that approval (issue #244,
+	// E2): everything above has been checked as for a search of its own, so a call that does not fit (another
+	// space, another base) is not the step and asks on its own below.
+	if p.Path == search.PathTemplate {
+		if step, _, _, _ := m.planNext(ctx, chatID, req); step != nil && step.Covered && plan.IsSearchStep(*step) {
+			return m.startSearchByPlan(ctx, chatID, step, p, data, base, req)
+		}
+	}
+
 	if err := m.checkPendingLimit(ctx, chatID); err != nil {
 		return platform.Result{}, err
 	}
@@ -254,13 +264,13 @@ func (m *Manager) ProposeSearch(ctx context.Context, chatID, slotID, via string,
 
 // approvedSearchText is the answer to an approved proposal: the id and how to go on.
 func approvedSearchText(id string, p search.Proposal, d SearchApprovalData) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "Search %s approved: %q, %s, objective %s (%s). ", id, d.Title, budgetText(d.Budget), p.Objective.Metric, p.Objective.Mode)
-	b.WriteString("Declare the first trial with {{tool:search_next}} (search_id, params naming every parameter of the space, note: why this trial); ")
-	b.WriteString("then make exactly the calls its answer names. They need no approval. After every trial the gateway tells you the result and you declare the next, ")
-	b.WriteString("until the search ends. Never repeat a trial; read {{tool:search_status}} before you choose.")
-	return b.String()
+	return fmt.Sprintf("Search %s approved: %q, %s, objective %s (%s). ", id, d.Title, budgetText(d.Budget), p.Objective.Metric, p.Objective.Mode) + searchGoOnText
 }
+
+// searchGoOnText is what the agent does after a search is approved, by its own card or by a plan.
+const searchGoOnText = "Declare the first trial with {{tool:search_next}} (search_id, params naming every parameter of the space, note: why this trial); " +
+	"then make exactly the calls its answer names. They need no approval. After every trial the gateway tells you the result and you declare the next, " +
+	"until the search ends. Never repeat a trial; read {{tool:search_status}} before you choose."
 
 // templateBase is what the template way reads from the platform when it takes a proposal.
 type templateBase struct {

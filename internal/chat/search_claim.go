@@ -16,6 +16,8 @@ const (
 	claimStart    = "start"    // POST /train/containers/{ref}/run of the declared trial
 	claimNotebook = "notebook" // a notebook run of the approved code
 	claimFinal    = "final"    // assess_model final=true for the winner of an ended search
+	// claimTakeover is the model takeover of the winner's training container, once per search (issue #244).
+	claimTakeover = "takeover"
 )
 
 // trialClaim says that a call of the agent is the next call of a trial the running search declared (issue
