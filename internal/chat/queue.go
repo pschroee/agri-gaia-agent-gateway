@@ -12,6 +12,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/google/uuid"
+
 	"agw/internal/artifacts"
 	"agw/internal/plan"
 	"agw/internal/store"
@@ -697,7 +699,7 @@ func (m *Manager) deliverQueue(chatID string, l *live) {
 			break
 		}
 	}
-	if limitHold && (trigger != store.TriggerWake || planStepWake(open) == "") {
+	if limitHold && (trigger != store.TriggerWake || planStepWake(m.withPlanRefs(ctx, chatID, open)) == "") {
 		// still nothing but what was held: it waits for the user as before
 		unlock()
 		return
@@ -937,6 +939,29 @@ func (m *Manager) autoLimitTurns(ctx context.Context, chatID string) (AutoHeldEv
 	return AutoHeldEvent{}, false
 }
 
+// withPlanRefs returns the entries with the plan in the first reference of every plan step note: the note about the
+// end of a step's job names the job (JobNote: job id, step), the note about a parked step the plan. Without this the
+// plan's own wake count never applied to a job's end (live, demo 4 of 27.10.2026, #251). The entries are copies.
+func (m *Manager) withPlanRefs(ctx context.Context, chatID string, open []store.QueueEntry) []store.QueueEntry {
+	out := make([]store.QueueEntry, len(open))
+	for i, e := range open {
+		out[i] = e
+		if e.Kind != store.QueueSystem || e.Note != store.NotePlanStep || len(e.Refs) == 0 || e.Refs[0] == "" {
+			continue
+		}
+		if _, err := uuid.Parse(e.Refs[0]); err == nil {
+			continue // already a plan
+		}
+		j, err := m.st.GetWatchJob(ctx, chatID, e.Refs[0])
+		if err != nil || j.PlanID == "" {
+			continue
+		}
+		refs := append([]string{j.PlanID}, e.Refs[1:]...)
+		out[i].Refs = refs
+	}
+	return out
+}
+
 // planStepWake names the autonomous plan whose step ended, when the open entries are nothing but such
 // notes (A-E2, D2.7): then the wake-up counts against that plan's own turn budget instead of the
 // gateway's wake limits. "" for every other delivery.
@@ -968,7 +993,7 @@ func planStepWake(open []store.QueueEntry) string {
 // autoLimit checks the limits for a turn without the user. Errors while counting count as a
 // reached limit (better to stop than to run on without limit).
 func (m *Manager) autoLimit(ctx context.Context, chatID string, open []store.QueueEntry) (AutoHeldEvent, bool) {
-	if planID := planStepWake(open); planID != "" {
+	if planID := planStepWake(m.withPlanRefs(ctx, chatID, open)); planID != "" {
 		if ev, limited, handled := m.planWakeLimit(ctx, chatID, planID); handled {
 			return ev, limited
 		}
