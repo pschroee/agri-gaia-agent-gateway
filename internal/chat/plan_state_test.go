@@ -184,3 +184,26 @@ func TestPublishKeepsPlanEvents(t *testing.T) {
 		}
 	}
 }
+
+// B24 (Phase B #244–#251): a plan whose approval card was open when the user stopped the turn is stored as
+// cancelled, like its approval, not as rejected (the Plans table said "Rejected" for a plan nobody rejected).
+func TestPlanStoppedBeforeApprovalIsCancelled(t *testing.T) {
+	e := setup(t)
+	withPlanPlatform(t, e)
+	ctx := store.WithSession(context.Background(), "main")
+	c, _ := e.m.Create(ctx, NewChat{})
+	slot := e.m.live[c.ID].slot.ID
+	cctx, stop := context.WithCancel(ctx)
+	ap, _, cancel, done := proposeWaiting(t, e, cctx, c.ID, slot, planTwo)
+	defer cancel()
+	stop() // the user stopped the turn while the card was open
+	if r := <-done; r.Status != "rejected" || !strings.Contains(r.Message, "stopped") {
+		t.Fatalf("result: %+v", r)
+	}
+	if got := onlyPlan(t, e, ctx, c.ID).State; got != plan.StateCancelled {
+		t.Fatalf("stored plan state %s, want %s", got, plan.StateCancelled)
+	}
+	if got, err := e.st.GetApproval(ctx, ap.ID); err != nil || got.State != store.ApprovalCancelled {
+		t.Fatalf("approval: %+v %v", got, err)
+	}
+}
