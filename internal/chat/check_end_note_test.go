@@ -23,6 +23,8 @@ import (
 func checkJob(t *testing.T, e *env, chatID string, final bool) (store.Assessment, string) {
 	t.Helper()
 	ctx := context.Background()
+	// the watcher polls only with a platform binding (pollJob reads through summaryReader)
+	newFakeJobs(t, e, "/tasks/5")
 	watch.Register((&assess.Service{St: e.st}).WatchKind())
 	a, err := e.st.CreateAssessment(ctx, store.Assessment{ChatID: chatID, Kind: "training", Subject: "model:5", EvalDatasetID: 9, Final: final})
 	if err != nil {
@@ -175,6 +177,10 @@ func TestSearchTrialJobGetsNoJobNote(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// SetTrialJob only touches a running trial (the hook runs after the start)
+	if ok, err := e.st.ClaimTrialStart(ctx, tr.ID, ""); err != nil || !ok {
+		t.Fatalf("claim: %v %v", ok, err)
+	}
 	if err := e.st.SetTrialJob(ctx, tr.ID, "63", jobID); err != nil {
 		t.Fatal(err)
 	}
@@ -193,10 +199,18 @@ func TestSingleTrialJobKeepsNote(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// a resting chat keeps the note in its queue (a live, idle one would get it at once)
+	if _, err := e.m.Suspend(ctx, c.ID); err != nil {
+		t.Fatal(err)
+	}
 	jobID := addRunningJob(t, e, c.ID, "training_run", "63")
 	tr, err := e.st.DeclareTrial(ctx, store.Trial{ChatID: c.ID, Path: store.SearchPathTemplate})
 	if err != nil {
 		t.Fatal(err)
+	}
+	// SetTrialJob only touches a running trial (the hook runs after the start)
+	if ok, err := e.st.ClaimTrialStart(ctx, tr.ID, ""); err != nil || !ok {
+		t.Fatalf("claim: %v %v", ok, err)
 	}
 	if err := e.st.SetTrialJob(ctx, tr.ID, "63", jobID); err != nil {
 		t.Fatal(err)

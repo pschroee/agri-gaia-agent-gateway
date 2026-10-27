@@ -113,6 +113,10 @@ func TestOutsidePlanTrialNoJobNote(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// SetTrialJob only touches a running trial (the hook runs after the start)
+	if ok, err := e.st.ClaimTrialStart(ctx, tr.ID, ""); err != nil || !ok {
+		t.Fatalf("claim: %v %v", ok, err)
+	}
 	if err := e.st.SetTrialJob(ctx, tr.ID, "7", jobs[0].ID); err != nil {
 		t.Fatal(err)
 	}
