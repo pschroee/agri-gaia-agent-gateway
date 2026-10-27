@@ -615,7 +615,7 @@ func contains(l []string, s string) bool {
 }
 
 // Created determines the new object after a successful create call (provenance rule): the
-// identifier from the body for datasets, models and container deployments, the task from Location
+// identifier from the body for datasets, models, container deployments and templates, the task from Location
 // for training and for container deployments. A training container comes from the answer's body
 // (a clone) or, for a build, only later from its job (watch.Progress.Created); the build itself
 // names its task.
@@ -634,7 +634,9 @@ func Created(a Access, res platform.Result) (resource, id string, ok bool) {
 		return "", "", false
 	}
 	switch a.Resource {
-	case Dataset, Model, ContainerDeployment:
+	case Dataset, Model, ContainerDeployment, ContainerTemplate:
+		// A template import names its id in the body (#230): a plan step "import_template" must resolve
+		// {{stepN.id}} for the build that follows.
 		if id := bodyID([]byte(res.Body), "id"); id != "" {
 			return a.Resource, id, true
 		}

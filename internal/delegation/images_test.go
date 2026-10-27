@@ -101,3 +101,20 @@ func TestImageBuildConformance(t *testing.T) {
 		}
 	}
 }
+
+// #230: the import of a template names the new template, so a plan step "import_template" resolves
+// {{stepN.id}} for the build that follows (Phase B: the build fell out of the plan as a single approval).
+func TestCreatedContainerTemplate(t *testing.T) {
+	a := Classify(platform.Request{Method: http.MethodPost, Path: "/inference-container-templates/create/git",
+		Form: map[string][]string{"name": {"ovms-inference"}, "git_url": {"https://github.com/pschroee/agri-gaia-inference-container-template"}, "git_ref": {"ovms-onnx"}}})
+	if a.Action != Create || a.Resource != ContainerTemplate {
+		t.Fatalf("classify: %+v", a)
+	}
+	res := platform.Result{Status: "ok", HTTPStatus: 200, Body: `{"id":2,"name":"ovms-inference","git_ref":"ovms-onnx","source":"git"}`}
+	if r, id, ok := Created(a, res); !ok || r != ContainerTemplate || id != "2" {
+		t.Fatalf("created: %q %q %v", r, id, ok)
+	}
+	if _, _, ok := Created(a, platform.Result{Status: "error", HTTPStatus: 409}); ok {
+		t.Error("a failed import was attributed")
+	}
+}
