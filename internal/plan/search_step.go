@@ -113,11 +113,11 @@ func checkSearchSteps(built map[int]store.PlanStep, probs *Problems) {
 				break // reported with the other placeholders
 			}
 			if b, ok := built[n]; ok && b.Tool != "create_training" && b.Path != "/train/config" {
-				probs.add(idx, fmt.Errorf("base_container_id {{step%d.id}} must name a create_training step; step %d is not one", n, n))
+				probs.add(idx, fmt.Errorf("base_container_id {{step%d.id}} must name the step that creates the training container; step %d does not create one", n, n))
 			}
 		case plain != "":
 			if _, err := strconv.ParseInt(plain, 10, 64); err != nil {
-				probs.add(idx, fmt.Errorf("base_container_id must be a training container id or {{stepN.id}} of a create_training step"))
+				probs.add(idx, fmt.Errorf("base_container_id must be a training container id or {{stepN.id}} of the step that creates the training container"))
 			}
 		default:
 			probs.add(idx, fmt.Errorf("base_container_id is required on path template"))

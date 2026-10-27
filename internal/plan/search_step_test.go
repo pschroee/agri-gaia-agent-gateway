@@ -77,11 +77,11 @@ func TestPlanSearchStepValidates(t *testing.T) {
 		"notebook path": {searchStep(`7`, okBudget, "notebook"), []string{"base_container_id belongs to path template"}},
 		"no limits":     {searchStep(`7`, `{"max_runs":3}`, "template"), []string{"max_runs and budget.max_compute_minutes"}},
 		"base not a training": {`{"tool":"split_dataset","args":{"dataset_id":1}},` + searchStep(`"{{step1.id}}"`, okBudget, "template"),
-			[]string{"must name a create_training step"}},
+			[]string{"must name the step that creates the training container"}},
 		"two searches": {searchStep(`7`, okBudget, "template") + `,` + searchStep(`8`, okBudget, "template"),
 			[]string{"holds one training search"}},
 		"all at once": {`{"tool":"split_dataset","args":{"dataset_id":1}},` + searchStep(`"{{step1.id}}"`, `{"max_runs":3}`, "template"),
-			[]string{"max_compute_minutes", "must name a create_training step"}},
+			[]string{"max_compute_minutes", "must name the step that creates the training container"}},
 	}
 	for name, c := range cases {
 		p := proposal(t, `{"title":"t","steps":[`+c.steps+`]}`)
