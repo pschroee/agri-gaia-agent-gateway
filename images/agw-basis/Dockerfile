@@ -5,7 +5,7 @@
 #   --target exec  agwpoc/agw-basis   Execution sandbox: Python, Typst, tools, agw-artifact.
 #                                     No pi. All of the agent's tools run here.
 
-FROM golang:1.26-bookworm AS build
+FROM golang:1.26-bookworm@sha256:632dff7351799a5a9954a48dc06670ade72ee44e8c351cdc0e5a57af2fea21af AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
@@ -19,7 +19,7 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/agw-artifact ./cmd
 
 # ---------------------------------------------------------------------------
 # pi container. Node.js LTS (24, active LTS since October 2025); pi requires at least 22.19.
-FROM node:24-bookworm-slim AS pi
+FROM node:24-bookworm-slim@sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b346054fdc8ee9957a2b55d205 AS pi
 ARG PI_VERSION=0.87.1
 RUN npm install -g @earendil-works/pi-coding-agent@${PI_VERSION} \
  && npm cache clean --force
@@ -97,7 +97,7 @@ ENTRYPOINT ["/usr/local/bin/agw-exec", "pi-entry"]
 
 # ---------------------------------------------------------------------------
 # Execution sandbox: Debian, Node (for the agent's node/npm), Python and common tools.
-FROM node:24-bookworm-slim AS exec
+FROM node:24-bookworm-slim@sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b346054fdc8ee9957a2b55d205 AS exec
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       python3 python3-pip python3-venv curl jq ripgrep git ca-certificates procps \
