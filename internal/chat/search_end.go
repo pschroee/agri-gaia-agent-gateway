@@ -203,6 +203,11 @@ func (m *Manager) finishSearch(ctx context.Context, s store.Search, reason strin
 	m.addSearchEvent(ctx, s.ID, "ended", ev)
 	m.searchStepEnded(ctx, s, wt)
 	text := m.endText(s, st.obj, reason, wt, ho)
+	if _, idx, err := m.st.PlanStepOfSearch(ctx, s.ID); err == nil && wt != nil {
+		// A search inside a plan (B19): the plan's next steps are the way on, exactly as approved; the free hints
+		// above (eval_dataset_id, a new plan) would make the calls differ from the steps.
+		text = planSearchEndText(s, st.obj, reason, wt, idx)
+	}
 	if reason != endByAgent {
 		m.searchNote(ctx, s, text, "")
 	}
@@ -242,6 +247,24 @@ func (m *Manager) endText(s store.Search, obj search.Objective, reason string, w
 	if s.Path != store.SearchPathTemplate {
 		b.WriteString(" The check takes class names and preprocessing from outputs/model.json of that run.")
 	}
+	return b.String()
+}
+
+// planSearchEndText is the note at the end of a search that is a plan step (B19, demo 5 of 27.10.2026): no free
+// wording of the final test – the agent named eval_dataset_id because the free text suggested it, and the call
+// differed from the plan's step.
+func planSearchEndText(s store.Search, obj search.Objective, reason string, wt *store.Trial, idx int) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "The training search ended: %s.", endReasonText(reason))
+	b.WriteString(fmt.Sprintf(" Winner: trial %d", wt.Idx))
+	if wt.Score != nil {
+		b.WriteString(fmt.Sprintf(" (%s %s)", obj.Metric, strconv.FormatFloat(*wt.Score, 'g', 6, 64)))
+	}
+	b.WriteString(".")
+	b.WriteString(" " + curvesLineSearch(s.ID))
+	fmt.Fprintf(&b, " This search was step %d of the approved plan; {{step%d.id}} is now training container %s.", idx, idx, wt.Ref)
+	b.WriteString(" Go on with the plan's next steps exactly as approved, with the same arguments and nothing added" +
+		" (the final test takes the held-back set by itself; do not add eval_dataset_id). Do not propose a new plan.")
 	return b.String()
 }
 

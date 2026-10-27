@@ -736,6 +736,12 @@ func SetFilePins(raw []byte, pins map[int][]FilePin, fileErrs map[int]string) ([
 // call leaves it out. It returns the call in the step's form, so that what runs is the approved call and the handler
 // derives the value again. ok is false in every other case; the caller keeps r and its difference.
 func WithDerived(st store.PlanStep, r platform.Request, resolve Resolve, field, derived string) (platform.Request, bool) {
+	return WithDerivedValue(st, r, resolve, field, derived, false)
+}
+
+// WithDerivedValue is WithDerived for a value that is a JSON string (number false) or a JSON number such as an id
+// (number true, B19); the other kind never matches.
+func WithDerivedValue(st store.PlanStep, r platform.Request, resolve Resolve, field, derived string, number bool) (platform.Request, bool) {
 	if derived == "" || len(st.Body) == 0 || len(bytes.TrimSpace(r.Body)) == 0 {
 		return r, false
 	}
@@ -752,15 +758,15 @@ func WithDerived(st store.PlanStep, r platform.Request, resolve Resolve, field, 
 	lv, inLive := live[field]
 	switch {
 	case inLive && !inStep:
-		if s, isStr := lv.(string); !isStr || s != derived {
+		if !derivedEqual(lv, derived, number) {
 			return r, false
 		}
 		delete(live, field)
 	case inStep && !inLive:
-		if s, isStr := sv.(string); !isStr || s != derived {
+		if !derivedEqual(sv, derived, number) {
 			return r, false
 		}
-		live[field] = derived
+		live[field] = sv
 	default:
 		return r, false
 	}
@@ -774,6 +780,17 @@ func WithDerived(st store.PlanStep, r platform.Request, resolve Resolve, field, 
 		return r, false
 	}
 	return out, true
+}
+
+// derivedEqual: a string, or with number a JSON number (an id, B19), that is exactly the derived value.
+func derivedEqual(v any, derived string, number bool) bool {
+	switch x := v.(type) {
+	case string:
+		return !number && x == derived
+	case json.Number:
+		return number && x.String() == derived
+	}
+	return false
 }
 
 // jsonObject decodes raw as one JSON object with numbers kept as written; anything else is an error.
