@@ -103,43 +103,38 @@ func TestDocumentsSkillFile(t *testing.T) {
 	}
 }
 
-// The execution image installs markitdown pinned, with the extras for the formats the skill names
-// and its dependencies under constraints, and both images copy the skills directory. A Docker build
-// is not part of the everyday tests; this guards the lines it depends on.
+// The execution image installs markitdown from the hashed lock (#242) with the extras the skill names, the lock holds
+// the dependencies the formats need, and both images copy the skills directory. A Docker build is not part of the
+// everyday tests; this guards the lines it depends on.
 func TestDockerfileMarkitdown(t *testing.T) {
 	d := repoFile(t, "images/agw-basis/Dockerfile")
 	m := regexp.MustCompile(`ARG MARKITDOWN_VERSION=(\d+\.\d+\.\d+)\n`).FindStringSubmatch(d)
 	if m == nil {
 		t.Fatal("MARKITDOWN_VERSION not pinned")
 	}
-	if !strings.Contains(d, `"markitdown[docx,xlsx,xls,pptx,outlook,pdf]==${MARKITDOWN_VERSION}"`) {
-		t.Error("markitdown not installed with the extras docx, xlsx, xls, pptx, outlook, pdf at the pinned version")
+	if !strings.Contains(d, "markitdown t.xlsx | grep -q") {
+		t.Error("the build check that converts a workbook is missing")
 	}
-	if !strings.Contains(d, "-c /tmp/markitdown-constraints.txt") || !strings.Contains(d, "markitdown t.xlsx | grep -q") {
-		t.Error("constraints or the build check missing")
+	if strings.Contains(d, "constraints") {
+		t.Error("constraints file still referenced; the lock replaced it")
 	}
 	if n := strings.Count(d, "COPY images/agw-basis/skills /opt/agw/skills"); n != 2 {
 		t.Errorf("skills copied into %d images, want 2 (pi and exec)", n)
 	}
-	// markitdown must come after the stage line of exec, not into the pi image (no Python there).
+	// The lock must be installed in the exec stage, not into the pi image (no Python there).
 	exec := strings.Index(d, "AS exec\n")
-	if i := strings.Index(d, "pip3 install --no-cache-dir --break-system-packages -c"); i < exec || exec < 0 {
-		t.Error("markitdown is not installed in the exec stage")
+	if i := strings.Index(d, "pip3 install --no-cache-dir --break-system-packages --require-hashes"); i < exec || exec < 0 {
+		t.Error("the lock is not installed in the exec stage")
 	}
-	c := repoFile(t, "images/agw-basis/markitdown/constraints.txt")
-	for _, pkg := range []string{"magika==", "mammoth==", "python-pptx==", "xlrd==", "olefile==", "pdfminer-six==", "onnxruntime=="} {
+	c := repoFile(t, "images/agw-basis/python/requirements.lock")
+	for _, pkg := range []string{"markitdown==" + m[1], "magika==", "mammoth==", "python-pptx==", "xlrd==", "olefile==", "pdfminer.six==", "onnxruntime=="} {
 		if !strings.Contains(c, "\n"+pkg) {
-			t.Errorf("constraints without %s", pkg)
+			t.Errorf("lock without %s", pkg)
 		}
 	}
-	for _, line := range strings.Split(c, "\n") {
-		if line != "" && !strings.HasPrefix(line, "#") && !regexp.MustCompile(`^[A-Za-z0-9._-]+==[0-9][0-9A-Za-z.]*$`).MatchString(line) {
-			t.Errorf("constraint not pinned exactly: %q", line)
-		}
-	}
-	for _, pre := range []string{"numpy==", "pandas==", "openpyxl=="} { // already in the image, unpinned there
-		if strings.Contains(c, "\n"+pre) {
-			t.Errorf("constraints pin %s, which an earlier layer installs", pre)
+	for _, pre := range []string{"numpy==", "pandas==", "openpyxl=="} {
+		if !strings.Contains(c, "\n"+pre) {
+			t.Errorf("lock without %s", pre)
 		}
 	}
 }
