@@ -137,3 +137,23 @@ func TestPlanSearchStepGrant(t *testing.T) {
 		t.Fatalf("rules: %+v", del.Rules)
 	}
 }
+
+// A placeholder that stands alone in a form field other than base_container_id is refused with the cause, not with the
+// text message (#254, E3).
+func TestPlaceholderAloneInFormFieldMessage(t *testing.T) {
+	err := checkFormSentinels(map[string][]string{"title": {sentinel(1)}})
+	if err == nil || !strings.Contains(err.Error(), "only allowed as base_container_id of propose_search") || strings.Contains(err.Error(), "inside a text") {
+		t.Fatalf("message: %v", err)
+	}
+	if err := checkFormSentinels(map[string][]string{searchBaseField: {sentinel(1)}}); err != nil {
+		t.Fatalf("base_container_id: %v", err)
+	}
+}
+
+// A placeholder with text around it keeps the text message (#254, E3).
+func TestPlaceholderInsideTextMessage(t *testing.T) {
+	err := checkFormSentinels(map[string][]string{"title": {"run " + sentinel(1)}})
+	if err == nil || !strings.Contains(err.Error(), "inside a text") {
+		t.Fatalf("message: %v", err)
+	}
+}

@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"os"
 	"path"
@@ -153,6 +154,31 @@ type DatasetRef struct {
 type OverallFigures struct {
 	Accuracy float64 `json:"accuracy"`
 	MacroF1  float64 `json:"macro_f1"`
+	// Correct and Wrong: the number of images the model got right and wrong in the measured set (#254). The agent
+	// reads the count here instead of deriving it from precision and recall, which misleads.
+	Correct int `json:"correct"`
+	Wrong   int `json:"wrong"`
+}
+
+// overallFigures builds the overall figures of a measurement. The counts come from the confusion table when there is
+// one (its diagonal is right, the rest wrong); without it, from the accuracy and the number of measured images.
+func overallFigures(in JudgeInput) OverallFigures {
+	o := OverallFigures{Accuracy: in.Accuracy, MacroF1: in.MacroF1}
+	total, correct := 0, 0
+	for truth, row := range in.Confusion {
+		for pred, n := range row {
+			total += n
+			if pred == truth {
+				correct += n
+			}
+		}
+	}
+	if total == 0 {
+		total = measuredImages(in)
+		correct = int(math.Round(in.Accuracy * float64(total)))
+	}
+	o.Correct, o.Wrong = correct, total-correct
+	return o
 }
 
 // BaselineFigures are the figures of the majority class applied to the measured set (P10).
@@ -293,7 +319,7 @@ func JudgeClassification(in JudgeInput) Report {
 	return judgeReport(in, &TrainingFigures{
 		Model: in.Model, EvalDataset: in.EvalDataset, SeenDatasets: in.SeenDatasets,
 		MeasuredImages: measuredImages(in), PerClass: in.PerClass, Confusion: in.Confusion,
-		Overall:      OverallFigures{Accuracy: in.Accuracy, MacroF1: in.MacroF1},
+		Overall:      overallFigures(in),
 		Baseline:     BaselineFigures{Kind: "majority", Class: in.Baseline.Class, Accuracy: in.Baseline.Accuracy, MacroF1: in.Baseline.MacroF1, PValue: in.PValue},
 		SeenSample:   SeenSample{Images: in.SeenImages, Accuracy: in.SeenAccuracy},
 		Mapping:      mappingNames(in.Mapping),

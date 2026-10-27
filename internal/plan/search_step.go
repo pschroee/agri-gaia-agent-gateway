@@ -137,15 +137,18 @@ func searchGrantRules() []delegation.Rule {
 }
 
 // checkFormSentinels refuses a placeholder in a form field, except as the whole value of base_container_id of a
-// training search. A sentinel anywhere else is a placeholder inside a text.
+// training search. A whole placeholder anywhere else is refused with its own message; one inside a text with the text message.
 func checkFormSentinels(form map[string][]string) error {
 	for k, vs := range form {
 		for _, v := range vs {
 			if !sentinelRe.MatchString(v) {
 				continue
 			}
-			if k == searchBaseField && sentinelOK.MatchString(v) {
-				continue
+			if sentinelOK.MatchString(v) {
+				if k == searchBaseField {
+					continue
+				}
+				return errPlaceholderAloneInField
 			}
 			return errPlaceholderText
 		}

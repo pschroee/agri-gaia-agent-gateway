@@ -334,6 +334,10 @@ type Manager struct {
 	blockedMu     sync.Mutex
 	blockedTimers map[string]*time.Timer
 
+	// planHintAt: per chat when the hint for a plan after two single approvals was last given (under planHintMu; #254).
+	planHintMu sync.Mutex
+	planHintAt map[string]time.Time
+
 	mu   sync.Mutex
 	live map[string]*live
 	subs map[string]map[chan Event]struct{}
@@ -2700,6 +2704,12 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 	if err == nil && claim == nil {
 		if id := cmp.Or(planJob, jobID); id != "" {
 			m.declareTrainingEarly(ctx, chatID, id)
+		}
+	}
+	// The second single approval of a writing call in a row suggests one plan for the rest of the task (#254).
+	if err == nil && res.Status == "ok" && approvalBy == "user" && step == nil && claim == nil {
+		if note := m.secondApprovalHint(ctx, chatID); note != "" {
+			res.Note = joinNote(res.Note, note)
 		}
 	}
 	// A job outside a plan tells the agent that the gateway watches it and will say when it ends (#212); the trials

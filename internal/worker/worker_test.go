@@ -329,3 +329,13 @@ func TestSupervisorTraceSetting(t *testing.T) {
 		t.Fatalf("SetExecTrace: %v %v", err, w.trace.Load())
 	}
 }
+
+// The language rule asks for the language's own letters, also in tool arguments (#254, E5).
+func TestSystemNoteLanguageLetters(t *testing.T) {
+	for _, v := range []string{"cli", "mcp", "api", "both"} {
+		n := SystemNoteFor(v, 2, nil, "")
+		if !strings.Contains(n, "own letters (ä, ö, ü, ß, é …) everywhere, also in tool arguments such as titles, notes and descriptions; never transliterate") {
+			t.Errorf("%s: system note without the letters rule", v)
+		}
+	}
+}
