@@ -1477,7 +1477,14 @@ merged (strand G-B), an approved plan does not yet change how the steps are appr
   with its effect, the gateway's summary, the call and its parameters, and marks the title and the notes as the
   agent's, not verified. Answer after
   approval: `{"plan_id", "state": "approved", "expires_at", "steps": [{"step", "call", "effect", "covered"}], "note"}`
-  with status `ok`. A rejected or expired plan answers `rejected` and executes nothing.
+  with status `ok`. A rejected or expired plan answers `rejected` and executes nothing. A plan whose card was open
+  when the user stopped the turn is stored as `cancelled` (its approval `cancelled`, without `ended_at`), not
+  `rejected` (B24). A `propose_search` step has the effect `compute`; its trials are counted by `budget.max_runs`,
+  not the step itself (B25).
+- **Free text in the match (B23):** the fields the agent writes for the user and that decide nothing are no part of
+  the match of a call with its step: `description` of `upload_dataset` and `upload_model`, `title` and `note` of
+  `propose_search`, `note` of `search_next`, `end_search` and `notebook_run` (an explicit list per step kind,
+  `internal/plan/freetext.go`). Names, ids, paths, parameters, labels, files, hashes and budgets stay exact.
 - **Capability `compute`, platform hardware (#253):** the system note carries one line, `compute: Platform trainings: ...`,
   from `AGW_PLATFORM_GPU` (`expected`: the platform has a GPU; `none`: CPU only, 4 vCPU; empty: not configured, give
   runtimes for both cases). The live entry of the tool `capabilities` repeats it as the field `platform_gpu` and adds
