@@ -82,7 +82,7 @@ deliberately chosen to be unusual, so that nothing collides with other services.
 | `internal/llmproxy` | proxy to the model provider with key and model allowlist |
 | `internal/api` | HTTP API, SSE, block for requests from the sandbox networks, embedded UI |
 | `web/` | React 19, Vite, Tailwind 4, shadcn/ui |
-| `images/agw-basis` | one Dockerfile, two images (E9). `agw-pi` (`--target pi`): Node.js 24 LTS, pi 0.87.1, pi-subagents as our own copy from `third_party/pi-subagents` (0.73.1-agw.2, dependencies via `npm ci` from `pi-subagents-deps/package-lock.json`), rpiv-todo 2.11.0, extensions, skills, `agw-exec`; **without a shell, without `git` and without Python**; `PI_SUBAGENTS_WORKFLOW_WORKER` points to `ext/remote-worker.mjs` (`workflowScript`, E9). `agw-basis` (`--target exec`, execution sandbox): Debian (`node:24-bookworm-slim`), Python 3.11 with numpy, pandas, matplotlib, jinja2, plotly, openpyxl; Typst 0.14.2 with a fixed package selection (`typst/packages.txt`); skills `writing-typst`, `charts` (matplotlib, `MPLBACKEND=Agg`) and others; curl, jq, ripgrep, fd (for `find`, like pi), git, unzip, zip, tar, xz, bzip2, file, poppler-utils (`pdfinfo`, `pdftotext`, `pdftoppm`), binutils (`strings`); `agw-artifact`, `agw-exec`, runtime for workflow scripts (`workflow/runner.cjs`); **without pi**. In addition the test image `agw-parity` (`--target parity`, execution sandbox plus pi), used only for the parity test |
+| `images/agw-basis` | one Dockerfile, two images (E9). `agw-pi` (`--target pi`): Node.js 24 LTS, pi 0.87.1, pi-subagents as our own copy from `third_party/pi-subagents` (0.73.1-agw.2, dependencies via `npm ci` from `pi-subagents-deps/package-lock.json`), rpiv-todo 2.11.0 (extension dependencies via `npm ci` from `pi-packages/package-lock.json`), extensions, skills, `agw-exec`; **without a shell, without `git` and without Python**; `PI_SUBAGENTS_WORKFLOW_WORKER` points to `ext/remote-worker.mjs` (`workflowScript`, E9). `agw-basis` (`--target exec`, execution sandbox): Debian (`node:24-bookworm-slim`), Python 3.11 with numpy, pandas, matplotlib, jinja2, plotly, openpyxl; Typst 0.14.2 with a fixed package selection (`typst/packages.txt`); skills `writing-typst`, `charts` (matplotlib, `MPLBACKEND=Agg`) and others; curl, jq, ripgrep, fd (for `find`, like pi), git, unzip, zip, tar, xz, bzip2, file, poppler-utils (`pdfinfo`, `pdftotext`, `pdftoppm`), binutils (`strings`); `agw-artifact`, `agw-exec`, runtime for workflow scripts (`workflow/runner.cjs`); **without pi**. In addition the test image `agw-parity` (`--target parity`, execution sandbox plus pi), used only for the parity test |
 | `third_party/pi-subagents` | our own copy of pi-subagents 0.73.1 (MIT) as `0.73.1-agw.2` with two changes (origin of the worker for `workflowScript` configurable; output of the children in the answer instead of as a file); origin, change and tests in `VENDORED.md`. The pi image is built from it; `images/agw-basis/pi-subagents-deps` pins the dependencies with a lockfile |
 | `pkgcache/verdaccio.yaml` | settings of the npm cache (read-only, no login, no publishing) |
 | `models.json` | model catalogue: models, tariff (peak hours), optionally custom prices |
@@ -104,7 +104,7 @@ code. What is only installed at build time is not in the repository.
 | `images/agw-basis/skills/writing-typst/SKILL.md` | skill of the author (from `~/.claude/skills`), extended by the section “In this sandbox” | yes | the section mentioned |
 | `images/agw-basis/skills/writing-typst/references/` | documentation of the Typst project (github.com/typst/typst, folder `docs`, Apache-2.0) | yes | none |
 | Web search: web proxy (`internal/webproxy`), `web-gate.ts`, `web-tools.ts`, `searxng/settings.yml`, table `web_requests` | **own** | yes | – |
-| `@blazer2k/searxng-suite` 0.2.3 (formerly `pi-searxng-suite`, unpublished on 2026-10-25; same code) (MIT, tools `web_search` and `web_extract`) | npm | no, at build time via `pi install` (fixed version) | none; showing and hiding the tools and forwarding are handled by `web-gate.ts` and the web proxy; `web-tools.ts` loads the package and only replaces the texts of the two tools (description, parameter descriptions, one added guideline) while it registers them (issue #44) |
+| `@blazer2k/searxng-suite` 0.2.3 (formerly `pi-searxng-suite`, unpublished on 2026-10-25; same code) (MIT, tools `web_search` and `web_extract`) | npm, vendored in `third_party/searxng-suite` (unchanged) | yes, `VENDORED.md` there; no fetch at build time (#242) | none; showing and hiding the tools and forwarding are handled by `web-gate.ts` and the web proxy; `web-tools.ts` loads the package and only replaces the texts of the two tools (description, parameter descriptions, one added guideline) while it registers them (issue #44) |
 | `third_party/pi-intercom` | npm package `pi-intercom` 0.15.0 (MIT) | yes | original in commit `4ce9ca6`, own change in `31a8495`; described in [`VENDORED.md`](third_party/pi-intercom/VENDORED.md), visible with `git diff 4ce9ca6 31a8495 -- poc/third_party/pi-intercom` |
 | pi (`@earendil-works/pi-coding-agent` 0.87.1), `@juicesharp/rpiv-todo` 2.11.0, Python and npm packages, Typst and Typst packages | npm, PyPI, GitHub | no, installed at build time (fixed versions in the Dockerfile) | none |
 | npm dependencies of the web UI (`web/package.json`, among others React, react-markdown, shadcn/radix, `mermaid` 12.0.0 (MIT) and `dompurify` 3.4.16 (MPL-2.0 or Apache-2.0) for the diagrams, `pdfjs-dist` 6.3.289 (Apache-2.0) for the PDF preview) | npm | no, only `package.json` and `package-lock.json`; `mermaid` and `dompurify` at fixed versions, bundled at build time into a separate chunk of `web/dist` that is loaded only on demand | none |
@@ -136,7 +136,7 @@ code. What is only installed at build time is not in the repository.
   which is on the `PATH`.
 - **Documents with markitdown** (skill `documents`, issue #42, 2026-10-07): `markitdown[docx,xlsx,xls,pptx,outlook,pdf]`
   0.1.8 converts Word, Excel, PowerPoint, Outlook `.msg`, EPUB, HTML, CSV and ZIP to Markdown, without internet; the
-  dependencies are pinned in `images/agw-basis/markitdown/constraints.txt` (a rebuild must not pull new releases),
+  dependencies are pinned in `images/agw-basis/python/requirements.lock` (with hashes; a rebuild must not pull new releases),
   and the build converts a generated workbook as a check. It makes the image about 127 MB larger (arm64,
   1.93 GB → 2.06 GB), most of it onnxruntime for magika, markitdown's file type detection. PDF stays with
   `pdftotext` first, markitdown is the fallback: it sometimes returns nothing for a PDF without an error. The skill
@@ -367,8 +367,8 @@ guidelines costs about 800 tokens per request (measured on the first model call,
 The command `/todos` appears in the command list, but reports only via `notify` and has no
 effect in the web UI.
 
-**Integration.** In the image, like pi-subagents, via `pi install` into `/opt/agw/pihome` (fixed version,
-`RPIV_TODO_VERSION`), loaded via `-e …/@juicesharp/rpiv-todo/index.ts` in **all three**
+**Integration.** In the image, like pi-subagents, in `/opt/agw/pihome/npm` (fixed version,
+`RPIV_TODO_VERSION`, installed by `npm ci` from the lockfile in `images/agw-basis/pi-packages`), loaded via `-e …/@juicesharp/rpiv-todo/index.ts` in **all three**
 variants (`PiArgs`). In the MCP variant `todo` is additionally listed in `--tools`; the tool
 only changes its own state in the session, so it does not extend the scope of action, and
 all variants plan the same way, which does not distort the comparison of bindings.
@@ -705,7 +705,7 @@ restart from Postgres), a store test, Vitest (`lib/outbox.test.ts`) and
 ### Web search
 
 The author's request (2026-09-30): web search as in other agents, with **our own SearXNG** in the stack,
-and the tools only with internet. Implemented with `pi-searxng-suite` 0.2.3 (npm, MIT, unmodified):
+and the tools only with internet. Implemented with `@blazer2k/searxng-suite` 0.2.3 (formerly `pi-searxng-suite`; MIT, unmodified, vendored in `third_party/searxng-suite`):
 `web_search` queries SearXNG (JSON), `web_extract` fetches an address and converts HTML, text, PDF and
 images. Both run as an extension **in pi's container** and call `fetch`.
 
@@ -1716,3 +1716,39 @@ any grant is active.
 - **Log:** `web_requests` rows carry `grant_id`, `origin`, `package`, `version`, `parent`, `tool_call_id`, `count`. After
   `AGW_INTERNET_LOG_ROWS` single rows a grant collapses further connections into one row per (origin, host,
   allowed/refused). Ends are `socket_calls` entries with op `internet_end`.
+
+## Pinned artifacts (issue #242)
+
+On 2026-10-25 the author of `pi-searxng-suite` unpublished it and the image build broke half way through. A fixed
+version does not protect against that, so every artifact the images fetch from outside is pinned and, where it can
+vanish, kept in the repo:
+
+| Artifact | How it is pinned |
+|---|---|
+| Base images (`FROM`, `image:` in `compose*.yaml` and for `agent_postgres` in the platform) | `name:tag@sha256:<index digest>` (multi-arch index, so amd64 and arm64 both work) |
+| npm packages | `package-lock.json` with integrity, installed by `npm ci`: `images/agw-basis/pi-packages` (rpiv-todo and the dependencies of the two vendored extensions), `mmdc` (mermaid-cli with puppeteer), `pi-subagents-deps`, `web/`; pi itself is installed globally at a fixed version and ships its own `npm-shrinkwrap.json` |
+| npm packages an author could unpublish (**rule: one maintainer, fewer than 300 downloads a week, no dependents**) | **vendored** in `third_party/` with a `VENDORED.md`: `searxng-suite`, `pi-intercom`, `pi-subagents`. A lockfile protects against change, not against removal |
+| Python packages of the execution image | one lock `images/agw-basis/python/requirements.lock`: every package with an exact version and the sha256 of its wheels (CPython 3.11, x86_64 and aarch64); installed with `--require-hashes --no-deps --only-binary :all:` |
+| Typst and fd (GitHub release assets) | `ARG TYPST_SHA256_AMD64/ARM64`, `FD_SHA256_AMD64/ARM64`; the Dockerfile checks the download with `sha256sum -c` |
+| apt packages | **not pinned**: Debian keeps only the current version, and a version pin would break the build earlier than drift does (and block security updates). The base image digest fixes the Debian point release |
+| Go modules, Typst packages | `go.sum`; Typst Universe does not delete. Only checked for availability |
+
+No mirror: the package caches (verdaccio, proxpi) are runtime caches for the sandbox; the build does not reach them.
+
+**Before every rollout that rebuilds images**, on the server in the checkout:
+`python3 services/agent-gateway/images/check-artifacts.py --compose docker-compose.yml`. It reads the build files and asks
+the registries (HEAD and metadata only, nothing downloaded) whether each pinned artifact is still there and whether
+hashes and digests match; FAIL means do not build. WARN lists artifacts that could be unpublished (one maintainer,
+few downloads), deprecated or yanked ones. `--list` prints the inventory without network, `--npm NAME@VERSION`
+checks a package before it is taken in, `--suggest-digests` prints the current digest of each tagged image.
+`internal/worker/images_test.go` guards the pins offline in `./dev.sh test`.
+
+**To bump:**
+- *Base image:* `check-artifacts.py --suggest-digests`, copy the digest into the `FROM`/`image:` line.
+- *npm:* change the version in the folder's `package.json`, `npm install --package-lock-only --ignore-scripts` there,
+  compare the lock with the installed packages, rebuild.
+- *Python:* edit the version in `requirements.lock`, run `python3 -I images/agw-basis/python/hash-lock.py
+  images/agw-basis/python/requirements.lock` (it fails if a package has no wheel for cp311 and both architectures),
+  rebuild with `--no-cache`, compare `pip freeze`.
+- *Typst, fd:* new version and the digests of the release assets (`gh api repos/<owner>/<repo>/releases/tags/<tag>`,
+  field `assets[].digest`).
