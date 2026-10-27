@@ -26,6 +26,8 @@ type Capability struct {
 	Available bool   `json:"available"`
 	Detail    string `json:"detail"`
 	Without   string `json:"without"`
+	// PlatformGPU: only the compute entry; "expected", "none" or empty when the operator did not say (#253).
+	PlatformGPU string `json:"platform_gpu,omitempty"`
 }
 
 // Capabilities is the answer of the overview (G1.10): the entries and a short line naming the state,

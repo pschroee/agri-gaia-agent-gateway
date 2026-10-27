@@ -33,7 +33,7 @@ The output is `HTTP <code>` followed by JSON. Exit code 0 ok, 3 rejected by the 
    (architectures with `category`), `agw-platform train-options Torchvision EfficientNet` (schema and
    default values of the `train_config`).
 2. Write the `train_config` as a file, starting from the default values, changing only what the task
-   requires (this instance has **no GPU**: few epochs, small images).
+   requires (size epochs and images for the hardware named in the line *Platform trainings* of the system note, or in the `capabilities` entry compute).
 3. Create: `agw-platform create-training Torchvision EfficientNet Classification <dataset_id> @train_config.json`
    — the platform builds the training image in the background. The response names `Location: /tasks/<id>`.
 4. Follow the build: `agw-platform task <id>` until `status` is `completed` or `failed` (not in a tight

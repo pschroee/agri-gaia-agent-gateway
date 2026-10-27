@@ -70,3 +70,26 @@ func TestSubagentDefinitionsNameFilesNotPaths(t *testing.T) {
 		}
 	}
 }
+
+// #253: no skill states the platform's hardware as a fact; the CPU measurements are named as such. The hardware
+// comes from the line "Platform trainings" of the system note.
+func TestSkillsNameNoFixedGPU(t *testing.T) {
+	for _, name := range []string{"training-advice", "platform", "pre-annotation", "model-card"} {
+		s := repoFile(t, "images/agw-basis/skills/"+name+"/SKILL.md")
+		for i, line := range strings.Split(s, "\n") {
+			if !strings.Contains(line, "no GPU") && !strings.Contains(line, "4 vCPU") && !strings.Contains(line, "CPU without GPU") {
+				continue
+			}
+			// Allowed only in the labelled CPU measurements.
+			if !strings.Contains(line, "Measured on the CPU") && !strings.Contains(line, "(CPU table;") && !strings.Contains(line, "4 vCPU, no GPU):") {
+				t.Errorf("%s:%d states fixed hardware: %s", name, i+1, line)
+			}
+		}
+	}
+	s := repoFile(t, "images/agw-basis/skills/training-advice/SKILL.md")
+	for _, want := range []string{"Platform trainings", "with a GPU", "Tesla V100"} {
+		if !strings.Contains(strings.ToLower(s), strings.ToLower(want)) {
+			t.Errorf("training-advice without %q", want)
+		}
+	}
+}
