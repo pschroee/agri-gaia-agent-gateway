@@ -43,7 +43,7 @@ func RunIDFrom(_ platform.Request, res platform.Result) (string, bool) {
 
 // WatchKind is the kind of job that observes one check of this chat.
 func (s *Service) WatchKind() watch.Kind {
-	return watch.Kind{Name: KindName, Resource: delegation.Assessment, Poll: s.poll}
+	return watch.Kind{Name: KindName, Resource: delegation.Assessment, Poll: s.poll, EndNote: true}
 }
 
 // poll answers the state of a check out of its row: queued and running are "running" for the watcher,

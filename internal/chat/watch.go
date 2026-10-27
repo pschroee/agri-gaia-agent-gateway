@@ -32,6 +32,7 @@ import (
 	"golang.org/x/sync/singleflight"
 
 	"agw/internal/artifacts"
+	"agw/internal/assess"
 	"agw/internal/delegation"
 	"agw/internal/notebook"
 	"agw/internal/plan"
@@ -651,14 +652,20 @@ func countLines(s string) int {
 // the next message.
 func (m *Manager) noteJobEnd(ctx context.Context, j store.WatchJob, st *store.PlanStep, p watch.Progress, dur time.Duration, wake bool) {
 	var note systemNote
+	finalOf := "" // the search whose final test this job is (#252)
 	if j.PlanID == "" {
-		// A job outside a plan (#212): the kinds of watch.AnnouncedOutsidePlan, never the trials of a search
-		// (their notes are the search's).
-		if !watch.AnnouncedOutsidePlan(j.Kind) || isTrialJob(j.ID) {
+		// A job outside a plan (#212): the kinds that tell their end (watch.TellsEndOutsidePlan), never the trials of
+		// a search (their notes are the search's; the row of the trial says so, #252).
+		if !watch.TellsEndOutsidePlan(j.Kind) || m.isSearchTrialJob(ctx, j.ID) {
 			return
 		}
-		note = JobNote(j, nil, p.State, dur, nil)
-		note.Type = store.NoteJob
+		if j.Kind == assess.KindName {
+			note = checkEndNote(j, p)
+			finalOf = m.searchOfFinalCheck(ctx, j.ChatID, j.Ref)
+		} else {
+			note = JobNote(j, nil, p.State, dur, nil)
+			note.Type = store.NoteJob
+		}
 	} else {
 		note = JobNote(j, st, p.State, dur, p.Created)
 	}
@@ -670,11 +677,64 @@ func (m *Manager) noteJobEnd(ctx context.Context, j store.WatchJob, st *store.Pl
 		return
 	}
 	m.publishQueue(ctx, j.ChatID, "queued", nil, "")
+	if finalOf != "" {
+		// The final test of a search is what the user waits for, and the search approval covers it (#252).
+		m.wakeForNote(j.ChatID, finalOf)
+		return
+	}
 	if !wake || j.PlanID == "" {
 		m.wakeIfLive(j.ChatID)
 		return
 	}
 	m.wakeForNote(j.ChatID, j.PlanID)
+}
+
+// isSearchTrialJob reports whether a trial of a search ran as this job: the row experiment_trials.job_id says so,
+// whatever order the hooks ran in and across restarts (#252). A single run keeps its note.
+func (m *Manager) isSearchTrialJob(ctx context.Context, jobID string) bool {
+	if m.st == nil {
+		return false
+	}
+	t, err := m.st.TrialByJob(ctx, jobID)
+	return err == nil && t.SearchID != ""
+}
+
+// searchOfFinalCheck returns the id of the ended search of the chat whose final test is this check ("" when it is
+// none): holdout.check_id of the search names it.
+func (m *Manager) searchOfFinalCheck(ctx context.Context, chatID, checkID string) string {
+	if m.st == nil || checkID == "" {
+		return ""
+	}
+	list, err := m.st.ListSearches(ctx, chatID)
+	if err != nil {
+		return ""
+	}
+	for i := len(list) - 1; i >= 0; i-- {
+		if list[i].State != store.SearchEnded {
+			continue
+		}
+		var ho SearchHoldout
+		if json.Unmarshal(list[i].Holdout, &ho) == nil && ho.CheckID == checkID {
+			return list[i].ID
+		}
+	}
+	return ""
+}
+
+// checkEndNote is the note about the end of a check the agent started outside a plan (#252): the header of the
+// report (or the error) and where to read the rest; the figures stay in assess_status.
+func checkEndNote(j store.WatchJob, p watch.Progress) systemNote {
+	msg := watch.ClipRunes(oneLine(platform.RedactText(p.Message)), watch.MaxMessage)
+	phrase := "finished"
+	if p.State == watch.StateFailed {
+		phrase = "failed"
+	}
+	sum := "Check " + j.Ref + " " + phrase
+	if msg != "" {
+		sum += ": " + msg
+	}
+	return systemNote{Type: store.NoteJob, Refs: []string{j.ID, j.Ref},
+		Summary: sum, Body: "Read the report with {{tool:assess_status}} and report it as skill result-check says."}
 }
 
 // wakeForNote hands a note of a plan to the agent: a live chat that is not working gets it at once, a

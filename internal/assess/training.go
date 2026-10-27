@@ -655,7 +655,7 @@ func (s *Service) assessModel(ctx context.Context, chatID string, req platform.R
 		return errResult(err.Error()), nil
 	}
 	return jsonResult(assessAnswer{CheckID: id, State: store.AssessQueued,
-		Note: "follow it with {{tool:assess_status}}; the gateway also wakes you when it is done"})
+		Note: "follow it with {{tool:assess_status}}; the gateway tells you when it is done while this chat is open (a resting chat is woken for the final test of a search and for plan steps)"})
 }
 
 // modelSubject is the subject of a check on a platform model (R0: subject "model:<id>").

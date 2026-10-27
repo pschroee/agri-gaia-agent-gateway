@@ -261,7 +261,7 @@ var assessModel = Tool{
 	Desc: "Starts a check of a result: the gateway runs the model in a container of its own on images the model " +
 		"did not see and reports accuracy, the figures per class, the majority baseline and a verdict " +
 		"(usable, questionable, not measured). It answers at once with a check_id; follow it with {{tool:assess_status}}, whose " +
-		"report starts with the header to begin your reply with (the gateway also wakes you when it is done). " +
+		"report starts with the header to begin your reply with (the gateway tells you when it is done while this chat is open; a resting chat is woken for the final test of a search and for plan steps). " +
 		"final=true measures the hold-out set and works once per dataset and chat: use it only when the model will not " +
 		"change any more; compare a retrained model with final=false. Needs approval; it downloads the model, the " +
 		"training log and the datasets (which syncs their CVAT annotations) and reads the model's own figures. " +
