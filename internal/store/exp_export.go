@@ -94,6 +94,14 @@ const messageTextSQL = `COALESCE(
   CASE WHEN jsonb_typeof(m.message->'content') = 'string' THEN m.message->>'content' END,
   '')`
 
+// turnOfCallSQL finds the turn a call belongs to: the last turn of the same chat that began at or before the call.
+// A call before the first turn has none (NULL). It needs no column written at call time, so it also holds for runs
+// recorded earlier.
+func turnOfCallSQL(alias, timeCol string) string {
+	return `LEFT JOIN LATERAL (SELECT ct.id FROM chat_turns ct WHERE ct.chat_id = ` + alias + `.chat_id AND ct.created_at <= ` +
+		alias + `.` + timeCol + ` ORDER BY ct.id DESC LIMIT 1) tt ON true`
+}
+
 // ExportNames lists the tables of the export in the order of the manifest.
 func ExportNames() []string { return append([]string(nil), exportTables...) }
 
@@ -107,24 +115,27 @@ func (s *Store) ExportTable(ctx context.Context, plan, table string) (*ExportTab
 			[]string{"run_id", "cell", "task", "rep", "id", "chat_id", "slot_id", "via", "op", "detail", "result", "created_at",
 				"session", "tool_call_id", "duration_ms", "effect", "decision", "reason", "rule", "body", "body_truncated",
 				"body_in_sha256", "call_ref", "call_ref_source", "call_ref_candidates", "call_ref_claimed", "within_delegation",
-				"approval_id", "approval_decision", "plan_step"},
+				"approval_id", "approval_decision", "plan_step", "turn_id"},
 			`SELECT r.run_id, r.cell, r.task, r.rep, s.id, COALESCE(s.chat_id::text,''), s.slot_id, s.via, s.op, s.detail, s.result,
   s.created_at, s.session, s.tool_call_id, s.duration_ms, COALESCE(s.effect,''), COALESCE(s.decision,''), COALESCE(s.reason,''),
   s.rule, CASE WHEN s.body IS NULL THEN NULL ELSE convert_from(s.body,'UTF8') END, s.body_truncated,
   COALESCE(s.body_in_sha256,''), COALESCE(s.call_ref,''), COALESCE(s.call_ref_source,''), s.call_ref_candidates,
   COALESCE(s.call_ref_claimed,''), s.within_delegation, COALESCE(s.approval_id::text,''), COALESCE(s.approval_decision,''),
-  s.plan_step
+  s.plan_step, tt.id
 FROM socket_calls s JOIN plan_chats r ON r.chat_id = s.chat_id
+`+turnOfCallSQL("s", "created_at")+`
 WHERE s.op = 'platform' ORDER BY s.id`)
 	case "tool_executions":
 		return s.exportQuery(ctx, plan, table,
 			[]string{"run_id", "cell", "task", "rep", "id", "chat_id", "slot_id", "session", "tool_call_id", "tool", "op", "args",
 				"exit_code", "error", "output_excerpt", "output_sha256", "output_bytes", "started_at", "duration_ms",
-				"args_truncated", "command_bytes", "command_sha256"},
+				"args_truncated", "command_bytes", "command_sha256", "turn_id"},
 			`SELECT r.run_id, r.cell, r.task, r.rep, e.id, COALESCE(e.chat_id::text,''), e.slot_id, e.session, e.tool_call_id,
   e.tool, e.op, e.args, e.exit_code, e.error, e.output_excerpt, e.output_sha256, e.output_bytes, e.started_at,
-  e.duration_ms, e.args_truncated, e.command_bytes, COALESCE(e.command_sha256,'')
-FROM tool_executions e JOIN plan_chats r ON r.chat_id = e.chat_id ORDER BY e.id`)
+  e.duration_ms, e.args_truncated, e.command_bytes, COALESCE(e.command_sha256,''), tt.id
+FROM tool_executions e JOIN plan_chats r ON r.chat_id = e.chat_id
+`+turnOfCallSQL("e", "started_at")+`
+ORDER BY e.id`)
 	case "llm_calls":
 		return s.exportQuery(ctx, plan, table,
 			[]string{"run_id", "cell", "task", "rep", "id", "chat_id", "slot_id", "model", "response_id", "status",
@@ -137,10 +148,15 @@ FROM llm_calls x JOIN plan_chats r ON r.chat_id = x.chat_id ORDER BY x.id`)
 	case "turns":
 		return s.exportQuery(ctx, plan, table,
 			[]string{"run_id", "cell", "task", "rep", "id", "chat_id", "trigger", "origin", "sources", "queue_ids",
-				"created_at", "abort_reason"},
+				"created_at", "abort_reason", "user_seq", "user_text"},
+			// The user's request of a turn is the first user message that carries the turn's id; a turn without
+			// a user message (a wake-up) has none: user_seq NULL, user_text empty.
 			`SELECT r.run_id, r.cell, r.task, r.rep, t.id, t.chat_id::text, t.trigger, t.origin, t.sources, t.queue_ids,
-  t.created_at, COALESCE(t.abort_reason,'')
-FROM chat_turns t JOIN plan_chats r ON r.chat_id = t.chat_id ORDER BY t.id`)
+  t.created_at, COALESCE(t.abort_reason,''), u.seq, COALESCE(u.text,'')
+FROM chat_turns t JOIN plan_chats r ON r.chat_id = t.chat_id
+LEFT JOIN LATERAL (SELECT m.seq, `+messageTextSQL+` AS text FROM chat_messages m
+  WHERE m.chat_id = t.chat_id AND m.turn_id = t.id AND m.role = 'user' ORDER BY m.seq LIMIT 1) u ON true
+ORDER BY t.id`)
 	case "messages":
 		return s.exportQuery(ctx, plan, table,
 			[]string{"run_id", "cell", "task", "rep", "chat_id", "seq", "role", "text", "message", "created_at", "turn_id"},
@@ -254,8 +270,12 @@ func (s *Store) exportRuns(ctx context.Context, plan string) (*ExportTable, erro
 	}
 	cols := []string{"run_id", "cell", "task", "rep", "id", "chat_id", "model", "model_role", "pass", "end_reason", "status",
 		"superseded_by", "binding", "protection", "attack", "started_at", "ended_at", "duration_ms", "gateway_version", "plan_sha256",
-		"image_pi", "image_exec", "catalog_sha256", "skills_sha256", "inference_runtime"}
+		"image_pi", "image_exec", "catalog_sha256", "skills_sha256", "inference_runtime", "first_user_text_sha256"}
 	out := &ExportTable{Name: "runs", Columns: cols}
+	firstSHA, err := s.firstUserTextSHA(ctx, runs)
+	if err != nil {
+		return nil, err
+	}
 	for _, r := range runs {
 		binding, protection, attack, role := cellParts(r.Cell)
 		var pass any
@@ -268,9 +288,39 @@ func (s *Store) exportRuns(ctx context.Context, plan string) (*ExportTable, erro
 		}
 		out.Rows = append(out.Rows, []any{r.RunID, r.Cell, r.Task, r.Rep, r.ID, r.ChatID, r.Model, role, pass,
 			r.EndReason, r.Status, r.SupersededBy, binding, protection, attack, r.StartedAt, r.EndedAt, dur, r.GatewayVersion, r.PlanSHA256,
-			r.ImagePi, r.ImageExec, r.CatalogSHA256, r.SkillsSHA256, r.InferenceRuntime})
+			r.ImagePi, r.ImageExec, r.CatalogSHA256, r.SkillsSHA256, r.InferenceRuntime, firstSHA[r.ChatID]})
 	}
 	return out, nil
+}
+
+// firstUserTextSHA maps each run's chat to the SHA-256 of the text of its first user message, so that a reader can
+// check that the run received exactly the task text without a second copy of the text in the export. A chat without
+// a user message is missing from the map (empty value in the export).
+func (s *Store) firstUserTextSHA(ctx context.Context, runs []PlanRun) (map[string]string, error) {
+	out := map[string]string{}
+	var ids []string
+	for _, r := range runs {
+		if isUUID(r.ChatID) {
+			ids = append(ids, r.ChatID)
+		}
+	}
+	if len(ids) == 0 {
+		return out, nil
+	}
+	rows, err := s.pool.Query(ctx, `SELECT DISTINCT ON (m.chat_id) m.chat_id::text, encode(sha256(convert_to(`+messageTextSQL+`, 'UTF8')), 'hex')
+FROM chat_messages m WHERE m.chat_id::text = ANY($1::text[]) AND m.role = 'user' ORDER BY m.chat_id, m.seq`, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var chatID, sum string
+		if err := rows.Scan(&chatID, &sum); err != nil {
+			return nil, err
+		}
+		out[chatID] = sum
+	}
+	return out, rows.Err()
 }
 
 // cellParts splits <binding>-<protection>-<attack>-<model>. A cell that does not follow the scheme leaves the

@@ -81,7 +81,7 @@ func TestExportOnlyPlanChats(t *testing.T) {
 		runs.Rows[0][idx(runs.Columns, "attack")] != "none" {
 		t.Fatalf("cell factors: %+v", runs.Rows[0])
 	}
-	if runs.Rows[0][idx(runs.Columns, "inference_runtime")] != "triton" || runs.Columns[len(runs.Columns)-1] != "inference_runtime" {
+	if runs.Rows[0][idx(runs.Columns, "inference_runtime")] != "triton" {
 		t.Fatalf("inference_runtime (#237): %+v", runs.Rows[0])
 	}
 	if runs.Rows[0][idx(runs.Columns, "pass")] != true || runs.Rows[0][idx(runs.Columns, "end_reason")] != "done" {
