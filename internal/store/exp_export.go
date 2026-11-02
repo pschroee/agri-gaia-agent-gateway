@@ -295,7 +295,9 @@ func (s *Store) exportRuns(ctx context.Context, plan string) (*ExportTable, erro
 }
 
 // firstUserTextSHA maps each run's chat to the SHA-256 of the text of its first user message, so that a reader can
-// check that the run received exactly the task text without a second copy of the text in the export. A chat without
+// check that the run received exactly the task text without a second copy of the text in the export. The hash is
+// the one the gateway stored for the user's own text (sources[].text_sha256), so the rights instruction of the
+// levels instruction and service does not change it; messages from before it was stored hash the whole text. A chat without
 // a user message is missing from the map (empty value in the export).
 func (s *Store) firstUserTextSHA(ctx context.Context, runs []PlanRun) (map[string]string, error) {
 	out := map[string]string{}
@@ -308,7 +310,12 @@ func (s *Store) firstUserTextSHA(ctx context.Context, runs []PlanRun) (map[strin
 	if len(ids) == 0 {
 		return out, nil
 	}
-	rows, err := s.pool.Query(ctx, `SELECT DISTINCT ON (m.chat_id) m.chat_id::text, encode(sha256(convert_to(`+messageTextSQL+`, 'UTF8')), 'hex')
+	rows, err := s.pool.Query(ctx, `SELECT DISTINCT ON (m.chat_id) m.chat_id::text, COALESCE(
+  (SELECT x.e->>'text_sha256'
+     FROM jsonb_array_elements(CASE WHEN jsonb_typeof(m.sources) = 'array' THEN m.sources ELSE '[]'::jsonb END)
+          WITH ORDINALITY AS x(e, ord)
+    WHERE x.e->>'kind' = 'user' AND COALESCE(x.e->>'text_sha256', '') <> '' ORDER BY x.ord LIMIT 1),
+  encode(sha256(convert_to(`+messageTextSQL+`, 'UTF8')), 'hex'))
 FROM chat_messages m WHERE m.chat_id::text = ANY($1::text[]) AND m.role = 'user' ORDER BY m.chat_id, m.seq`, ids)
 	if err != nil {
 		return nil, err

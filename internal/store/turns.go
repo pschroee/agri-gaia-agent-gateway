@@ -43,6 +43,9 @@ type Source struct {
 	Context *PageContext `json:"context,omitempty"`
 	// SearchHint: this user part is the user's hint for the named training search (issue #168).
 	SearchHint *SearchHintRef `json:"search_hint,omitempty"`
+	// TextSHA256: for a user part the SHA-256 (hex) of the user's own text, without the notes of the orchestrator in
+	// the same message. The experiment export hashes this instead of the whole message (BM3).
+	TextSHA256 string `json:"text_sha256,omitempty"`
 }
 
 // SearchHintRef marks a message of the user as a hint for a training search.

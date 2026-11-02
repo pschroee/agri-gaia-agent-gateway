@@ -23,6 +23,7 @@ package chat
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"regexp"
 	"strings"
@@ -136,6 +137,10 @@ func composeMessage(entries []store.QueueEntry, notices ...*systemNote) composed
 			all.WriteString(n.Text())
 		}
 		src := store.Source{Kind: store.QueueUser, QueueID: e.ID}
+		if t != "" {
+			sum := sha256.Sum256([]byte(t))
+			src.TextSHA256 = hex.EncodeToString(sum[:])
+		}
 		if e.SearchHint != "" {
 			src.SearchHint = &store.SearchHintRef{SearchID: e.SearchHint}
 		}

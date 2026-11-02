@@ -133,3 +133,28 @@ func TestExportRunsFirstUserTextSHA(t *testing.T) {
 		t.Errorf("t2 without a message: %v", byTask["t2"])
 	}
 }
+
+// The hash covers the user's own text, not the rights instruction that stands in the same message (levels instruction
+// and service): the stored text_sha256 of the user part wins.
+func TestExportRunsFirstUserTextSHAIgnoresNote(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	chat := codingRun(t, s, "t3", 1)
+	task := "Aufgabe: Zähle die Autos."
+	sum := sha256.Sum256([]byte(task))
+	want := hex.EncodeToString(sum[:])
+	msg := `{"role":"user","content":[{"type":"text","text":"[Note from the orchestrator, not from the user]\nrights\n\nAufgabe: Zähle die Autos."}]}`
+	if _, err := s.AppendMessage(ctx, chat, json.RawMessage(msg)); err != nil {
+		t.Fatal(err)
+	}
+	src := `[{"kind":"system","type":"rights_instruction"},{"kind":"user","text_sha256":"` + want + `"}]`
+	if _, err := s.pool.Exec(ctx, `UPDATE chat_messages SET sources=$2::jsonb WHERE chat_id=$1 AND role='user'`, chat, src); err != nil {
+		t.Fatal(err)
+	}
+	_, rows := exportRows(t, s, "runs")
+	for _, r := range rows {
+		if r["task"] == "t3" && r["first_user_text_sha256"] != want {
+			t.Fatalf("t3: %v, expected %s", r["first_user_text_sha256"], want)
+		}
+	}
+}
