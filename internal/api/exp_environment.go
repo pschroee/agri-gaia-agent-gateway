@@ -12,12 +12,12 @@ package api
 import (
 	"net/http"
 	"sort"
-	"strings"
 
 	"agw/internal/chat"
 	"agw/internal/config"
 	"agw/internal/exp"
 	"agw/internal/platform"
+	"agw/internal/toolset"
 	"agw/internal/version"
 )
 
@@ -62,7 +62,7 @@ func (s *Server) environment() exp.Environment {
 	piImages, execImages := map[string]bool{}, map[string]bool{}
 	if s.Pool != nil {
 		for _, in := range s.Pool.Snapshot() {
-			if !strings.HasPrefix(in.Variant, "exp:") {
+			if _, experiment := toolset.SplitExperiment(in.Variant); !experiment {
 				continue
 			}
 			slot := exp.EnvironmentSlot{ID: in.ID, Variant: in.Variant, State: string(in.State), ChatID: in.ChatID}
