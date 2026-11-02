@@ -511,6 +511,24 @@ func (m *Manager) RequestInternet(ctx context.Context, chatID, slotID, via strin
 		return sock.UploadResult{}, err
 	}
 	_ = m.st.SetGrantApproval(ctx, g.ID, ap.ID)
+	if decided, ok, derr := m.experimentDecides(ctx, chatID, ap); ok || derr != nil {
+		// BM2: in an experiment chat the profile decides: a grant only in a task with internet "request".
+		bg := context.WithoutCancel(ctx)
+		if derr != nil {
+			_, _ = m.st.CloseGrant(bg, g.ID, store.GrantRejected)
+			return sock.UploadResult{}, derr
+		}
+		if decided.State != store.ApprovalApproved {
+			_, _ = m.st.CloseGrant(bg, g.ID, store.GrantRejected)
+			m.publishChat(bg, chatID)
+			return sock.UploadResult{Status: "rejected", Name: "internet", Message: ReasonExperimentNoInternet, Log: "rejected: " + ReasonExperimentNoInternet}, nil
+		}
+		started, err := m.activateGrant(bg, g.ID)
+		if err != nil {
+			return sock.UploadResult{}, err
+		}
+		return sock.UploadResult{Status: "approved", Name: "internet", Message: fmt.Sprintf("%s (grant %d)", describeGrant(started), started.ID)}, nil
+	}
 	w := m.broker.Register(ap.ID)
 	if s, ok := m.pool.Get(slotID); ok {
 		s.SetActivity("waiting_approval", "")
@@ -742,7 +760,7 @@ func (m *Manager) startUserFullGrant(ctx context.Context, chatID, origin, via st
 }
 
 // SetInternet runs under the chat lock. The old switch is now a full grant: on starts one with the default limits
-// (unless a full grant is active), off ends all grants. Experiment chats never get internet.
+// (unless a full grant is active), off ends all grants. Experiment chats get internet only by a request in a task that allows it (BM2), never by the switch.
 func (m *Manager) SetInternet(ctx context.Context, chatID string, on bool) (ChatView, error) {
 	return m.setInternet(ctx, chatID, on, false)
 }
@@ -759,8 +777,13 @@ func (m *Manager) SetInternetByUser(ctx context.Context, chatID string, on bool)
 const ViaUser = "user"
 
 func (m *Manager) setInternet(ctx context.Context, chatID string, on, byUser bool) (ChatView, error) {
-	if _, err := m.st.GetChat(ctx, chatID); err != nil {
+	c, err := m.st.GetChat(ctx, chatID)
+	if err != nil {
 		return ChatView{}, err
+	}
+	if on && c.Experiment != nil {
+		// BM2: an experiment chat has no switch; internet comes only from a request that the profile decides.
+		return ChatView{}, fmt.Errorf("%w: an experiment chat has no internet switch", ErrInvalid)
 	}
 	var switchedOn int64
 	var ended []int64

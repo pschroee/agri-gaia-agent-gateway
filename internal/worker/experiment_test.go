@@ -224,3 +224,36 @@ func TestPlatformExpIsGenerated(t *testing.T) {
 		t.Errorf("build script runs in %d images, want 2 (pi and exec)", n)
 	}
 }
+
+// BM2: a slot of a task that may request internet has the product's lines on requesting it; the plain
+// experiment slot has none.
+func TestSystemNoteExpNetHasInternetNote(t *testing.T) {
+	note := SystemNoteFor("exp-net:cli", 4, nil, "")
+	if !strings.Contains(note, "request it with a short reason") || !strings.Contains(note, "Internet is off by default") {
+		t.Errorf("exp-net note lacks the internet lines:\n%s", note)
+	}
+	if strings.Contains(note, "start subagents") {
+		t.Errorf("exp-net note describes subagents:\n%s", note)
+	}
+}
+
+func TestSystemNoteExpHasNone(t *testing.T) {
+	note := SystemNoteFor("exp:cli", 4, nil, "")
+	if strings.Contains(note, "Internet is off by default") || strings.Contains(note, "request it with a short reason") {
+		t.Errorf("exp note has internet lines:\n%s", note)
+	}
+}
+
+// BM2: the internet tools of REST and MCP stay in an exp-net slot and are hidden in an exp slot.
+func TestExpNetKeepsInternetTools(t *testing.T) {
+	for _, variant := range []string{"exp:api", "exp-net:api"} {
+		args, err := PiArgs(variant, "p", "m")
+		if err != nil {
+			t.Fatalf("%s: %v", variant, err)
+		}
+		has := slices.Contains(argTools(t, args), "request_internet")
+		if has != (variant == "exp-net:api") {
+			t.Errorf("%s: request_internet present=%v", variant, has)
+		}
+	}
+}

@@ -95,9 +95,6 @@ func (m *Manager) ProposeSearch(ctx context.Context, chatID, slotID, via string,
 	if m.inTrash(ctx, chatID) {
 		return platform.Result{Status: "error", Message: platform.RefusedPrefix + trashRefusal}, nil
 	}
-	if m.experimentOf(ctx, chatID) != nil {
-		return searchErr(platform.RefusedPrefix + "a training search is not available in an experiment chat")
-	}
 	p, err := search.ParseProposal(req.Form, platform.NotebookTimeoutMax)
 	if err != nil {
 		return searchErr(err.Error())
@@ -227,6 +224,25 @@ func (m *Manager) ProposeSearch(ctx context.Context, chatID, slotID, via string,
 		ToolCallID: store.ToolCallFrom(ctx), Search: raw})
 	if err != nil {
 		return platform.Result{}, err
+	}
+	if decided, ok, derr := m.experimentDecides(ctx, chatID, ap); ok || derr != nil {
+		// BM2: in an experiment chat the profile decides; the search starts as after the user's click.
+		if derr != nil {
+			return platform.Result{}, derr
+		}
+		bg := context.WithoutCancel(ctx)
+		done, err := d.decide(bg, decided.State)
+		m.publishChat(bg, chatID)
+		if err != nil {
+			if errors.Is(err, store.ErrSearchRunning) {
+				return searchErr("another training search is running in this chat")
+			}
+			return platform.Result{}, err
+		}
+		if !done {
+			return searchErr("search was decided elsewhere; nothing executed")
+		}
+		return platform.Result{Status: "ok", HTTPStatus: 200, Body: approvedSearchText(searchID, p, data)}, nil
 	}
 	w := m.broker.Register(ap.ID)
 	if s, ok := m.pool.Get(slotID); ok {

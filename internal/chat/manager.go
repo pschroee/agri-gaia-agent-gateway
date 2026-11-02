@@ -733,7 +733,7 @@ func (m *Manager) Create(ctx context.Context, req NewChat) (ChatView, error) {
 			}
 			base = ts
 		}
-		req.Variant = toolset.ExperimentPrefix + base.Key()
+		req.Variant = toolset.ExperimentVariant(base.Key(), experiment.Internet == "request")
 	} else {
 		if req.Variant != "" {
 			ts, err := toolset.FromVariant(req.Variant)
@@ -751,8 +751,8 @@ func (m *Manager) Create(ctx context.Context, req NewChat) (ChatView, error) {
 		internet = *req.Internet
 	}
 	if experiment != nil {
-		// X0/X1: the experiment runs without internet, and without a way to request it (the tools
-		// for that are not in its slots either).
+		// X0/X1: the experiment starts without internet. BM2: a task with internet "request" may ask for it
+		// (variant exp-net:); the grant comes only from that request, which the profile decides.
 		internet = false
 	}
 	// Without a title it counts as a placeholder; Send replaces it with the first question
@@ -923,7 +923,7 @@ func (m *Manager) attachSlot(ctx context.Context, c store.Chat, session []byte, 
 	}
 	key := ts.Key()
 	if experiment {
-		key = toolset.ExperimentPrefix + key
+		key = toolset.ExperimentVariant(key, toolset.ExperimentInternet(c.Variant))
 	}
 	if slot == nil {
 		if slot, err = m.pool.AcquireWait(ctx, key, c.ID, m.opt.AcquireTimeout); err != nil {
@@ -2535,20 +2535,17 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 		approvalID, approvalBy = ap.ID, "user"
 		bg := context.WithoutCancel(ctx)
 		var final string
-		if inExperiment {
-			// X0.9: in an experiment chat the gateway decides instead of the user. The approval stays in
+		if decided, ok, derr := m.experimentDecides(ctx, chatID, ap); ok || derr != nil {
+			// X0.9/BM2: in an experiment chat the gateway decides instead of the user. The approval stays in
 			// the record with decided_by "experiment", and only the decided event goes out (no pending
 			// one, nobody waits for it).
-			decided, _, derr := m.st.DecideApprovalBy(ctx, ap.ID, store.ApprovalApproved, store.DecidedByExperiment)
 			if derr != nil {
 				return platform.Result{}, derr
 			}
 			ap = decided
-			final = store.ApprovalApproved
+			final = ap.State
 			approvalBy = store.DecidedByExperiment
 			executedDecision = platform.DecisionApprovedAuto
-			m.publish(chatID, Event{Kind: "approval", Data: ap})
-			slog.Info("platform call approved by the experiment profile", "chat", chatID, "approval", ap.ID, "call", req.String(), "via", via)
 		} else {
 			w := m.broker.Register(ap.ID)
 			if s, ok := m.pool.Get(slotID); ok {

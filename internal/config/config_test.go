@@ -487,3 +487,12 @@ func TestConfigNotebookGPU(t *testing.T) {
 		}
 	}
 }
+
+// BM2: AGW_EXPERIMENT_POOL may name a slot of a task that requests internet; the prefix is kept.
+func TestEnvExperimentPoolNet(t *testing.T) {
+	t.Setenv("AGW_EXPERIMENT_POOL", "exp-net:cli=1, exp:cli=2, exp-net:shell=1")
+	e := FromEnv()
+	if len(e.ExperimentPool) != 2 || e.ExperimentPool["exp-net:cli"] != 1 || e.ExperimentPool["exp:cli"] != 2 {
+		t.Fatalf("pool targets: %v", e.ExperimentPool)
+	}
+}

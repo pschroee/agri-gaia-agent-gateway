@@ -135,3 +135,28 @@ func TestSplitExperiment(t *testing.T) {
 		t.Fatal("ValidVariant")
 	}
 }
+
+// BM2: the variant of a task that may request internet.
+func TestVariantExpNet(t *testing.T) {
+	if !ValidVariant("exp-net:cli") || !ValidVariant("exp-net:cli,api") {
+		t.Fatal("exp-net variants are not valid")
+	}
+	if ValidVariant("exp-net:nope") {
+		t.Fatal("exp-net with an unknown binding is valid")
+	}
+	if base, ok := SplitExperiment("exp-net:cli"); base != "cli" || !ok {
+		t.Fatalf("split exp-net: %q %v", base, ok)
+	}
+	if base, ok := SplitExperiment("exp:cli"); base != "cli" || !ok {
+		t.Fatalf("split exp: %q %v", base, ok)
+	}
+	if base, ok := SplitExperiment("cli"); base != "cli" || ok {
+		t.Fatalf("split product: %q %v", base, ok)
+	}
+	if !ExperimentInternet("exp-net:cli") || ExperimentInternet("exp:cli") || ExperimentInternet("cli") {
+		t.Fatal("ExperimentInternet")
+	}
+	if ExperimentVariant("mcp", true) != "exp-net:mcp" || ExperimentVariant("mcp", false) != "exp:mcp" {
+		t.Fatal("ExperimentVariant")
+	}
+}
