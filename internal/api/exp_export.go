@@ -8,10 +8,13 @@ package api
 // experiment key reaches it (auth middleware). The CLI writes the files, the CSV forms and the manifest.
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"slices"
 
+	"agw/internal/chat"
 	"agw/internal/store"
 	"agw/internal/version"
 )
@@ -60,19 +63,28 @@ func (s *Server) exportTable(r *http.Request, plan, table string) (*store.Export
 	if table != "reconcile" {
 		return s.M.Store().ExportTable(r.Context(), plan, table)
 	}
-	cols := []string{"run_id", "cell", "task", "rep", "tool_call_id", "state", "tool", "executed_tool", "requested",
-		"executed", "main", "session", "llm_call_id", "response_id", "arguments", "requested_at", "started_at", "ops",
-		"reason", "exit_code", "error", "duration_ms", "output_sha256", "execution_ids"}
-	out := &store.ExportTable{Name: table, Columns: cols}
 	runs, err := s.M.Store().PlanRuns(r.Context(), plan)
 	if err != nil {
 		return nil, err
 	}
+	return reconcileTable(r.Context(), runs, s.M.ToolExecutions)
+}
+
+// reconcileTable builds the reconcile table from the executions of every run's chat. A run whose chat no longer
+// exists (deleted after the run) has no rows; it does not stop the export of the other runs.
+func reconcileTable(ctx context.Context, runs []store.PlanRun, read func(context.Context, string) (chat.Reconciliation, error)) (*store.ExportTable, error) {
+	cols := []string{"run_id", "cell", "task", "rep", "tool_call_id", "state", "tool", "executed_tool", "requested",
+		"executed", "main", "session", "llm_call_id", "response_id", "arguments", "requested_at", "started_at", "ops",
+		"reason", "exit_code", "error", "duration_ms", "output_sha256", "execution_ids"}
+	out := &store.ExportTable{Name: "reconcile", Columns: cols}
 	for _, run := range runs {
 		if run.ChatID == "" {
 			continue
 		}
-		rec, err := s.M.ToolExecutions(r.Context(), run.ChatID)
+		rec, err := read(ctx, run.ChatID)
+		if errors.Is(err, store.ErrNotFound) {
+			continue
+		}
 		if err != nil {
 			return nil, err
 		}

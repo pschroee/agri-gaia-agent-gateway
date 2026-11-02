@@ -5,9 +5,15 @@
 package api
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"agw/internal/chat"
+	"agw/internal/store"
 )
 
 // X5.7: /api/exp/* takes only the separate experiment key, never the normal API token.
@@ -45,5 +51,29 @@ func TestExpExportUnknownTable(t *testing.T) {
 	s.expExport(w, r)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("code: %d", w.Code)
+	}
+}
+
+// A run whose chat was deleted has no reconcile rows and does not stop the export of the other runs.
+func TestReconcileTableSkipsDeletedChat(t *testing.T) {
+	runs := []store.PlanRun{{RunID: "a", ChatID: "gone"}, {RunID: "b", ChatID: "here"}, {RunID: "c"}}
+	read := func(_ context.Context, id string) (chat.Reconciliation, error) {
+		if id == "gone" {
+			return chat.Reconciliation{}, fmt.Errorf("chat: %w", store.ErrNotFound)
+		}
+		return chat.Reconciliation{Calls: []chat.ReconciledCall{{ToolCallID: "t1"}}}, nil
+	}
+	tbl, err := reconcileTable(context.Background(), runs, read)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tbl.Rows) != 1 || tbl.Rows[0][0] != "b" {
+		t.Fatalf("rows: %v", tbl.Rows)
+	}
+	boom := func(context.Context, string) (chat.Reconciliation, error) {
+		return chat.Reconciliation{}, errors.New("db down")
+	}
+	if _, err := reconcileTable(context.Background(), runs, boom); err == nil {
+		t.Fatal("other errors must still stop the export")
 	}
 }
