@@ -226,13 +226,43 @@ func TestImagesPipLocked(t *testing.T) {
 		t.Fatal("MARKITDOWN_VERSION not found")
 	}
 	for _, w := range []string{"onnxruntime==1.30.0", "plotly==7.1.0", "kaleido==1.5.0", "choreographer==1.4.0",
-		"markitdown==" + md[1], "nbformat==5.10.4", "nbclient==0.10.4", "ipykernel==7.2.0"} {
+		"markitdown==" + md[1], "opencv-python-headless==4.14.0.94", "nbformat==5.10.4", "nbclient==0.10.4", "ipykernel==7.2.0"} {
 		if !pins[w] {
 			t.Errorf("requirements.lock lacks %s", w)
 		}
 	}
 	if strings.Contains(lock, "onnxruntime==1.20") {
 		t.Error("onnxruntime 1.20 in the lock; the image runs 1.30.0")
+	}
+}
+
+// BM4: the exec image decodes MP4 clips with the wheels of opencv-python-headless (FFmpeg inside). The lock holds
+// wheels for both architectures, the same version is pinned in the notebook image (Dockerfile.agent of the platform fork),
+// the sandbox skills say that cv2 is there, and check-video.py proves it inside the built image.
+func TestImagesOpencvVideo(t *testing.T) {
+	lock := repoFile(t, "images/agw-basis/python/requirements.lock")
+	m := regexp.MustCompile(`(?m)^opencv-python-headless==(\S+) \\\n((?:    --hash=sha256:[0-9a-f]{64}(?: \\)?\n)+)`).FindStringSubmatch(lock)
+	if m == nil {
+		t.Fatal("requirements.lock lacks opencv-python-headless with hashes")
+	}
+	// x86_64 and aarch64 each have a manylinux2014 and a manylinux_2_28 wheel
+	if n := strings.Count(m[2], "--hash=sha256:"); n < 2 {
+		t.Errorf("opencv-python-headless has %d hashes, want wheels for both architectures", n)
+	}
+	if !strings.Contains(lock, "# Direct:") || !regexp.MustCompile(`# Direct:[^\n]*opencv-python-headless`).MatchString(lock) {
+		t.Error("the Direct: list of the lock does not name opencv-python-headless")
+	}
+	if !strings.Contains(repoFile(t, "images/agw-basis/skills/platform/SKILL.md"), "cv2.VideoCapture") {
+		t.Error("the platform skill does not mention cv2.VideoCapture")
+	}
+	if !strings.Contains(repoFile(t, "images/agw-basis/skills/notebook/SKILL.md"), "cv2") {
+		t.Error("the notebook skill does not mention cv2")
+	}
+	v := repoFile(t, "images/check-video.py")
+	for _, w := range []string{"cv2.VideoWriter", "CAP_PROP_FRAME_COUNT", "== 10"} {
+		if !strings.Contains(v, w) {
+			t.Errorf("check-video.py lacks %q", w)
+		}
 	}
 }
 

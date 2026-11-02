@@ -119,6 +119,11 @@ Keywords (`--keywords`) are **AGROVOC URIs** for both, not free words; search wi
 `agw-platform request GET /agrovoc/keywords --query keyword=pig`. The orchestrator never sets "Classification Dataset" (otherwise a bug in the platform discards the
 classes); the classes go via `--annotation-labels`.
 
+## Video clips
+
+Video: `cv2.VideoCapture(path)`; MP4 (H.264) is supported in the sandbox and in notebook runs. There is no `ffmpeg`
+command; read frames with `cv2` (`CAP_PROP_FRAME_COUNT`, `set(cv2.CAP_PROP_POS_FRAMES, n)`, `read()`).
+
 ## Renaming and model metadata
 
 - `agw-platform rename-dataset <dataset_id> <name>` renames a dataset. The name may only contain letters,

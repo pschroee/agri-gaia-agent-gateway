@@ -7,7 +7,7 @@
 # an exact version and the sha256 of its wheels for CPython 3.11 (Debian 12), x86_64 (server) and aarch64 (Mac). Nothing
 # moves on a rebuild; a package that PyPI removed fails the build. Internet is off in the sandbox, so the agent cannot
 # repair a broken package later.
-# Direct: numpy pandas matplotlib jinja2 openpyxl plotly kaleido choreographer onnxruntime nbformat nbclient ipykernel
+# Direct: numpy pandas matplotlib jinja2 openpyxl plotly kaleido choreographer onnxruntime opencv-python-headless nbformat nbclient ipykernel
 # markitdown[docx,xlsx,xls,pptx,outlook,pdf]. The rest are their dependencies (pip freeze of the image of 2026-10-27).
 # To bump: edit the versions, run `python3 -I images/agw-basis/python/hash-lock.py images/agw-basis/python/requirements.lock`,
 # check images/check-artifacts.py, rebuild with --no-cache and compare `pip freeze`.
@@ -142,6 +142,11 @@ olefile==0.47 \
 onnxruntime==1.30.0 \
     --hash=sha256:bac3aee7b40acd805659fd81a2acd6096312d5b0f014c97ddfe75fb4c1644627 \
     --hash=sha256:fd54b314ea385bcecac69ab431f020ba503e3878dad4ebb645fec5a24b041242
+opencv-python-headless==4.14.0.94 \
+    --hash=sha256:211e581f5a4670acbbe08fff36a35e9946039d2eea28b80394632d036d1be527 \
+    --hash=sha256:29714d7716dbfddf9fec20ffb878765e94ccaecd7d3ebd6750877420296e2dc5 \
+    --hash=sha256:5e02669eac0ba67b2a22d7245af1e8ee1a2ef1185ee526a063d8f0555224bd52 \
+    --hash=sha256:97c6e818c6f71c0cfa214e12293b1d0266d679c38f4e086de08357c8ac6ece0d
 openpyxl==3.1.5 \
     --hash=sha256:5282c12b107bffeef825f4617dc029afaf41d0ea60823bbb665ef3079dc79de2
 packaging==26.3 \
