@@ -35,3 +35,18 @@ func (c *Client) ExportTable(ctx context.Context, plan, table string) (*Exported
 	}
 	return out, nil
 }
+
+// ExpWorkspace streams the archive of one experiment run's working directory (GET /api/exp/workspace) into w and
+// returns the SHA-256 the gateway recorded for it. A chat without an archive gives an *APIError with status 404 whose
+// message says why. The caller compares the checksum with what it received.
+func (c *Client) ExpWorkspace(ctx context.Context, chat string, w io.Writer) (string, error) {
+	resp, err := c.request(ctx, "GET", "/api/exp/workspace?"+url.Values{"chat": {chat}}.Encode(), nil, "")
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if _, err := io.Copy(w, resp.Body); err != nil {
+		return "", err
+	}
+	return resp.Header.Get("X-Agw-Workspace-SHA256"), nil
+}

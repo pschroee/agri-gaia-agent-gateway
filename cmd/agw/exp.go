@@ -9,10 +9,12 @@ import (
 	"encoding/csv"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"hash"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
@@ -571,7 +573,8 @@ func (a *app) cmdExpExport(args []string) error {
 	planFile := fs.String("plan-file", "", "plan file for model roles and cell factors")
 	out := fs.String("out", "", "directory for the export")
 	format := fs.String("format", "jsonl,csv", "comma-separated: jsonl, csv")
-	if _, err := a.parse(fs, args, 0, 0, "agw exp export --plan <name|file> --out <dir> [--format jsonl,csv]"); err != nil {
+	workspaces := fs.Bool("workspaces", false, "also fetch the agent's working directory of each run into <out>/workspaces/")
+	if _, err := a.parse(fs, args, 0, 0, "agw exp export --plan <name|file> --out <dir> [--format jsonl,csv] [--workspaces]"); err != nil {
 		return err
 	}
 	if *planArg == "" || *out == "" {
@@ -636,6 +639,7 @@ func (a *app) cmdExpExport(args []string) error {
 	}
 	files := make([]map[string]any, 0, len(agwExportNames)*2)
 	version := ""
+	var runRows []map[string]any
 	for _, table := range agwExportNames {
 		tbl, err := a.c.ExportTable(a.ctx, plan, table)
 		if err != nil {
@@ -650,6 +654,7 @@ func (a *app) cmdExpExport(args []string) error {
 			return fmt.Errorf("%s: %w", table, err)
 		}
 		if table == "runs" {
+			runRows = rows
 			enrichRuns(rows, roles, cells)
 			if planSHA == "" {
 				for _, row := range rows {
@@ -666,6 +671,13 @@ func (a *app) cmdExpExport(args []string) error {
 		}
 		files = append(files, entry...)
 		fmt.Fprintf(a.stdout, "%s: %d rows\n", table, len(rows))
+	}
+	if *workspaces {
+		entries, err := a.exportWorkspaces(*out, runRows)
+		if err != nil {
+			return err
+		}
+		files = append(files, entries...)
 	}
 	if version == "" {
 		version = gwversion.String()
@@ -725,7 +737,93 @@ func expLimitReport(limits exp.Limits, usage agwclient.ExpUsage) (map[string]any
 }
 
 // agwExportNames lists the files of the export in the order of the manifest (X5.7).
-var agwExportNames = []string{"runs", "platform_calls", "tool_executions", "llm_calls", "reconcile", "fixtures", "syscalls", "turns"}
+var agwExportNames = []string{"runs", "platform_calls", "tool_executions", "llm_calls", "reconcile", "fixtures", "syscalls", "turns",
+	"messages", "approvals", "internet_grants", "web_requests", "notebook_runs", "artifacts", "plan_steps"}
+
+// workspaceFileName turns the id of a run attempt (<plan>/<cell>/<task>/<rep>, with "#<n>" after a retry) into a file
+// name under workspaces/.
+func workspaceFileName(id string) string {
+	return strings.NewReplacer("/", "__", "#", "-attempt", "\\", "_").Replace(id) + ".tar.gz"
+}
+
+// exportWorkspaces fetches the stored working directory of every run attempt that has a chat and writes it as
+// workspaces/<attempt>.tar.gz (--workspaces, BM3). The archive is the tar.gz exactly as the gateway stored it; its
+// SHA-256 must equal the one the gateway recorded (chat_workspaces.sha256), else the export stops. A run without an
+// archive (never saved, skipped, or no chat) is noted in the manifest as {"run_id":…, "workspace":"skipped: <reason>"}
+// instead of failing the export.
+func (a *app) exportWorkspaces(out string, runs []map[string]any) ([]map[string]any, error) {
+	dir := filepath.Join(out, "workspaces")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, err
+	}
+	entries := []map[string]any{}
+	for _, run := range runs {
+		runID, _ := run["run_id"].(string)
+		id, _ := run["id"].(string)
+		if id == "" {
+			id = runID
+		}
+		chatID, _ := run["chat_id"].(string)
+		if chatID == "" {
+			entries = append(entries, map[string]any{"run_id": runID, "id": id, "workspace": "skipped: run has no chat"})
+			continue
+		}
+		name := "workspaces/" + workspaceFileName(id)
+		entry, err := a.fetchWorkspace(filepath.Join(out, filepath.FromSlash(name)), chatID)
+		if err != nil {
+			var ae *agwclient.APIError
+			if errors.As(err, &ae) && ae.Status == http.StatusNotFound {
+				entries = append(entries, map[string]any{"run_id": runID, "id": id, "workspace": "skipped: " + ae.Message})
+				continue
+			}
+			return nil, fmt.Errorf("workspace of %s: %w", id, err)
+		}
+		entry["name"] = name
+		entry["run_id"] = runID
+		entry["id"] = id
+		entry["chat_id"] = chatID
+		entries = append(entries, entry)
+		fmt.Fprintf(a.stdout, "%s: %d bytes\n", name, entry["bytes"])
+	}
+	return entries, nil
+}
+
+// fetchWorkspace writes one archive and checks it against the checksum the gateway recorded. A mismatch removes the
+// file and is an error.
+func (a *app) fetchWorkspace(path, chatID string) (map[string]any, error) {
+	f, err := os.Create(path)
+	if err != nil {
+		return nil, err
+	}
+	h := sha256.New()
+	cw := &countingWriter{w: io.MultiWriter(f, h)}
+	want, err := a.c.ExpWorkspace(a.ctx, chatID, cw)
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		os.Remove(path)
+		return nil, err
+	}
+	got := sumHex(h)
+	if want != "" && want != got {
+		os.Remove(path)
+		return nil, fmt.Errorf("archive checksum %s does not match the recorded %s", got, want)
+	}
+	return map[string]any{"bytes": cw.n, "sha256": got, "recorded_sha256": want, "workspace": "ok"}, nil
+}
+
+// countingWriter counts the bytes that pass through.
+type countingWriter struct {
+	w io.Writer
+	n int64
+}
+
+func (c *countingWriter) Write(p []byte) (int, error) {
+	n, err := c.w.Write(p)
+	c.n += int64(n)
+	return n, err
+}
 
 // readExportRows decodes a JSONL stream.
 func readExportRows(r io.Reader) ([]map[string]any, error) {

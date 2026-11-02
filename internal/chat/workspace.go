@@ -476,3 +476,33 @@ func truncate(s string, n int) string {
 	}
 	return s
 }
+
+// OpenExpWorkspace opens the stored archive of an experiment run's working directory for the export (BM3). Only a chat
+// that belongs to a recorded experiment run is served, and only an archive that was actually saved; the entry says why
+// otherwise. The archive is the tar.gz exactly as stored, its checksum is that of the entry. store.ErrNotFound when
+// there is nothing to serve.
+func (m *Manager) OpenExpWorkspace(ctx context.Context, chatID string) (io.ReadCloser, store.Workspace, error) {
+	ok, err := m.st.ChatInExpRun(ctx, chatID)
+	if err != nil {
+		return nil, store.Workspace{}, err
+	}
+	if !ok {
+		return nil, store.Workspace{}, fmt.Errorf("%w: chat is not an experiment run", store.ErrNotFound)
+	}
+	w, err := m.st.GetWorkspace(ctx, chatID)
+	if err != nil {
+		return nil, w, err
+	}
+	if w.ObjectKey == "" {
+		reason := "never backed up"
+		if w.SkippedReason != nil && *w.SkippedReason != "" {
+			reason = *w.SkippedReason
+		}
+		return nil, w, fmt.Errorf("%w: no workspace archive (%s)", store.ErrNotFound, reason)
+	}
+	rc, _, err := m.blobs.Get(ctx, w.ObjectKey)
+	if err != nil {
+		return nil, w, fmt.Errorf("storage: %w", err)
+	}
+	return rc, w, nil
+}
