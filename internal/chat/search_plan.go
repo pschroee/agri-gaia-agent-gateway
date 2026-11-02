@@ -28,7 +28,7 @@ import (
 // waits until the search ends and is done with the training container of the winner as its object.
 
 // searchStepProblems refuses what a plan with a search step cannot hold, for the proposal (issue #244, E4, E9): a
-// search in an experiment chat, and more compute calls than the chat has left, counting the trials of the search.
+// more compute calls than the chat has left, counting the trials of the search.
 func (m *Manager) searchStepProblems(ctx context.Context, chatID string, steps []store.PlanStep) error {
 	searches := 0
 	for _, st := range steps {
@@ -40,14 +40,6 @@ func (m *Manager) searchStepProblems(ctx context.Context, chatID string, steps [
 		return nil
 	}
 	var probs plan.Problems
-	if m.experimentOf(ctx, chatID) != nil {
-		for _, st := range steps {
-			if plan.IsSearchStep(st) {
-				probs = append(probs, plan.Problem{Step: st.Idx, Msg: "a training search is not available in an experiment chat"})
-			}
-		}
-		return probs
-	}
 	runs := plan.SearchRuns(steps)
 	need := plan.ComputeSteps(steps)
 	if left := m.computeLeft(ctx, chatID); need > left {

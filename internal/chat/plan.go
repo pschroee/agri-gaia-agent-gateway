@@ -181,6 +181,26 @@ func (m *Manager) ProposePlan(ctx context.Context, chatID, slotID, via string, r
 	if err := m.st.SetPlanApproval(ctx, pl.ID, ap.ID); err != nil {
 		return platform.Result{}, err
 	}
+	if decided, ok, derr := m.experimentDecides(ctx, chatID, ap); ok || derr != nil {
+		// BM2: in an experiment chat the profile decides; the plan runs as after the user's click.
+		if derr != nil {
+			return platform.Result{}, derr
+		}
+		bg := context.WithoutCancel(ctx)
+		done, err := d.decide(bg, decided.State)
+		m.publishChat(bg, chatID)
+		if err != nil {
+			return platform.Result{}, err
+		}
+		if !done {
+			return platform.Result{Status: "error", Message: "plan was decided elsewhere; nothing executed"}, nil
+		}
+		stored, err := m.st.GetPlan(bg, pl.ID)
+		if err != nil {
+			return platform.Result{}, err
+		}
+		return platform.Result{Status: "ok", HTTPStatus: 200, Body: plan.ApprovedText(stored)}, nil
+	}
 	w := m.broker.Register(ap.ID)
 	if s, ok := m.pool.Get(slotID); ok {
 		s.SetActivity("waiting_approval", "")
