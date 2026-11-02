@@ -600,16 +600,47 @@ func TestForTask(t *testing.T) {
 		{ID: "file-b", Kind: KindDatasetFile, Fields: map[string]FieldValue{"dataset": {Literal: "ds-b"}}},
 		{ID: "ds-c1", Kind: KindDataset, Cells: []string{"c1"}},
 	}
-	got := ForTask(ms, Task{Fixtures: []string{"ds-a", "ds-c1"}}, "c2")
+	got := ForTask(ms, Task{Fixtures: []string{"ds-a", "ds-c1"}}, Cell{ID: "c2"})
 	if len(got) != 2 || got[0].ID != "ds-a" || got[1].ID != "file-a" {
 		t.Fatalf("for c2: %+v", got)
 	}
-	got = ForTask(ms, Task{Fixtures: []string{"ds-a", "ds-c1"}}, "c1")
+	got = ForTask(ms, Task{Fixtures: []string{"ds-a", "ds-c1"}}, Cell{ID: "c1"})
 	if len(got) != 3 || got[2].ID != "ds-c1" {
 		t.Fatalf("for c1: %+v", got)
 	}
-	if got := ForTask(ms, Task{}, "c1"); len(got) != 0 {
+	if got := ForTask(ms, Task{}, Cell{ID: "c1"}); len(got) != 0 {
 		t.Fatalf("task without fixtures: %+v", got)
+	}
+}
+
+// BM1: an attack variant exists only in attack cells and takes the place of the harmless fixture it replaces;
+// its Ref is the id of the harmless fixture.
+func TestForTaskAttackVariant(t *testing.T) {
+	ms := []Manifest{
+		{ID: "ds-clean", Kind: KindDataset},
+		{ID: "file-clean", Kind: KindDatasetFile, Fields: map[string]FieldValue{"dataset": {Literal: "ds-clean"}}},
+		{ID: "ds-evil", Kind: KindDataset, Attack: true, Replaces: "ds-clean"},
+		{ID: "ds-extra", Kind: KindDataset, Attack: true},
+	}
+	task := Task{Fixtures: []string{"ds-clean"}, AttackFixtures: []string{"ds-evil", "ds-extra"}}
+	got := ForTask(ms, task, Cell{ID: "plain", Attack: false})
+	if len(got) != 2 || got[0].ID != "ds-clean" || got[0].Ref != "ds-clean" || got[1].ID != "file-clean" {
+		t.Fatalf("harmless cell: %+v", got)
+	}
+	got = ForTask(ms, task, Cell{ID: "attacked", Attack: true})
+	if len(got) != 2 {
+		t.Fatalf("attack cell: %+v", got)
+	}
+	if got[0].ID != "ds-evil" || got[0].Ref != "ds-clean" {
+		t.Fatalf("variant must replace the harmless fixture under its ref: %+v", got[0])
+	}
+	if got[1].ID != "ds-extra" || got[1].Ref != "ds-extra" {
+		t.Fatalf("an attack fixture without replaces keeps its own ref: %+v", got[1])
+	}
+	for _, f := range got {
+		if f.ID == "ds-clean" || f.ID == "file-clean" {
+			t.Fatalf("the replaced fixture and its files must not appear in an attack cell: %+v", got)
+		}
 	}
 }
 

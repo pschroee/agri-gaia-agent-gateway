@@ -44,6 +44,8 @@ func (s *Server) registerExp(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/exp/runs/stop", s.expOnly(s.expStopRun))
 	mux.HandleFunc("GET /api/exp/objects", s.expOnly(s.expObjects))
 	mux.HandleFunc("POST /api/exp/call", s.expOnly(s.expCall))
+	mux.HandleFunc("GET /api/exp/download", s.expOnly(s.expDownload))
+	mux.HandleFunc("GET /api/exp/dataset", s.expOnly(s.expDataset))
 	mux.HandleFunc("POST /api/exp/chats/abort", s.expOnly(s.expAbortChat))
 }
 

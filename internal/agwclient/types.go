@@ -363,6 +363,8 @@ type ExperimentProfile struct {
 	Limit string `json:"limit,omitempty"`
 	// Limits: the run's limits from the plan (#206); zero values mean the gateway's defaults.
 	Limits *ExpRunLimits `json:"limits,omitempty"`
+	// Internet: the task's field (BM1): off | request; empty means off.
+	Internet string `json:"internet,omitempty"`
 }
 
 // ExpRunLimits mirrors store.RunLimits (#206): tokens are input + output without cache reads (X3.3).

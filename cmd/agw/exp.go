@@ -62,6 +62,8 @@ type material struct {
 	Plan      *exp.Plan
 	Tasks     []exp.Task
 	Manifests []exp.Manifest
+	// Base is grundbestand.yaml next to the plan; nil when the file is missing (BM1).
+	Base *exp.BaseSet
 }
 
 // loadMaterial reads a plan directory (then plan.yaml is used) or a plan file.
@@ -77,6 +79,9 @@ func loadMaterial(path string) (*material, error) {
 		m.Plan, m.Tasks, m.Manifests, err = exp.LoadPlanFile(path)
 	}
 	if err != nil {
+		return nil, err
+	}
+	if m.Base, err = exp.LoadBaseSet(m.Dir); err != nil {
 		return nil, err
 	}
 	base := filepath.Base(m.Path)
@@ -311,9 +316,10 @@ func (a *app) cmdExpRun(args []string) error {
 	k := fs.Int("k", 0, "repetitions per task (default: the plan's k)")
 	seed := fs.Int64("seed", 0, "seed of the order (default: the plan's seed)")
 	dry := fs.Bool("dry-run", false, "print the order and change nothing")
+	collectDir := fs.String("collect-dir", defaultCollectDir, "directory for results a task collects before the cleanup (collect:)")
 	var cells multiFlag
 	fs.Var(&cells, "cell", "cell to run (repeatable; default: every cell of the plan)")
-	if _, err := a.parse(fs, args, 0, 0, "agw exp run --plan <dir|file> [--cell <id>]... [--k N] [--seed N] [--dry-run]"); err != nil {
+	if _, err := a.parse(fs, args, 0, 0, "agw exp run --plan <dir|file> [--cell <id>]... [--k N] [--seed N] [--collect-dir <dir>] [--dry-run]"); err != nil {
 		return err
 	}
 	if *path == "" {
@@ -339,7 +345,7 @@ func (a *app) cmdExpRun(args []string) error {
 		}
 		return errSilentFailure
 	}
-	opts := expRunOptions{PlanPath: *path, Cells: cells, K: *k, Seed: *seed, SeedSet: seedSet, DryRun: *dry}
+	opts := expRunOptions{PlanPath: *path, Cells: cells, K: *k, Seed: *seed, SeedSet: seedSet, DryRun: *dry, CollectDir: *collectDir}
 	if *dry {
 		return runExpPlan(a.ctx, nil, opts, a.stdout, a.stderr)
 	}
@@ -450,7 +456,7 @@ func (a *app) cmdExpAbort(args []string) error {
 // materialProblems checks the material of one plan: the format rules of X9 and, for a pilot, the
 // separation from the main runs (X7.1).
 func materialProblems(m *material) ([]exp.Problem, error) {
-	problems := exp.Validate(m.Plan, m.Tasks, m.Manifests)
+	problems := exp.ValidateWithBase(m.Plan, m.Tasks, m.Manifests, m.Base)
 	if m.Plan != nil && m.Plan.Purpose == exp.PurposePilot {
 		var mainTasks map[string]bool
 		if filepath.Base(m.Path) != "plan.yaml" {
@@ -754,6 +760,11 @@ func enrichRuns(rows []map[string]any, roles map[string]string, cells map[string
 				row["attack"] = "attack"
 			} else {
 				row["attack"] = "none"
+			}
+			// BM1: the role is the one the plan gives the cell; the cell identifier only ends with it.
+			if c.Model != "" {
+				row["model_role"] = c.Model
+				continue
 			}
 		}
 		if s, _ := row["model_role"].(string); s != "" {

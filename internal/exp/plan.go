@@ -16,6 +16,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -27,13 +28,20 @@ import (
 const (
 	PurposeMain  = "main"
 	PurposePilot = "pilot"
+	// PurposeBenchmark is a small, frozen plan without a minimum number of tasks (BM1).
+	PurposeBenchmark = "benchmark"
 )
 
-// Model roles. The second model only runs the cells for H1 and H2 (outline 7.1).
+// Model roles. The second model only runs the cells for H1 and H2 (outline 7.1). A benchmark plan
+// may name its roles freely (RoleName).
 const (
 	RoleMain   = "main"
 	RoleSecond = "second"
 )
+
+// RoleName is the pattern of a free model role in a benchmark plan. The cell identifier ends with
+// the role, so a role may contain hyphens but no upper case letters.
+var RoleName = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
 
 // Plan is the content of plan.yaml or pilot.yaml. The cells are listed explicitly: the second
 // model does not run every combination of the other factors.
@@ -61,7 +69,7 @@ type Cell struct {
 	Binding    string `yaml:"binding"`
 	Protection string `yaml:"protection"`
 	Attack     bool   `yaml:"attack"`
-	Model      string `yaml:"model"` // role of the model, main or second
+	Model      string `yaml:"model"` // role of the model: main or second; any RoleName in a benchmark plan
 	// Trace: syscall trace of this cell (X7.6/#152): on | off. Empty means on.
 	Trace string `yaml:"trace,omitempty"`
 }
@@ -214,6 +222,11 @@ func loadYAML[T any](path string) (*T, error) {
 // Verify checks the plan, its tasks and the fixture manifests. It collects every finding
 // instead of stopping at the first one, so that the material can be fixed in one pass.
 func Validate(p *Plan, ts []Task, ms []Manifest) []Problem {
+	return ValidateWithBase(p, ts, ms, nil)
+}
+
+// ValidateWithBase is Validate for material with a grundbestand.yaml (BM1): base:<name> in a rule must be listed in it.
+func ValidateWithBase(p *Plan, ts []Task, ms []Manifest, base *BaseSet) []Problem {
 	if p == nil {
 		return []Problem{{"plan", "missing"}}
 	}
@@ -223,7 +236,7 @@ func Validate(p *Plan, ts []Task, ms []Manifest) []Problem {
 		fixtures[m.ID] = m
 	}
 	for _, t := range ts {
-		problems = append(problems, validateTask(t, p, fixtures)...)
+		problems = append(problems, validateTask(t, p, fixtures, base)...)
 	}
 	cells := make(map[string]bool, len(p.Cells))
 	for _, c := range p.Cells {
@@ -284,9 +297,9 @@ func validatePlan(p *Plan) []Problem {
 	var out []Problem
 	add := func(format string, a ...any) { out = append(out, Problem{"plan", fmt.Sprintf(format, a...)}) }
 	switch p.Purpose {
-	case PurposeMain, PurposePilot:
+	case PurposeMain, PurposePilot, PurposeBenchmark:
 	default:
-		add("purpose must be %q or %q, not %q", PurposeMain, PurposePilot, p.Purpose)
+		add("purpose must be %q, %q or %q, not %q", PurposeMain, PurposePilot, PurposeBenchmark, p.Purpose)
 	}
 	if p.K < 1 {
 		add("k must be at least 1, not %d", p.K)
@@ -304,14 +317,20 @@ func validatePlan(p *Plan) []Problem {
 			add("%s: id %q is listed twice", where, m.ID)
 		}
 		modelIDs[m.ID] = true
-		switch m.Role {
-		case RoleMain, RoleSecond:
+		switch {
+		case p.Purpose == PurposeBenchmark:
+			if !RoleName.MatchString(m.Role) {
+				add("%s: role must match %s, not %q", where, RoleName.String(), m.Role)
+			} else {
+				roles[m.Role] = true
+			}
+		case m.Role == RoleMain || m.Role == RoleSecond:
 			roles[m.Role] = true
 		default:
 			add("%s: role must be %q or %q, not %q", where, RoleMain, RoleSecond, m.Role)
 		}
 	}
-	if !roles[RoleMain] {
+	if p.Purpose != PurposeBenchmark && !roles[RoleMain] {
 		add("no model has the role %q", RoleMain)
 	}
 	if len(p.Cells) == 0 {
@@ -336,7 +355,7 @@ func validatePlan(p *Plan) []Problem {
 			add("%s: model %q is not a role of a listed model", where, c.Model)
 		}
 		if c.Model == "" {
-			add("%s: model is empty; name the role of the model, main or second", where)
+			add("%s: model is empty; name the role of the model (main or second; any role in a benchmark plan)", where)
 		}
 		if c.Trace != "" && c.Trace != "on" && c.Trace != "off" {
 			add("%s: trace must be \"on\" or \"off\", not %q", where, c.Trace)

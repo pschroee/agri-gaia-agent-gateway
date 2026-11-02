@@ -142,6 +142,8 @@ type Experiment struct {
 	Limit string `json:"limit,omitempty"`
 	// Limits: the run's limits from the plan (#206); zero values mean the gateway's defaults (AGW_EXP_MAX_*).
 	Limits *RunLimits `json:"limits,omitempty"`
+	// Internet: the task's field (BM1): off (empty) or request. BM2 acts on it; here it is only stored.
+	Internet string `json:"internet,omitempty"`
 }
 
 // RunLimits are the limits of one experiment run (#206). Tokens are input + output without cache reads (X3.3).

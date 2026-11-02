@@ -322,3 +322,23 @@ func TestExperimentTracePerRun(t *testing.T) {
 		t.Fatalf("invalid trace: %v", err)
 	}
 }
+
+// BM1: the task's internet field is stored with the experiment; only off and request are valid.
+func TestCreateExperimentInternetField(t *testing.T) {
+	e := setup(t)
+	allowExperiment(e)
+	c, err := e.m.Create(context.Background(), NewChat{Title: "internet",
+		Experiment: &store.Experiment{Protection: "none", Cell: "cli", Run: "r1", Internet: "request"},
+		Delegation: json.RawMessage(experimentDelegation), Owner: "sub-1", OwnerName: experimentUser})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Experiment == nil || c.Experiment.Internet != "request" {
+		t.Fatalf("stored internet field: %+v", c.Experiment)
+	}
+	if _, err := e.m.Create(context.Background(), NewChat{Title: "bad",
+		Experiment: &store.Experiment{Protection: "none", Cell: "cli", Run: "r1", Internet: "on"},
+		Delegation: json.RawMessage(experimentDelegation), Owner: "sub-1", OwnerName: experimentUser}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("internet \"on\": want ErrInvalid, got %v", err)
+	}
+}

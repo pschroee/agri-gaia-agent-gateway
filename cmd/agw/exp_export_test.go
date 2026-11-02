@@ -99,3 +99,13 @@ func TestCsvValueNested(t *testing.T) {
 		t.Fatalf("scalars: %q %q", csvValue(true), csvValue(nil))
 	}
 }
+
+// BM1: the plan's role of the cell wins over what the server derived from the cell identifier.
+func TestEnrichRunsRoleFromCell(t *testing.T) {
+	rows := []map[string]any{{"cell": "cli-service-no-deepseek-flash", "model": "deepseek/deepseek-flash", "model_role": "wrong"}}
+	cells := map[string]exp.Cell{"cli-service-no-deepseek-flash": {ID: "cli-service-no-deepseek-flash", Binding: "cli", Protection: "service", Model: "deepseek-flash"}}
+	enrichRuns(rows, map[string]string{"deepseek/deepseek-flash": "deepseek-flash"}, cells)
+	if rows[0]["model_role"] != "deepseek-flash" {
+		t.Fatalf("enriched: %+v", rows[0])
+	}
+}

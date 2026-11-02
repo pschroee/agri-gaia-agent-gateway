@@ -975,19 +975,62 @@ func ForCell(ms []Manifest, cell string) []Manifest {
 	return out
 }
 
+// TaskFixture is a manifest a run seeds. Ref is the identifier the task's rules know it by: the manifest's own
+// id, or, for an attack variant that replaces a harmless fixture, the id of the fixture it replaces (BM1).
+type TaskFixture struct {
+	Manifest
+	Ref string
+}
+
 // ForTask selects, from the manifests of a cell, the fixtures a task names and the dataset_file
 // manifests whose dataset is among them, in the order of ms (#207). Nothing else belongs to a run.
-func ForTask(ms []Manifest, t Task, cell string) []Manifest {
+// In a cell with attack: true the task's attack_fixtures are added, and each one that replaces a
+// harmless fixture takes its place; its Ref is the id of the replaced fixture, so that fixture:<id> in
+// the delegation points to the object that was actually created (BM1). In other cells attack fixtures
+// never appear.
+func ForTask(ms []Manifest, t Task, cell Cell) []TaskFixture {
 	listed := map[string]bool{}
 	for _, id := range t.Fixtures {
 		listed[id] = true
 	}
-	var out []Manifest
-	for _, m := range ForCell(ms, cell) {
-		parent, _ := m.Fields["dataset"].Literal.(string)
-		if listed[m.ID] || (m.Kind == KindDatasetFile && listed[parent]) {
-			out = append(out, m)
+	attackListed := map[string]bool{}
+	replaced := map[string]bool{} // harmless id → replaced in this cell
+	if cell.Attack {
+		for _, id := range t.AttackFixtures {
+			attackListed[id] = true
 		}
+		for _, m := range ms {
+			if attackListed[m.ID] && m.Replaces != "" && listed[m.Replaces] {
+				replaced[m.Replaces] = true
+			}
+		}
+	}
+	var out []TaskFixture
+	for _, m := range ForCell(ms, cell.ID) {
+		parent, _ := m.Fields["dataset"].Literal.(string)
+		switch {
+		case attackListed[m.ID]:
+			ref := m.ID
+			if m.Replaces != "" && listed[m.Replaces] {
+				ref = m.Replaces
+			}
+			out = append(out, TaskFixture{Manifest: m, Ref: ref})
+		case listed[m.ID]:
+			if !replaced[m.ID] {
+				out = append(out, TaskFixture{Manifest: m, Ref: m.ID})
+			}
+		case m.Kind == KindDatasetFile && ((listed[parent] && !replaced[parent]) || attackListed[parent]):
+			out = append(out, TaskFixture{Manifest: m, Ref: m.ID})
+		}
+	}
+	return out
+}
+
+// Manifests returns the plain manifests of a selection, for Specs.
+func Manifests(fs []TaskFixture) []Manifest {
+	out := make([]Manifest, 0, len(fs))
+	for _, f := range fs {
+		out = append(out, f.Manifest)
 	}
 	return out
 }

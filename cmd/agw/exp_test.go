@@ -447,6 +447,11 @@ type fakeExpAPI struct {
 	unseedCalls   int
 	unseedFailAt  int // the n-th unseed call fails (1-based); 0 never
 	unseedRemoved int // what the first unseed reports as removed
+	// BM1: GET /datasets/{id} without a chat (base check), archives per dataset id, and the order of the calls
+	// that decide whether a result survives the cleanup.
+	baseBodies map[int64]string
+	downloads  map[int64]string
+	order      []string
 }
 
 type fakeSeedCall struct {
@@ -616,8 +621,28 @@ func (f *fakeExpAPI) ExpObjects(_ context.Context, chatID string) ([]agwclient.E
 	return f.objects[chatID], nil
 }
 
+func (f *fakeExpAPI) ExpDataset(_ context.Context, id int64) (agwclient.ExpCallResult, error) {
+	f.order = append(f.order, fmt.Sprintf("base %d", id))
+	body, ok := f.baseBodies[id]
+	if !ok {
+		return agwclient.ExpCallResult{Status: "error", HTTPStatus: 404}, nil
+	}
+	return agwclient.ExpCallResult{Status: "ok", HTTPStatus: 200, Body: body}, nil
+}
+
+func (f *fakeExpAPI) ExpDownload(_ context.Context, chat string, dataset int64, w io.Writer) error {
+	f.order = append(f.order, fmt.Sprintf("download %d", dataset))
+	body, ok := f.downloads[dataset]
+	if !ok {
+		return fmt.Errorf("dataset %d: not created by this chat", dataset)
+	}
+	_, err := io.WriteString(w, body)
+	return err
+}
+
 func (f *fakeExpAPI) ExpCall(_ context.Context, req agwclient.ExpCallRequest) (agwclient.ExpCallResult, error) {
 	f.calls = append(f.calls, req)
+	f.order = append(f.order, req.Method+" "+req.Path)
 	if req.Method == "GET" {
 		body, ok := f.answers[req.Path]
 		if !ok {

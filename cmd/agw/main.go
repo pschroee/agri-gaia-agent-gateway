@@ -60,7 +60,7 @@ Commands:
   exp seed --plan <dir|file> --cell <id>    create the fixtures of a cell, print ids and checksums
   exp unseed --plan <dir|file> --cell <id>  remove that cell's fixtures by their recorded ids
   exp verify --plan <dir|file> --cell <id>  compare the live fixtures with the recorded checksums
-  exp run --plan <dir|file> [--cell <id>]... [--k N] [--seed N] [--dry-run]
+  exp run --plan <dir|file> [--cell <id>]... [--k N] [--seed N] [--collect-dir <dir>] [--dry-run]
                                 run the plan's runs, one after the other, each in a fresh chat
   exp status --plan <dir|file>  runs per cell and status
   exp abort <run>               abort a run's chat and close the run as aborted

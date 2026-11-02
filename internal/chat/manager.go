@@ -720,6 +720,11 @@ func (m *Manager) Create(ctx context.Context, req NewChat) (ChatView, error) {
 		default:
 			return ChatView{}, fmt.Errorf("%w: %q", ErrExperimentTrace, experiment.Trace)
 		}
+		switch experiment.Internet {
+		case "", "off", "request":
+		default:
+			return ChatView{}, fmt.Errorf("%w: internet %q", ErrInvalid, experiment.Internet)
+		}
 		base := m.opt.Toolsets
 		if req.Variant != "" {
 			ts, err := toolset.FromVariant(req.Variant)
