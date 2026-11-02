@@ -5,9 +5,15 @@
 package main
 
 import (
+	"context"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"agw/internal/config"
+	"agw/internal/oidc"
+	"agw/internal/platform"
 )
 
 // X4: the fixtures log in as their experiment accounts with the public client of X1.2. agw-agent is
@@ -46,5 +52,26 @@ func TestFixtureClientUsesFrontend(t *testing.T) {
 	c, err = fixtureClient(env, "agent-exp", "secret")
 	if err != nil || c == nil || c.Info().ClientID != "agw-agent" {
 		t.Fatalf("confidential fixture client: %v %v", c, err)
+	}
+}
+
+// BM1: the runner reads the base datasets before a run's chat exists. With a per-chat login that call names the
+// stand-in chat, and the token comes from the experiment account without a lookup in the store.
+func TestOwnerTokenForTheExperimentRunner(t *testing.T) {
+	var srv *httptest.Server
+	mux := http.NewServeMux()
+	srv = httptest.NewServer(mux)
+	defer srv.Close()
+	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, `{"issuer":%q,"token_endpoint":%q,"authorization_endpoint":"x","jwks_uri":"x"}`, srv.URL, srv.URL+"/token")
+	})
+	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"access_token":"tok-exp","expires_in":300}`)
+	})
+	exp := oidc.NewPasswordSource(srv.URL, "frontend", "", "agent-exp", "pw")
+	// st and auth stay nil: the stand-in chat must not reach them.
+	tok, err := ownerToken(nil, nil, exp)(context.Background(), platform.ExpRunnerChat)
+	if err != nil || tok != "tok-exp" {
+		t.Fatalf("token %q, err %v", tok, err)
 	}
 }

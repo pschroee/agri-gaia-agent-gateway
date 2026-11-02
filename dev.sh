@@ -275,7 +275,7 @@ new_test_logs() {
 # GO_UNIT_FLAGS: empty for ./dev.sh test (Go's test cache, no -race), "-race -count=1" for --full.
 GO_UNIT_FLAGS=""
 # GO_UNIT_TIMEOUT: the time limit of the Go stage (go test's default is 10 min); --full runs with -race and gets more.
-GO_UNIT_TIMEOUT=5m
+GO_UNIT_TIMEOUT="${GO_UNIT_TIMEOUT:-5m}"
 go_unit() {
   # gofmt check first: unformatted files make later diffs noisy (#174).
   local unformatted; unformatted="$(gofmt -l internal cmd 2>/dev/null)"

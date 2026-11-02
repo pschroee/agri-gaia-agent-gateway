@@ -98,7 +98,7 @@ func (s *Server) expDataset(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotImplemented, "the platform binding is off")
 		return
 	}
-	res, err := s.Platform.Do(r.Context(), "", platform.Request{Method: http.MethodGet, Path: "/datasets/" + strconv.FormatInt(id, 10), Full: true})
+	res, err := s.Platform.Do(r.Context(), platform.ExpRunnerChat, platform.Request{Method: http.MethodGet, Path: "/datasets/" + strconv.FormatInt(id, 10), Full: true})
 	if err != nil {
 		fail(w, err)
 		return

@@ -857,6 +857,10 @@ func (c *Client) Forget(chatID string) {
 	}
 }
 
+// ExpRunnerChat is the stand-in chat identifier of calls the experiment runner makes before a run's chat exists
+// (the check of the base datasets, BM1). With a per-chat login the owner's token comes from the experiment account.
+const ExpRunnerChat = "exp-runner"
+
 // SetOnExchange sets the per-exchange report (the manager is created after the client).
 func (c *Client) SetOnExchange(f func(chatID string, cl Claims)) {
 	if c == nil {

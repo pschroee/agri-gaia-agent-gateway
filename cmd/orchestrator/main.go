@@ -557,6 +557,10 @@ func expClientSecret(env config.Env) string {
 // Without a live session the platform call fails with oidc.ErrNoSession (message to the agent).
 func ownerToken(st *store.Store, auth *oidc.Service, exp *oidc.PasswordSource) func(ctx context.Context, chatID string) (string, error) {
 	return func(ctx context.Context, chatID string) (string, error) {
+		if chatID == platform.ExpRunnerChat && exp != nil {
+			// The runner reads the base datasets before a run's chat exists (BM1): the experiment account acts.
+			return exp.Token(ctx)
+		}
 		owner, err := st.ChatOwner(ctx, chatID)
 		if err != nil {
 			return "", err
