@@ -11,7 +11,7 @@ yourself and let it run in this chat's notebook server in JupyterHub.
 
 The server belongs to the user (their JupyterHub account, their files). It has 2 CPUs, 8 GB RAM, **no
 internet** and **no access to the platform**: packages are fixed in the image (`torch` (CUDA 12.6, runs on the CPU without a GPU), `torchvision`,
-`scikit-learn`, `numpy`, `pandas`, `matplotlib`, `onnx`, `onnxruntime`, `skl2onnx`), and an `pip install`
+`scikit-learn`, `numpy`, `pandas`, `matplotlib`, `opencv-python-headless` (`cv2`, reads MP4/H.264 clips), `onnx`, `onnxruntime`, `skl2onnx`), and an `pip install`
 fails. Data comes in as a platform dataset, results go out as files.
 
 ## 1. First ask what this setup offers

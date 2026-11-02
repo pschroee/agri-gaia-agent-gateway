@@ -1742,6 +1742,8 @@ hashes and digests match; FAIL means do not build. WARN lists artifacts that cou
 few downloads), deprecated or yanked ones. `--list` prints the inventory without network, `--npm NAME@VERSION`
 checks a package before it is taken in, `--suggest-digests` prints the current digest of each tagged image.
 `internal/worker/images_test.go` guards the pins offline in `./dev.sh test`.
+After building the exec image, `images/check-video.py` (run inside the image) proves that `cv2` writes and reads an MP4 clip;
+`check-artifacts.py` itself stays offline metadata only and imports no package.
 
 **To bump:**
 - *Base image:* `check-artifacts.py --suggest-digests`, copy the digest into the `FROM`/`image:` line.
