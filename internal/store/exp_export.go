@@ -12,6 +12,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -230,8 +231,13 @@ func cellParts(cell string) (binding, protection, attack, role string) {
 	return parts[0], parts[1], parts[2], roleAt(parts, 3)
 }
 
+// roleName is the pattern of a model role in a plan (internal/exp.RoleName): benchmark plans name their roles freely, so
+// the cell identifier ends with any such role, hyphens included (deepseek-flash). SplitN keeps everything after the
+// third hyphen together.
+var roleName = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
+
 func roleAt(parts []string, i int) string {
-	if i < len(parts) && (parts[i] == "main" || parts[i] == "second") {
+	if i < len(parts) && roleName.MatchString(parts[i]) {
 		return parts[i]
 	}
 	return ""

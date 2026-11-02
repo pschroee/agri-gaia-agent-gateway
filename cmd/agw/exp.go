@@ -755,6 +755,11 @@ func enrichRuns(rows []map[string]any, roles map[string]string, cells map[string
 			} else {
 				row["attack"] = "none"
 			}
+			// BM1: the role is the one the plan gives the cell; the cell identifier only ends with it.
+			if c.Model != "" {
+				row["model_role"] = c.Model
+				continue
+			}
 		}
 		if s, _ := row["model_role"].(string); s != "" {
 			continue
