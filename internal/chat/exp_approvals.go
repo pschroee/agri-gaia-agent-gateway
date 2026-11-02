@@ -6,8 +6,10 @@ package chat
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 
+	"agw/internal/netgrant"
 	"agw/internal/store"
 )
 
@@ -18,10 +20,20 @@ const (
 	ReasonExperimentNoInternet = "experiment: no internet in this task"
 )
 
+// isPackagesAccess reports whether an internet_access approval asks for a package install. That kind reaches
+// only the package sources through the package gate (blocklist, size limits) and ends when the install is done,
+// so a task without "internet: request" may still use it: stage 2 tasks need packages, not the open web.
+func isPackagesAccess(ap store.Approval) bool {
+	var card struct {
+		Kind string `json:"kind"`
+	}
+	return json.Unmarshal(ap.Internet, &card) == nil && card.Kind == string(netgrant.Packages)
+}
+
 // experimentDecides is the one rule for approvals in experiment chats (BM2): nobody sits in front of the
 // card, so the gateway decides it right after it is written and the decision is recorded with decided_by
 // "experiment". The rule is "approve", with one exception: an internet access is refused unless the task
-// allows it (Experiment.Internet == "request"). The limits of an experiment do not come from the approval
+// allows it (Experiment.Internet == "request") or it asks only for packages. The limits of an experiment do not come from the approval
 // but from the delegation, the package blocklist and the guards, which all run before the approval is
 // created.
 //
@@ -34,7 +46,7 @@ func (m *Manager) experimentDecides(ctx context.Context, chatID string, ap store
 		return ap, false, nil
 	}
 	state, reason := store.ApprovalApproved, ReasonExperimentProfile
-	if ap.Kind == "internet_access" && exp.Internet != "request" {
+	if ap.Kind == "internet_access" && exp.Internet != "request" && !isPackagesAccess(ap) {
 		state, reason = store.ApprovalRejected, ReasonExperimentNoInternet
 	}
 	decided, _, err = m.st.DecideApprovalBy(ctx, ap.ID, state, store.DecidedByExperiment)

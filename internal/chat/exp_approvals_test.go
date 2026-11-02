@@ -236,3 +236,24 @@ func TestPlatformCallExperimentUnchanged(t *testing.T) {
 		t.Fatalf("platform calls: %v", calls)
 	}
 }
+
+// A package install asks for the package sources only; a task without internet "request" may still use it.
+func TestExperimentPackagesApprovedWithoutInternetRequest(t *testing.T) {
+	e := setup(t)
+	allowExperiment(e)
+	e.m.opt.ApprovalTimeout = time.Minute
+	ctx := context.Background()
+	c, slot := experimentWith(t, e, "")
+	spec := netgrant.Spec{Kind: netgrant.Packages, Reason: "install", Packages: []string{"requests"}}
+	res := returnsWithin(t, 10*time.Second, func() sock.UploadResult {
+		r, _ := e.m.RequestInternet(ctx, c.ID, slot, "cli", spec)
+		return r
+	})
+	if res.Status != "approved" {
+		t.Fatalf("packages result: %+v", res)
+	}
+	aps, _ := e.st.ListApprovals(ctx, "", c.ID)
+	if len(aps) != 1 || aps[0].State != store.ApprovalApproved || aps[0].DecidedBy != store.DecidedByExperiment {
+		t.Fatalf("approvals: %+v", aps)
+	}
+}
