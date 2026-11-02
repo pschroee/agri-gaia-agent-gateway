@@ -4,11 +4,11 @@
 # SPDX-License-Identifier: MIT
 """Prove that the execution image can write, open and read MP4 clips with OpenCV.
 
-usage (inside the built exec image): python3 /path/to/check-video.py [--version X.Y.Z.W]
+usage (inside the built exec image): python3 /path/to/check-video.py [--version 4.14.0]
 
 Writes a clip of 10 frames of 64x48 (mp4v) into a temporary directory, opens it again, checks the frame count and the
 size, and reads frame 5 by position. Garage footage is never needed. With --version it also compares cv2.__version__
-with the pin of the lock file. Exit 0 on success, 1 on a failed check. Run it after `docker build` of the exec stage:
+with the library version (wheel 4.14.0.94 reports 4.14.0). Exit 0 on success, 1 on a failed check. Run it after `docker build` of the exec stage:
   docker run --rm -v "$PWD/images:/chk:ro" <exec image> python3 /chk/check-video.py
 """
 import argparse
