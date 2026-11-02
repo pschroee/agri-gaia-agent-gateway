@@ -368,7 +368,7 @@ type Env struct {
 	// Chats of another combination (stored before a change of AGW_TOOLSETS) get a slot on demand.
 	PoolSize int
 	// ExperimentPool: warm slots kept ready for experiment variants (AGW_EXPERIMENT_POOL, X0.3),
-	// keyed by the pool key "exp:<binding>". Empty: experiment slots start on demand.
+	// keyed by the pool key "exp:<binding>" or "exp-net:<binding>" (BM2). Empty: experiment slots start on demand.
 	ExperimentPool map[string]int
 	// ExperimentUsers: accounts (preferred_username) that may create experiment chats
 	// (AGW_EXPERIMENT_USERS, X0.2). Empty: no experiment chats.
@@ -922,13 +922,14 @@ func experimentPool() map[string]int {
 		if !ok {
 			continue
 		}
-		base, _ := toolset.SplitExperiment(strings.TrimSpace(variant))
+		variant = strings.TrimSpace(variant)
+		base, _ := toolset.SplitExperiment(variant)
 		key, err := toolset.Normalize(base)
 		n, nerr := strconv.Atoi(strings.TrimSpace(count))
 		if err != nil || nerr != nil || n < 1 {
 			continue
 		}
-		out[toolset.ExperimentPrefix+key] = n
+		out[toolset.ExperimentVariant(key, toolset.ExperimentInternet(variant))] = n
 	}
 	return out
 }

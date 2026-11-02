@@ -733,7 +733,7 @@ func (m *Manager) Create(ctx context.Context, req NewChat) (ChatView, error) {
 			}
 			base = ts
 		}
-		req.Variant = toolset.ExperimentPrefix + base.Key()
+		req.Variant = toolset.ExperimentVariant(base.Key(), experiment.Internet == "request")
 	} else {
 		if req.Variant != "" {
 			ts, err := toolset.FromVariant(req.Variant)
@@ -923,7 +923,7 @@ func (m *Manager) attachSlot(ctx context.Context, c store.Chat, session []byte, 
 	}
 	key := ts.Key()
 	if experiment {
-		key = toolset.ExperimentPrefix + key
+		key = toolset.ExperimentVariant(key, toolset.ExperimentInternet(c.Variant))
 	}
 	if slot == nil {
 		if slot, err = m.pool.AcquireWait(ctx, key, c.ID, m.opt.AcquireTimeout); err != nil {

@@ -198,13 +198,18 @@ func SystemNoteFor(variant string, bgMax int, caps []string, apiIndex string) st
 	internet := internetNote(ts)
 	template := systemNote
 	if experiment {
-		// The experiment slots have no file tools with MCP (X0.4), no subagents (X0.6) and no way to
-		// request internet (X1); the note says what they have and nothing about a protection level.
+		// The experiment slots have no file tools with MCP (X0.4), no subagents (X0.6) and, unless the task
+		// allows it (BM2, exp-net:), no way to request internet (X1); the note says what they have and
+		// nothing about a protection level.
 		if ts.Has(toolset.MCP) && !ts.Has(toolset.CLI) {
 			inputs = inputsAPI
 		}
-		internet = ""
-		template = systemNoteExperiment
+		if toolset.ExperimentInternet(variant) {
+			template = systemNoteExperimentNet
+		} else {
+			internet = ""
+			template = systemNoteExperiment
+		}
 	}
 	return strings.NewReplacer("{{bg}}", bg, "{{mmdc}}", mmdc, "{{inputs}}", inputs, "{{internet}}", internet,
 		"{{send}}", sendNote(ts), "{{capabilities}}", capabilityNote(ts, caps),
@@ -214,7 +219,13 @@ func SystemNoteFor(variant string, bgMax int, caps []string, apiIndex string) st
 // systemNoteExperiment is the system note of an experiment slot: systemNote without the paragraph on
 // subagents (X0.6) and without the line on requesting internet (X1). It is derived from systemNote
 // instead of being a second full text, so that the two cannot drift apart.
-var systemNoteExperiment = func() string {
+var systemNoteExperiment = experimentNote(false)
+
+// systemNoteExperimentNet is the note of an experiment slot whose task may request internet (BM2): as
+// systemNoteExperiment, but with the lines on requesting internet as in the product.
+var systemNoteExperimentNet = experimentNote(true)
+
+func experimentNote(keepInternet bool) string {
 	const paragraph = "- For self-contained subtasks you can start subagents"
 	i := strings.Index(systemNote, paragraph)
 	if i < 0 {
@@ -225,8 +236,11 @@ var systemNoteExperiment = func() string {
 		return systemNote
 	}
 	without := systemNote[:i] + systemNote[i+j+1:]
+	if keepInternet {
+		return without
+	}
 	return strings.Replace(without, "{{internet}}\n", "", 1)
-}()
+}
 
 // capabilityTool names, per binding, how the agent asks for the capabilities of this setup (G1.9).
 var capabilityTool = map[toolset.Binding]string{
@@ -491,7 +505,7 @@ func piArgs(variant, provider, model, note string) ([]string, error) {
 		args = append(args, "-e", apiExt)
 	}
 	if experiment {
-		if hidden := experimentHidden(ts); len(hidden) > 0 {
+		if hidden := experimentHidden(ts, toolset.ExperimentInternet(variant)); len(hidden) > 0 {
 			args = append(args, "--exclude-tools", strings.Join(hidden, ","))
 		}
 	}
@@ -505,7 +519,7 @@ func piArgs(variant, provider, model, note string) ([]string, error) {
 		}
 		tools := Tools(ts)
 		if experiment {
-			tools = experimentTools(ts)
+			tools = experimentTools(ts, toolset.ExperimentInternet(variant))
 		}
 		args = append(args, "--tools", strings.Join(tools, ","))
 	}
@@ -524,8 +538,8 @@ func SplitExperiment(variant string) (base string, experiment bool) {
 
 // experimentHidden are the tools an experiment slot does not get (X0.4–X0.6): the file tools with
 // MCP (unless the command line brings read and write anyway), the internet switch (internet is off in
-// the experiment and cannot be requested, X1), and subagents and intercom with the command line.
-func experimentHidden(ts toolset.Set) []string {
+// the experiment and cannot be requested, X1; kept in an exp-net: slot, BM2), and subagents and intercom with the command line.
+func experimentHidden(ts toolset.Set, internet bool) []string {
 	var out []string
 	if ts.Has(toolset.CLI) {
 		out = append(out, "subagent", "intercom")
@@ -534,9 +548,11 @@ func experimentHidden(ts toolset.Set) []string {
 		if !ts.Has(toolset.CLI) {
 			out = append(out, "read", "write", "ls")
 		}
-		out = append(out, "mcp_request_internet", "mcp_disable_internet")
+		if !internet {
+			out = append(out, "mcp_request_internet", "mcp_disable_internet")
+		}
 	}
-	if ts.Has(toolset.API) {
+	if ts.Has(toolset.API) && !internet {
 		out = append(out, "request_internet", "disable_internet")
 	}
 	return out
@@ -544,9 +560,9 @@ func experimentHidden(ts toolset.Set) []string {
 
 // experimentTools filters the tools of a combination for an experiment slot; REST stays unchanged
 // apart from the internet tools (X0.5).
-func experimentTools(ts toolset.Set) []string {
+func experimentTools(ts toolset.Set, internet bool) []string {
 	hidden := map[string]bool{}
-	for _, t := range experimentHidden(ts) {
+	for _, t := range experimentHidden(ts, internet) {
 		hidden[t] = true
 	}
 	tools := Tools(ts)

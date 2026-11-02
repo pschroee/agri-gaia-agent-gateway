@@ -158,13 +158,33 @@ func Valid(v string) bool {
 // FromVariant does not accept the prefix; callers split it off first.
 const ExperimentPrefix = "exp:"
 
-// SplitExperiment splits an experiment variant into the binding key ("exp:mcp" → "mcp", true). Any
-// other variant comes back unchanged with false.
+// ExperimentNetPrefix marks the variant of an experiment chat whose task may request internet (BM2): the
+// experiment profile plus the paragraph on requesting internet in the system note. The profile of a slot is
+// fixed per variant (prefix cache), so a task with internet "request" gets its own slots.
+const ExperimentNetPrefix = "exp-net:"
+
+// SplitExperiment splits an experiment variant into the binding key ("exp:mcp" → "mcp", true; the same for
+// "exp-net:mcp"). Any other variant comes back unchanged with false.
 func SplitExperiment(variant string) (base string, experiment bool) {
-	if strings.HasPrefix(variant, ExperimentPrefix) {
-		return strings.TrimPrefix(variant, ExperimentPrefix), true
+	for _, p := range []string{ExperimentPrefix, ExperimentNetPrefix} {
+		if strings.HasPrefix(variant, p) {
+			return strings.TrimPrefix(variant, p), true
+		}
 	}
 	return variant, false
+}
+
+// ExperimentInternet reports whether the variant is an experiment variant that may request internet.
+func ExperimentInternet(variant string) bool {
+	return strings.HasPrefix(variant, ExperimentNetPrefix)
+}
+
+// ExperimentVariant is the variant of an experiment chat with the binding key base.
+func ExperimentVariant(base string, internet bool) string {
+	if internet {
+		return ExperimentNetPrefix + base
+	}
+	return ExperimentPrefix + base
 }
 
 // ValidVariant reports whether a stored variant can be resumed, including experiment variants.
