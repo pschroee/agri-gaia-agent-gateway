@@ -270,6 +270,7 @@ func TestResolveBaseRef(t *testing.T) {
 	}
 	read := map[string]any{"action": "read", "resource": "dataset", "ids": []any{"base:garage-clips-train"}}
 	task := taskWith(nil, read)
+	task.Check = CheckSpec{Offline: &OfflineCheck{Kind: OfflineSolution}}
 	if got := problemText(validateTask(task, testPlan, nil, b)); got != "" {
 		t.Fatalf("valid base ref: %s", got)
 	}

@@ -36,11 +36,11 @@ func TestExportTurnIDOnCalls(t *testing.T) {
 		}
 	}
 	callAt := func(detail string, m int) {
-		id, err := s.AddSocketCallRecord(ctx, CallRecord{ChatID: chat, SlotID: "s", Via: "api", Op: "platform", Detail: detail, Result: "ok"})
+		rec, err := s.AddSocketCallRecord(ctx, CallRecord{ChatID: chat, SlotID: "s", Via: "api", Op: "platform", Detail: detail, Result: "ok"})
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := s.pool.Exec(ctx, `UPDATE socket_calls SET created_at=$2 WHERE id=$1`, id, at(m)); err != nil {
+		if _, err := s.pool.Exec(ctx, `UPDATE socket_calls SET created_at=$2 WHERE id=$1`, rec.ID, at(m)); err != nil {
 			t.Fatal(err)
 		}
 	}

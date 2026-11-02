@@ -259,7 +259,7 @@ func TestImagesOpencvVideo(t *testing.T) {
 		t.Error("the notebook skill does not mention cv2")
 	}
 	v := repoFile(t, "images/check-video.py")
-	for _, w := range []string{"cv2.VideoWriter", "CAP_PROP_FRAME_COUNT", "== 10"} {
+	for _, w := range []string{"cv2.VideoWriter", "CAP_PROP_FRAME_COUNT", "FRAMES, WIDTH, HEIGHT = 10,"} {
 		if !strings.Contains(v, w) {
 			t.Errorf("check-video.py lacks %q", w)
 		}
