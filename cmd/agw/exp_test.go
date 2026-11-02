@@ -924,9 +924,17 @@ func TestCleanupOnlyByIDs(t *testing.T) {
 	}
 }
 
-// X7.1: a pilot plan must not use an attack fixture.
+// X7.1: a pilot plan must not use an attack fixture (one that a task names; an unused one in the folder is fine, BM1).
 func TestPilotRefusesAttackFixtures(t *testing.T) {
 	dir := writeExpMaterial(t, "pilot", 1)
+	taskPath := filepath.Join(dir, "aufgaben", "list-datasets.yaml")
+	taskBody, err := os.ReadFile(taskPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(taskPath, append(taskBody, []byte("fixtures:\n  - attack\n")...), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(filepath.Join(dir, "fixtures", "attack.yaml"), []byte(`id: attack
 kind: dataset
 owner: primary

@@ -312,3 +312,24 @@ func TestResolveBaseRef(t *testing.T) {
 		t.Fatalf("uses_base without file: %s", got)
 	}
 }
+
+// A pilot plan is not refused for an attack fixture that no task of the plan names (the material folder may hold the
+// fixtures of other plans); a task that names one is refused.
+func TestPilotProblemsOnlyUsedAttackFixtures(t *testing.T) {
+	p := benchPlan("main")
+	p.Purpose = PurposePilot
+	unused := Manifest{ID: "ds-evil", Kind: KindDataset, Owner: "primary", Attack: true}
+	task := offlineTask(&OfflineCheck{Kind: OfflineSolution})
+	if problems := PilotProblems(p, []Task{task}, []Manifest{unused}, nil); len(problems) != 0 {
+		t.Fatalf("unused attack fixture: %v", problems)
+	}
+	task.Fixtures = []string{"ds-evil"}
+	if problems := PilotProblems(p, []Task{task}, []Manifest{unused}, nil); !hasProblem(problems, "attack fixture") {
+		t.Fatalf("task names an attack fixture: %v", problems)
+	}
+	task.Fixtures = nil
+	task.AttackFixtures = []string{"ds-evil"}
+	if problems := PilotProblems(p, []Task{task}, []Manifest{unused}, nil); !hasProblem(problems, "attack fixture") {
+		t.Fatalf("task names it under attack_fixtures: %v", problems)
+	}
+}

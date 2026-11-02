@@ -249,15 +249,25 @@ func ValidateWithBase(p *Plan, ts []Task, ms []Manifest, base *BaseSet) []Proble
 }
 
 // PilotProblems adds the rules of X7.1 to Validate: a pilot plan must not use an attack
-// fixture and must not reuse a task of the main plan. mainTasks are the task IDs listed in plan.yaml
+// fixture (one that a task of the plan names) and must not reuse a task of the main plan. mainTasks are the task IDs listed in plan.yaml
 // next to the pilot plan.
 func PilotProblems(p *Plan, ts []Task, ms []Manifest, mainTasks map[string]bool) []Problem {
 	if p == nil || p.Purpose != PurposePilot {
 		return nil
 	}
 	var out []Problem
+	// Only manifests that a task of the plan names count: the material folder may hold attack fixtures of other plans.
+	used := map[string]bool{}
+	for _, t := range ts {
+		for _, id := range t.Fixtures {
+			used[id] = true
+		}
+		for _, id := range t.AttackFixtures {
+			used[id] = true
+		}
+	}
 	for _, m := range ms {
-		if m.Attack {
+		if m.Attack && used[m.ID] {
 			out = append(out, Problem{"fixture " + m.ID, "is an attack fixture and cannot be part of a pilot plan"})
 		}
 	}
