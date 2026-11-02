@@ -51,6 +51,8 @@ type Server struct {
 	Images ImageOpener
 	// Artifacts serves the files of a chat; nil means M (replaceable for tests).
 	Artifacts ArtifactOpener
+	// Workspaces serves the working directory archives of experiment runs; nil means M (replaceable for tests).
+	Workspaces WorkspaceOpener
 
 	// OIDC: login through the platform's Keycloak (AGW_AUTH_MODE=oidc); nil: token mode.
 	// Chats then belong to the logged-in user, and Token does not apply.
@@ -111,6 +113,11 @@ type ImageOpener interface {
 // ArtifactOpener serves a stored file of a chat (see chat.Manager.OpenArtifact).
 type ArtifactOpener interface {
 	OpenArtifact(ctx context.Context, chatID, kind, name string) (io.ReadCloser, int64, error)
+}
+
+// WorkspaceOpener serves the stored working directory of an experiment run (see chat.Manager.OpenExpWorkspace).
+type WorkspaceOpener interface {
+	OpenExpWorkspace(ctx context.Context, chatID string) (io.ReadCloser, store.Workspace, error)
 }
 
 // base is the UI's path for the browser ("" or e.g. "/agent", from AGW_PUBLIC_URL). A proxy
@@ -273,6 +280,7 @@ func (s *Server) Handler() http.Handler {
 		mux.Handle("/oidc/", s.OIDC.Handler())
 	}
 	mux.HandleFunc("GET /api/exp/export", s.expExport)
+	mux.HandleFunc("GET /api/exp/workspace", s.expWorkspace)
 	mux.HandleFunc("GET /api/me", s.me)
 	mux.HandleFunc("GET /api/models", s.models)
 	mux.HandleFunc("GET /api/variants", s.variants)

@@ -280,3 +280,13 @@ func (s *Store) ExpOpenRunChats(ctx context.Context) ([]string, error) {
 	}
 	return ids, rows.Err()
 }
+
+// ChatInExpRun reports whether the chat belongs to a recorded experiment run (any plan, any attempt).
+func (s *Store) ChatInExpRun(ctx context.Context, chatID string) (bool, error) {
+	if !isUUID(chatID) {
+		return false, nil
+	}
+	var ok bool
+	err := s.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM exp_runs WHERE chat_id = $1)`, chatID).Scan(&ok)
+	return ok, err
+}
