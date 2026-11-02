@@ -111,7 +111,7 @@ func TestExperimentInternetRefusedWithoutRequest(t *testing.T) {
 		e.m.opt.ApprovalTimeout = time.Minute
 		ctx := context.Background()
 		c, slot := experimentWith(t, e, field)
-		spec := netgrant.Spec{Kind: netgrant.Domains, Reason: "pypi", Domains: []string{"pypi.org"}}
+		spec := netgrant.Spec{Kind: netgrant.Domains, Reason: "pypi", Domains: []string{"docs.example.org"}}
 		res := returnsWithin(t, 10*time.Second, func() sock.UploadResult {
 			r, _ := e.m.RequestInternet(ctx, c.ID, slot, "cli", spec)
 			return r
@@ -141,7 +141,7 @@ func TestExperimentInternetGrantedWithRequest(t *testing.T) {
 	if c.Variant != "exp-net:"+e.m.opt.Toolsets.Key() {
 		t.Fatalf("variant %q", c.Variant)
 	}
-	spec := netgrant.Spec{Kind: netgrant.Domains, Reason: "pypi", Domains: []string{"pypi.org"}}
+	spec := netgrant.Spec{Kind: netgrant.Domains, Reason: "pypi", Domains: []string{"docs.example.org"}}
 	status := returnsWithin(t, 10*time.Second, func() string {
 		r, _ := e.m.RequestInternet(ctx, c.ID, slot, "cli", spec)
 		return r.Status
@@ -158,12 +158,12 @@ func TestExperimentInternetGrantedWithRequest(t *testing.T) {
 		t.Fatalf("approvals: %+v", aps)
 	}
 	// The grant counts what goes through the proxy, as in a product chat.
-	id := e.m.RecordWeb(webproxy.Request{ChatID: c.ID, Method: "CONNECT", Host: "pypi.org", Port: 443, Status: 200, StartedAt: time.Now(), GrantID: gs[0].ID, Origin: "exec"})
+	id := e.m.RecordWeb(webproxy.Request{ChatID: c.ID, Method: "CONNECT", Host: "docs.example.org", Port: 443, Status: 200, StartedAt: time.Now(), GrantID: gs[0].ID, Origin: "exec"})
 	if id == 0 {
 		t.Fatal("web request not stored")
 	}
 	rows, _ := e.m.GrantWebRequests(ctx, c.ID, gs[0].ID)
-	if len(rows) != 1 || rows[0].Host != "pypi.org" {
+	if len(rows) != 1 || rows[0].Host != "docs.example.org" {
 		t.Fatalf("web requests: %+v", rows)
 	}
 }
@@ -193,7 +193,7 @@ func TestProductChatStillWaits(t *testing.T) {
 		t.Fatal(err)
 	}
 	slot := e.m.live[c.ID].slot.ID
-	r, _ := e.m.RequestInternet(ctx, c.ID, slot, "cli", netgrant.Spec{Kind: netgrant.Domains, Reason: "pypi", Domains: []string{"pypi.org"}})
+	r, _ := e.m.RequestInternet(ctx, c.ID, slot, "cli", netgrant.Spec{Kind: netgrant.Domains, Reason: "pypi", Domains: []string{"docs.example.org"}})
 	if r.Status != "rejected" || r.Message != "no decision within the waiting time" {
 		t.Fatalf("internet: %+v", r)
 	}
@@ -244,7 +244,7 @@ func TestExperimentPackagesApprovedWithoutInternetRequest(t *testing.T) {
 	e.m.opt.ApprovalTimeout = time.Minute
 	ctx := context.Background()
 	c, slot := experimentWith(t, e, "")
-	spec := netgrant.Spec{Kind: netgrant.Packages, Reason: "install", Packages: []string{"requests"}}
+	spec := netgrant.Spec{Kind: netgrant.Packages, Reason: "install", Packages: []string{"pip:requests"}}
 	res := returnsWithin(t, 10*time.Second, func() sock.UploadResult {
 		r, _ := e.m.RequestInternet(ctx, c.ID, slot, "cli", spec)
 		return r
