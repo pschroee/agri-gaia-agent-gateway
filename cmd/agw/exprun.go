@@ -34,6 +34,9 @@ import (
 
 const expStarted = "started"
 
+// defaultCollectDir is where agw exp run stores the results a task collects (BM1).
+const defaultCollectDir = "/tmp/exp-collect"
+
 // expAPI is the part of the gateway the runner uses. The real implementation is *agwclient.Client;
 // the tests replace it.
 type expAPI interface {
@@ -50,6 +53,10 @@ type expAPI interface {
 	ExpUsage(ctx context.Context, plan string) (agwclient.ExpUsage, error)
 	ExpObjects(ctx context.Context, chatID string) ([]agwclient.ExpObject, error)
 	ExpCall(ctx context.Context, req agwclient.ExpCallRequest) (agwclient.ExpCallResult, error)
+	// ExpDataset reads GET /datasets/{id} without a chat: the check of the base datasets runs before the run's chat exists (BM1).
+	ExpDataset(ctx context.Context, id int64) (agwclient.ExpCallResult, error)
+	// ExpDownload streams the archive of a dataset the chat created into w (BM1, collect).
+	ExpDownload(ctx context.Context, chat string, dataset int64, w io.Writer) error
 	ExpAbortChat(ctx context.Context, chatID string) error
 	ExpSeed(ctx context.Context, plan, cell, run string, specs []exp.FixtureSpec) (agwclient.ExpFixtureAnswer, int, error)
 	ExpUnseed(ctx context.Context, plan, cell string) (agwclient.ExpFixtureAnswer, error)
@@ -63,6 +70,8 @@ type expRunOptions struct {
 	Seed     int64
 	SeedSet  bool
 	DryRun   bool
+	// CollectDir is the root for collected results; empty means defaultCollectDir.
+	CollectDir string
 
 	// Poll, StartGrace and Heartbeat are the waiting intervals (tests shorten them).
 	Poll time.Duration
@@ -95,7 +104,9 @@ type expRunner struct {
 	specsDir  string // the material directory, for the content files of the fixtures
 	planName  string
 	planSHA   string
-	lock      *exp.Lock // set for a main plan (X8.5); nil for a pilot
+	lock      *exp.Lock    // set for a main or benchmark plan (X8.5); nil for a pilot
+	base      *exp.BaseSet // grundbestand.yaml, nil when absent (BM1)
+	collect   string       // root of the collected results
 	order     []expPlannedRun
 
 	taskByID map[string]exp.Task
@@ -133,7 +144,7 @@ func newExpRunner(api expAPI, opts expRunOptions, out, errw io.Writer) (*expRunn
 		return nil, err
 	}
 	p, tasks, manifests, dir := m.Plan, m.Tasks, m.Manifests, m.Dir
-	problems := exp.Validate(p, tasks, manifests)
+	problems := exp.ValidateWithBase(p, tasks, manifests, m.Base)
 	if len(problems) > 0 {
 		var b strings.Builder
 		for _, problem := range problems {
@@ -142,13 +153,13 @@ func newExpRunner(api expAPI, opts expRunOptions, out, errw io.Writer) (*expRunn
 		return nil, errors.New("the material has problems:\n" + strings.TrimRight(b.String(), "\n"))
 	}
 	var lock *exp.Lock
-	if p.Purpose == exp.PurposeMain {
-		// X8.5: a main plan only starts when the material matches its lock. The file checks are offline and
+	if p.Purpose == exp.PurposeMain || p.Purpose == exp.PurposeBenchmark {
+		// X8.5: a main or benchmark plan only starts when the material matches its lock. The file checks are offline and
 		// run here; the environment checks follow in run(), where the API is available.
 		lock, err = exp.LoadLock(dir)
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
-				return nil, fmt.Errorf("%s is missing: a main plan starts only with a lock (X8)", filepath.Join(dir, "plan.lock"))
+				return nil, fmt.Errorf("%s is missing: a %s plan starts only with a lock (X8)", filepath.Join(dir, "plan.lock"), p.Purpose)
 			}
 			return nil, err
 		}
@@ -175,7 +186,7 @@ func newExpRunner(api expAPI, opts expRunOptions, out, errw io.Writer) (*expRunn
 	name := m.PlanID
 	r := &expRunner{
 		api: api, out: out, errw: errw,
-		plan: p, tasks: tasks, manifests: manifests, specsDir: dir, planName: name, planSHA: digest, lock: lock,
+		plan: p, tasks: tasks, manifests: manifests, specsDir: dir, planName: name, planSHA: digest, lock: lock, base: m.Base, collect: opts.CollectDir,
 		order:    expRunOrder(name, tasks, cells, k, seed),
 		taskByID: map[string]exp.Task{}, cellByID: map[string]exp.Cell{}, models: map[string]string{},
 		k: k, seed: seed, dryRun: opts.DryRun,
@@ -198,6 +209,9 @@ func newExpRunner(api expAPI, opts expRunOptions, out, errw io.Writer) (*expRunn
 	}
 	if r.now == nil {
 		r.now = time.Now
+	}
+	if r.collect == "" {
+		r.collect = defaultCollectDir
 	}
 	for _, t := range tasks {
 		r.taskByID[t.ID] = t
@@ -503,6 +517,10 @@ func (r *expRunner) runOne(ctx context.Context, pr expPlannedRun, prev agwclient
 	if hasPrev {
 		id = fmt.Sprintf("%s#%d", pr.Key, expAttempt(prev.ID, pr.Key)+1)
 	}
+	// BM1: a run in protection none can change a base dataset; check them before every run that uses one.
+	if err := r.checkBase(ctx, task); err != nil {
+		return expOutcome{}, fmt.Errorf("run %s: %w", id, err)
+	}
 	// #207: the fixtures of the task are made fresh for every run and removed after it. This happens before the
 	// run exists, so that a failing seed leaves no record and the plan can be started again.
 	objects, release, err := r.seedRun(ctx, pr, id, task)
@@ -576,16 +594,27 @@ func (r *expRunner) execute(ctx context.Context, pr expPlannedRun, id string, pr
 	if objsErr != nil {
 		fmt.Fprintf(r.errw, "run %s: provenance register not readable: %v\n", pr.Key, objsErr)
 	}
-	pass, evidence, checkErr := exp.Evaluate(ctx, expRunnerCheck{api: r.api, chat: chat.ID}, task.Check, created)
-	if checkErr != nil {
-		status, reason = "error", "check: "+checkErr.Error()
+	// BM1: a task that is judged offline only leaves pass empty; runs.pass must claim nothing that was not checked.
+	var passPtr *bool
+	var evidence json.RawMessage
+	passText := "n/a"
+	if task.Check.HasOnline() {
+		pass, ev, checkErr := exp.Evaluate(ctx, expRunnerCheck{api: r.api, chat: chat.ID}, task.Check, created)
+		if checkErr != nil {
+			status, reason = "error", "check: "+checkErr.Error()
+		}
+		passPtr, evidence, passText = &pass, ev, yesNo(pass)
+	}
+	// BM1: results the task asks for are fetched after the check and before the cleanup removes them.
+	if notes := r.collectResults(ctx, pr, chat.ID, task); len(notes) > 0 {
+		reason = strings.TrimPrefix(reason+"; "+strings.Join(notes, "; "), "; ")
 	}
 	r.cleanup(ctx, chat.ID, det)
 	if err := r.api.ExpEndRun(ctx, agwclient.ExpRunEnd{ID: id, Status: status, EndReason: reason,
-		Pass: &pass, CheckEvidence: evidence}); err != nil {
+		Pass: passPtr, CheckEvidence: evidence}); err != nil {
 		return expOutcome{}, fmt.Errorf("%s: ending the run failed: %w", pr.Key, err)
 	}
-	fmt.Fprintf(r.out, "run %s %s pass=%s chat=%s %s tokens %d (+%d cache reads)\n", pr.Key, status, yesNo(pass), shortID(chat.ID),
+	fmt.Fprintf(r.out, "run %s %s pass=%s chat=%s %s tokens %d (+%d cache reads)\n", pr.Key, status, passText, shortID(chat.ID),
 		roundDuration(r.now().Sub(started)), det.Chat.Tokens.Input+det.Chat.Tokens.Output, det.Chat.Tokens.CacheRead)
 	if reason != "" && status != "done" {
 		fmt.Fprintf(r.errw, "  %s\n", reason)
@@ -612,7 +641,7 @@ func experimentVariant(binding string) string {
 // createChat makes the run's experiment chat. The task text goes with the create request: the
 // experiment key may create and read chats, not post messages (X1.3).
 func (r *expRunner) createChat(ctx context.Context, pr expPlannedRun, task exp.Task, cell exp.Cell, model string, objects map[string]string) (agwclient.Chat, error) {
-	delegation, err := exp.ResolveFixtureRefs(task.Delegation, objects)
+	delegation, err := exp.ResolveFixtureRefs(task.Delegation, objects, r.base.IDs())
 	if err != nil {
 		return agwclient.Chat{}, fmt.Errorf("delegation: %w", err)
 	}
@@ -629,6 +658,8 @@ func (r *expRunner) createChat(ctx context.Context, pr expPlannedRun, task exp.T
 			Seed:       pr.Seed,
 			// X7.6/#152: on unless the cell turns it off; the plan's field is per cell.
 			Trace: exp.TraceValue(cell.Trace),
+			// BM1: the task's internet field; empty means off. BM2 acts on it in the gateway.
+			Internet: task.Internet,
 			// #206: the gateway enforces the plan's run limits, not its own defaults.
 			Limits: &agwclient.ExpRunLimits{MaxCostUSD: r.plan.Limits.MaxCostUSD, MaxTokens: r.plan.Limits.MaxTokens,
 				MaxDuration: r.plan.Limits.MaxDuration},
@@ -1007,7 +1038,7 @@ func (r *expRunner) fixtureIDs(pr expPlannedRun) []string {
 		return nil
 	}
 	var ids []string
-	for _, m := range exp.ForTask(r.manifests, task, pr.Cell) {
+	for _, m := range exp.ForTask(r.manifests, task, r.cellByID[pr.Cell]) {
 		ids = append(ids, m.ID)
 	}
 	return ids
@@ -1018,7 +1049,8 @@ func (r *expRunner) fixtureIDs(pr expPlannedRun) []string {
 // fixtures after the run. A failure is a failure of the environment, not a result of the run (#207).
 func (r *expRunner) seedRun(ctx context.Context, pr expPlannedRun, id string, task exp.Task) (map[string]string, func() error, error) {
 	noop := func() error { return nil }
-	manifests := exp.ForTask(r.manifests, task, pr.Cell)
+	selected := exp.ForTask(r.manifests, task, r.cellByID[pr.Cell])
+	manifests := exp.Manifests(selected)
 	if len(manifests) == 0 {
 		return nil, noop, nil
 	}
@@ -1056,10 +1088,19 @@ func (r *expRunner) seedRun(ctx context.Context, pr expPlannedRun, id string, ta
 		}
 		return nil, noop, fmt.Errorf("run %s: fixtures of cell %s could not be seeded: %w; the plan stops before this run", id, pr.Cell, err)
 	}
+	// An attack variant that replaces a harmless fixture is known to the task's rules by the harmless id (BM1).
+	refs := map[string]string{}
+	for _, f := range selected {
+		refs[f.ID] = f.Ref
+	}
 	objects := map[string]string{}
 	var names []string
 	for _, f := range ans.Fixtures {
-		objects[f.ManifestID] = f.ObjectID
+		ref := refs[f.ManifestID]
+		if ref == "" {
+			ref = f.ManifestID
+		}
+		objects[ref] = f.ObjectID
 		names = append(names, f.ManifestID)
 	}
 	fmt.Fprintf(r.out, "run %s: fixtures %s seeded (%s)\n", id, strings.Join(names, ", "), roundDuration(r.now().Sub(started)))

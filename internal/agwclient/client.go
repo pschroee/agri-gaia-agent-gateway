@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -393,6 +394,27 @@ func (c *Client) ExpObjects(ctx context.Context, chatID string) (out []ExpObject
 
 func (c *Client) ExpCall(ctx context.Context, req ExpCallRequest) (out ExpCallResult, err error) {
 	return out, c.Do(ctx, "POST", "/api/exp/call", req, &out)
+}
+
+// ExpDataset reads GET /datasets/{id} with the experiment account's token and without a chat (BM1): the
+// runner checks the base datasets before a run's chat exists.
+func (c *Client) ExpDataset(ctx context.Context, id int64) (out ExpCallResult, err error) {
+	return out, c.Do(ctx, "GET", "/api/exp/dataset?id="+strconv.FormatInt(id, 10), nil, &out)
+}
+
+// ExpDownload streams the archive of a dataset the chat created into w (BM1). The gateway refuses a dataset
+// that is not in the chat's provenance register.
+func (c *Client) ExpDownload(ctx context.Context, chat string, dataset int64, w io.Writer) error {
+	q := url.Values{}
+	q.Set("chat", chat)
+	q.Set("dataset", strconv.FormatInt(dataset, 10))
+	resp, err := c.request(ctx, "GET", "/api/exp/download?"+q.Encode(), nil, "")
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	_, err = io.Copy(w, resp.Body)
+	return err
 }
 
 func (c *Client) ExpAbortChat(ctx context.Context, chatID string) error {

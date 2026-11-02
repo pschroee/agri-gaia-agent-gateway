@@ -331,7 +331,7 @@ var testPlan = &Plan{Purpose: PurposePilot, Cells: []Cell{{ID: "c1"}, {ID: "c2"}
 // #207: the error of the pilot run of 22.10.2026, found before the first chat.
 func TestValidateRejectsUpdateWithoutIDs(t *testing.T) {
 	task := taskWith(nil, map[string]any{"action": "update", "resource": "dataset"})
-	got := problemText(validateTask(task, testPlan, nil))
+	got := problemText(validateTask(task, testPlan, nil, nil))
 	if !strings.Contains(got, "rule 1 (update dataset) has no ids and covers no call") {
 		t.Fatalf("problems: %s", got)
 	}
@@ -340,7 +340,7 @@ func TestValidateRejectsUpdateWithoutIDs(t *testing.T) {
 func TestValidateAllowsReadWithoutIDs(t *testing.T) {
 	task := taskWith(nil, map[string]any{"action": "read", "resource": "dataset"},
 		map[string]any{"action": "create", "resource": "dataset"})
-	if got := problemText(validateTask(task, testPlan, nil)); strings.Contains(got, "no ids") {
+	if got := problemText(validateTask(task, testPlan, nil, nil)); strings.Contains(got, "no ids") {
 		t.Fatalf("problems: %s", got)
 	}
 }
@@ -348,12 +348,12 @@ func TestValidateAllowsReadWithoutIDs(t *testing.T) {
 func TestValidateFixtureRefMustBeListed(t *testing.T) {
 	ms := map[string]Manifest{"fx": {ID: "fx", Kind: KindDataset}}
 	task := taskWith(nil, map[string]any{"action": "update", "resource": "dataset", "ids": []any{"fixture:fx"}})
-	got := problemText(validateTask(task, testPlan, ms))
+	got := problemText(validateTask(task, testPlan, ms, nil))
 	if !strings.Contains(got, `rule 1 names fixture "fx", which the task does not list`) {
 		t.Fatalf("problems: %s", got)
 	}
 	task.Fixtures = []string{"fx"}
-	if got := problemText(validateTask(task, testPlan, ms)); strings.Contains(got, "rule 1") {
+	if got := problemText(validateTask(task, testPlan, ms, nil)); strings.Contains(got, "rule 1") {
 		t.Fatalf("problems: %s", got)
 	}
 }
@@ -361,7 +361,7 @@ func TestValidateFixtureRefMustBeListed(t *testing.T) {
 func TestValidateFixtureRefKind(t *testing.T) {
 	ms := map[string]Manifest{"fx": {ID: "fx", Kind: KindModel}}
 	task := taskWith([]string{"fx"}, map[string]any{"action": "update", "resource": "dataset", "ids": []any{"fixture:fx"}})
-	got := problemText(validateTask(task, testPlan, ms))
+	got := problemText(validateTask(task, testPlan, ms, nil))
 	if !strings.Contains(got, `rule 1 names fixture "fx" of kind model for resource dataset`) {
 		t.Fatalf("problems: %s", got)
 	}
@@ -370,7 +370,7 @@ func TestValidateFixtureRefKind(t *testing.T) {
 func TestValidateFixtureNotInCell(t *testing.T) {
 	ms := map[string]Manifest{"fx": {ID: "fx", Kind: KindDataset, Cells: []string{"c1"}}}
 	task := taskWith([]string{"fx"})
-	got := problemText(validateTask(task, testPlan, ms))
+	got := problemText(validateTask(task, testPlan, ms, nil))
 	if !strings.Contains(got, `fixture "fx" is not seeded in cell c2`) || strings.Contains(got, "in cell c1") {
 		t.Fatalf("problems: %s", got)
 	}
@@ -381,7 +381,7 @@ func TestResolveFixtureRefs(t *testing.T) {
 		map[string]any{"action": "update", "resource": "dataset", "ids": []any{"fixture:fx", "own", "*", "7"}},
 		map[string]any{"action": "read", "resource": "dataset"},
 	}, "confirm": "none"}
-	raw, err := ResolveFixtureRefs(del, map[string]string{"fx": "42"})
+	raw, err := ResolveFixtureRefs(del, map[string]string{"fx": "42"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -401,7 +401,7 @@ func TestResolveFixtureRefs(t *testing.T) {
 	if del["rules"].([]any)[0].(map[string]any)["ids"].([]any)[0] != "fixture:fx" {
 		t.Fatal("the task's delegation was changed")
 	}
-	if _, err := ResolveFixtureRefs(del, map[string]string{}); err == nil || !strings.Contains(err.Error(), `fixture "fx" has no object`) {
+	if _, err := ResolveFixtureRefs(del, map[string]string{}, nil); err == nil || !strings.Contains(err.Error(), `fixture "fx" has no object`) {
 		t.Fatalf("missing object: %v", err)
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -35,6 +36,51 @@ type Task struct {
 	Kind       string         `yaml:"kind"`
 	Notes      string         `yaml:"notes,omitempty"`
 	Example    bool           `yaml:"example,omitempty"`
+
+	// AttackFixtures lists attack manifests (attack: true, no cells) that exist only in cells with attack: true.
+	// A manifest with replaces: <id> takes the place of that harmless fixture there (BM1).
+	AttackFixtures []string `yaml:"attack_fixtures,omitempty"`
+	// Collect names results the runner downloads after the check and before the cleanup (BM1).
+	Collect []CollectSpec `yaml:"collect,omitempty"`
+	// Internet is off (default) or request: whether the agent may ask for internet access in this task (BM2 acts on it).
+	Internet string `yaml:"internet,omitempty"`
+	// UsesBase makes the runner check the base datasets before the run although no rule names one with base:.
+	UsesBase bool `yaml:"uses_base,omitempty"`
+}
+
+// CollectSpec names one result of a run that is downloaded before the cleanup removes it. Only datasets
+// the run's chat created are considered; Name is the dataset's name on the platform, the archive is
+// stored as <Name>.zip.
+type CollectSpec struct {
+	Resource string `yaml:"resource"`
+	Name     string `yaml:"name"`
+}
+
+// Values of Task.Internet.
+const (
+	InternetOff     = "off"
+	InternetRequest = "request"
+)
+
+// Kinds of an offline check.
+const (
+	OfflineClip     = "clip"
+	OfflineSolution = "solution"
+	OfflineCoding   = "coding"
+)
+
+// OfflineFields are the fields an offline clip check may compare.
+var OfflineFields = map[string]bool{"richtung": true, "auto": true, "kennzeichen": true}
+
+var offlineTripPattern = regexp.MustCompile(`^F\d{3,}$`)
+
+// OfflineCheck marks a task whose result is judged outside the gateway (BM6/BM7/BM8): the runner does
+// not set a pass for it, the evaluation reads the collected result. Fahrten and Fields only belong to
+// kind clip.
+type OfflineCheck struct {
+	Kind    string   `yaml:"kind"`
+	Fahrten []string `yaml:"fahrten,omitempty"`
+	Fields  []string `yaml:"fields,omitempty"`
 }
 
 // CheckSpec is the declarative success check (X1.9). Only read calls are allowed, so that the
@@ -44,6 +90,13 @@ type CheckSpec struct {
 	Conditions []Condition  `yaml:"conditions"`
 	Created    *Created     `yaml:"created,omitempty"`
 	Answer     *AnswerCheck `yaml:"answer,omitempty"`
+	// Offline: judged outside the gateway; may stand alone or next to the checks above (BM1).
+	Offline *OfflineCheck `yaml:"offline,omitempty"`
+}
+
+// HasOnline reports whether the runner has anything to evaluate itself (conditions, created, answer).
+func (c CheckSpec) HasOnline() bool {
+	return len(c.Conditions) > 0 || c.Created != nil || c.Answer != nil
 }
 
 // AnswerCheck judges the last assistant text of the run's chat (issue #147): it contains a
@@ -83,14 +136,17 @@ type Created struct {
 // Manifest is the content of fixtures/<id>.yaml (format from X4.1). Fields carry literal
 // values or {file: <path>} references to a content file below fixtures/inhalte/.
 type Manifest struct {
-	ID      string                `yaml:"id"`
-	Kind    string                `yaml:"kind"`
-	Owner   string                `yaml:"owner"`
-	Fields  map[string]FieldValue `yaml:"fields,omitempty"`
-	Files   []string              `yaml:"files,omitempty"`
-	Attack  bool                  `yaml:"attack,omitempty"`
-	Cells   []string              `yaml:"cells,omitempty"`
-	Example bool                  `yaml:"example,omitempty"`
+	ID     string                `yaml:"id"`
+	Kind   string                `yaml:"kind"`
+	Owner  string                `yaml:"owner"`
+	Fields map[string]FieldValue `yaml:"fields,omitempty"`
+	Files  []string              `yaml:"files,omitempty"`
+	Attack bool                  `yaml:"attack,omitempty"`
+	Cells  []string              `yaml:"cells,omitempty"`
+	// Replaces (attack manifests only): in cells with attack: true this fixture is created instead of the
+	// harmless fixture of that id; fixture:<id> then points to it (BM1).
+	Replaces string `yaml:"replaces,omitempty"`
+	Example  bool   `yaml:"example,omitempty"`
 }
 
 // FieldValue is either a literal value (anything but a mapping with exactly one key file) or a
@@ -159,7 +215,7 @@ func loadManifests(dir string) ([]Manifest, error) {
 	return out, nil
 }
 
-func validateTask(t Task, p *Plan, fixtures map[string]Manifest) []Problem {
+func validateTask(t Task, p *Plan, fixtures map[string]Manifest, base *BaseSet) []Problem {
 	where := "task " + t.ID
 	if where == "task " {
 		where = "task"
@@ -180,8 +236,23 @@ func validateTask(t Task, p *Plan, fixtures map[string]Manifest) []Problem {
 	default:
 		add("kind must be %q or %q, not %q", KindAllowed, KindTempting, t.Kind)
 	}
-	if t.Example && p.Purpose == PurposeMain {
-		add("is an example and cannot be part of a main plan")
+	if t.Example && frozenPurpose(p.Purpose) {
+		add("is an example and cannot be part of a %s plan", p.Purpose)
+	}
+	switch t.Internet {
+	case "", InternetOff, InternetRequest:
+	default:
+		add("internet must be %q or %q, not %q", InternetOff, InternetRequest, t.Internet)
+	}
+	for i, c := range t.Collect {
+		if c.Resource != delegation.Dataset {
+			add("collect[%d].resource must be %q, not %q", i, delegation.Dataset, c.Resource)
+		}
+		if strings.TrimSpace(c.Name) == "" {
+			add("collect[%d].name is empty", i)
+		} else if strings.ContainsAny(c.Name, `/\`) || strings.Contains(c.Name, "..") {
+			add("collect[%d].name must be a plain name, not %q", i, c.Name)
+		}
 	}
 	if t.Delegation == nil {
 		add("delegation is missing")
@@ -196,6 +267,10 @@ func validateTask(t Task, p *Plan, fixtures map[string]Manifest) []Problem {
 			add("fixture %q has no manifest in fixtures/", id)
 			continue
 		}
+		if m.Attack {
+			add("fixture %q: attack fixture must be listed under attack_fixtures", id)
+			continue
+		}
 		// The runner seeds the fixture for every cell of the plan (#207); a manifest limited to other cells
 		// would leave a run without its starting point.
 		for _, c := range p.Cells {
@@ -204,10 +279,75 @@ func validateTask(t Task, p *Plan, fixtures map[string]Manifest) []Problem {
 			}
 		}
 	}
+	out = append(out, validateAttackFixtures(t, p, fixtures, where)...)
 	if t.Delegation != nil {
-		out = append(out, validateRules(t, where, fixtures)...)
+		out = append(out, validateRules(t, where, fixtures, base)...)
+	}
+	if t.UsesBase && base == nil {
+		add("uses_base is set, but %s is missing next to the plan", BaseFile)
 	}
 	out = append(out, validateCheck(t.Check, where)...)
+	return out
+}
+
+// frozenPurpose reports whether a plan of this purpose is frozen by plan.lock and must not contain examples.
+func frozenPurpose(purpose string) bool {
+	return purpose == PurposeMain || purpose == PurposeBenchmark
+}
+
+// validateAttackFixtures checks the attack_fixtures of a task: each is an attack manifest without cells that
+// exists only in attack cells, so the plan needs an attack cell; replaces names a harmless fixture of the
+// task with the same kind, and no fixture is replaced twice.
+func validateAttackFixtures(t Task, p *Plan, fixtures map[string]Manifest, where string) []Problem {
+	var out []Problem
+	add := func(format string, a ...any) { out = append(out, Problem{where, fmt.Sprintf(format, a...)}) }
+	if len(t.AttackFixtures) == 0 {
+		return nil
+	}
+	hasAttackCell := false
+	for _, c := range p.Cells {
+		hasAttackCell = hasAttackCell || c.Attack
+	}
+	if !hasAttackCell {
+		add("attack_fixtures are listed, but no cell of the plan has attack: true")
+	}
+	listed := map[string]bool{}
+	for _, id := range t.Fixtures {
+		listed[id] = true
+	}
+	replaced := map[string]string{}
+	seen := map[string]bool{}
+	for _, id := range t.AttackFixtures {
+		if seen[id] {
+			add("attack fixture %q is listed twice", id)
+			continue
+		}
+		seen[id] = true
+		m, ok := fixtures[id]
+		switch {
+		case !ok:
+			add("attack fixture %q has no manifest in fixtures/", id)
+			continue
+		case !m.Attack:
+			add("attack fixture %q: the manifest must have attack: true", id)
+		case len(m.Cells) > 0:
+			add("attack fixture %q must not limit cells: it exists in the attack cells only", id)
+		}
+		if m.Replaces == "" {
+			continue
+		}
+		target, known := fixtures[m.Replaces]
+		switch {
+		case !listed[m.Replaces] || !known:
+			add("attack fixture %q replaces %q, which the task does not list under fixtures", id, m.Replaces)
+		case target.Kind != m.Kind:
+			add("attack fixture %q (kind %s) replaces %q of kind %s; the kinds must match", id, m.Kind, m.Replaces, target.Kind)
+		}
+		if other, dup := replaced[m.Replaces]; dup {
+			add("attack fixtures %q and %q both replace %q", other, id, m.Replaces)
+		}
+		replaced[m.Replaces] = id
+	}
 	return out
 }
 
@@ -225,7 +365,7 @@ var fixtureResource = map[string]string{KindDataset: delegation.Dataset, KindDat
 
 // validateRules checks the rules of a task against its fixtures: a write rule needs ids (else it
 // covers nothing), and a fixture: reference needs a listed fixture of the matching kind.
-func validateRules(t Task, where string, fixtures map[string]Manifest) []Problem {
+func validateRules(t Task, where string, fixtures map[string]Manifest, base *BaseSet) []Problem {
 	var out []Problem
 	add := func(format string, a ...any) { out = append(out, Problem{where, fmt.Sprintf(format, a...)}) }
 	rules, _ := t.Delegation["rules"].([]any)
@@ -240,6 +380,16 @@ func validateRules(t Task, where string, fixtures map[string]Manifest) []Problem
 		}
 		for _, v := range ids {
 			ref, _ := v.(string)
+			if strings.HasPrefix(ref, BaseRef) {
+				name := strings.TrimPrefix(ref, BaseRef)
+				if _, known := base.Lookup(name); !known {
+					add("rule %d names base dataset %q, which %s does not list", i+1, name, BaseFile)
+				}
+				if action == delegation.Update || action == delegation.Delete {
+					add("rule %d (%s %s) names base dataset %q: base datasets are delegated for reading only", i+1, action, resource, name)
+				}
+				continue
+			}
 			if !strings.HasPrefix(ref, FixtureRef) {
 				continue
 			}
@@ -261,9 +411,10 @@ func validateRules(t Task, where string, fixtures map[string]Manifest) []Problem
 }
 
 // ResolveFixtureRefs replaces every "fixture:<id>" in the ids of the rules by the object identifier
-// of that fixture (objects maps manifest id to object id). Other identifiers stay as they are. The
+// of that fixture (objects maps manifest id to object id) and every "base:<name>" by the identifier of that
+// base dataset (bases maps name to id, see BaseSet.IDs). Other identifiers stay as they are. The
 // task's own map is not changed. A reference without an object is an error (#207).
-func ResolveFixtureRefs(del map[string]any, objects map[string]string) (json.RawMessage, error) {
+func ResolveFixtureRefs(del map[string]any, objects, bases map[string]string) (json.RawMessage, error) {
 	raw, err := json.Marshal(del)
 	if err != nil {
 		return nil, err
@@ -278,6 +429,15 @@ func ResolveFixtureRefs(del map[string]any, objects map[string]string) (json.Raw
 		ids, _ := r["ids"].([]any)
 		for j, v := range ids {
 			ref, _ := v.(string)
+			if strings.HasPrefix(ref, BaseRef) {
+				name := strings.TrimPrefix(ref, BaseRef)
+				id, ok := bases[name]
+				if !ok || id == "" {
+					return nil, fmt.Errorf("base dataset %q is not listed in %s", name, BaseFile)
+				}
+				ids[j] = id
+				continue
+			}
 			if !strings.HasPrefix(ref, FixtureRef) {
 				continue
 			}
@@ -295,8 +455,29 @@ func ResolveFixtureRefs(del map[string]any, objects map[string]string) (json.Raw
 func validateCheck(c CheckSpec, where string) []Problem {
 	var out []Problem
 	add := func(format string, a ...any) { out = append(out, Problem{where, fmt.Sprintf(format, a...)}) }
-	if len(c.Conditions) == 0 && c.Created == nil && c.Answer == nil {
-		add("check is empty; a task needs conditions, created or answer")
+	if !c.HasOnline() && c.Offline == nil {
+		add("check is empty; a task needs conditions, created, answer or offline")
+	}
+	if o := c.Offline; o != nil {
+		switch o.Kind {
+		case OfflineClip:
+			for _, f := range o.Fahrten {
+				if !offlineTripPattern.MatchString(f) {
+					add("check.offline.fahrten: %q is not a trip such as F017", f)
+				}
+			}
+			for _, f := range o.Fields {
+				if !OfflineFields[f] {
+					add("check.offline.fields: %q is not one of richtung, auto, kennzeichen", f)
+				}
+			}
+		case OfflineSolution, OfflineCoding:
+			if len(o.Fahrten) > 0 || len(o.Fields) > 0 {
+				add("check.offline: fahrten and fields belong to kind %q only", OfflineClip)
+			}
+		default:
+			add("check.offline.kind must be clip, solution or coding, not %q", o.Kind)
+		}
 	}
 	for i, cond := range c.Conditions {
 		at := fmt.Sprintf("check.conditions[%d]", i)
@@ -366,8 +547,14 @@ func validateManifest(m Manifest, purpose string, cells map[string]bool) []Probl
 	default:
 		add("owner must be primary or secondary, not %q", m.Owner)
 	}
-	if m.Example && purpose == PurposeMain {
-		add("is an example and cannot be part of a main plan")
+	if m.Example && frozenPurpose(purpose) {
+		add("is an example and cannot be part of a %s plan", purpose)
+	}
+	if m.Replaces != "" && !m.Attack {
+		add("replaces is only for attack fixtures (attack: true)")
+	}
+	if m.Replaces != "" && m.Replaces == m.ID {
+		add("replaces names itself")
 	}
 	for _, id := range m.Cells {
 		if !cells[id] {
