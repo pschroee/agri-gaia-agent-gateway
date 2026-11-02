@@ -80,7 +80,19 @@ func (s *Store) planChatsCTE(ctx context.Context) (string, error) {
 )`, nil
 }
 
-var exportTables = []string{"runs", "platform_calls", "tool_executions", "llm_calls", "reconcile", "fixtures", "syscalls", "turns"}
+var exportTables = []string{"runs", "platform_calls", "tool_executions", "llm_calls", "reconcile", "fixtures", "syscalls", "turns",
+	"messages", "approvals", "internet_grants", "web_requests", "notebook_runs", "artifacts", "plan_steps"}
+
+// messageTextSQL is the text of a chat_messages row aliased m: only its text items joined with a newline (like
+// exp.AssistantText, but for each message), or the content itself when it is a plain string. Thinking, tool calls and
+// tool results never count.
+const messageTextSQL = `COALESCE(
+  (SELECT string_agg(x.e->>'text', E'\n' ORDER BY x.ord)
+     FROM jsonb_array_elements(CASE WHEN jsonb_typeof(m.message->'content') = 'array' THEN m.message->'content' ELSE '[]'::jsonb END)
+          WITH ORDINALITY AS x(e, ord)
+    WHERE x.e->>'type' = 'text'),
+  CASE WHEN jsonb_typeof(m.message->'content') = 'string' THEN m.message->>'content' END,
+  '')`
 
 // ExportNames lists the tables of the export in the order of the manifest.
 func ExportNames() []string { return append([]string(nil), exportTables...) }
@@ -129,6 +141,58 @@ FROM llm_calls x JOIN plan_chats r ON r.chat_id = x.chat_id ORDER BY x.id`)
 			`SELECT r.run_id, r.cell, r.task, r.rep, t.id, t.chat_id::text, t.trigger, t.origin, t.sources, t.queue_ids,
   t.created_at, COALESCE(t.abort_reason,'')
 FROM chat_turns t JOIN plan_chats r ON r.chat_id = t.chat_id ORDER BY t.id`)
+	case "messages":
+		return s.exportQuery(ctx, plan, table,
+			[]string{"run_id", "cell", "task", "rep", "chat_id", "seq", "role", "text", "message", "created_at", "turn_id"},
+			`SELECT r.run_id, r.cell, r.task, r.rep, m.chat_id::text, m.seq, m.role, `+messageTextSQL+`, m.message, m.created_at, m.turn_id
+FROM chat_messages m JOIN plan_chats r ON r.chat_id = m.chat_id ORDER BY m.chat_id, m.seq`)
+	case "approvals":
+		return s.exportQuery(ctx, plan, table,
+			[]string{"run_id", "cell", "task", "rep", "id", "chat_id", "kind", "via", "name", "effect", "state", "decided_by",
+				"created_at", "decided_at", "summary", "internet"},
+			`SELECT r.run_id, r.cell, r.task, r.rep, a.id::text, a.chat_id::text, a.kind, a.via, a.name, COALESCE(a.effect,''),
+  a.state, a.decided_by, a.created_at, a.decided_at, COALESCE(a.summary,''), a.internet
+FROM approvals a JOIN plan_chats r ON r.chat_id = a.chat_id ORDER BY a.created_at, a.id`)
+	case "internet_grants":
+		// Every column of the table; it holds no secret (kind, list, limits, end). A new column with a secret would
+		// have to stay out of this list.
+		return s.exportQuery(ctx, plan, table,
+			[]string{"run_id", "cell", "task", "rep", "id", "chat_id", "approval_id", "kind", "origin", "via", "session",
+				"tool_call_id", "reason", "domains", "packages", "state", "max_minutes", "max_bytes", "bytes", "blocked",
+				"created_at", "started_at", "expires_at", "ended_at", "ended_reason"},
+			`SELECT r.run_id, r.cell, r.task, r.rep, g.id, g.chat_id::text, COALESCE(g.approval_id::text,''), g.kind, g.origin,
+  g.via, g.session, g.tool_call_id, g.reason, g.domains, g.packages, g.state, g.max_minutes, g.max_bytes, g.bytes, g.blocked,
+  g.created_at, g.started_at, g.expires_at, g.ended_at, g.ended_reason
+FROM internet_grants g JOIN plan_chats r ON r.chat_id = g.chat_id ORDER BY g.id`)
+	case "web_requests":
+		// Without source_ip: an address inside the sandbox network says nothing about the run.
+		return s.exportQuery(ctx, plan, table,
+			[]string{"run_id", "cell", "task", "rep", "id", "chat_id", "method", "host", "port", "path", "status",
+				"bytes_up", "bytes_down", "denied", "started_at", "duration_ms"},
+			`SELECT r.run_id, r.cell, r.task, r.rep, w.id, w.chat_id::text, w.method, w.host, w.port, w.path, w.status,
+  w.bytes_up, w.bytes_down, w.denied, w.started_at, w.duration_ms
+FROM web_requests w JOIN plan_chats r ON r.chat_id = w.chat_id ORDER BY w.id`)
+	case "notebook_runs":
+		return s.exportQuery(ctx, plan, table,
+			[]string{"run_id", "cell", "task", "rep", "id", "chat_id", "entry", "files", "dataset_ids", "timeout_min",
+				"started_at", "finished_at", "exit_code"},
+			`SELECT r.run_id, r.cell, r.task, r.rep, n.id, n.chat_id::text, n.entry, n.files, n.dataset_ids, n.timeout_min,
+  n.started_at, n.finished_at, n.exit_code
+FROM notebook_runs n JOIN plan_chats r ON r.chat_id = n.chat_id ORDER BY n.started_at, n.id`)
+	case "artifacts":
+		// Without object_key: the internal storage path is of no use for the evaluation.
+		return s.exportQuery(ctx, plan, table,
+			[]string{"run_id", "cell", "task", "rep", "chat_id", "kind", "name", "size", "content_type", "via", "created_at"},
+			`SELECT r.run_id, r.cell, r.task, r.rep, a.chat_id::text, a.kind, a.name, a.size, a.content_type, a.via, a.created_at
+FROM artifacts a JOIN plan_chats r ON r.chat_id = a.chat_id ORDER BY a.created_at, a.kind, a.name`)
+	case "plan_steps":
+		return s.exportQuery(ctx, plan, table,
+			[]string{"run_id", "cell", "task", "rep", "plan_id", "idx", "description", "tool", "method", "path", "body", "effect",
+				"state", "created_resource", "created_id", "done_at"},
+			`SELECT r.run_id, r.cell, r.task, r.rep, p.id::text, ps.idx, ps.description, ps.tool, ps.method, ps.path, ps.body,
+  ps.effect, ps.state, ps.created_resource, ps.created_id, ps.done_at
+FROM plan_steps ps JOIN plans p ON p.id = ps.plan_id JOIN plan_chats r ON r.chat_id = p.chat_id
+ORDER BY p.created_at, p.id, ps.idx`)
 	case "fixtures":
 		// X4 records the seeded platform objects. A fixture seeded by the runner carries its run_key (#207) and
 		// belongs to that run only; an older row without run_key belongs to the whole cell, so the export repeats
