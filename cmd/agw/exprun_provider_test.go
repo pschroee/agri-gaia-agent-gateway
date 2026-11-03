@@ -28,3 +28,13 @@ func TestEndReasonMarksProviderError(t *testing.T) {
 		t.Fatalf("%s %q", st, r)
 	}
 }
+
+func TestEndReasonEmptyAnswerIsProviderError(t *testing.T) {
+	st, r := endOf(`{"stopReason":"stop","content":[],"usage":{"output":1}}`)
+	if st != "error" || !strings.HasPrefix(r, "provider_error: empty") {
+		t.Fatalf("%s %q", st, r)
+	}
+	if st, _ := endOf(`{"stopReason":"stop","content":[{"type":"text","text":"done"}],"usage":{"output":5}}`); st != "done" {
+		t.Fatalf("a real answer: %s", st)
+	}
+}

@@ -835,10 +835,19 @@ func expEndReason(det agwclient.ChatDetail) (status, reason string) {
 			continue
 		}
 		var p struct {
-			StopReason   string `json:"stopReason"`
-			ErrorMessage string `json:"errorMessage"`
+			StopReason   string            `json:"stopReason"`
+			ErrorMessage string            `json:"errorMessage"`
+			Content      []json.RawMessage `json:"content"`
+			Usage        struct {
+				Output *int64 `json:"output"`
+			} `json:"usage"`
 		}
 		_ = json.Unmarshal(m.Message, &p)
+		if p.StopReason == "stop" && len(p.Content) == 0 && p.Usage.Output != nil && *p.Usage.Output <= 1 {
+			// An overloaded provider answered with nothing (BM9, 3 Nov 2026: one output token, no text, no tool call):
+			// that is no finished run.
+			return "error", "provider_error: empty answer from the model provider"
+		}
 		switch p.StopReason {
 		case "error":
 			if providerErrorRe.MatchString(p.ErrorMessage) {
