@@ -192,3 +192,36 @@ func TestAbortWithoutTurnNoReason(t *testing.T) {
 		t.Fatalf("reason for a finished turn: %q", got)
 	}
 }
+
+// BM9: the turn limit of 30 minutes does not apply to an experiment run; its plan limits (X3) bound it. The pilot of
+// 3 Nov 2026 was aborted at 30 min while the agent waited for a notebook run.
+func TestTimeLimitSparesExperimentRun(t *testing.T) {
+	e := setup(t)
+	allowExperiment(e)
+	e.m.opt.ExpMaxCostUSD, e.m.opt.ExpMaxTokens, e.m.opt.ExpMaxDuration = 0, 0, 0
+	c := createExperiment(t, e, "none", NewChat{})
+	a := e.agent(0)
+	hold := make(chan struct{})
+	a.mu.Lock()
+	a.hold = hold
+	a.mu.Unlock()
+	defer close(hold)
+	if _, err := e.m.Send(context.Background(), c.ID, "go"); err != nil {
+		t.Fatal(err)
+	}
+	waitRunning(t, e, c.ID)
+	waitReported(t, e, c.ID)
+	e.m.opt.IdleTimeout = time.Minute
+	l := e.m.liveOf(c.ID)
+	if l == nil {
+		t.Fatal("chat is not live")
+	}
+	e.m.mu.Lock()
+	l.runningSince = time.Now().Add(-maxRunTime - time.Minute)
+	e.m.mu.Unlock()
+	e.m.armIdleAfter(c.ID, l, time.Millisecond)
+	time.Sleep(300 * time.Millisecond)
+	if r := turnReason(t, e, c.ID); r == AbortTimeLimit {
+		t.Fatal("an experiment run was aborted by the 30 min turn limit")
+	}
+}

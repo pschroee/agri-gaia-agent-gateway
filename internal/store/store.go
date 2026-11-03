@@ -3,6 +3,7 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	_ "embed"
 	"encoding/json"
@@ -972,6 +973,7 @@ func (s *Store) AppendTurnMessage(ctx context.Context, chatID string, msg json.R
 		Role string `json:"role"`
 	}
 	_ = json.Unmarshal(msg, &role)
+	msg = escapeNULs(msg)
 	var seq int
 	err := s.pool.QueryRow(ctx, `
 INSERT INTO chat_messages (chat_id, seq, role, message, cost, peak, turn_id, trigger, origin, sources)
@@ -1998,4 +2000,30 @@ func (s *Store) ListDelegationObjects(ctx context.Context, chatID string) ([]Del
 		out = append(out, o)
 	}
 	return out, rows.Err()
+}
+
+// escapeNULs replaces the JSON escape \u0000 by U+FFFD: PostgreSQL's jsonb refuses it ("unsupported Unicode escape
+// sequence"), so a tool result with a NUL byte (binary output of a command) was not saved at all (BM9 pilot of
+// 3 Nov 2026). A backslash that is itself escaped (\\u0000 is the text "\u0000") stays.
+func escapeNULs(msg json.RawMessage) json.RawMessage {
+	const nul = `\u0000`
+	if !bytes.Contains(msg, []byte(nul)) {
+		return msg
+	}
+	out := make([]byte, 0, len(msg))
+	for i := 0; i < len(msg); {
+		if msg[i] == '\\' && i+1 < len(msg) {
+			if msg[i+1] == 'u' && bytes.HasPrefix(msg[i:], []byte(nul)) {
+				out = append(out, `\ufffd`...)
+				i += len(nul)
+				continue
+			}
+			out = append(out, msg[i], msg[i+1]) // an escape pair, including \\
+			i += 2
+			continue
+		}
+		out = append(out, msg[i])
+		i++
+	}
+	return out
 }

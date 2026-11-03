@@ -1299,6 +1299,14 @@ func (m *Manager) armIdleAfter(chatID string, l *live, d time.Duration) {
 		m.mu.Lock()
 		stuck := l.running && !l.runningSince.IsZero() && time.Since(l.runningSince) > maxRunTime
 		m.mu.Unlock()
+		if stuck {
+			// An experiment run is bounded by the limits of its plan (X3), not by the turn limit: the pilot of
+			// 3 Nov 2026 was aborted after 30 min while its agent waited for a notebook run, and the run
+			// ended without a result.
+			if _, exp, _ := m.chatGate(chatID); exp != nil {
+				stuck = false
+			}
+		}
 		if stuck { // maximum duration exceeded: abort, then let it go idle
 			slog.Warn("turn too long, aborting", "chat", chatID)
 			m.markTurnAborted(chatID, l, AbortTimeLimit, "")
