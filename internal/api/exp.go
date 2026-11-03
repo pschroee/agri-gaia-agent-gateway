@@ -313,7 +313,7 @@ func (s *Server) expAbortChat(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, store.ErrNotFound.Error())
 		return
 	}
-	if _, err := s.M.Abort(r.Context(), req.Chat); err != nil {
+	if _, err := s.M.AbortExperimentRun(r.Context(), req.Chat); err != nil {
 		fail(w, err)
 		return
 	}

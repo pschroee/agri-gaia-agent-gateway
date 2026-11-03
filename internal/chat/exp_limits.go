@@ -187,7 +187,7 @@ func (m *Manager) hitExperimentLimit(ctx context.Context, chatID, at, reason str
 		go func() {
 			actx, cancel := context.WithTimeout(context.Background(), callTimeout)
 			defer cancel()
-			if _, err := m.Abort(actx, chatID); err != nil {
+			if _, err := m.AbortExperimentRun(actx, chatID); err != nil {
 				slog.Warn("experiment run not aborted after the limit", "chat", chatID, "error", err)
 			}
 		}()
@@ -198,4 +198,18 @@ func (m *Manager) hitExperimentLimit(ctx context.Context, chatID, at, reason str
 		}
 	}
 	return fmt.Errorf("experiment run limit reached: %s", reason)
+}
+
+// AbortExperimentRun stops an experiment chat for good: the turn is aborted and the chat's notebook server is
+// stopped. A product abort leaves platform jobs running on purpose; for a run that has ended (limit or abort by the
+// runner) that is wrong: a notebook run with a long timeout would hold the runner at "a job is still running"
+// until its own limit (pilot of 02.11.2026, a training with 200 min), and would go on using the machine.
+func (m *Manager) AbortExperimentRun(ctx context.Context, chatID string) (ChatView, error) {
+	v, err := m.Abort(ctx, chatID)
+	if m.opt.Notebook != nil {
+		if nerr := m.opt.Notebook.StopChat(ctx, chatID); nerr != nil {
+			slog.Warn("notebook server of the experiment run not stopped", "chat", chatID, "error", nerr)
+		}
+	}
+	return v, err
 }

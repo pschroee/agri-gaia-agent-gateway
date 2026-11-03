@@ -337,3 +337,45 @@ func TestLimitTickSkipsEnded(t *testing.T) {
 		t.Fatalf("the first reason must stay: %+v", got.Experiment)
 	}
 }
+
+// BM9 (pilot of 02.11.2026): a run that a limit ends also loses its notebook server, otherwise a long notebook run
+// goes on after the end and holds the runner.
+func TestLimitStopsNotebookServer(t *testing.T) {
+	e := setup(t)
+	allowExperiment(e)
+	nb := &fakeNotebook{}
+	e.m.opt.Notebook = nb
+	e.m.opt.ExpMaxCostUSD, e.m.opt.ExpMaxTokens, e.m.opt.ExpMaxDuration = 0, 0, 0
+	c := createLimited(t, e, &store.RunLimits{MaxDuration: "1ms"})
+	startRunOf(t, e, c.ID, "p/c/t/1")
+	time.Sleep(5 * time.Millisecond)
+	e.m.checkOpenExperiments(context.Background())
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		nb.mu.Lock()
+		n := len(nb.stopped)
+		nb.mu.Unlock()
+		if n == 1 && nb.stopped[0] == c.ID {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("notebook server not stopped after the limit: %v", nb.stopped)
+}
+
+// The runner's own abort (POST /api/exp/chats/abort) goes through the same path.
+func TestAbortExperimentRunStopsNotebookServer(t *testing.T) {
+	e := setup(t)
+	allowExperiment(e)
+	nb := &fakeNotebook{}
+	e.m.opt.Notebook = nb
+	c := createExperiment(t, e, "none", NewChat{})
+	if _, err := e.m.AbortExperimentRun(context.Background(), c.ID); err != nil {
+		t.Fatal(err)
+	}
+	nb.mu.Lock()
+	defer nb.mu.Unlock()
+	if len(nb.stopped) != 1 || nb.stopped[0] != c.ID {
+		t.Fatalf("stopped: %v", nb.stopped)
+	}
+}
