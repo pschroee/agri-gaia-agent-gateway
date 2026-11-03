@@ -23,6 +23,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -825,6 +826,8 @@ func (r *expRunner) abort(ctx context.Context, chatID string) {
 
 // expEndReason reads the outcome of the chat's last assistant turn. An error that pi reports there
 // is the run's error; an abort is the run's abort.
+var providerErrorRe = regexp.MustCompile(`^\s*(5\d\d|429)\b`)
+
 func expEndReason(det agwclient.ChatDetail) (status, reason string) {
 	for i := len(det.Messages) - 1; i >= 0; i-- {
 		m := det.Messages[i]
@@ -838,6 +841,10 @@ func expEndReason(det agwclient.ChatDetail) (status, reason string) {
 		_ = json.Unmarshal(m.Message, &p)
 		switch p.StopReason {
 		case "error":
+			if providerErrorRe.MatchString(p.ErrorMessage) {
+				// The model provider failed (overload, outage), not the agent: the status stays error, the reason says so.
+				return "error", "provider_error: " + p.ErrorMessage
+			}
 			return "error", p.ErrorMessage
 		case "aborted":
 			return "aborted", "the turn was aborted"
