@@ -256,7 +256,12 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	started := time.Now()
+	var transport http.RoundTripper
+	if att.Experiment {
+		transport = &retryTransport{base: http.DefaultTransport, body: func() io.ReadCloser { return io.NopCloser(bytes.NewReader(body)) }, log: provID}
+	}
 	rp := &httputil.ReverseProxy{
+		Transport: transport,
 		ModifyResponse: func(resp *http.Response) error {
 			if p.rec == nil {
 				return nil
