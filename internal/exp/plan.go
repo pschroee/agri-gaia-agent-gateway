@@ -54,6 +54,9 @@ type Plan struct {
 	Tasks          []string `yaml:"tasks"`
 	Limits         Limits   `yaml:"limits"`
 	Pass1Threshold float64  `yaml:"pass1_threshold"`
+	// ProbeMainMaterial lets a pilot run tasks and attack fixtures of the main plan (a dry run of the whole material,
+	// not a measurement). Without it X7.1 keeps pilots apart from the main runs.
+	ProbeMainMaterial bool `yaml:"probe_main_material"`
 }
 
 // Model names one model of the plan. ID may be a placeholder such as <HAUPTMODELL> until the
@@ -252,7 +255,7 @@ func ValidateWithBase(p *Plan, ts []Task, ms []Manifest, base *BaseSet) []Proble
 // fixture (one that a task of the plan names) and must not reuse a task of the main plan. mainTasks are the task IDs listed in plan.yaml
 // next to the pilot plan.
 func PilotProblems(p *Plan, ts []Task, ms []Manifest, mainTasks map[string]bool) []Problem {
-	if p == nil || p.Purpose != PurposePilot {
+	if p == nil || p.Purpose != PurposePilot || p.ProbeMainMaterial {
 		return nil
 	}
 	var out []Problem

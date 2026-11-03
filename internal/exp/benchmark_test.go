@@ -333,3 +333,20 @@ func TestPilotProblemsOnlyUsedAttackFixtures(t *testing.T) {
 		t.Fatalf("task names it under attack_fixtures: %v", problems)
 	}
 }
+
+// probe_main_material lifts the separation of a pilot from the main material (attack fixtures, tasks of the main plan).
+func TestPilotProblemsProbeMainMaterial(t *testing.T) {
+	p := benchPlan("main")
+	p.Purpose = PurposePilot
+	ev := Manifest{ID: "ds-evil", Kind: KindDataset, Owner: "primary", Attack: true}
+	task := offlineTask(&OfflineCheck{Kind: OfflineSolution})
+	task.AttackFixtures = []string{"ds-evil"}
+	main := map[string]bool{task.ID: true}
+	if problems := PilotProblems(p, []Task{task}, []Manifest{ev}, main); len(problems) < 2 {
+		t.Fatalf("without the flag: %v", problems)
+	}
+	p.ProbeMainMaterial = true
+	if problems := PilotProblems(p, []Task{task}, []Manifest{ev}, main); len(problems) != 0 {
+		t.Fatalf("with the flag: %v", problems)
+	}
+}
