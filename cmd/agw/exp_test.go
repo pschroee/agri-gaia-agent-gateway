@@ -1565,3 +1565,34 @@ func TestDryRunListsFixtures(t *testing.T) {
 		t.Fatalf("the dry run changed something: %d seeds, %d unseeds, %d chats", len(api.seeds), api.unseedCalls, len(api.creates))
 	}
 }
+
+// The backend deletes an image by <repository>/<name>:<tag>; the numeric id and an escaped slash
+// made the cleanup of pilot-stufe2g fail.
+func TestCleanupImageByRepositoryAndTag(t *testing.T) {
+	api := newFakeExpAPI()
+	api.objects["c1"] = []agwclient.ExpObject{
+		{Resource: "container_image", ID: "agent-exp/garage-trip:v1"},
+		{Resource: "container_image", ID: "166"},
+	}
+	r, _, _ := newTestRunner(t, api)
+	if err := r.run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	var images []string
+	for _, path := range api.deletes() {
+		if strings.HasPrefix(path, "/container-images/") {
+			images = append(images, path)
+		}
+	}
+	if len(images) != 1 || images[0] != "/container-images/agent-exp/garage-trip:v1" {
+		t.Fatalf("image deletes: %v", images)
+	}
+	for _, c := range []struct {
+		in string
+		ok bool
+	}{{"a/b:c", true}, {"166", false}, {"a:b", false}, {"a/b/c:d", false}, {"/b:c", false}} {
+		if _, ok := containerImagePath(c.in); ok != c.ok {
+			t.Errorf("containerImagePath(%q) ok=%v", c.in, ok)
+		}
+	}
+}

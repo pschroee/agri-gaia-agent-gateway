@@ -936,7 +936,11 @@ func (r *expRunner) cleanup(ctx context.Context, chatID string, det agwclient.Ch
 		byResource[o.Resource] = appendUnique(byResource[o.Resource], o.ID)
 	}
 	for _, id := range byResource["container_image"] {
-		r.deleteObject(ctx, chatID, "/container-images/"+url.PathEscape(id), "")
+		// The backend deletes an image by <repository>/<name>:<tag>, not by its numeric id; the register
+		// lists both for one build, so the numeric entry is skipped.
+		if path, ok := containerImagePath(id); ok {
+			r.deleteObject(ctx, chatID, path, "")
+		}
 	}
 	for _, id := range expContainerIDs(det) {
 		r.deleteObject(ctx, chatID, "/train/containers/"+url.PathEscape(id), "")
@@ -949,6 +953,20 @@ func (r *expRunner) cleanup(ctx context.Context, chatID string, det agwclient.Ch
 		// annotation task (CLAUDE.md, cleanup of test objects).
 		r.deleteObject(ctx, chatID, "/datasets/"+url.PathEscape(id), `{"key":"-","csrftoken":"-","sessionid":"-"}`)
 	}
+}
+
+// containerImagePath builds the DELETE path of an image from "<repository>/<name>:<tag>". The slash
+// stays a separator (the route has two path segments), every segment is escaped on its own.
+func containerImagePath(ref string) (string, bool) {
+	repo, tag, ok := strings.Cut(ref, ":")
+	if !ok || tag == "" || strings.Count(repo, "/") != 1 {
+		return "", false
+	}
+	first, second, _ := strings.Cut(repo, "/")
+	if first == "" || second == "" {
+		return "", false
+	}
+	return "/container-images/" + url.PathEscape(first) + "/" + url.PathEscape(second) + ":" + url.PathEscape(tag), true
 }
 
 func (r *expRunner) deleteObject(ctx context.Context, chatID, path, body string) {
