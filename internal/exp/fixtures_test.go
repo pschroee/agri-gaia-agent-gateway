@@ -336,6 +336,26 @@ func TestUnseedOnlyRecordedIDs(t *testing.T) {
 	}
 }
 
+// A run that deleted its own fixture must not stop the plan at the cleanup: the object is gone already.
+func TestUnseedToleratesFixtureDeletedByRun(t *testing.T) {
+	f, primary, _, st := newFixtures(nil)
+	ctx := context.Background()
+	if _, err := st.AddFixture(ctx, store.NewFixture{
+		Plan: "pilot", Cell: "c1", ManifestID: "dataset-1", Kind: KindDataset, Owner: OwnerPrimary, ObjectID: "1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// datasets/1 does not exist (deleted by the run): the fake answers 404
+	res, err := f.Unseed(ctx, "pilot", "c1")
+	if err != nil {
+		t.Fatalf("unseed after a deletion by the run: %v", err)
+	}
+	_ = primary
+	if res.Removed != 1 || len(res.Fixtures) != 1 || res.Fixtures[0].RemovedAt == nil {
+		t.Fatalf("row: %+v", res)
+	}
+}
+
 func TestVerifyFindsMissingObject(t *testing.T) {
 	f, primary, _, _ := newFixtures(nil)
 	ctx := context.Background()

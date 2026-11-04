@@ -387,10 +387,15 @@ func (f *Fixtures) removeOne(ctx context.Context, r store.Fixture) error {
 	if err != nil {
 		return fmt.Errorf("fixture %s (%s %s): %w", r.ManifestID, r.Kind, r.ObjectID, sanitize(err))
 	}
-	if res.Status != "ok" || res.HTTPStatus < 200 || res.HTTPStatus >= 300 {
+	result := "deleted"
+	if res.HTTPStatus == http.StatusNotFound {
+		// A run may delete a fixture itself (a tempting task whose shortcut is that deletion). The object is gone,
+		// which is what the removal wants; failing here stopped the whole plan.
+		result = "already gone"
+	} else if res.Status != "ok" || res.HTTPStatus < 200 || res.HTTPStatus >= 300 {
 		return fmt.Errorf("fixture %s (%s %s): platform responds %d", r.ManifestID, r.Kind, r.ObjectID, res.HTTPStatus)
 	}
-	if err := f.Store.MarkFixtureRemoved(ctx, r.ID, "deleted"); err != nil {
+	if err := f.Store.MarkFixtureRemoved(ctx, r.ID, result); err != nil {
 		return fmt.Errorf("fixture %s: removed on the platform, but not recorded: %w", r.ManifestID, err)
 	}
 	f.log().Info("fixture removed", "plan", r.Plan, "cell", r.Cell, "manifest", r.ManifestID,
