@@ -22,7 +22,7 @@ const MAX_SHOWN = 64 * 1024;
 const description = `Calls the REST API of the Agri-Gaia platform (datasets, models, training, tasks, edge devices, container images). You do not log in; the orchestrator takes care of login, checking against your delegated rights and the user's approval of writing calls.
 - Paths as in the platform's OpenAPI description, e.g. GET /datasets, GET /datasets/3, GET /train/providers, POST /train/config, GET /tasks/12.
 - Which paths exist: the system note lists the platform's operations and the gateway's own paths (/_agw/…). Which rights you have: GET /_agw/rights. What this setup offers (vision, internet, notebook, edge, pre-annotation, compute calls left, bindings): GET /_agw/capabilities.
-- Body only as JSON; files cannot be uploaded this way.
+- Body only as JSON. Files of a notebook run and of an upload (datasets, models) go through the gateway paths /_agw/notebook/… and /_agw/uploads/… of the system note, as content in the JSON body.
 - Response 403 with "denied by the authorization service" means the call was refused. 403 with "rejected by the user": the user rejected the writing call.
 - Every call has an effect class: read runs directly; write, compute (building or starting a training; a chat has a limited number) and irreversible (deleting, publishing) wait until the user decides, irreversible ones always.
 - Two or more writing calls in a row: propose them once with POST /_agw/plan (body {"title": …, "steps": [{"method","path","query","body","description"}]}); the user approves the plan once, and each call that matches the next step exactly then runs without a new approval. An id from an earlier step is written as "{{stepN.id}}": the object that step created. For a step that starts a platform job (POST /train/config, POST /container-images/build) it is known only when the job ends; the gateway's note names it. A placeholder never points at a step that only starts something (POST /train/containers/{train_container_id}/run). For a long task done without approving each call, add "mode": "autonomous" and a "budget" {"max_duration_minutes","max_llm_cost_usd","max_auto_turns"}; a step may set "max_attempts" (1-3). While an autonomous plan runs, a call outside the rights derived from its steps is refused without asking; to change course, propose a new plan with "replaces": "<plan_id>". Irreversible steps, notebook runs and a start (PUT /container-deployments/{id}/deploy) whose image the plan does not build still ask.`;
@@ -182,6 +182,17 @@ export default function (pi: ExtensionAPI) {
 				} catch {
 					note = "\n" + rawNote;
 				}
+			}
+			// An image fetched from a notebook run (inline) comes as base64 text with its type in X-Agw-Image.
+			const imageType = r.headers?.["x-agw-image"];
+			if (typeof imageType === "string" && imageType.startsWith("image/") && r.status === 200) {
+				return {
+					content: [
+						{ type: "text", text: `HTTP ${r.status}${loc}\nimage (${imageType}) follows${note}` },
+						{ type: "image", data: r.text.trim(), mimeType: imageType },
+					],
+					details: { status: r.status },
+				};
 			}
 			return { content: [{ type: "text", text: `HTTP ${r.status}${loc}\n${text}${note}` }], details: { status: r.status } };
 		},

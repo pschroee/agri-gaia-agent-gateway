@@ -2234,9 +2234,23 @@ the platform trainings (`notebook_status` answers `"gpu": true`, `notebook_run_s
   `fetch needs the command line sandbox`. Every fetched file is remembered with the SHA-256 of the bytes the
   gateway read (table `notebook_fetches`, R2.1): a check of a file of the sandbox rests on that row, and no
   call of the gateway ever states such an origin itself.
-- **Raw calls are refused.** `platform_request` and the REST binding (`/platform-api/_agw/notebook…`) answer
-  `notebook calls go through the notebook tools (…)`: only the tools read the files of a run from the sandbox. A
-  GET of the paths is refused the same way.
+- **Raw calls are refused.** `platform_request` and a REST call on a notebook path that no tool owns answer
+  `notebook calls go through the notebook tools (…)`: only the tools read the files of a run from the sandbox.
+- **The same tools in every binding (BM12, #276).** A run and an upload take their files from the sandbox
+  (`files`) **or as content in the call**: `contents` (object from file name to UTF-8 text; `notebook_run`,
+  `upload_dataset`) and `contents_base64` (binary files; `upload_dataset`), at most 50 files and 4 MB together. The tool
+  builds the call it builds for sandbox files; the socket writes the content into
+  `/workspace/inline/<hash>/<name>` of the execution sandbox **after the delegation has checked the call and before it
+  reads the files**, and from there the approval (name, size, SHA-256), the limits, the compute count and the log see the
+  same call as with paths. `annotation_file` of `upload_dataset` may name one of the content files. `notebook_fetch` takes
+  `inline: true`: the file is returned in the answer instead of being copied (text up to 64 KiB; PNG, JPEG, GIF or WebP up to
+  4 MB as an image; a larger or other file is refused with what to do), MCP sends an image as image content, the REST
+  binding as base64 text with the header `X-Agw-Image: <type>` (`api.ts` turns it into an image), the command line shows
+  text only (an image is viewed from the sandbox with its file tool). The REST binding calls the tools on their gateway
+  paths (`POST /_agw/notebook/runs`, `GET /_agw/notebook/runs/{run_id}/file?path=…&inline=true`, `POST
+  /_agw/uploads/datasets`, `POST /_agw/uploads/models`, … listed under *Gateway paths* in the system note) and may name
+  sandbox paths of files fetched from a run; the log (`socket_calls`) carries the call with method and path in every
+  binding (`POST /_agw/notebook/runs (multipart, 1 file)`, `POST /datasets (multipart, 2 files)`).
 - **Reaper and trash.** The gateway stops a chat's server after `AGW_NOTEBOOK_IDLE_MIN` (default 60) minutes without a
   run and when the chat goes into the trash; the volume with the files of the runs stays. `AGW_NOTEBOOK_IDLE_MIN=0`
   stops nothing.
@@ -2484,7 +2498,7 @@ checks (R0); this section names what is R3's own.
   first request (`requests: 0`, suggestion `rebuild_image`).
 - **The test requests** (R3.5) are fixed and repeatable: the first all zeros, the second 0.5 everywhere,
   the remaining four drawn uniformly from `[0, 1)` with PCG generators of their own (`math/rand/v2`). A
-  dynamic dimension becomes 1, at most 1 000 000 values per input, and the input has to be `FP32` —
+  dynamic dimension becomes 1, at most 1 310 720 values per input (so that 1×3×640×640 = 1 228 800 fits; BM12), and the input has to be `FP32` —
   otherwise the verdict is `not measured – input type <t> not supported by the test`. A model with more
   than one input cannot be tested this way (the requests carry one) and says so.
 - **The comparison** (R3.6) is a function of its own, `assess.CompareOutputs`: the same outputs in the
@@ -2723,11 +2737,11 @@ model the path like pi does, and a `read` on it runs like any other.
 
 | Method and path | Purpose |
 |---|---|
-| `POST /platform/{tool}` | tool of the platform binding (`agw-platform`); `{tool}` is the name from `internal/platform/tools.go` (`list_datasets`) or the subcommand (`datasets`). Body: arguments as a JSON object (at most 1 MiB). Response `{status: "ok"\|"rejected"\|"error", http_status?, location?, body?, truncated?, message?}`; unknown tool 404, slot without a chat 409 |
+| `POST /platform/{tool}` | tool of the platform binding (`agw-platform`); `{tool}` is the name from `internal/platform/tools.go` (`list_datasets`) or the subcommand (`datasets`). Body: arguments as a JSON object (at most 5.5 MiB: content given as files travels in it). Response `{status: "ok"\|"rejected"\|"error", http_status?, location?, body?, truncated?, message?}`; unknown tool 404, slot without a chat 409 |
 | `ANY /platform-api/{path}` | REST endpoint (step 2): mirrors the platform API, at both sockets. Method, path, query and JSON body as with the platform, without login; response with status, `Location` and body of the platform (redacted, not truncated). `403` with `X-Agw-Outcome: denied` (violation) or `rejected` (rejected by the user), `400` for percent encoding, repeated query parameters or a refused path, `415` for a body other than JSON. Special paths: `/_agw/paths?prefix=` (path directory), `/_agw/rights` (rights) |
 
-The upload tools (`upload_dataset`, `upload_model`) name file paths in the execution sandbox; the orchestrator
-reads the files there itself (operation `read`, at most `AGW_ARTIFACT_MAX_MB` per file, 512 MB in total, at most
+The upload tools (`upload_dataset`, `upload_model`) name file paths in the execution sandbox (or, `upload_dataset`,
+bring the content with the call, see *Notebook tools*); the orchestrator reads the files there itself (operation `read`, at most `AGW_ARTIFACT_MAX_MB` per file, 512 MB in total, at most
 2,000 files) and sends them as `multipart/form-data`. With token exchange, every exchange appears as a
 `socket_calls` entry with `via: "orchestrator"`, `op: "token_exchange"` and the details of the new token in
 `detail` (user, `azp`, `aud`, expiry, whether an `act` claim came).

@@ -48,7 +48,9 @@ func TestRESTIndexCoversGatewayRoutes(t *testing.T) {
 			t.Errorf("route %s %s has no REST description and no listed exception", rt.method, pat)
 		}
 	}
-	special := map[string]bool{"/_agw/rights": true, "/_agw/capabilities": true, "/_agw/plan": true, "/_agw/paths": true, "/_agw/search": true}
+	special := map[string]bool{"/_agw/rights": true, "/_agw/capabilities": true, "/_agw/plan": true, "/_agw/paths": true, "/_agw/search": true,
+		// The uploads are rebuilt as POST /datasets and POST /models, which the routes cover (BM12).
+		"/_agw/uploads/datasets": true, "/_agw/uploads/models": true}
 	for _, tool := range platform.Tools {
 		c := tool.RESTCall()
 		if c == nil || special[c.Example] {

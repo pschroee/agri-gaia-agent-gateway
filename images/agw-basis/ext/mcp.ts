@@ -190,11 +190,16 @@ export default async function (pi: ExtensionAPI) {
 				} finally {
 					signal?.removeEventListener("abort", onAbort);
 				}
+				// Text stays text; an image (a result file shown inline, BM12) goes to pi as an image.
 				const content = (result?.content ?? []).map((c: any) =>
-					c.type === "text" ? { type: "text", text: c.text } : { type: "text", text: JSON.stringify(c) },
+					c.type === "text"
+						? { type: "text", text: c.text }
+						: c.type === "image" && typeof c.data === "string" && typeof c.mimeType === "string"
+							? { type: "image", data: c.data, mimeType: c.mimeType }
+							: { type: "text", text: JSON.stringify(c) },
 				);
 				if (result?.isError) {
-					throw new Error(content.map((c: any) => c.text).join("\n") || "MCP tool reports an error");
+					throw new Error(content.map((c: any) => c.text ?? "").join("\n") || "MCP tool reports an error");
 				}
 				return { content, details: { structured: result?.structuredContent ?? null } };
 			},

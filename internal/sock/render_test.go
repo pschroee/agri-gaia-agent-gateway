@@ -77,8 +77,8 @@ func TestRESTUploadHintInAPIOnlyChat(t *testing.T) {
 		set  toolset.Set
 		want string
 	}{
-		{toolset.Of(toolset.API), "files go through upload_dataset (not offered in this setup) and upload_model (not offered in this setup)"},
-		{toolset.Of(toolset.CLI, toolset.API), "files go through agw-platform upload-dataset and agw-platform upload-model"},
+		{toolset.Of(toolset.API), "files go through POST /_agw/uploads/datasets and POST /_agw/uploads/models"},
+		{toolset.Of(toolset.CLI, toolset.API), "files go through POST /_agw/uploads/datasets and POST /_agw/uploads/models"},
 	} {
 		b := newRenderBackend(c.set, platform.Result{Status: "ok", HTTPStatus: 200, Body: `[]`})
 		pi := listenHandler(t, NewPiHandler("p-test", b, 1<<20, &fakeRunner{}, &fakeRecorder{}))

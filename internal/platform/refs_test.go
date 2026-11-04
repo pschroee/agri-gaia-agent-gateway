@@ -21,8 +21,8 @@ func TestToolFormsPerBinding(t *testing.T) {
 		{"assess_status", "agw-platform assess-status", "mcp_platform_assess_status", "GET /_agw/assess/checks/{check_id}"},
 		{"start_training", "agw-platform start-training", "mcp_platform_start_training", "POST /train/containers/{train_container_id}/run"},
 		{"search_next", "agw-platform search-next", "mcp_platform_search_next", "POST /_agw/search/{search_id}/trials"},
-		{"notebook_fetch", "agw-platform notebook-fetch", "mcp_platform_notebook_fetch", ""},
-		{"upload_model", "agw-platform upload-model", "mcp_platform_upload_model", ""},
+		{"notebook_fetch", "agw-platform notebook-fetch", "mcp_platform_notebook_fetch", "GET /_agw/notebook/runs/{run_id}/file"},
+		{"upload_model", "agw-platform upload-model", "mcp_platform_upload_model", "POST /_agw/uploads/models"},
 		{"request", "agw-platform request", "mcp_platform_request", ""},
 	} {
 		tool, ok := toolByName(c.tool)
@@ -54,8 +54,8 @@ func TestRenderChoosesForm(t *testing.T) {
 		{"no call: all forms", "{{tool:assess_status}}", "", cliMCP, "agw-platform assess-status or mcp_platform_assess_status"},
 		{"no call, three bindings", "{{tool:assess_status}}", "", all,
 			"agw-platform assess-status or mcp_platform_assess_status or GET /_agw/assess/checks/{check_id}"},
-		{"via lacks the form: the others", "{{tool:notebook_fetch}}", toolset.API, cliAPI, "agw-platform notebook-fetch"},
-		{"nowhere offered", "{{tool:notebook_fetch}}", toolset.API, toolset.Of(toolset.API), "notebook_fetch (not offered in this setup)"},
+		{"via lacks the form: the others", "{{tool:request}}", toolset.API, cliAPI, "agw-platform request"},
+		{"nowhere offered", "{{tool:request}}", toolset.API, toolset.Of(toolset.API), "request (not offered in this setup)"},
 		{"two markers", "{{tool:clone_training}} then {{tool:start_training}}", toolset.CLI, all, "agw-platform clone-training then agw-platform start-training"},
 		{"unknown marker stays", "{{tool:no_such_tool}}", toolset.CLI, all, "{{tool:no_such_tool}}"},
 		{"no marker is identical", "plain text {{step1.id}}", toolset.CLI, all, "plain text {{step1.id}}"},
@@ -82,18 +82,13 @@ func TestRenderKeepsJSONValid(t *testing.T) {
 
 // Tools without a REST form, with the reason.
 var noAPIForm = map[string]string{
-	"upload_dataset": "multipart upload; the REST binding passes JSON only",
-	"upload_model":   "multipart upload; the REST binding passes JSON only",
-	"request":        "this is platform_http itself",
+	"request": "this is platform_http itself",
 }
 
 func TestEveryToolHasAPIForm(t *testing.T) {
 	for _, tool := range Tools {
 		_, ok := tool.Form(toolset.API)
 		reason, excused := noAPIForm[tool.Name]
-		if strings.HasPrefix(tool.Name, "notebook_") {
-			excused = true // files of the sandbox
-		}
 		switch {
 		case !ok && !excused:
 			t.Errorf("%s has no REST form and no reason", tool.Name)

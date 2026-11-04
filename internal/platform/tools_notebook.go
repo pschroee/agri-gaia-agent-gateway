@@ -335,9 +335,10 @@ var notebookRun = Tool{
 		"One run at a time; returns the run id and a link for the user. A note of yours (optional) is shown to the user " +
 		"as your own text, marked as not verified.",
 	Params: []Param{
-		{Name: "files", Type: "array", Required: true, Path: true, Desc: "files from the sandbox, copied flat into a new run directory: code and small config files " +
-			"(.py .ipynb .txt .json .yaml .yml .csv .md .cfg .toml), at most 50 files and 4 MB"},
-		{Name: "entry", Type: "string", Required: true, Desc: "file name of the script or notebook to run, one of files"},
+		{Name: "files", Type: "array", Path: true, Positional: true, Desc: "files from the sandbox, copied flat into a new run directory: code and small config files " +
+			"(.py .ipynb .txt .json .yaml .yml .csv .md .cfg .toml), at most 50 files and 4 MB. Files can also be given as content (contents); at least one of the two"},
+		{Name: "contents", Type: "object", Desc: contentsDesc},
+		{Name: "entry", Type: "string", Required: true, Desc: "file name of the script or notebook to run, one of the files or contents"},
 		{Name: "args", Type: "array", Desc: "command line arguments for a .py entry (a notebook takes none), letters, digits and _.,=:/+- only"},
 		{Name: "dataset_ids", Type: "array", Desc: "ids of platform datasets to unpack before the run, at most 3"},
 		{Name: "timeout_minutes", Type: "integer", Desc: "at most this many minutes for the run (default 120)"},
@@ -350,8 +351,15 @@ var notebookRun = Tool{
 		if err != nil {
 			return Request{}, err
 		}
+		inline, err := inlineEntries(a)
+		if err != nil {
+			return Request{}, err
+		}
+		for _, f := range inline {
+			paths = append(paths, f.Path)
+		}
 		if len(paths) == 0 {
-			return Request{}, errors.New("files: at least one file")
+			return Request{}, errors.New("files: at least one file, as sandbox paths (files) or as content (contents)")
 		}
 		entry, err := requiredStr(a, "entry")
 		if err != nil {
@@ -401,7 +409,7 @@ var notebookRun = Tool{
 		if err := ValidateRunFiles(parsed, names, nil); err != nil {
 			return Request{}, err
 		}
-		return Request{Method: http.MethodPost, Path: NotebookPrefix + "/runs", Form: RunForm(parsed), Files: files}, nil
+		return Request{Method: http.MethodPost, Path: NotebookPrefix + "/runs", Form: RunForm(parsed), Files: files, Inline: inline}, nil
 	},
 }
 
@@ -458,10 +466,13 @@ var notebookLog = Tool{
 var notebookFetch = Tool{
 	Name: "notebook_fetch", CLI: "notebook-fetch",
 	Desc: "Copies a result file of a run (at most 64 MB) into the sandbox under /workspace/notebook/<run_id>/; " +
-		"upload a model from there with {{tool:upload_model}}.",
+		"upload a model or files from there with {{tool:upload_model}} and {{tool:upload_dataset}}. With inline the file is " +
+		"returned in the answer instead: a text file up to 64 KiB as text, a PNG, JPEG, GIF or WebP image up to 4 MB as an image " +
+		"(nothing is copied; larger or other files are fetched without inline).",
 	Params: []Param{
 		{Name: "run_id", Type: "string", Required: true, Desc: "id of the run (r<date>-<hex>, from {{tool:notebook_run}})"},
 		{Name: "path", Type: "string", Required: true, Desc: "path of the file inside the run directory, e.g. model.onnx or out/model.onnx"},
+		{Name: "inline", Type: "boolean", Desc: "true: return the file in the answer (text or image) instead of copying it into the sandbox"},
 	},
 	build: func(a Args) (Request, error) {
 		id, err := notebookRunID(a)
@@ -475,7 +486,11 @@ var notebookFetch = Tool{
 		if err := CheckNotebookFilePath(p); err != nil {
 			return Request{}, err
 		}
-		return Request{Method: http.MethodGet, Path: NotebookPrefix + "/runs/" + id + "/file", Query: map[string]string{"path": p}}, nil
+		view, err := a.bool("inline")
+		if err != nil {
+			return Request{}, err
+		}
+		return Request{Method: http.MethodGet, Path: NotebookPrefix + "/runs/" + id + "/file", Query: map[string]string{"path": p}, View: view}, nil
 	},
 }
 

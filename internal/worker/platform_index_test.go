@@ -120,8 +120,15 @@ func TestSystemNoteGatewayPaths(t *testing.T) {
 	if n := SystemNoteFor("exp:api", 4, nil, apiIndexTest); !strings.Contains(n, "- Gateway paths:") || strings.Contains(strings.ReplaceAll(n, "{{step", ""), "{{") {
 		t.Error("exp:api: gateway paths missing")
 	}
-	// The plan description names notebook_run among the plannable tools (#218); a gateway path it has not.
-	if strings.Contains(SystemNoteFor("api", 4, nil, apiIndexTest), "/_agw/notebook") {
-		t.Error("notebook tools have no gateway path in the REST binding")
+	// Since BM12 (#276) the notebook tools and the uploads have gateway paths in the REST binding, like the other
+	// gateway tools; the other bindings do not carry the list.
+	api := SystemNoteFor("api", 4, nil, apiIndexTest)
+	for _, p := range []string{"POST /_agw/notebook/runs", "GET /_agw/notebook/runs/{run_id}/file", "POST /_agw/uploads/datasets"} {
+		if !strings.Contains(api, p) {
+			t.Errorf("api: gateway path %s missing in the note", p)
+		}
+	}
+	if strings.Contains(SystemNoteFor("cli,mcp", 4, nil, apiIndexTest), "/_agw/notebook") {
+		t.Error("cli,mcp: carries gateway paths")
 	}
 }

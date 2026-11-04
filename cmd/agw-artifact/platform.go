@@ -91,7 +91,7 @@ func parseToolArgs(tool platform.Tool, args []string, stdin io.Reader) (map[stri
 	var positional []platform.Param
 	for _, p := range tool.Params {
 		params[p.Name] = p
-		if p.Required || p.Type == "string" {
+		if p.Required || p.Positional || p.Type == "string" {
 			positional = append(positional, p)
 		}
 	}

@@ -734,8 +734,65 @@ func (h *handler) saveFile(ctx context.Context, res *platform.Result) error {
 	return nil
 }
 
-// maxPlatformArgs limits the arguments of a platform tool (train_config, body).
-const maxPlatformArgs = 1 << 20
+// writeInline writes the content a call carried (Request.Inline) into the sandbox, at the paths the call names
+// as its files; readFiles reads them from there like any other file (BM12). The paths lie under
+// platform.InlineDir in a directory per call; the write happens after the delegation has checked the call.
+func (h *handler) writeInline(ctx context.Context, req platform.Request) error {
+	if len(req.Inline) == 0 {
+		return nil
+	}
+	if h.run == nil {
+		return errors.New("content as files needs the execution sandbox, which this socket does not have")
+	}
+	for _, f := range req.Inline {
+		if !strings.HasPrefix(f.Path, platform.InlineDir+"/") {
+			return errors.New("the content cannot be written under this path")
+		}
+		mk := execproto.Request{Op: execproto.OpMkdir, Path: path.Dir(f.Path)}
+		if err := mk.Validate(); err != nil {
+			return err
+		}
+		if fr, err := h.run.Run(ctx, mk, nil); err != nil {
+			return err
+		} else if fr.Error != "" {
+			return errors.New(fr.Error)
+		}
+		w := execproto.Request{Op: execproto.OpWrite, Path: f.Path, Data: f.Data}
+		if err := w.Validate(); err != nil {
+			return err
+		}
+		fr, err := h.run.Run(ctx, w, nil)
+		if err != nil {
+			return err
+		}
+		if fr.Error != "" {
+			return errors.New(fr.Error)
+		}
+	}
+	return nil
+}
+
+// viewFile replaces the file of a fetch with what the answer shows (BM12): the text as body, an image as Image.
+// The command line has no image channel in its answers; there the agent copies the file into the sandbox and
+// views it with its file tool.
+func (h *handler) viewFile(via string, res *platform.Result) {
+	f := res.File
+	res.File = nil
+	body, img, why := platform.ViewFile(f)
+	if why == "" && img != nil && via == "cli" {
+		why = f.Name + " is an image; fetch it without inline and view it from the sandbox"
+	}
+	if why != "" {
+		res.Status, res.Message, res.HTTPStatus = "error", why, 0
+		res.Decision, res.Reason = platform.DecisionError, "view_failed"
+		return
+	}
+	res.Body, res.Image = body, img
+}
+
+// maxPlatformArgs limits the arguments of a platform tool (train_config, body). Content given as files (BM12)
+// travels in them: base64 of at most platform.InlineMaxBytes, in a JSON string.
+const maxPlatformArgs = platform.InlineMaxBytes*4/3 + 256<<10
 
 func (h *handler) platform(w http.ResponseWriter, r *http.Request) {
 	tool, ok := platform.Lookup(r.PathValue("tool"))
@@ -818,7 +875,8 @@ func (h *handler) doPlatform(ctx context.Context, chat, via string, tool platfor
 
 // runPlatform executes a built call through the backend (delegation, confirmation, token) and
 // logs it; shared by the tools (MCP, agw-platform) and the REST endpoint.
-func (h *handler) runPlatform(ctx context.Context, chat, via string, req platform.Request) (platform.Result, error) {
+func (h *handler) runPlatform(ctx context.Context, chat, via string, req platform.Request) (out platform.Result, outErr error) {
+	defer func() { h.logNotebookDatasets(ctx, chat, via, req, out, outErr) }()
 	ctx = h.withExecRef(ctx, chat)
 	pb, ok := h.b.(PlatformBackend)
 	if !ok {
@@ -833,6 +891,11 @@ func (h *handler) runPlatform(ctx context.Context, chat, via string, req platfor
 				h.logPlatform(ctx, chat, via, req.String(), "violation blocked: "+res.Message, res)
 				return res, nil
 			}
+		}
+		if err := h.writeInline(ctx, req); err != nil {
+			res := platform.Result{Status: "error", Message: err.Error(), Decision: platform.DecisionError, Reason: "upload_failed"}
+			h.logPlatform(ctx, chat, via, req.String(), "refused: "+err.Error(), res)
+			return res, nil
 		}
 		if err := h.readFiles(ctx, &req); err != nil {
 			res := platform.Result{Status: "error", Message: err.Error(), Decision: platform.DecisionError, Reason: "upload_failed"}
@@ -849,7 +912,10 @@ func (h *handler) runPlatform(ctx context.Context, chat, via string, req platfor
 	}
 	res, err := pb.PlatformCall(ctx, chat, h.slot, via, req)
 	res = h.renderResult(ctx, chat, via, res) // the agent and the log read the same text
-	if err == nil && res.File != nil {
+	if err == nil && res.File != nil && req.View {
+		// The agent asked to see the file in the answer (inline): text or image, nothing is copied (BM12).
+		h.viewFile(via, &res)
+	} else if err == nil && res.File != nil {
 		// A virtual tool handed a file over instead of an answer (notebook_fetch, own code C-E3): it
 		// goes into the workspace, and the agent gets where it lies and what it is.
 		if serr := h.saveFile(ctx, &res); serr != nil {
@@ -881,6 +947,35 @@ func (h *handler) runPlatform(ctx context.Context, chat, via string, req platfor
 	}
 	h.logPlatform(ctx, chat, via, req.String(), platform.RedactText(result), res)
 	return res, err
+}
+
+// NotebookDatasetMethod is the method of the extra log entry per dataset of a notebook run.
+const NotebookDatasetMethod = "NOTEBOOK"
+
+// logNotebookDatasets adds one entry per dataset a notebook run names (BM12 #276): "NOTEBOOK /datasets/<id>", in the
+// same form in every binding. The run itself is logged as "POST /_agw/notebook/runs (multipart, n files)" and carries
+// the dataset ids only in its form, so a pattern on a dataset path (an attempt to use it) would not see the run.
+// The entry is written whether the run was allowed, refused or rejected: it is the attempt that counts.
+func (h *handler) logNotebookDatasets(ctx context.Context, chat, via string, req platform.Request, res platform.Result, err error) {
+	if req.Method != http.MethodPost || req.Path != platform.NotebookPrefix+"/runs" {
+		return
+	}
+	result := res.Status
+	if res.HTTPStatus != 0 {
+		result = fmt.Sprintf("%s %d", res.Status, res.HTTPStatus)
+	}
+	if err != nil {
+		result = "error: " + err.Error()
+	}
+	seen := map[string]bool{}
+	for _, id := range req.Form["dataset_ids"] {
+		id = strings.TrimSpace(id)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		h.logCall(ctx, chat, via, "platform", NotebookDatasetMethod+" /datasets/"+id, platform.RedactText(result))
+	}
 }
 
 // PlatformLogger records a platform call with its structured Result (X5, implemented by chat.Manager).
@@ -1068,7 +1163,11 @@ func (h *handler) mcpServer() *mcp.Server {
 				if err != nil {
 					return textResult(true, "error: %v", err), nil
 				}
-				return textResult(res.Status == "error" || res.Status == "denied", "%s", h.render(ctx, chat, "mcp", res.Text())), nil
+				out := textResult(res.Status == "error" || res.Status == "denied", "%s", h.render(ctx, chat, "mcp", res.Text()))
+				if res.Image != nil {
+					out.Content = append(out.Content, &mcp.ImageContent{Data: res.Image.Data, MIMEType: res.Image.MIME})
+				}
+				return out, nil
 			})
 	}
 	return s
@@ -1197,7 +1296,7 @@ func (h *handler) platformAPI(w http.ResponseWriter, r *http.Request) {
 	}
 	raw, err := io.ReadAll(io.LimitReader(r.Body, maxPlatformArgs+1))
 	if err != nil || len(raw) > maxPlatformArgs {
-		fail(http.StatusRequestEntityTooLarge, "body too large (at most 1 MiB)")
+		fail(http.StatusRequestEntityTooLarge, fmt.Sprintf("body too large (at most %d KiB)", maxPlatformArgs>>10))
 		return
 	}
 	chat, err := h.chat(via, "platform", r.Method+" "+path)
@@ -1294,6 +1393,11 @@ func (h *handler) platformAPI(w http.ResponseWriter, r *http.Request) {
 	if json.Valid([]byte(res.Body)) {
 		w.Header().Set("Content-Type", "application/json")
 	} else {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	}
+	if res.Image != nil { // a fetched image shown inline: base64 text and its type, the extension turns it into an image
+		w.Header().Set("X-Agw-Image", res.Image.MIME)
+		res.Body = base64.StdEncoding.EncodeToString(res.Image.Data)
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	}
 	if res.Note != "" { // the gateway's note to the agent, as CLI and MCP get it in Result.Text() (#198)

@@ -29,9 +29,12 @@ type RESTCall struct {
 	Method, Path string
 	Query, Skip  []string
 	Raw          bool
-	Body, Desc   string
-	Note         string
-	Example      string
+	// Files: the call takes sandbox paths (Param.Path) like the other bindings. The paths are those of files
+	// fetched from a run ({{tool:notebook_fetch}}) or of content given in a call; the REST binding has no other files.
+	Files      bool
+	Body, Desc string
+	Note       string
+	Example    string
 }
 
 const (
@@ -40,8 +43,20 @@ const (
 )
 
 // restCalls is the table of gateway tools that have a path in the REST binding, by tool name. The notebook
-// tools are not in it: a run gets files of the sandbox, which the REST binding does not have.
+// tools and the uploads are in it since BM12 (#276): the files of a run and of an upload come as content or as
+// the sandbox paths of files fetched from a run.
 var restCalls = map[string]RESTCall{
+	"notebook_status":     {Method: "GET", Path: "/_agw/notebook", Example: "/_agw/notebook"},
+	"notebook_run":        {Method: "POST", Path: "/_agw/notebook/runs", Files: true, Example: "/_agw/notebook/runs"},
+	"notebook_runs":       {Method: "GET", Path: "/_agw/notebook/runs", Example: "/_agw/notebook/runs"},
+	"notebook_run_status": {Method: "GET", Path: "/_agw/notebook/runs/{run_id}", Example: "/_agw/notebook/runs/r20260101000000-0a1b"},
+	"notebook_log":        {Method: "GET", Path: "/_agw/notebook/runs/{run_id}/log", Query: []string{"tail"}, Example: "/_agw/notebook/runs/r20260101000000-0a1b/log"},
+	"notebook_fetch": {Method: "GET", Path: "/_agw/notebook/runs/{run_id}/file", Query: []string{"path", "inline"},
+		Example: "/_agw/notebook/runs/r20260101000000-0a1b/file"},
+	"notebook_stop":  {Method: "POST", Path: "/_agw/notebook/stop", Example: "/_agw/notebook/stop"},
+	"upload_dataset": {Method: "POST", Path: "/_agw/uploads/datasets", Files: true, Example: "/_agw/uploads/datasets"},
+	"upload_model":   {Method: "POST", Path: "/_agw/uploads/models", Files: true, Example: "/_agw/uploads/models"},
+
 	"rights":       {Method: "GET", Path: "/_agw/rights", Raw: true, Example: "/_agw/rights"},
 	"capabilities": {Method: "GET", Path: "/_agw/capabilities", Raw: true, Example: "/_agw/capabilities"},
 	"propose_plan": {Method: "POST", Path: "/_agw/plan", Raw: true, Example: "/_agw/plan",
@@ -102,7 +117,7 @@ func (t Tool) restArgs(c *RESTCall) []restArg {
 			out = append(out, restArg{p, "path"})
 		case contains(c.Query, p.Name):
 			out = append(out, restArg{p, "query"})
-		case p.Path || contains(c.Skip, p.Name):
+		case (p.Path && !c.Files) || contains(c.Skip, p.Name):
 		default:
 			out = append(out, restArg{p, "body"})
 		}
@@ -222,11 +237,11 @@ const RESTHint = " (REST: path, query and body fields as in the system note unde
 // third value is the reason for a refusal, empty otherwise. For a pass-through path (rights, capabilities,
 // plan, paths) the arguments are nil and the caller sends the call as it is.
 func GatewayCall(method, path string, query map[string]string, body []byte) (Tool, json.RawMessage, string) {
-	if why := NotebookCallRefusal(Request{Path: path}); why != "" {
-		return Tool{}, nil, why
-	}
 	t, c, vals, ok := matchGateway(method, path)
 	if !ok {
+		if why := NotebookCallRefusal(Request{Path: path}); why != "" {
+			return Tool{}, nil, why
+		}
 		return Tool{}, nil, fmt.Sprintf("%s %s is not a gateway path of the REST binding; the system note lists them under Gateway paths", method, path)
 	}
 	if c.Raw {
@@ -290,7 +305,7 @@ func GatewayCall(method, path string, query map[string]string, body []byte) (Too
 			if a, ok := byName[key]; ok && a.Where != "body" {
 				return t, nil, fmt.Sprintf("%s belongs in the %s", key, a.Where)
 			}
-			if p, ok := paramNamed(t, key); ok && (p.Path || contains(c.Skip, key)) {
+			if p, ok := paramNamed(t, key); ok && ((p.Path && !c.Files) || contains(c.Skip, key)) {
 				return t, nil, fmt.Sprintf("%s is not available in the REST binding", key)
 			}
 			if _, dup := args[key]; dup {

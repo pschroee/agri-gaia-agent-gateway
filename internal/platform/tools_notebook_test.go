@@ -126,7 +126,7 @@ func TestNotebookToolsInTable(t *testing.T) {
 			files = &tool.Params[i]
 		}
 	}
-	if files == nil || !files.Required || !files.Path || files.Type != "array" {
+	if files == nil || files.Required || !files.Positional || !files.Path || files.Type != "array" {
 		t.Fatalf("files: %+v", files)
 	}
 	req, err := tool.Build(json.RawMessage(`{"files":["/workspace/train.py","/workspace/data.json"],"entry":"train.py",

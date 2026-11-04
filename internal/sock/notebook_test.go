@@ -6,7 +6,6 @@ package sock
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
@@ -97,23 +96,22 @@ func TestNotebookFetchNeedsSandbox(t *testing.T) {
 	}
 }
 
-// The REST binding never reaches the notebook paths: a run gets its files from the sandbox, which
-// only the notebook tools can read (own code C-E3).
-func TestRESTRefusesNotebookPaths(t *testing.T) {
+// A notebook path without a tool is refused in the REST binding, and the raw platform path never reaches the
+// backend: only the notebook tools (BM12: and their gateway paths) may go there.
+func TestRESTRefusesNotebookPathsWithoutTool(t *testing.T) {
 	b := &platformBackend{fakeBackend: fakeBackend{chat: "chat-rnb", decide: "approved"}}
 	c := start(t, b)
 	for _, call := range []struct{ m, p, body string }{
-		{"GET", "/platform-api/_agw/notebook/runs", ""},
-		{"GET", "/platform-api/_agw/notebook/runs/r20260101120000-abcd/log", ""},
-		{"POST", "/platform-api/_agw/notebook/runs", "{}"},
-		{"POST", "/platform-api/_agw/notebook/stop", ""},
+		{"GET", "/platform-api/_agw/notebook/files", ""},
+		{"DELETE", "/platform-api/_agw/notebook/runs", ""},
+		{"POST", "/platform-api/_agw/Notebook/runs", "{}"},
+		{"GET", "/platform-api/_agw/notebook/runs/r20260101120000-abcd/other", ""},
 	} {
 		code, body, _ := apiCall(t, c, call.m, call.p, "", call.body, nil)
 		if code != 400 || !strings.Contains(body, "notebook calls go through the notebook tools") {
 			t.Errorf("%s %s: %d %s", call.m, call.p, code, body)
 		}
 	}
-	// Nothing of it reached the backend, and every refusal is in the log.
 	if len(b.reqs) != 0 {
 		t.Errorf("the notebook paths reached the backend: %v", b.reqs)
 	}
@@ -125,34 +123,5 @@ func TestRESTRefusesNotebookPaths(t *testing.T) {
 	}
 	if refused != 4 {
 		t.Errorf("refusals in the log: %d of 4 (%v)", refused, b.calls)
-	}
-}
-
-// The raw tool request refuses the notebook paths too: only the notebook tools carry the files of a
-// run.
-func TestRequestToolRefusesNotebookPaths(t *testing.T) {
-	b := &platformBackend{fakeBackend: fakeBackend{chat: "chat-req", decide: "approved"}}
-	c := start(t, b)
-	for _, args := range []string{
-		`{"method":"POST","path":"/_agw/notebook/runs"}`,
-		`{"method":"GET","path":"/_agw/notebook/runs"}`,
-		`{"method":"GET","path":"/_agw/notebook/runs/r20260101120000-abcd/file"}`,
-	} {
-		code, r := cliPlatform(t, c, "request", args)
-		if code != 200 || r.Status != "error" || !strings.Contains(r.Message, "notebook calls go through the notebook tools") {
-			t.Errorf("%s: %d %+v", args, code, r)
-		}
-	}
-	if len(b.reqs) != 0 {
-		t.Errorf("the notebook paths reached the backend: %v", b.reqs)
-	}
-	// A path that only shares a prefix is not a notebook path.
-	code, r := cliPlatform(t, c, "request", `{"method":"GET","path":"/datasets"}`)
-	if code != 200 || r.Status != "ok" {
-		t.Errorf("a normal call: %d %+v", code, r)
-	}
-	var raw any // the list of datasets is an array, so any JSON value is accepted here
-	if json.Unmarshal([]byte(r.Body), &raw) != nil || raw == nil {
-		t.Errorf("answer: %s", r.Body)
 	}
 }

@@ -33,7 +33,7 @@ func TestGatewayIndexLines(t *testing.T) {
 			}
 		}
 		for _, p := range tool.Params {
-			if p.Path && strings.Contains(strings.SplitN(line, " · ", 2)[len(strings.SplitN(line, " · ", 2))-1], p.Name+"*") {
+			if p.Path && !tool.RESTCall().Files && strings.Contains(strings.SplitN(line, " · ", 2)[len(strings.SplitN(line, " · ", 2))-1], p.Name+"*") {
 				t.Errorf("%s: sandbox argument %s listed", tool.Name, p.Name)
 			}
 		}
@@ -41,9 +41,10 @@ func TestGatewayIndexLines(t *testing.T) {
 	if !strings.Contains(idx, "  POST /_agw/search/{search_id}/trials — ") {
 		t.Error("search_next line missing")
 	}
-	for _, name := range []string{"notebook_run", "notebook_status", "notebook_fetch"} {
-		if strings.Contains(idx, "/_agw/"+strings.SplitN(name, "_", 2)[0]) {
-			t.Errorf("%s must have no line (sandbox files)", name)
+	// Since BM12 (#276) the notebook tools and the uploads have a path like every other gateway tool.
+	for _, p := range []string{"POST /_agw/notebook/runs", "GET /_agw/notebook/runs/{run_id}/file", "POST /_agw/uploads/datasets", "POST /_agw/uploads/models"} {
+		if !strings.Contains(idx, "  "+p+" — ") {
+			t.Errorf("%s: line missing", p)
 		}
 	}
 	if strings.Contains(idx, "\x1b") || !strings.HasSuffix(lines[len(lines)-1], " gateway paths)") {
@@ -67,6 +68,7 @@ const (
 	cUUID   = "11111111-2222-3333-4444-555555555555"
 	cSearch = "s0123456789ab"
 	cFn     = "agw-test-m1-abcd1234"
+	cRun    = "r20260101000000-0a1b"
 )
 
 var restCases = map[string]restCase{
@@ -95,6 +97,20 @@ var restCases = map[string]restCase{
 	"annotation_rollback": {"POST", "/_agw/annotation/rollbacks", nil, `{"source_id":"run-1","scope":"all"}`, `{"source_id":"run-1","scope":"all"}`},
 	"annotation_summary":  {"GET", "/_agw/annotation/datasets/5/summary", nil, ``, `{"dataset_id":5}`},
 	"annotation_sync":     {"POST", "/_agw/annotation/datasets/5/sync", nil, ``, `{"dataset_id":5}`},
+
+	"notebook_status":     {"GET", "/_agw/notebook", nil, ``, ``},
+	"notebook_runs":       {"GET", "/_agw/notebook/runs", nil, ``, ``},
+	"notebook_run_status": {"GET", "/_agw/notebook/runs/" + cRun, nil, ``, `{"run_id":"` + cRun + `"}`},
+	"notebook_log":        {"GET", "/_agw/notebook/runs/" + cRun + "/log", map[string]string{"tail": "50"}, ``, `{"run_id":"` + cRun + `","tail":50}`},
+	"notebook_fetch": {"GET", "/_agw/notebook/runs/" + cRun + "/file", map[string]string{"path": "out/a.png", "inline": "true"}, ``,
+		`{"run_id":"` + cRun + `","path":"out/a.png","inline":true}`},
+	"notebook_stop": {"POST", "/_agw/notebook/stop", nil, ``, ``},
+	"notebook_run": {"POST", "/_agw/notebook/runs", nil, `{"contents":{"main.py":"print(1)"},"entry":"main.py","dataset_ids":["3"],"timeout_minutes":10}`,
+		`{"contents":{"main.py":"print(1)"},"entry":"main.py","dataset_ids":["3"],"timeout_minutes":10}`},
+	"upload_dataset": {"POST", "/_agw/uploads/datasets", nil, `{"name":"d","description":"x","contents":{"NOTES.txt":"hi"},"contents_base64":{"a.png":"AAEC"}}`,
+		`{"name":"d","description":"x","contents":{"NOTES.txt":"hi"},"contents_base64":{"a.png":"AAEC"}}`},
+	"upload_model": {"POST", "/_agw/uploads/models", nil, `{"name":"m","description":"x","format":"onnx","model_file":"/workspace/notebook/` + cRun + `/model.onnx"}`,
+		`{"name":"m","description":"x","format":"onnx","model_file":"/workspace/notebook/` + cRun + `/model.onnx"}`},
 }
 
 // The REST call on a gateway path builds exactly the request of the tool (#199): same method, path, query,
@@ -147,7 +163,8 @@ func TestGatewayCallRefuses(t *testing.T) {
 	}{
 		{"unknown path", "GET", "/_agw/nothing", nil, ``, "not a gateway path"},
 		{"wrong method", "DELETE", "/_agw/search/" + cSearch, nil, ``, "not a gateway path"},
-		{"notebook", "POST", "/_agw/notebook/runs", nil, `{}`, "notebook calls go through the notebook tools"},
+		{"notebook path without a tool", "POST", "/_agw/notebook/files", nil, `{}`, "notebook calls go through the notebook tools"},
+		{"notebook path in other case", "POST", "/_agw/Notebook/runs", nil, `{}`, "notebook calls go through the notebook tools"},
 		{"assess read path", "GET", "/_agw/assess/models/5/latest", nil, ``, "not a gateway path"},
 		{"assess without id", "GET", "/_agw/assess/checks", nil, ``, "not a gateway path"},
 		{"sandbox file", "POST", "/_agw/assess/checks", nil, `{"path":"/workspace/m.onnx"}`, "path is not available in the REST binding"},

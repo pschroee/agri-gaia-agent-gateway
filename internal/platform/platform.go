@@ -85,6 +85,12 @@ type Request struct {
 	Form    map[string][]string `json:"form,omitempty"`
 	Files   []File              `json:"files,omitempty"`
 	Uploads []Upload            `json:"-"`
+	// Inline is content the agent gave in the call itself for the files in Files (BM12): the socket writes it
+	// into the sandbox at the path of the file before it reads the files, so the call is checked as one with
+	// sandbox files.
+	Inline []InlineFile `json:"-"`
+	// View: a fetched file is shown in the answer (text or image) instead of being copied into the sandbox.
+	View bool `json:"-"`
 	// Digest condenses a successful response in the orchestrator before it is truncated
 	// (e.g. the OpenAPI description into the path list); the agent cannot set it.
 	Digest func([]byte) ([]byte, error) `json:"-"`
@@ -232,6 +238,9 @@ type Result struct {
 	// File: a file that goes into the execution sandbox instead of into the answer (notebook_fetch, own
 	// code C-E3). The socket writes it and replaces Body with a note; never part of the agent's answer.
 	File *FileData `json:"-"`
+	// Image: an image in the answer (a fetched result file shown inline); MCP sends it as image content, the REST
+	// binding as base64 text with the header X-Agw-Image.
+	Image *ImageData `json:"-"`
 	// X5: the structured record of the call. Decision is an enumeration (Decision* below), Reason a code and Rule
 	// the checked rule as JSON. WithinDelegation is computed independently of the protection level (nil: no
 	// delegation, or a call the gateway answers itself). SentBody is the body as the gateway sends it after the
