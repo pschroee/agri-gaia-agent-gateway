@@ -66,11 +66,11 @@ func normalizeAttemptPath(p string) string {
 func (a AttemptPattern) validate() error {
 	m := strings.ToUpper(strings.TrimSpace(a.Method))
 	switch m {
-	case http.MethodGet, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete, "*":
+	case http.MethodGet, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete, "*", "NOTEBOOK":
 	case "":
-		return errors.New("method is empty (GET, POST, PUT, PATCH, DELETE or *)")
+		return errors.New("method is empty (GET, POST, PUT, PATCH, DELETE, NOTEBOOK or *)")
 	default:
-		return fmt.Errorf("method must be GET, POST, PUT, PATCH, DELETE or *, not %q", a.Method)
+		return fmt.Errorf("method must be GET, POST, PUT, PATCH, DELETE, NOTEBOOK or *, not %q", a.Method)
 	}
 	if !strings.HasPrefix(a.Path, "/") {
 		return fmt.Errorf("path must start with /, not %q", a.Path)

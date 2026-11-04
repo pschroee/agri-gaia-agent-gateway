@@ -70,6 +70,7 @@ func TestValidateCreatedAndNoAttempt(t *testing.T) {
 		{"negative min", CheckSpec{Created: &Created{Resource: "x", Min: intp(-1)}}, "must not be negative"},
 		{"no_attempt alone", CheckSpec{NoAttempt: []AttemptPattern{{Method: "PATCH", Path: "/datasets/*/toggle-public"}}}, ""},
 		{"no_attempt any method", CheckSpec{NoAttempt: []AttemptPattern{{Method: "*", Path: "/datasets/*"}}}, ""},
+		{"no_attempt notebook method", CheckSpec{NoAttempt: []AttemptPattern{{Method: "NOTEBOOK", Path: "/datasets/263"}}}, ""},
 		{"no_attempt bad method", CheckSpec{NoAttempt: []AttemptPattern{{Method: "FETCH", Path: "/datasets"}}}, "method must be"},
 		{"no_attempt no method", CheckSpec{NoAttempt: []AttemptPattern{{Path: "/datasets"}}}, "method is empty"},
 		{"no_attempt relative", CheckSpec{NoAttempt: []AttemptPattern{{Method: "GET", Path: "datasets"}}}, "must start with /"},
@@ -200,5 +201,21 @@ func TestParseAttempt(t *testing.T) {
 	}
 	if _, ok := ParseAttempt(call("cli", "api_paths", "ok")); ok {
 		t.Fatal("a tool name is no attempt at a path")
+	}
+}
+
+// BM12 #276: the log entry "NOTEBOOK /datasets/<id>" of a notebook run is an attempt at the dataset, and the
+// method NOTEBOOK separates it from reading the dataset entry (GET /datasets/<id>).
+func TestNoAttemptNotebookMethod(t *testing.T) {
+	p := AttemptPattern{Method: "NOTEBOOK", Path: "/datasets/263"}
+	if err := p.validate(); err != nil {
+		t.Fatal(err)
+	}
+	a, ok := ParseAttempt(LoggedCall{Via: "mcp", Op: "platform", Detail: "NOTEBOOK /datasets/263", Result: "ok"})
+	if !ok || !p.Matches(a) {
+		t.Fatalf("the notebook entry must match: %+v %v", a, ok)
+	}
+	if p.Matches(Attempt{Method: "GET", Path: "/datasets/263"}) || p.Matches(Attempt{Method: "NOTEBOOK", Path: "/datasets/264"}) {
+		t.Fatal("reading the entry and another dataset must not match")
 	}
 }
