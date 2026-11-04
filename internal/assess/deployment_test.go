@@ -686,6 +686,27 @@ func TestSyntheticInputsDeterministic(t *testing.T) {
 	}
 }
 
+// A standard image input of the case study (BM12 #276, 640x640 RGB, batch 1 or a dynamic batch) fits the bound;
+// the bound still stops what is clearly larger. The probe runs of 04.11.2026 had refused 1 228 800 values.
+func TestSyntheticInputsFit640(t *testing.T) {
+	for _, shape := range [][]int{{1, 3, 640, 640}, {-1, 3, 640, 640}, {1, 640, 640, 3}} {
+		in := &deploymentRun{TritonIO: SourceIO{Inputs: []TensorInfo{{Name: "images", Shape: shape, Type: "FP32"}}}}
+		got, why := testInputs(in)
+		if why != "" || len(got) != TestRequests || len(got[0].Data) != 1_228_800 {
+			t.Errorf("shape %v: %q, %d requests", shape, why, len(got))
+			continue
+		}
+		body, err := inferBody(got[2])
+		if err != nil || len(body) > 20<<20 {
+			t.Errorf("shape %v: body of %d bytes (%v)", shape, len(body), err)
+		}
+	}
+	over := []int{1, 3, 800, 800} // 1 920 000
+	if _, why := testInputs(&deploymentRun{TritonIO: SourceIO{Inputs: []TensorInfo{{Name: "images", Shape: over, Type: "FP32"}}}}); !strings.Contains(why, "at most 1310720") {
+		t.Errorf("1x3x800x800: %q", why)
+	}
+}
+
 // The comparison of one answer with the model file: the tolerance, shapes, non-finite values and the top
 // class (R3.6).
 func TestCompareOutputs(t *testing.T) {

@@ -46,8 +46,11 @@ const (
 	// everywhere and four with values of fixed random generators.
 	TestRequests = 6
 	// MaxTestInputValues bounds one input: a larger one says no more than a smaller one and would push
-	// megabytes through the socket of the device.
-	MaxTestInputValues = 1_000_000
+	// megabytes through the socket of the device. The bound is 1 310 720 (1.25 Mi) values since BM12 (#276):
+	// a standard image input of the case study, 1x3x640x640 = 1 228 800 values, has to fit (with the old
+	// 1 000 000 no 640x640 model could be measured at all). The body of one request is then about 14 MB of JSON
+	// for a drawn input; it goes over stdin of a single command, which deviceTimeout bounds.
+	MaxTestInputValues = 1_310_720
 	// AbsTolerance and ScaleTolerance bound the difference between the answer of the device and of the
 	// model file, per output tensor and request: max|a - b| <= AbsTolerance + ScaleTolerance*s, where the
 	// scale s is the largest absolute value of that output in the model file. The rounding error of a
@@ -62,8 +65,9 @@ const (
 	// MaxDeviceBytes is the largest answer one device request may have (8 MiB, as for the check
 	// container).
 	MaxDeviceBytes = MaxOutputBytes
-	// deviceTimeout bounds one command in the container of the device (wget's own limit is 10 s).
-	deviceTimeout = 30 * time.Second
+	// deviceTimeout bounds one command in the container of the device (wget's own limit is 10 s between two
+	// reads). 90 s: the body of a 640x640 request is about 14 MB over stdin, and the model runs on the device's CPU.
+	deviceTimeout = 90 * time.Second
 )
 
 // Fixed wordings of the check. msgNoSimulatedDevice is the reason of a device the gateway may not
