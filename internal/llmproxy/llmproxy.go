@@ -24,7 +24,9 @@ import (
 )
 
 const (
-	maxBody       = 16 << 20
+	// maxBody bounds one model request. An agent that views images (tool results of type image, 1 to 4 MB each as
+	// base64) resends all of them with every call; 16 MiB ended experiment runs with 413 after about ten images.
+	maxBody       = 64 << 20
 	maxConcurrent = 32
 )
 
