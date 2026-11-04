@@ -112,7 +112,7 @@ func TestValidateOfflineCheck(t *testing.T) {
 		t.Fatalf("empty check: %v", problems)
 	}
 	both := offlineTask(&OfflineCheck{Kind: OfflineSolution})
-	both.Check.Created = &Created{Resource: "dataset", Count: 1}
+	both.Check.Created = &Created{Resource: "dataset", Count: intp(1)}
 	if problems := Validate(p, []Task{both}, nil); len(problems) != 0 {
 		t.Fatalf("offline next to created: %v", problems)
 	}

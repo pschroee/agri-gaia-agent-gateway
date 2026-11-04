@@ -31,6 +31,7 @@ import (
 
 	"agw/internal/agwclient"
 	"agw/internal/exp"
+	"agw/internal/watch"
 )
 
 const expStarted = "started"
@@ -125,7 +126,16 @@ type expRunner struct {
 
 	noSlotWait    time.Duration
 	noSlotRetries int
+
+	// BM11: how long the cleanup waits for an image build that outlives its run, and for the registry to list
+	// the finished image.
+	buildWait    time.Duration
+	registryWait time.Duration
 }
+
+// expBuildWait bounds the wait for an image build after a run has ended: the build of the garage image takes
+// about 9 minutes to the end of the push and longer on a cold cache (pilot-alle-s1).
+const expBuildWait = 30 * time.Minute
 
 // runExpPlan loads the material, builds the order and runs it.
 func runExpPlan(ctx context.Context, api expAPI, opts expRunOptions, out, errw io.Writer) error {
@@ -195,6 +205,8 @@ func newExpRunner(api expAPI, opts expRunOptions, out, errw io.Writer) (*expRunn
 		now:           opts.Now,
 		noSlotWait:    30 * time.Second,
 		noSlotRetries: 20,
+		buildWait:     expBuildWait,
+		registryWait:  2 * time.Minute,
 	}
 	if r.poll <= 0 {
 		r.poll = 10 * time.Second
@@ -610,7 +622,7 @@ func (r *expRunner) execute(ctx context.Context, pr expPlannedRun, id string, pr
 	if notes := r.collectResults(ctx, pr, chat.ID, task); len(notes) > 0 {
 		reason = strings.TrimPrefix(reason+"; "+strings.Join(notes, "; "), "; ")
 	}
-	r.cleanup(ctx, chat.ID, det)
+	cleanErr := r.cleanup(ctx, chat.ID, det)
 	if err := r.api.ExpEndRun(ctx, agwclient.ExpRunEnd{ID: id, Status: status, EndReason: reason,
 		Pass: passPtr, CheckEvidence: evidence}); err != nil {
 		return expOutcome{}, fmt.Errorf("%s: ending the run failed: %w", pr.Key, err)
@@ -620,7 +632,8 @@ func (r *expRunner) execute(ctx context.Context, pr expPlannedRun, id string, pr
 	if reason != "" && status != "done" {
 		fmt.Fprintf(r.errw, "  %s\n", reason)
 	}
-	return expOutcome{status: status}, nil
+	// BM11: a build that is still running would put its image into the next run; the plan does not go on.
+	return expOutcome{status: status}, cleanErr
 }
 
 func roundDuration(d time.Duration) string {
@@ -907,6 +920,20 @@ func (c expRunnerCheck) LastAssistantText(ctx context.Context) (string, error) {
 	return exp.AssistantText(messages), nil
 }
 
+// PlatformCalls reads the chat's call log (socket_calls): the source of no_attempt (BM11). The log holds
+// the calls of every binding, with the delegation's decision, not the end state of the platform.
+func (c expRunnerCheck) PlatformCalls(ctx context.Context) ([]exp.LoggedCall, error) {
+	detail, err := c.api.Chat(ctx, c.chat)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]exp.LoggedCall, len(detail.SocketCalls))
+	for i, sc := range detail.SocketCalls {
+		out[i] = exp.LoggedCall{Via: sc.Via, Op: sc.Op, Detail: sc.Detail, Result: sc.Result}
+	}
+	return out, nil
+}
+
 // createdObjects reads the chat's provenance register (X1.10). The check and the cleanup use only
 // these identifiers, never a name.
 func (r *expRunner) createdObjects(ctx context.Context, chatID string) ([]exp.Object, error) {
@@ -925,15 +952,23 @@ func (r *expRunner) createdObjects(ctx context.Context, chatID string) ([]exp.Ob
 // model, dataset) and only by identifiers from the provenance register or from the training
 // container ids in the chat's answers. A failure is reported and does not change the run's result;
 // the fixtures (X4) are removed by the runner after each run (#207), not here.
-func (r *expRunner) cleanup(ctx context.Context, chatID string, det agwclient.ChatDetail) {
+//
+// A run that ended at a limit may leave an image build running in the backend; the image would then appear
+// during the next run and make its count wrong (BM11). So the cleanup first waits until the builds of the chat
+// are over and then removes their images too. The returned error means a build did not end in time.
+func (r *expRunner) cleanup(ctx context.Context, chatID string, det agwclient.ChatDetail) error {
+	builtImages, buildErr := r.settleBuilds(ctx, chatID)
 	objs, err := r.api.ExpObjects(ctx, chatID)
 	if err != nil {
 		fmt.Fprintf(r.errw, "cleanup of chat %s: register not readable: %v\n", shortID(chatID), err)
-		return
+		return buildErr
 	}
 	byResource := map[string][]string{}
 	for _, o := range objs {
 		byResource[o.Resource] = appendUnique(byResource[o.Resource], o.ID)
+	}
+	for _, target := range builtImages {
+		byResource["container_image"] = appendUnique(byResource["container_image"], target)
 	}
 	for _, id := range byResource["container_deployment"] {
 		// A deployment of the chat sits on an edge device and holds an image. The backend refuses to delete a
@@ -961,6 +996,103 @@ func (r *expRunner) cleanup(ctx context.Context, chatID string, det agwclient.Ch
 		// DELETE /datasets/{id} wants a CVAT login in the body; placeholders suffice without an
 		// annotation task (CLAUDE.md, cleanup of test objects).
 		r.deleteObject(ctx, chatID, "/datasets/"+url.PathEscape(id), `{"key":"-","csrftoken":"-","sessionid":"-"}`)
+	}
+	return buildErr
+}
+
+// settleBuilds waits until every image build the chat started has ended and returns the images ("<repository>:<tag>")
+// the registry lists for the finished ones. The source is the chat's watch jobs, so only builds of this chat count.
+// A task that does not end within buildWait is an error: the build is still running and cannot be stopped from here.
+func (r *expRunner) settleBuilds(ctx context.Context, chatID string) ([]string, error) {
+	jobs, err := r.api.Jobs(ctx, chatID)
+	if err != nil {
+		fmt.Fprintf(r.errw, "cleanup of chat %s: jobs not readable: %v\n", shortID(chatID), err)
+		return nil, nil
+	}
+	var built []string
+	var stuck []string
+	seen := map[string]bool{}
+	for _, job := range jobs {
+		taskID, target, ok := watch.ImageBuildOf(job.Kind, job.Ref)
+		if !ok || seen[target] {
+			continue
+		}
+		seen[target] = true
+		if taskID != "" {
+			status, waited := r.waitBuildTask(ctx, chatID, taskID)
+			if waited {
+				fmt.Fprintf(r.errw, "cleanup of chat %s: waited for the image build %s (task %s): %s\n", shortID(chatID), target, taskID, status)
+			}
+			if status == "inprogress" || status == "created" {
+				stuck = append(stuck, target+" (task "+taskID+")")
+				continue
+			}
+			if status == "failed" {
+				continue
+			}
+		}
+		if r.waitImageListed(ctx, chatID, target) {
+			built = append(built, target)
+		}
+	}
+	if len(stuck) > 0 {
+		return built, fmt.Errorf("image build still running %s after the run: %s; it would put its image into the next run, so the plan stops",
+			r.buildWait, strings.Join(stuck, ", "))
+	}
+	return built, nil
+}
+
+// waitBuildTask polls GET /tasks/<id> until the task is completed, failed or gone, at most buildWait. It returns
+// the last status ("" when the task could not be read or is gone) and whether it had to wait at all.
+func (r *expRunner) waitBuildTask(ctx context.Context, chatID, taskID string) (status string, waited bool) {
+	deadline := r.now().Add(r.buildWait)
+	for {
+		res, err := r.api.ExpCall(ctx, agwclient.ExpCallRequest{Chat: chatID, Method: "GET", Path: "/tasks/" + url.PathEscape(taskID)})
+		if err != nil || res.Status != "ok" || res.HTTPStatus >= 300 {
+			return "", waited
+		}
+		var d struct {
+			Status string `json:"status"`
+		}
+		if json.Unmarshal([]byte(res.Body), &d) != nil {
+			return "", waited
+		}
+		if d.Status != "inprogress" && d.Status != "created" {
+			return d.Status, waited
+		}
+		if !r.now().Before(deadline) {
+			return d.Status, waited
+		}
+		waited = true
+		select {
+		case <-ctx.Done():
+			return d.Status, waited
+		case <-time.After(r.poll):
+		}
+	}
+}
+
+// waitImageListed waits at most registryWait until the registry lists the image (the registry's webhook creates the
+// row a little after the build task ends). It reports whether the image is there and so has to be deleted.
+func (r *expRunner) waitImageListed(ctx context.Context, chatID, target string) bool {
+	path, ok := containerImagePath(target)
+	if !ok {
+		return false
+	}
+	deadline := r.now().Add(r.registryWait)
+	for {
+		res, err := r.api.ExpCall(ctx, agwclient.ExpCallRequest{Chat: chatID, Method: "GET", Path: path})
+		if err == nil && res.Status == "ok" && res.HTTPStatus < 300 {
+			return true
+		}
+		if !r.now().Before(deadline) {
+			return false
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(r.poll):
+		}
 	}
 }
 

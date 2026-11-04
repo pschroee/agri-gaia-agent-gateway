@@ -18,6 +18,8 @@ type fakeCheckClient struct {
 	asked    []string
 	lastText string
 	lastErr  error
+	calls    []LoggedCall
+	callsErr error
 
 	textAsked bool
 }
@@ -34,6 +36,12 @@ func (f *fakeCheckClient) LastAssistantText(context.Context) (string, error) {
 	f.textAsked = true
 	return f.lastText, f.lastErr
 }
+
+func (f *fakeCheckClient) PlatformCalls(context.Context) ([]LoggedCall, error) {
+	return f.calls, f.callsErr
+}
+
+func intp(n int) *int { return &n }
 
 func answerSpec(a AnswerCheck) CheckSpec { return CheckSpec{Answer: &a} }
 
@@ -86,7 +94,7 @@ func TestEvaluateOps(t *testing.T) {
 func TestEvaluateUsesCreatedObjects(t *testing.T) {
 	f := &fakeCheckClient{answers: map[string]string{"/datasets": `{"datasets":[{"id":"1"}]}`}}
 	cs := spec("/datasets", Expectation{Path: "$.datasets[*].id", Op: "exists"})
-	cs.Created = &Created{Resource: "dataset", Count: 1}
+	cs.Created = &Created{Resource: "dataset", Count: intp(1)}
 	created := []Object{{Resource: "dataset", ID: "1"}, {Resource: "model", ID: "9"}}
 	pass, evidence, err := Evaluate(context.Background(), f, cs, created)
 	if err != nil || !pass {
@@ -100,7 +108,7 @@ func TestEvaluateUsesCreatedObjects(t *testing.T) {
 		t.Fatalf("created evidence: %+v", ev.Created)
 	}
 
-	cs.Created.Count = 2
+	cs.Created.Count = intp(2)
 	pass, evidence, err = Evaluate(context.Background(), f, cs, created)
 	if err != nil || pass {
 		t.Fatalf("two datasets expected: pass %v, err %v, evidence %s", pass, err, evidence)

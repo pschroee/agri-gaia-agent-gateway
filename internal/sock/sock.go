@@ -130,12 +130,18 @@ func (h *handler) failedCallsStopped(chat string) string {
 // warning or stop notice goes to the agent with the answer. The path directory (api_paths) is refused when the
 // chat is stopped but never counted.
 func (h *handler) counted(ctx context.Context, chat, via, key string, run func() (platform.Result, error)) (platform.Result, error) {
+	return h.countedAs(ctx, chat, via, key, key, run)
+}
+
+// countedAs is counted with the text a refused call is logged under: the method and path of the attempt where
+// the caller knows them (BM11: an attempt must stay visible in the log even when the gateway refuses it).
+func (h *handler) countedAs(ctx context.Context, chat, via, key, detail string, run func() (platform.Result, error)) (platform.Result, error) {
 	fc, ok := h.b.(FailedCallsCounter)
 	if !ok {
 		return run()
 	}
 	if s := fc.FailedCallsStopped(chat); s != "" {
-		h.logCall(ctx, chat, via, "platform", key, s)
+		h.logCall(ctx, chat, via, "platform", detail, s)
 		return platform.Result{Status: "error", Message: s}, nil
 	}
 	res, err := run()
@@ -748,7 +754,7 @@ func (h *handler) platform(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := h.callerCtx(r)
-	res, err := h.counted(ctx, chat, "cli", tool.Name, func() (platform.Result, error) {
+	res, err := h.countedAs(ctx, chat, "cli", tool.Name, attemptDetail(tool, raw), func() (platform.Result, error) {
 		return h.doPlatform(ctx, chat, "cli", tool, raw)
 	})
 	if err != nil {
@@ -756,6 +762,27 @@ func (h *handler) platform(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, res)
+}
+
+// attemptDetail is what a refused call of a tool is logged under. The tool "request" carries the method and the
+// path of the call in its arguments, and these stay in the log, so that an attempt the gateway refuses (a blocked
+// path, a stopped chat) is still an attempt at that path; any other tool is logged by its name.
+func attemptDetail(tool platform.Tool, raw json.RawMessage) string {
+	if tool.Name != "request" {
+		return tool.Name
+	}
+	var a struct {
+		Method string `json:"method"`
+		Path   string `json:"path"`
+	}
+	if json.Unmarshal(raw, &a) != nil || a.Path == "" {
+		return tool.Name
+	}
+	m := strings.ToUpper(strings.TrimSpace(a.Method))
+	if m == "" {
+		m = http.MethodGet
+	}
+	return m + " " + a.Path
 }
 
 // doPlatform builds the call from the tool table, has the backend execute it
@@ -771,7 +798,7 @@ func (h *handler) doPlatform(ctx context.Context, chat, via string, tool platfor
 		res, refused, err := tool.Run(ctx, raw, func(ctx context.Context, r platform.Request) (platform.Result, error) {
 			n, err := platform.Normalize(r)
 			if err != nil {
-				h.logCall(ctx, chat, via, "platform", tool.Name, "refused: "+err.Error())
+				h.logCall(ctx, chat, via, "platform", r.Method+" "+r.Path, "refused: "+err.Error())
 				return h.renderResult(ctx, chat, via, platform.Result{Status: "error", Message: err.Error()}), nil
 			}
 			return h.runPlatform(ctx, chat, via, n)
@@ -783,7 +810,7 @@ func (h *handler) doPlatform(ctx context.Context, chat, via string, tool platfor
 	}
 	req, err := tool.Build(raw)
 	if err != nil {
-		h.logCall(ctx, chat, via, "platform", tool.Name, "refused: "+err.Error())
+		h.logCall(ctx, chat, via, "platform", attemptDetail(tool, raw), "refused: "+err.Error())
 		return h.renderResult(ctx, chat, via, platform.Result{Status: "error", Message: err.Error()}), nil
 	}
 	return h.runPlatform(ctx, chat, via, req)
@@ -1035,7 +1062,7 @@ func (h *handler) mcpServer() *mcp.Server {
 				cctx := h.callerExtra(ctx, req)
 				cctx, untrack := h.trackCall(cctx, req)
 				defer untrack()
-				res, err := h.counted(cctx, chat, "mcp", t.Name, func() (platform.Result, error) {
+				res, err := h.countedAs(cctx, chat, "mcp", t.Name, attemptDetail(t, req.Params.Arguments), func() (platform.Result, error) {
 					return h.doPlatform(cctx, chat, "mcp", t, req.Params.Arguments)
 				})
 				if err != nil {
@@ -1236,7 +1263,7 @@ func (h *handler) platformAPI(w http.ResponseWriter, r *http.Request) {
 			res.Message += platform.RESTHint
 		}
 	default:
-		res, err = h.counted(ctx, chat, via, platform.CallKey(r.Method, path), func() (platform.Result, error) {
+		res, err = h.countedAs(ctx, chat, via, platform.CallKey(r.Method, path), r.Method+" "+path, func() (platform.Result, error) {
 			return h.runGatewayRaw(ctx, chat, via, r.Method, path, q, raw)
 		})
 	}

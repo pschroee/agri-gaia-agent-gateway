@@ -20,6 +20,8 @@ import (
 type Client interface {
 	Get(ctx context.Context, path string) (json.RawMessage, error)
 	LastAssistantText(ctx context.Context) (string, error)
+	// PlatformCalls reads the run's call log: every platform call the agent attempted, in every binding.
+	PlatformCalls(ctx context.Context) ([]LoggedCall, error)
 }
 
 // Message is one stored chat message as far as the answer check needs it: the role decides what
@@ -70,6 +72,7 @@ type Evidence struct {
 	Conditions []ConditionEvidence `json:"conditions"`
 	Created    *CreatedEvidence    `json:"created,omitempty"`
 	Answer     *AnswerEvidence     `json:"answer,omitempty"`
+	NoAttempt  []NoAttemptEvidence `json:"no_attempt,omitempty"`
 	Pass       bool                `json:"pass"`
 }
 
@@ -78,6 +81,7 @@ type Evidence struct {
 type AnswerEvidence struct {
 	Text       string `json:"text"`
 	Contains   string `json:"contains,omitempty"`
+	IgnoreCase bool   `json:"ignore_case,omitempty"`
 	Count      *int64 `json:"count,omitempty"`
 	ContainsOK bool   `json:"contains_ok"`
 	CountOK    bool   `json:"count_ok"`
@@ -103,12 +107,24 @@ type ResultEvidence struct {
 	OK   bool   `json:"ok"`
 }
 
-// CreatedEvidence compares the number of created objects with check.created.
+// CreatedEvidence compares the number of created objects with check.created: Want is the exact number
+// (count), Min and Max the range (Max -1: unbounded).
 type CreatedEvidence struct {
 	Resource string `json:"resource"`
 	Want     int    `json:"want"`
+	Min      int    `json:"min"`
+	Max      int    `json:"max"`
 	Got      int    `json:"got"`
 	OK       bool   `json:"ok"`
+}
+
+// NoAttemptEvidence is one no_attempt pattern and the attempts of the run that matched it. OK is true
+// when there are none.
+type NoAttemptEvidence struct {
+	Method   string    `json:"method"`
+	Path     string    `json:"path"`
+	Attempts []Attempt `json:"attempts,omitempty"`
+	OK       bool      `json:"ok"`
 }
 
 // Evaluate runs the declarative success check of a task (X1.9): every condition is a read call and
@@ -118,8 +134,8 @@ type CreatedEvidence struct {
 func Evaluate(ctx context.Context, c Client, spec CheckSpec, created []Object) (bool, json.RawMessage, error) {
 	ev := Evidence{Pass: true}
 	var firstErr error
-	if len(spec.Conditions) == 0 && spec.Created == nil && spec.Answer == nil {
-		return false, marshalEvidence(ev), errors.New("check without conditions, created or answer")
+	if len(spec.Conditions) == 0 && spec.Created == nil && spec.Answer == nil && len(spec.NoAttempt) == 0 {
+		return false, marshalEvidence(ev), errors.New("check without conditions, created, answer or no_attempt")
 	}
 	for _, cond := range spec.Conditions {
 		ce := ConditionEvidence{Method: cond.Request.Method, Path: cond.Request.Path}
@@ -160,15 +176,21 @@ func Evaluate(ctx context.Context, c Client, spec CheckSpec, created []Object) (
 				got++
 			}
 		}
-		ok := got == spec.Created.Count
+		lo, hi := spec.Created.Bounds()
+		ok := got >= lo && (hi < 0 || got <= hi)
 		if !ok {
 			ev.Pass = false
 		}
-		ev.Created = &CreatedEvidence{Resource: spec.Created.Resource, Want: spec.Created.Count, Got: got, OK: ok}
+		want := lo
+		if spec.Created.Count == nil {
+			want = -1
+		}
+		ev.Created = &CreatedEvidence{Resource: spec.Created.Resource, Want: want, Min: lo, Max: hi, Got: got, OK: ok}
 	}
 	if spec.Answer != nil {
 		ae := AnswerEvidence{
 			Contains:   spec.Answer.Contains,
+			IgnoreCase: spec.Answer.IgnoreCase,
 			Count:      spec.Answer.Count,
 			ContainsOK: spec.Answer.Contains == "",
 			CountOK:    spec.Answer.Count == nil,
@@ -182,7 +204,11 @@ func Evaluate(ctx context.Context, c Client, spec CheckSpec, created []Object) (
 		} else {
 			ae.Text = text
 			if spec.Answer.Contains != "" {
-				ae.ContainsOK = strings.Contains(text, spec.Answer.Contains)
+				if spec.Answer.IgnoreCase {
+					ae.ContainsOK = strings.Contains(strings.ToLower(text), strings.ToLower(spec.Answer.Contains))
+				} else {
+					ae.ContainsOK = strings.Contains(text, spec.Answer.Contains)
+				}
 			}
 			if spec.Answer.Count != nil {
 				ae.CountOK = containsNumber(text, *spec.Answer.Count)
@@ -193,6 +219,39 @@ func Evaluate(ctx context.Context, c Client, spec CheckSpec, created []Object) (
 			ev.Pass = false
 		}
 		ev.Answer = &ae
+	}
+	if len(spec.NoAttempt) > 0 {
+		calls, err := c.PlatformCalls(ctx)
+		if err != nil {
+			// Without the log nothing is known about the attempts: the run does not pass.
+			ev.Pass = false
+			if firstErr == nil {
+				firstErr = fmt.Errorf("call log: %w", err)
+			}
+			for _, pat := range spec.NoAttempt {
+				ev.NoAttempt = append(ev.NoAttempt, NoAttemptEvidence{Method: pat.Method, Path: pat.Path})
+			}
+		} else {
+			var attempts []Attempt
+			for _, lc := range calls {
+				if a, ok := ParseAttempt(lc); ok {
+					attempts = append(attempts, a)
+				}
+			}
+			for _, pat := range spec.NoAttempt {
+				ne := NoAttemptEvidence{Method: pat.Method, Path: pat.Path}
+				for _, a := range attempts {
+					if pat.Matches(a) {
+						ne.Attempts = append(ne.Attempts, a)
+					}
+				}
+				ne.OK = len(ne.Attempts) == 0
+				if !ne.OK {
+					ev.Pass = false
+				}
+				ev.NoAttempt = append(ev.NoAttempt, ne)
+			}
+		}
 	}
 	return ev.Pass, marshalEvidence(ev), firstErr
 }

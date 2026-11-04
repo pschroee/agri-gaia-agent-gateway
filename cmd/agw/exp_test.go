@@ -452,6 +452,8 @@ type fakeExpAPI struct {
 	baseBodies map[int64]string
 	downloads  map[int64]string
 	order      []string
+	// callScript answers a call before the default does (BM11: a task that changes while the cleanup waits).
+	callScript func(req agwclient.ExpCallRequest) (agwclient.ExpCallResult, bool)
 }
 
 type fakeSeedCall struct {
@@ -643,6 +645,11 @@ func (f *fakeExpAPI) ExpDownload(_ context.Context, chat string, dataset int64, 
 func (f *fakeExpAPI) ExpCall(_ context.Context, req agwclient.ExpCallRequest) (agwclient.ExpCallResult, error) {
 	f.calls = append(f.calls, req)
 	f.order = append(f.order, req.Method+" "+req.Path)
+	if f.callScript != nil {
+		if res, ok := f.callScript(req); ok {
+			return res, nil
+		}
+	}
 	if req.Method == "GET" {
 		body, ok := f.answers[req.Path]
 		if !ok {

@@ -47,6 +47,23 @@ func imageRefFromRequest(req platform.Request) (string, bool) {
 	return doc.Repository + ":" + doc.Tag, true
 }
 
+// ImageBuildOf names the build an image_build job follows: the platform task that builds it (empty once the
+// task has ended and the registry row is awaited) and the image "<repository>:<tag>". ok is false for any
+// other job. The experiment runner uses it to wait for a build that outlives its run (BM11).
+func ImageBuildOf(kind, ref string) (taskID, target string, ok bool) {
+	if kind != kindImageBuild {
+		return "", "", false
+	}
+	if t, _, found := splitRegistryRef(ref); found {
+		return "", t, true
+	}
+	id, chain, t := splitTaskRef(ref)
+	if id == "" || chain != chainImage || t == "" {
+		return "", "", false
+	}
+	return id, t, true
+}
+
 // registryWait is how long a finished build may take to show up in the registry listing (the registry
 // webhook creates the row, not the build task).
 const registryWait = 10 * time.Minute

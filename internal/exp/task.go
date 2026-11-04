@@ -90,21 +90,32 @@ type CheckSpec struct {
 	Conditions []Condition  `yaml:"conditions"`
 	Created    *Created     `yaml:"created,omitempty"`
 	Answer     *AnswerCheck `yaml:"answer,omitempty"`
+	// NoAttempt: the run fails as soon as the agent attempted one of these platform calls, whatever the
+	// delegation or the platform made of it (BM11). The source is the gateway's call log, not the end state.
+	NoAttempt []AttemptPattern `yaml:"no_attempt,omitempty"`
 	// Offline: judged outside the gateway; may stand alone or next to the checks above (BM1).
 	Offline *OfflineCheck `yaml:"offline,omitempty"`
 }
 
 // HasOnline reports whether the runner has anything to evaluate itself (conditions, created, answer).
 func (c CheckSpec) HasOnline() bool {
-	return len(c.Conditions) > 0 || c.Created != nil || c.Answer != nil
+	return len(c.Conditions) > 0 || c.Created != nil || c.Answer != nil || len(c.NoAttempt) > 0
+}
+
+// AttemptPattern names a platform call the agent must not attempt: the method (or *) and a path pattern
+// relative to the platform API, in which * stands for exactly one path segment (BM11).
+type AttemptPattern struct {
+	Method string `yaml:"method"`
+	Path   string `yaml:"path"`
 }
 
 // AnswerCheck judges the last assistant text of the run's chat (issue #147): it contains a
 // required string, or the required whole number, or both. Tool outputs, thinking, tool calls
-// and system notes never count.
+// and system notes never count. IgnoreCase makes contains independent of upper and lower case (BM11).
 type AnswerCheck struct {
-	Contains string `yaml:"contains,omitempty"`
-	Count    *int64 `yaml:"count,omitempty"`
+	Contains   string `yaml:"contains,omitempty"`
+	IgnoreCase bool   `yaml:"ignore_case,omitempty"`
+	Count      *int64 `yaml:"count,omitempty"`
 }
 
 // Condition is one read call and the expectations on its answer.
@@ -127,10 +138,28 @@ type Expectation struct {
 	Value any    `yaml:"value,omitempty"`
 }
 
-// Created names a resource that the task must have created, with its count.
+// Created names a resource that the task must have created, with its number: exactly Count, or
+// between Min and Max (either may be left out). Count and Min/Max exclude each other (BM11).
 type Created struct {
 	Resource string `yaml:"resource"`
-	Count    int    `yaml:"count"`
+	Count    *int   `yaml:"count,omitempty"`
+	Min      *int   `yaml:"min,omitempty"`
+	Max      *int   `yaml:"max,omitempty"`
+}
+
+// Bounds returns the accepted range of the number of created objects; max < 0 means unbounded.
+func (c Created) Bounds() (min, max int) {
+	if c.Count != nil {
+		return *c.Count, *c.Count
+	}
+	min, max = 0, -1
+	if c.Min != nil {
+		min = *c.Min
+	}
+	if c.Max != nil {
+		max = *c.Max
+	}
+	return min, max
 }
 
 // Manifest is the content of fixtures/<id>.yaml (format from X4.1). Fields carry literal
@@ -456,7 +485,7 @@ func validateCheck(c CheckSpec, where string) []Problem {
 	var out []Problem
 	add := func(format string, a ...any) { out = append(out, Problem{where, fmt.Sprintf(format, a...)}) }
 	if !c.HasOnline() && c.Offline == nil {
-		add("check is empty; a task needs conditions, created, answer or offline")
+		add("check is empty; a task needs conditions, created, answer, no_attempt or offline")
 	}
 	if o := c.Offline; o != nil {
 		switch o.Kind {
@@ -517,13 +546,38 @@ func validateCheck(c CheckSpec, where string) []Problem {
 		if strings.TrimSpace(c.Created.Resource) == "" {
 			add("check.created.resource is empty")
 		}
-		if c.Created.Count < 0 {
-			add("check.created.count must not be negative, not %d", c.Created.Count)
+		cr := c.Created
+		switch {
+		case cr.Count != nil && (cr.Min != nil || cr.Max != nil):
+			add("check.created: count and min/max exclude each other")
+		case cr.Count == nil && cr.Min == nil && cr.Max == nil:
+			add("check.created needs count, or min and/or max")
+		}
+		if cr.Count != nil && *cr.Count < 0 {
+			add("check.created.count must not be negative, not %d", *cr.Count)
+		}
+		if cr.Min != nil && *cr.Min < 0 {
+			add("check.created.min must not be negative, not %d", *cr.Min)
+		}
+		if cr.Max != nil && *cr.Max < 0 {
+			add("check.created.max must not be negative, not %d", *cr.Max)
+		}
+		if cr.Min != nil && cr.Max != nil && *cr.Min > *cr.Max {
+			add("check.created.min (%d) is greater than max (%d)", *cr.Min, *cr.Max)
+		}
+	}
+	for i, a := range c.NoAttempt {
+		at := fmt.Sprintf("check.no_attempt[%d]", i)
+		if err := a.validate(); err != nil {
+			add("%s: %v", at, err)
 		}
 	}
 	if c.Answer != nil {
 		if strings.TrimSpace(c.Answer.Contains) == "" && c.Answer.Count == nil {
 			add("check.answer needs contains or count")
+		}
+		if c.Answer.IgnoreCase && strings.TrimSpace(c.Answer.Contains) == "" {
+			add("check.answer.ignore_case only applies to contains")
 		}
 	}
 	return out
