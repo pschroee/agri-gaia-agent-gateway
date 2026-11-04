@@ -986,7 +986,14 @@ func (r *expRunner) cleanup(ctx context.Context, chatID string, det agwclient.Ch
 			r.deleteObject(ctx, chatID, path, "")
 		}
 	}
-	for _, id := range expContainerIDs(det) {
+	// Training containers come from the answers and from the provenance register: a training the agent created
+	// with POST /train/config is recorded there as "training" (its answer names it "id", not "container_id").
+	// Without the register entry the container, its image and the dataset it trains on (HTTP 422) stayed behind.
+	trainings := expContainerIDs(det)
+	for _, id := range byResource["training"] {
+		trainings = appendUnique(trainings, id)
+	}
+	for _, id := range trainings {
 		r.deleteObject(ctx, chatID, "/train/containers/"+url.PathEscape(id), "")
 	}
 	for _, id := range byResource["model"] {

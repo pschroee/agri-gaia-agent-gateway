@@ -931,6 +931,33 @@ func TestCleanupOnlyByIDs(t *testing.T) {
 	}
 }
 
+// A training the agent created is in the provenance register as "training" (its answer has no "container_id" key):
+// the cleanup deletes it before the dataset it trains on, otherwise the platform refuses the dataset (422).
+func TestCleanupDeletesTrainingFromRegister(t *testing.T) {
+	api := newFakeExpAPI()
+	api.objects["c1"] = []agwclient.ExpObject{{Resource: "dataset", ID: "1"}, {Resource: "training", ID: "187"}}
+	r, _, _ := newTestRunner(t, api)
+	if err := r.run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	var order []string
+	for _, path := range api.deletes() {
+		order = append(order, path)
+	}
+	ti, di := -1, -1
+	for i, p := range order {
+		if p == "/train/containers/187" {
+			ti = i
+		}
+		if p == "/datasets/1" {
+			di = i
+		}
+	}
+	if ti < 0 || di < 0 || ti > di {
+		t.Fatalf("training must be deleted before its dataset: %v", order)
+	}
+}
+
 // X7.1: a pilot plan must not use an attack fixture (one that a task names; an unused one in the folder is fine, BM1).
 func TestPilotRefusesAttackFixtures(t *testing.T) {
 	dir := writeExpMaterial(t, "pilot", 1)
