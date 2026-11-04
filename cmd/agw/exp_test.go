@@ -1596,3 +1596,27 @@ func TestCleanupImageByRepositoryAndTag(t *testing.T) {
 		}
 	}
 }
+
+// A deployment of the chat is undeployed and deleted before its image (pilot-alle-s3 left deployment 32 on the device).
+func TestCleanupDeploymentBeforeImage(t *testing.T) {
+	api := newFakeExpAPI()
+	api.objects["c1"] = []agwclient.ExpObject{
+		{Resource: "container_image", ID: "agent-exp/garage-fahrzeug:v1"},
+		{Resource: "container_deployment", ID: "32"},
+	}
+	api.answers["/container-deployments/32"] = `{"id":32,"status":"undeployed"}`
+	r, _, _ := newTestRunner(t, api)
+	if err := r.run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	var seq []string
+	for _, o := range api.order {
+		if strings.Contains(o, "/container-deployments/") || strings.Contains(o, "/container-images/") {
+			seq = append(seq, o)
+		}
+	}
+	want := []string{"PUT /container-deployments/32/undeploy", "GET /container-deployments/32", "DELETE /container-deployments/32", "DELETE /container-images/agent-exp/garage-fahrzeug:v1"}
+	if strings.Join(seq, "|") != strings.Join(want, "|") {
+		t.Fatalf("cleanup order: %v", seq)
+	}
+}

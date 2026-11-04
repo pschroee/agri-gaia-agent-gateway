@@ -9,6 +9,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"regexp"
 
 	"agw/internal/platform"
 	"agw/internal/store"
@@ -243,6 +244,8 @@ func (s *Server) expObjects(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, objs)
 }
 
+var expUndeployPath = regexp.MustCompile(`^/container-deployments/[0-9]+/undeploy$`)
+
 // expCall is the check's and the cleanup's way to the platform (X1.9, X1.10): a read or delete with
 // the experiment account's token for a chat this account owns. Never a write: the check only reads,
 // and the cleanup deletes objects by identifier.
@@ -258,7 +261,10 @@ func (s *Server) expCall(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
-	if req.Method != http.MethodGet && req.Method != http.MethodDelete {
+	// The one exception to "reads and deletes": a deployment on an edge device must be undeployed before the backend
+	// lets it be deleted, so the cleanup may PUT /container-deployments/<id>/undeploy (and nothing else).
+	undeploy := req.Method == http.MethodPut && expUndeployPath.MatchString(req.Path)
+	if req.Method != http.MethodGet && req.Method != http.MethodDelete && !undeploy {
 		writeErr(w, http.StatusForbidden, "the experiment runner only reads and deletes")
 		return
 	}

@@ -935,6 +935,15 @@ func (r *expRunner) cleanup(ctx context.Context, chatID string, det agwclient.Ch
 	for _, o := range objs {
 		byResource[o.Resource] = appendUnique(byResource[o.Resource], o.ID)
 	}
+	for _, id := range byResource["container_deployment"] {
+		// A deployment of the chat sits on an edge device and holds an image. The backend refuses to delete a
+		// deployed one (409), so undeploy first (a no-op for one that never ran), wait until it is gone from
+		// the device, then delete the row, all before the image goes.
+		path := "/container-deployments/" + url.PathEscape(id)
+		r.callObject(ctx, chatID, "PUT", path+"/undeploy", "")
+		r.waitUndeployed(ctx, chatID, path)
+		r.deleteObject(ctx, chatID, path, "")
+	}
 	for _, id := range byResource["container_image"] {
 		// The backend deletes an image by <repository>/<name>:<tag>, not by its numeric id; the register
 		// lists both for one build, so the numeric entry is skipped.
@@ -970,17 +979,44 @@ func containerImagePath(ref string) (string, bool) {
 }
 
 func (r *expRunner) deleteObject(ctx context.Context, chatID, path, body string) {
-	req := agwclient.ExpCallRequest{Chat: chatID, Method: "DELETE", Path: path}
+	r.callObject(ctx, chatID, "DELETE", path, body)
+}
+
+// waitUndeployed polls the deployment until it is no longer "deployed" (at most two minutes; the delete then
+// reports what is left).
+func (r *expRunner) waitUndeployed(ctx context.Context, chatID, path string) {
+	deadline := r.now().Add(2 * time.Minute)
+	for r.now().Before(deadline) {
+		res, err := r.api.ExpCall(ctx, agwclient.ExpCallRequest{Chat: chatID, Method: "GET", Path: path})
+		if err != nil || res.Status != "ok" || res.HTTPStatus >= 300 {
+			return
+		}
+		var d struct {
+			Status string `json:"status"`
+		}
+		if json.Unmarshal([]byte(res.Body), &d) != nil || d.Status != "deployed" {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(3 * time.Second):
+		}
+	}
+}
+
+func (r *expRunner) callObject(ctx context.Context, chatID, method, path, body string) {
+	req := agwclient.ExpCallRequest{Chat: chatID, Method: method, Path: path}
 	if body != "" {
 		req.Body = json.RawMessage(body)
 	}
 	res, err := r.api.ExpCall(ctx, req)
 	if err != nil {
-		fmt.Fprintf(r.errw, "cleanup: DELETE %s failed: %v\n", path, err)
+		fmt.Fprintf(r.errw, "cleanup: %s %s failed: %v\n", method, path, err)
 		return
 	}
 	if res.Status != "ok" || res.HTTPStatus >= 300 {
-		fmt.Fprintf(r.errw, "cleanup: DELETE %s: %s\n", path, orDefault(res.Message, fmt.Sprintf("HTTP %d", res.HTTPStatus)))
+		fmt.Fprintf(r.errw, "cleanup: %s %s: %s\n", method, path, orDefault(res.Message, fmt.Sprintf("HTTP %d", res.HTTPStatus)))
 	}
 }
 
