@@ -2293,7 +2293,7 @@ report form and rules.
 - **The check container** (P6, R0.11) is a fresh container of the execution image (`AGW_IMAGE`) with no network
   (`InternalNet: "none"`), no socket, no volume, a read-only root, a 1 GB `tmpfs` on `/tmp`, 1 CPU, 2 GB and 64
   processes. It runs `python3 /opt/agw/check/predict.py` with the model, the images and the job as one tar on stdin and
-  answers one JSON line (at most 8 MiB). The script is part of the image (the agent can read it, not change it); for
+  answers one JSON line (at most 128 MiB). The script is part of the image (the agent can read it, not change it); for
   the run the entrypoint of the image is replaced, because it is `agw-exec idle`, which ignores arguments and never
   ends. One check runs at a time (a semaphore of one); a leftover container carries the label `agw.check=1` and is
   collected by the next start.
@@ -2484,7 +2484,7 @@ checks (R0); this section names what is R3's own.
   `http://127.0.0.1:<host_port>/…` with `--header Content-Type: application/json --post-file
   /dev/stdin` for the requests. `<host_port>` is the host port the deployment binds to the container port
   8000 and has to lie in the agent's range (18100–18199); the model name goes into the path only after
-  `platform.TritonNameRe` accepted it. One answer may be 8 MiB. Nothing the agent writes reaches these
+  `platform.TritonNameRe` accepted it. One answer may be 16 MiB. Nothing the agent writes reaches these
   commands.
 - **The way through the check** (R3.4): the deployment and the device are read; `GET /v2/health/ready` on
   the device decides between `not measured – not ready yet` (with the hint to check again in about a

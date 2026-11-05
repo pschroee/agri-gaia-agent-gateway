@@ -62,9 +62,9 @@ const (
 	// factor 35 above the first and a factor 10 below the second (R3.6).
 	AbsTolerance   = 1e-4
 	ScaleTolerance = 1e-2
-	// MaxDeviceBytes is the largest answer one device request may have (8 MiB, as for the check
-	// container).
-	MaxDeviceBytes = MaxOutputBytes
+	// MaxDeviceBytes is the largest answer one device request may have: 16 MiB since BM12 #276 (before 8 MiB). The
+	// raw output of a YOLO11n at 640x640 (705 600 float32 values) is about 8.5 MB as JSON from the Triton server.
+	MaxDeviceBytes = 16 << 20
 	// deviceTimeout bounds one command in the container of the device (wget's own limit is 10 s between two
 	// reads). 90 s: the body of a 640x640 request is about 14 MB over stdin, and the model runs on the device's CPU.
 	deviceTimeout = 90 * time.Second

@@ -260,3 +260,16 @@ func keys(m map[string][]byte) []string {
 	}
 	return out
 }
+
+// BM12 #276: the raw output of a YOLO11n at 640x640 (1x84x8400 = 705 600 values) has to fit the limits of the
+// check container (six requests, Python's float repr, up to 20 bytes a value) and of one device request (Triton
+// JSON, about 13 bytes a value). With 8 MiB such a model could not be measured at all.
+func TestLimitsFitAYoloOutput(t *testing.T) {
+	const values = 1 * 84 * 8400
+	if need := int64(TestRequests * values * 20); MaxOutputBytes < need {
+		t.Errorf("MaxOutputBytes %d is below the %d bytes of six raw YOLO outputs", int64(MaxOutputBytes), need)
+	}
+	if need := int64(values * 13); MaxDeviceBytes < need {
+		t.Errorf("MaxDeviceBytes %d is below the %d bytes of one raw YOLO output", int64(MaxDeviceBytes), need)
+	}
+}

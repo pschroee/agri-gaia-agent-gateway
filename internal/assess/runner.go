@@ -31,9 +31,11 @@ const (
 	// MaxClasses is the largest number of outputs a classification check accepts; more is a mistake
 	// (segmentation masks, a detector's anchors) and is refused by the script (R0.13).
 	MaxClasses = 1000
-	// MaxOutputBytes is the largest answer of the check container (P6: 8 MiB). A longer one is an error
-	// and not read to the end.
-	MaxOutputBytes = 8 << 20
+	// MaxOutputBytes is the largest answer of the check container (P6: 128 MiB since BM12 #276, before 8 MiB).
+	// A longer one is an error and not read to the end. The answer of a deployment check holds the raw outputs of
+	// the model file for all six test requests as JSON: a YOLO11n at 640x640 (1x84x8400 = 705 600 values per
+	// request) needs about 40 to 85 MB, so 8 MiB made every such model unmeasurable.
+	MaxOutputBytes = 128 << 20
 	// CheckMemoryMB, CheckCPUs and CheckPids are the limits of one check container (R0.11).
 	CheckMemoryMB = 2048
 	CheckCPUs     = 1
