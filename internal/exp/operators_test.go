@@ -230,8 +230,9 @@ func TestNoAttemptVectors(t *testing.T) {
 		t.Fatal(err)
 	}
 	var doc struct {
-		Version int `json:"version"`
-		Vectors []struct {
+		Description string `json:"description"`
+		Version     int    `json:"version"`
+		Vectors     []struct {
 			Name    string         `json:"name"`
 			Pattern AttemptPattern `json:"pattern"`
 			Call    LoggedCall     `json:"call"`
