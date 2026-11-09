@@ -9,6 +9,7 @@ package store
 // database.
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -42,6 +43,7 @@ type PlanRun struct {
 	CatalogSHA256      string
 	SkillsSHA256       string
 	InferenceRuntime   string
+	CheckEvidence      json.RawMessage // canonical JSON (sorted keys), nil when the run stored none
 	StartedAt, EndedAt *time.Time
 	DurationMs         *int64
 }
@@ -52,7 +54,7 @@ func (s *Store) PlanRuns(ctx context.Context, plan string) ([]PlanRun, error) {
  pass, COALESCE(end_reason,''), COALESCE(superseded_by,''), COALESCE(status,''), started_at, ended_at,
  CASE WHEN ended_at IS NOT NULL THEN (extract(epoch FROM ended_at-started_at)*1000)::bigint END,
  COALESCE(gateway_version,''), COALESCE(plan_sha256,''),
- COALESCE(image_pi,''), COALESCE(image_exec,''), COALESCE(catalog_sha256,''), COALESCE(skills_sha256,''), COALESCE(inference_runtime,'')
+ COALESCE(image_pi,''), COALESCE(image_exec,''), COALESCE(catalog_sha256,''), COALESCE(skills_sha256,''), COALESCE(inference_runtime,''), check_evidence
 FROM exp_runs WHERE plan=$1 ORDER BY position, run_key, id`, plan)
 	if err != nil {
 		return nil, err
@@ -62,10 +64,15 @@ FROM exp_runs WHERE plan=$1 ORDER BY position, run_key, id`, plan)
 	for rows.Next() {
 		var r PlanRun
 		var pass *bool
+		var evidence []byte
 		if err := rows.Scan(&r.ID, &r.RunID, &r.Cell, &r.Task, &r.Rep, &r.ChatID, &r.Model, &pass, &r.EndReason,
 			&r.SupersededBy, &r.Status, &r.StartedAt, &r.EndedAt, &r.DurationMs, &r.GatewayVersion, &r.PlanSHA256,
-			&r.ImagePi, &r.ImageExec, &r.CatalogSHA256, &r.SkillsSHA256, &r.InferenceRuntime); err != nil {
+			&r.ImagePi, &r.ImageExec, &r.CatalogSHA256, &r.SkillsSHA256, &r.InferenceRuntime, &evidence); err != nil {
 			return nil, err
+		}
+		var cerr error
+		if r.CheckEvidence, cerr = canonicalJSON(evidence); cerr != nil {
+			return nil, fmt.Errorf("run %s: check_evidence: %w", r.ID, cerr)
 		}
 		r.Pass = pass
 		out = append(out, r)
@@ -271,7 +278,7 @@ func (s *Store) exportRuns(ctx context.Context, plan string) (*ExportTable, erro
 	}
 	cols := []string{"run_id", "cell", "task", "rep", "id", "chat_id", "model", "model_role", "pass", "end_reason", "status",
 		"superseded_by", "binding", "protection", "attack", "started_at", "ended_at", "duration_ms", "gateway_version", "plan_sha256",
-		"image_pi", "image_exec", "catalog_sha256", "skills_sha256", "inference_runtime", "first_user_text_sha256"}
+		"image_pi", "image_exec", "catalog_sha256", "skills_sha256", "inference_runtime", "first_user_text_sha256", "check_evidence"}
 	out := &ExportTable{Name: "runs", Columns: cols}
 	firstSHA, err := s.firstUserTextSHA(ctx, runs)
 	if err != nil {
@@ -289,7 +296,7 @@ func (s *Store) exportRuns(ctx context.Context, plan string) (*ExportTable, erro
 		}
 		out.Rows = append(out.Rows, []any{r.RunID, r.Cell, r.Task, r.Rep, r.ID, r.ChatID, r.Model, role, pass,
 			r.EndReason, r.Status, r.SupersededBy, binding, protection, attack, r.StartedAt, r.EndedAt, dur, r.GatewayVersion, r.PlanSHA256,
-			r.ImagePi, r.ImageExec, r.CatalogSHA256, r.SkillsSHA256, r.InferenceRuntime, firstSHA[r.ChatID]})
+			r.ImagePi, r.ImageExec, r.CatalogSHA256, r.SkillsSHA256, r.InferenceRuntime, firstSHA[r.ChatID], evidenceCell(r.CheckEvidence)})
 	}
 	return out, nil
 }
@@ -362,4 +369,30 @@ func roleAt(parts []string, i int) string {
 		return parts[i]
 	}
 	return ""
+}
+
+// canonicalJSON re-encodes a JSON document with object keys in sorted order and numbers as written, so that the
+// same stored evidence always exports to the same bytes. Empty input and JSON null give nil.
+func canonicalJSON(raw []byte) (json.RawMessage, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	var v any
+	if err := dec.Decode(&v); err != nil {
+		return nil, err
+	}
+	if v == nil {
+		return nil, nil
+	}
+	return json.Marshal(v) // maps are written with sorted keys
+}
+
+// evidenceCell is the export value of check_evidence: the document itself, or an empty cell for none.
+func evidenceCell(e json.RawMessage) any {
+	if len(e) == 0 {
+		return nil
+	}
+	return e
 }

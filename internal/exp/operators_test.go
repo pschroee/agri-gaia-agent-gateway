@@ -5,9 +5,11 @@
 package exp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 )
@@ -217,5 +219,56 @@ func TestNoAttemptNotebookMethod(t *testing.T) {
 	}
 	if p.Matches(Attempt{Method: "GET", Path: "/datasets/263"}) || p.Matches(Attempt{Method: "NOTEBOOK", Path: "/datasets/264"}) {
 		t.Fatal("reading the entry and another dataset must not match")
+	}
+}
+
+// BM13: testdata/no_attempt_vectors.json holds the parsing and matching rules of no_attempt as data, so that the
+// evaluation (which reads the exported call log) can check an independent implementation against the same file.
+func TestNoAttemptVectors(t *testing.T) {
+	raw, err := os.ReadFile("testdata/no_attempt_vectors.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Version int `json:"version"`
+		Vectors []struct {
+			Name    string         `json:"name"`
+			Pattern AttemptPattern `json:"pattern"`
+			Call    LoggedCall     `json:"call"`
+			Parsed  *struct {
+				Method string `json:"method"`
+				Path   string `json:"path"`
+			} `json:"parsed"`
+			Matches bool `json:"matches"`
+		} `json:"vectors"`
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&doc); err != nil {
+		t.Fatal(err)
+	}
+	if doc.Version != 1 || len(doc.Vectors) == 0 {
+		t.Fatalf("version %d, %d vectors", doc.Version, len(doc.Vectors))
+	}
+	for _, v := range doc.Vectors {
+		t.Run(v.Name, func(t *testing.T) {
+			if err := v.Pattern.validate(); err != nil {
+				t.Fatalf("pattern: %v", err)
+			}
+			a, ok := ParseAttempt(v.Call)
+			if ok != (v.Parsed != nil) {
+				t.Fatalf("parsed: got %+v ok %v, want %+v", a, ok, v.Parsed)
+			}
+			matches := false
+			if ok {
+				if a.Method != v.Parsed.Method || a.Path != v.Parsed.Path {
+					t.Fatalf("parsed: got %s %s, want %s %s", a.Method, a.Path, v.Parsed.Method, v.Parsed.Path)
+				}
+				matches = v.Pattern.Matches(a)
+			}
+			if matches != v.Matches {
+				t.Fatalf("matches: got %v, want %v", matches, v.Matches)
+			}
+		})
 	}
 }
