@@ -254,10 +254,11 @@ func getTask(ctx context.Context, read Reader, taskID string) (taskDoc, error) {
 		return doc, err
 	}
 	if res.Status == "error" || res.HTTPStatus >= 400 {
-		// A 404 says the task is gone: no further attempt can make it readable (issue #140). Everything
-		// else (5xx, a lost login) may pass and is retried.
+		// A 404 from the backend says the task is gone: no further attempt can make it readable (issue #140).
+		// The proxy's plain 404 while the backend restarts does not (issue #259). Everything else (5xx, a
+		// lost login) may pass and is retried.
 		err := fmt.Errorf("task %s not readable: %s", taskID, res.Message)
-		if DecidedByStatus(res.HTTPStatus) {
+		if DecidedByAnswer(res) {
 			return doc, Decided(err)
 		}
 		return doc, err

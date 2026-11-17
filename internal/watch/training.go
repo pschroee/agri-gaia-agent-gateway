@@ -71,10 +71,10 @@ func pollTrainingRun(ctx context.Context, j Job, read Reader) (Progress, error) 
 		return Progress{}, err
 	}
 	if res.Status == "error" || res.HTTPStatus >= 400 {
-		// A 404 means the training container was removed while it was observed (issue #140): the job ends,
+		// A backend 404 means the training container was removed while it was observed (issue #140): the job ends,
 		// every other status may pass.
 		err := fmt.Errorf("training container %s not readable: %s", j.Ref, res.Message)
-		if DecidedByStatus(res.HTTPStatus) {
+		if DecidedByAnswer(res) {
 			return Progress{}, Decided(err)
 		}
 		return Progress{}, err
