@@ -25,7 +25,7 @@ func recorded(t *testing.T, answers map[string]string) (Reader, func() []string)
 		got = append(got, key)
 		body, ok := answers[key]
 		if !ok {
-			return platform.Result{Status: "error", HTTPStatus: 404, Message: "platform responds 404"}, nil
+			return backend404, nil
 		}
 		return platform.Result{Status: "ok", HTTPStatus: http.StatusOK, Body: body}, nil
 	}
@@ -184,5 +184,39 @@ func TestTaskIDsFromBodyReference(t *testing.T) {
 		platform.Result{Status: "ok", HTTPStatus: 200, Body: "33"})
 	if len(got) != 1 || got[0] != "33" {
 		t.Errorf("body reference: %v", got)
+	}
+}
+
+// Issue #259: the proxy answers its own plain-text 404 while the backend restarts; the task is not gone, the
+// read fails transiently and the job keeps running.
+func TestTaskTraefik404IsTransient(t *testing.T) {
+	_, err := pollPlatformTask(context.Background(), Job{ID: "w1", Kind: kindPlatformTask, Ref: "task:5"}, answering(proxy404))
+	if err == nil {
+		t.Fatal("a proxy 404 must be an error of the read")
+	}
+	if IsDecided(err) {
+		t.Fatalf("a proxy 404 must stay transient: %v", err)
+	}
+}
+
+// Issue #259: a 404 in the backend's own error form says the task is gone.
+func TestTaskBackend404IsDecided(t *testing.T) {
+	_, err := pollPlatformTask(context.Background(), Job{ID: "w1", Kind: kindPlatformTask, Ref: "task:5"}, answering(backend404))
+	if err == nil || !IsDecided(err) {
+		t.Fatalf("a backend 404 must be decided: %v", err)
+	}
+}
+
+// Issue #259: a task the backend marked as interrupted by its restart ends the step as failed, with that reason.
+func TestTaskInterruptedByRestart(t *testing.T) {
+	read, _ := recorded(t, map[string]string{
+		"GET /tasks/5": `{"status":"failed","completion_percentage":0.5,"message":"Interrupted by a backend restart."}`,
+	})
+	p, err := pollPlatformTask(context.Background(), Job{ID: "w1", Kind: kindPlatformTask, Ref: "task:5"}, read)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.State != StateFailed || p.Message != "Interrupted by a backend restart." {
+		t.Errorf("%+v", p)
 	}
 }

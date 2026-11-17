@@ -225,3 +225,14 @@ func TestTrainingContainerOf(t *testing.T) {
 		}
 	}
 }
+
+// Issue #259: the proxy's plain-text 404 (backend restarting) must not end a training observation.
+func TestTrainingTraefik404IsTransient(t *testing.T) {
+	_, err := pollTrainingRun(context.Background(), Job{ID: "w2", Kind: kindTrainingRun, Ref: "9"}, answering(proxy404))
+	if err == nil {
+		t.Fatal("a proxy 404 must be an error of the read")
+	}
+	if IsDecided(err) {
+		t.Fatalf("a proxy 404 must stay transient: %v", err)
+	}
+}

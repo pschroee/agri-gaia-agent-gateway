@@ -5,13 +5,16 @@
 package watch
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+
+	"agw/internal/platform"
 )
 
 // Read errors of a kind (issue #140). A poll that fails says whether the failure is **decided**: the
-// platform answered and the job can never become readable again — the task is gone (404), or its answer is
+// platform answered and the job can never become readable again — the task is gone (a 404 from the backend itself), or its answer is
 // no longer a task (unparsable JSON). The loop ends such a job as "failed" with the reason. Every other
 // error (network, timeout, 5xx, a lost login) is **transient**: the job stays running, the failures are
 // counted, the next attempt waits longer and the log gets one warning, not one per tick.
@@ -44,7 +47,19 @@ func IsDecided(err error) bool {
 	return errors.As(err, &d)
 }
 
-// DecidedByStatus reports whether an answer says that the job is gone: a 404 on the object the kind reads.
-// Every other status is transient — a 5xx or a timeout may pass, and a 401 or 403 is the user's login,
-// which comes back.
-func DecidedByStatus(status int) bool { return status == http.StatusNotFound }
+// DecidedByAnswer reports whether an answer says that the job is gone: a 404 that the **backend** wrote
+// (issue #259). The backend answers in the FastAPI error form, a JSON object with a "detail" key. The proxy
+// in front of it answers a plain-text "404 page not found" while the backend restarts or is unhealthy; that
+// says nothing about the job and stays transient. Every other status is transient too — a 5xx or a timeout
+// may pass, and a 401 or 403 is the user's login, which comes back.
+func DecidedByAnswer(res platform.Result) bool {
+	if res.HTTPStatus != http.StatusNotFound {
+		return false
+	}
+	var body map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(res.Body), &body); err != nil {
+		return false
+	}
+	_, ok := body["detail"]
+	return ok
+}
