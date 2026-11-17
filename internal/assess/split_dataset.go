@@ -507,7 +507,7 @@ func (s *Service) splitDataset(ctx context.Context, chatID string, req platform.
 	}
 	if err := s.St.RecordSplit(ctx, store.Split{
 		ChatID: chatID, SourceDatasetID: body.DatasetID, TrainDatasetID: trainID,
-		TrainImages: len(train), KeptImages: len(kept),
+		TrainImages: len(train), KeptImages: len(kept), HoldoutImages: ci.Holdout, ValidationImages: ci.Validation,
 	}); err != nil {
 		return platform.Result{}, err
 	}

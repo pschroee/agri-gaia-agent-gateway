@@ -23,6 +23,12 @@ CREATE TABLE IF NOT EXISTS assess_splits (
 );
 CREATE INDEX IF NOT EXISTS assess_splits_chat ON assess_splits (chat_id, source_dataset_id);
 
+-- How the kept-back images divide between the two check sets (#260): the validation part compares the
+-- rounds of a search, the hold-out part is what the final test measures. 0 means unknown (rows written
+-- before the columns existed). Additive and idempotent, so an existing database upgrades in place.
+ALTER TABLE assess_splits ADD COLUMN IF NOT EXISTS holdout_images integer NOT NULL DEFAULT 0;
+ALTER TABLE assess_splits ADD COLUMN IF NOT EXISTS validation_images integer NOT NULL DEFAULT 0;
+
 CREATE TABLE IF NOT EXISTS model_origins (
     model_id           bigint PRIMARY KEY,                -- the platform model the gateway saw being created
     chat_id            uuid NOT NULL REFERENCES chats(id) ON DELETE CASCADE,

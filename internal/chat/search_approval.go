@@ -58,7 +58,10 @@ type SearchBase struct {
 type SearchHoldout struct {
 	Available   bool         `json:"available"`
 	EvalDataset *SearchNamed `json:"eval_dataset,omitempty"`
-	Images      int          `json:"images,omitempty"`
+	// Images: all images the split kept back (hold-out plus validation); HoldoutImages: the part the final test
+	// measures (#260; 0 when unknown, e.g. a split recorded before it was stored).
+	Images        int `json:"images,omitempty"`
+	HoldoutImages int `json:"holdout_images,omitempty"`
 	// FinalState: "" (not run yet), "pending" (the search ended with a winner), "started" (the final test runs).
 	FinalState string          `json:"final_state,omitempty"`
 	CheckID    string          `json:"check_id,omitempty"`

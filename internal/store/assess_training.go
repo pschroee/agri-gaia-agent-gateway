@@ -29,29 +29,35 @@ type Split struct {
 	// SourceDatasetID: the dataset the split read and downloaded (its CVAT annotations were synced).
 	SourceDatasetID int64 `json:"source_dataset_id"`
 	// TrainDatasetID: the dataset the split created (70 % of the annotated images per class).
-	TrainDatasetID int64     `json:"train_dataset_id"`
-	TrainImages    int       `json:"train_images"`
-	KeptImages     int       `json:"kept_images"`
-	CreatedAt      time.Time `json:"created_at"`
+	TrainDatasetID int64 `json:"train_dataset_id"`
+	TrainImages    int   `json:"train_images"`
+	KeptImages     int   `json:"kept_images"`
+	// HoldoutImages and ValidationImages: how the kept-back images divide between the final test and the
+	// comparison of rounds (#260). 0: unknown (a split recorded before the columns existed).
+	HoldoutImages    int       `json:"holdout_images"`
+	ValidationImages int       `json:"validation_images"`
+	CreatedAt        time.Time `json:"created_at"`
 }
 
 // RecordSplit stores a split; a second split of the same training dataset replaces the first (the
 // training dataset is the key, and a dataset is created once).
 func (s *Store) RecordSplit(ctx context.Context, sp Split) error {
 	_, err := s.pool.Exec(ctx, `
-INSERT INTO assess_splits (chat_id, source_dataset_id, train_dataset_id, train_images, kept_images)
-VALUES ($1,$2,$3,$4,$5)
+INSERT INTO assess_splits (chat_id, source_dataset_id, train_dataset_id, train_images, kept_images, holdout_images, validation_images)
+VALUES ($1,$2,$3,$4,$5,$6,$7)
 ON CONFLICT (train_dataset_id) DO UPDATE SET
   source_dataset_id = EXCLUDED.source_dataset_id, train_images = EXCLUDED.train_images,
-  kept_images = EXCLUDED.kept_images`, sp.ChatID, sp.SourceDatasetID, sp.TrainDatasetID, sp.TrainImages, sp.KeptImages)
+  kept_images = EXCLUDED.kept_images, holdout_images = EXCLUDED.holdout_images,
+  validation_images = EXCLUDED.validation_images`, sp.ChatID, sp.SourceDatasetID, sp.TrainDatasetID, sp.TrainImages, sp.KeptImages,
+		sp.HoldoutImages, sp.ValidationImages)
 	return err
 }
 
-const splitCols = `chat_id::text, source_dataset_id, train_dataset_id, train_images, kept_images, created_at`
+const splitCols = `chat_id::text, source_dataset_id, train_dataset_id, train_images, kept_images, holdout_images, validation_images, created_at`
 
 func scanSplit(row pgx.Row) (Split, error) {
 	var sp Split
-	err := row.Scan(&sp.ChatID, &sp.SourceDatasetID, &sp.TrainDatasetID, &sp.TrainImages, &sp.KeptImages, &sp.CreatedAt)
+	err := row.Scan(&sp.ChatID, &sp.SourceDatasetID, &sp.TrainDatasetID, &sp.TrainImages, &sp.KeptImages, &sp.HoldoutImages, &sp.ValidationImages, &sp.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Split{}, ErrNotFound
 	}
