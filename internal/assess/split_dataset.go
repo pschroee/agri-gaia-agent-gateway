@@ -507,7 +507,7 @@ func (s *Service) splitDataset(ctx context.Context, chatID string, req platform.
 	}
 	if err := s.St.RecordSplit(ctx, store.Split{
 		ChatID: chatID, SourceDatasetID: body.DatasetID, TrainDatasetID: trainID,
-		TrainImages: len(train), KeptImages: len(kept),
+		TrainImages: len(train), KeptImages: len(kept), HoldoutImages: ci.Holdout, ValidationImages: ci.Validation,
 	}); err != nil {
 		return platform.Result{}, err
 	}
@@ -750,7 +750,7 @@ func callResult(res platform.Result, err error) string {
 	if res.Status != "ok" {
 		return res.Status + ": " + res.Message
 	}
-	return fmt.Sprintf("HTTP %d", res.HTTPStatus)
+	return fmt.Sprintf("%s %d", res.Status, res.HTTPStatus)
 }
 
 // log records one call the check service made on its own (R1.3).

@@ -233,6 +233,10 @@ func TestSplitDatasetUploads(t *testing.T) {
 	if sp.SourceDatasetID != 7 || sp.TrainImages != 14 || sp.KeptImages != 6 {
 		t.Fatalf("recorded split: %+v", sp)
 	}
+	// The division of the kept-back images is recorded with it (#260): the search card names the hold-out part.
+	if sp.HoldoutImages != 4 || sp.ValidationImages != 2 {
+		t.Errorf("recorded hold-out/validation: %d/%d, want 4/2", sp.HoldoutImages, sp.ValidationImages)
+	}
 	if sp, err := st.SplitOfSourceDataset(ctx, chat.ID, 7); err != nil || sp.TrainDatasetID != 42 {
 		t.Fatalf("split of the source: %+v %v", sp, err)
 	}

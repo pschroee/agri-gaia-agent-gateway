@@ -418,7 +418,7 @@ func (m *Manager) holdoutOf(ctx context.Context, chatID string, read platform.Do
 		return SearchHoldout{}
 	}
 	n := readNamed(ctx, read, sp.SourceDatasetID)
-	return SearchHoldout{Available: true, EvalDataset: &n, Images: sp.KeptImages}
+	return SearchHoldout{Available: true, EvalDataset: &n, Images: sp.KeptImages, HoldoutImages: sp.HoldoutImages}
 }
 
 // searchRecheckState is what the recheck of a proposal keeps between clicks: the data and base the user saw last.

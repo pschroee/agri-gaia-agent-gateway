@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 
 	"agw/internal/platform"
@@ -164,5 +165,35 @@ func TestSearchReadLinksFinalCheckOfWinner(t *testing.T) {
 	_ = holdoutOf(t, e, c.ID)
 	if kinds := searchEventKinds(t, e, s.ID); kinds["final"] != 1 {
 		t.Errorf("final events: %v", kinds)
+	}
+}
+
+// #260: the search card names the hold-out images of the final test next to all the kept-back ones.
+func TestHoldoutOfNamesHoldoutImages(t *testing.T) {
+	e := setup(t)
+	ctx := store.WithSession(context.Background(), "main")
+	c, err := e.m.Create(ctx, NewChat{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.st.RecordSplit(ctx, store.Split{ChatID: c.ID, SourceDatasetID: 212, TrainDatasetID: 213,
+		TrainImages: 210, KeptImages: 90, HoldoutImages: 60, ValidationImages: 30}); err != nil {
+		t.Fatal(err)
+	}
+	ho := e.m.holdoutOf(ctx, c.ID, nil, 213)
+	if !ho.Available || ho.Images != 90 || ho.HoldoutImages != 60 {
+		t.Fatalf("holdout: %+v", ho)
+	}
+	// A split recorded before the division was stored: unknown stays 0 and is not sent.
+	if err := e.st.RecordSplit(ctx, store.Split{ChatID: c.ID, SourceDatasetID: 214, TrainDatasetID: 215,
+		TrainImages: 70, KeptImages: 30}); err != nil {
+		t.Fatal(err)
+	}
+	ho = e.m.holdoutOf(ctx, c.ID, nil, 215)
+	if ho.Images != 30 || ho.HoldoutImages != 0 {
+		t.Fatalf("old split: %+v", ho)
+	}
+	if b, _ := json.Marshal(ho); strings.Contains(string(b), "holdout_images") {
+		t.Fatalf("unknown hold-out images must not be sent: %s", b)
 	}
 }
