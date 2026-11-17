@@ -75,6 +75,7 @@ const outcomeSQL = `CASE
 	WHEN sc.result LIKE 'rejected%' THEN 'rejected'
 	WHEN sc.result LIKE 'refused%' OR sc.result LIKE 'not configured%' THEN 'refused'
 	WHEN sc.result LIKE 'ok%' THEN 'ok'
+	WHEN sc.result ~ '^HTTP 2[0-9]{2}' THEN 'ok'
 	ELSE 'error' END`
 
 // Kinds of activity entries (parameter kind of GET /api/activity, field kind of an entry).

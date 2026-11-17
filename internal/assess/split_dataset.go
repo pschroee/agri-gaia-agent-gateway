@@ -750,7 +750,7 @@ func callResult(res platform.Result, err error) string {
 	if res.Status != "ok" {
 		return res.Status + ": " + res.Message
 	}
-	return fmt.Sprintf("HTTP %d", res.HTTPStatus)
+	return fmt.Sprintf("%s %d", res.Status, res.HTTPStatus)
 }
 
 // log records one call the check service made on its own (R1.3).
