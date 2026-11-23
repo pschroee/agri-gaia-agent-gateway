@@ -54,6 +54,12 @@ Requires Docker and Go; `.env` from `.env.example` (never committed).
 ./dev.sh stop
 ```
 
+`./dev.sh test` on the development machine remains the main check. When that machine must not take the load,
+`dev/test-remote.sh <ssh-host> [<git-ref>] [--tmux <name>]` runs the same stages (Go with Postgres, web) on a Linux
+host that only has Docker: the commit is shipped with `git archive`, everything runs in labelled containers with
+pinned images and resource limits in an own `10.231.x` network, and only those objects are removed afterwards.
+See the header of the script for options and limits.
+
 The HTTP API is described in `API.md`; design decisions and their rationale in `docs/design.md`.
 
 ## License
