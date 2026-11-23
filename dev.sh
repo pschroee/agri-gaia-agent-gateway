@@ -15,6 +15,7 @@
 #   ./dev.sh test --docker additionally Docker integration, S3 and slot tests (off by default since
 #                     issue #27: they start real containers and load the machine, about 7 min);
 #                     --dry-run with any of these only lists the stages it would run
+#                     the same stages on a remote host with only Docker: dev/test-remote.sh <ssh-host> [<git-ref>]
 #   ./dev.sh e2e      end-to-end tests with a real model (costs a few cents); starts the
 #                     orchestrator with a low compaction threshold for it and normally again afterwards
 #   ./dev.sh cli ...  CLI agw against the running orchestrator (e.g. ./dev.sh cli pool)
