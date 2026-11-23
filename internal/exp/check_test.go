@@ -5,9 +5,11 @@
 package exp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 )
@@ -243,5 +245,111 @@ func TestParseJSONPath(t *testing.T) {
 		if _, err := parseJSONPath(p); err == nil {
 			t.Errorf("%q accepted", p)
 		}
+	}
+}
+
+// TestAnswerCountVectors holds the answer number rule (BM17 K1) against the shared vectors; the
+// thesis repo's abgleich_online.py reads the same file.
+func TestAnswerCountVectors(t *testing.T) {
+	raw, err := os.ReadFile("testdata/answer_count_vectors.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Description string `json:"description"`
+		Version     int    `json:"version"`
+		Vectors     []struct {
+			Name   string `json:"name"`
+			Text   string `json:"text"`
+			Want   int64  `json:"want"`
+			Number string `json:"number"`
+			OK     bool   `json:"ok"`
+		} `json:"vectors"`
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&doc); err != nil {
+		t.Fatal(err)
+	}
+	if doc.Version != 1 || len(doc.Vectors) == 0 {
+		t.Fatalf("version %d, %d vectors", doc.Version, len(doc.Vectors))
+	}
+	for _, v := range doc.Vectors {
+		t.Run(v.Name, func(t *testing.T) {
+			if got := containsNumber(v.Text, v.Want); got != v.OK {
+				t.Errorf("containsNumber(%q, %d) = %v, want %v", v.Text, v.Want, got, v.OK)
+			}
+			if tok, _ := answerNumber(v.Text); tok != v.Number {
+				t.Errorf("answerNumber(%q) = %q, want %q", v.Text, tok, v.Number)
+			}
+		})
+	}
+}
+
+func TestAnswerCountEvidenceNamesTheNumber(t *testing.T) {
+	want := int64(22)
+	f := &fakeCheckClient{lastText: "23 datasets, see\n22. [garage-notizen] and 1.22 GB"}
+	pass, evidence, err := Evaluate(context.Background(), f, answerSpec(AnswerCheck{Count: &want}), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pass {
+		t.Fatalf("23 as the answer must not pass for 22: %s", evidence)
+	}
+	var ev Evidence
+	if err := json.Unmarshal(evidence, &ev); err != nil {
+		t.Fatal(err)
+	}
+	if ev.Answer == nil || ev.Answer.Number != "23" || ev.Answer.CountOK {
+		t.Fatalf("answer evidence: %+v", ev.Answer)
+	}
+}
+
+// BM17 K2: the number the answer must carry is counted from the list the agent reads, when the check runs.
+func countFromSpec() CheckSpec {
+	return answerSpec(AnswerCheck{CountFrom: &CountFrom{Path: "/datasets", Select: "$[*].name", Prefix: "garage"}})
+}
+
+const datasetsAnswer = `[{"name":"mnist-a"},{"name":"garage-clips-train-teil1"},{"name":"garage-notizen"},` +
+	`{"name":"a-garage-x"},{"name":"garage-auto-train"}]`
+
+func TestAnswerCountFromDerivesTheNumberFromTheList(t *testing.T) {
+	f := &fakeCheckClient{answers: map[string]string{"/datasets": datasetsAnswer}, lastText: "3 datasets start with garage."}
+	pass, evidence, err := Evaluate(context.Background(), f, countFromSpec(), nil)
+	if err != nil || !pass {
+		t.Fatalf("pass %v, err %v, evidence %s", pass, err, evidence)
+	}
+	var ev Evidence
+	if err := json.Unmarshal(evidence, &ev); err != nil {
+		t.Fatal(err)
+	}
+	a := ev.Answer
+	if a == nil || a.Count == nil || *a.Count != 3 || a.CountFrom == nil || len(a.CountFrom.Names) != 3 || a.Number != "3" {
+		t.Fatalf("answer evidence: %s", evidence)
+	}
+}
+
+func TestAnswerCountFromFollowsTheState(t *testing.T) {
+	// A leftover with the prefix moves the required number with the list the agent sees: 3 no longer passes.
+	f := &fakeCheckClient{answers: map[string]string{"/datasets": strings.Replace(datasetsAnswer, `{"name":"mnist-a"}`, `{"name":"garage-rest"}`, 1)}, lastText: "3 datasets."}
+	pass, evidence, err := Evaluate(context.Background(), f, countFromSpec(), nil)
+	if err != nil || pass {
+		t.Fatalf("3 must fail against 4 names: pass %v, err %v, %s", pass, err, evidence)
+	}
+	f.lastText = "4 datasets."
+	if pass, evidence, err = Evaluate(context.Background(), f, countFromSpec(), nil); err != nil || !pass {
+		t.Fatalf("4 must pass: pass %v, err %v, %s", pass, err, evidence)
+	}
+}
+
+func TestAnswerCountFromFailsWithoutTheList(t *testing.T) {
+	f := &fakeCheckClient{errs: map[string]error{"/datasets": errors.New("503")}, lastText: "3 datasets."}
+	pass, evidence, err := Evaluate(context.Background(), f, countFromSpec(), nil)
+	if err == nil || pass {
+		t.Fatalf("an unreadable list must fail the check: pass %v, err %v", pass, err)
+	}
+	var ev Evidence
+	if jerr := json.Unmarshal(evidence, &ev); jerr != nil || ev.Answer == nil || ev.Answer.CountFrom == nil || ev.Answer.CountFrom.Error == "" {
+		t.Fatalf("evidence keeps the failure: %s", evidence)
 	}
 }

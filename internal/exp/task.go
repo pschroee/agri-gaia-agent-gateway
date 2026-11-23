@@ -116,6 +116,17 @@ type AnswerCheck struct {
 	Contains   string `yaml:"contains,omitempty"`
 	IgnoreCase bool   `yaml:"ignore_case,omitempty"`
 	Count      *int64 `yaml:"count,omitempty"`
+	// CountFrom derives the required number when the check runs, from the same list the agent reads,
+	// instead of fixing it in the task (BM17 K2). Exclusive with Count.
+	CountFrom *CountFrom `yaml:"count_from,omitempty"`
+}
+
+// CountFrom names the read call and the names to count: the number of values the JSONPath Select picks
+// from the answer of GET Path that start with Prefix. The answer of the agent must be that number.
+type CountFrom struct {
+	Path   string `yaml:"path"`
+	Select string `yaml:"select"`
+	Prefix string `yaml:"prefix"`
 }
 
 // Condition is one read call and the expectations on its answer.
@@ -573,8 +584,22 @@ func validateCheck(c CheckSpec, where string) []Problem {
 		}
 	}
 	if c.Answer != nil {
-		if strings.TrimSpace(c.Answer.Contains) == "" && c.Answer.Count == nil {
-			add("check.answer needs contains or count")
+		if strings.TrimSpace(c.Answer.Contains) == "" && c.Answer.Count == nil && c.Answer.CountFrom == nil {
+			add("check.answer needs contains, count or count_from")
+		}
+		if c.Answer.Count != nil && c.Answer.CountFrom != nil {
+			add("check.answer.count and check.answer.count_from exclude each other")
+		}
+		if cf := c.Answer.CountFrom; cf != nil {
+			if !strings.HasPrefix(cf.Path, "/") {
+				add("check.answer.count_from.path must start with /, not %q", cf.Path)
+			}
+			if strings.TrimSpace(cf.Prefix) == "" {
+				add("check.answer.count_from.prefix is empty")
+			}
+			if _, err := parseJSONPath(cf.Select); err != nil {
+				add("check.answer.count_from.select: %v", err)
+			}
 		}
 		if c.Answer.IgnoreCase && strings.TrimSpace(c.Answer.Contains) == "" {
 			add("check.answer.ignore_case only applies to contains")
