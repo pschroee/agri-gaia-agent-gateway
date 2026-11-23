@@ -89,8 +89,20 @@ type AnswerEvidence struct {
 	CountOK    bool   `json:"count_ok"`
 	// Number is the number token the check read as the answer (first number of the text, BM17 K1).
 	Number string `json:"number,omitempty"`
+	// CountFrom says where Count came from when the task derives it at check time (BM17 K2): the call,
+	// the prefix and the names that counted.
+	CountFrom *CountFromEvidence `json:"count_from,omitempty"`
 	Error  string `json:"error,omitempty"`
 	OK     bool   `json:"ok"`
+}
+
+// CountFromEvidence is the derivation of a required number from a list read when the check ran.
+type CountFromEvidence struct {
+	Path   string   `json:"path"`
+	Select string   `json:"select"`
+	Prefix string   `json:"prefix"`
+	Names  []string `json:"names,omitempty"`
+	Error  string   `json:"error,omitempty"`
 }
 
 // ConditionEvidence is one read call of the check.
@@ -197,7 +209,20 @@ func Evaluate(ctx context.Context, c Client, spec CheckSpec, created []Object) (
 			IgnoreCase: spec.Answer.IgnoreCase,
 			Count:      spec.Answer.Count,
 			ContainsOK: spec.Answer.Contains == "",
-			CountOK:    spec.Answer.Count == nil,
+			CountOK:    spec.Answer.Count == nil && spec.Answer.CountFrom == nil,
+		}
+		if cf := spec.Answer.CountFrom; cf != nil {
+			names, cfe := countFromNames(ctx, c, cf)
+			ae.CountFrom = &cfe
+			if cfe.Error != "" {
+				if firstErr == nil {
+					firstErr = fmt.Errorf("count_from %s: %s", cf.Path, cfe.Error)
+				}
+				ae.Error = cfe.Error
+			} else {
+				n := int64(len(names))
+				ae.Count = &n
+			}
 		}
 		text, err := c.LastAssistantText(ctx)
 		if err != nil {
@@ -214,8 +239,8 @@ func Evaluate(ctx context.Context, c Client, spec CheckSpec, created []Object) (
 					ae.ContainsOK = strings.Contains(text, spec.Answer.Contains)
 				}
 			}
-			if spec.Answer.Count != nil {
-				ae.CountOK = containsNumber(text, *spec.Answer.Count)
+			if ae.Count != nil {
+				ae.CountOK = containsNumber(text, *ae.Count)
 				ae.Number, _ = answerNumber(text)
 			}
 		}
@@ -354,6 +379,35 @@ func onlyMarkupBefore(text string, pos int) bool {
 		}
 	}
 	return true
+}
+
+// countFromNames reads the list of a count_from and returns the names that start with the prefix. A list
+// that cannot be read leaves the evidence with the error; the check then fails (pass stays false).
+func countFromNames(ctx context.Context, c Client, cf *CountFrom) ([]string, CountFromEvidence) {
+	ev := CountFromEvidence{Path: cf.Path, Select: cf.Select, Prefix: cf.Prefix}
+	raw, err := c.Get(ctx, cf.Path)
+	if err != nil {
+		ev.Error = err.Error()
+		return nil, ev
+	}
+	var root any
+	if err := json.Unmarshal(raw, &root); err != nil {
+		ev.Error = "the answer is not JSON"
+		return nil, ev
+	}
+	segs, err := parseJSONPath(cf.Select)
+	if err != nil {
+		ev.Error = err.Error()
+		return nil, ev
+	}
+	var names []string
+	for _, v := range selectValues(root, segs) {
+		if s, ok := v.(string); ok && strings.HasPrefix(s, cf.Prefix) {
+			names = append(names, s)
+		}
+	}
+	ev.Names = names
+	return names, ev
 }
 
 // numberEquals reports whether the answer token has the whole-number value want. A decimal number

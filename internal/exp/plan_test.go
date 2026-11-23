@@ -226,7 +226,7 @@ func TestValidateAnswerCheck(t *testing.T) {
 
 	emptyAnswer := strings.Replace(taskAnswer, "  answer:\n    contains: \"datasets\"\n    count: 3\n", "  answer: {}\n", 1)
 	dir = material(t, planYAML("pilot", "count-datasets"), map[string]string{"count-datasets": emptyAnswer}, nil)
-	if problems := loadAndValidate(t, dir); !hasProblem(problems, "check.answer needs contains or count") {
+	if problems := loadAndValidate(t, dir); !hasProblem(problems, "check.answer needs contains, count or count_from") {
 		t.Fatalf("empty answer check: %v", problems)
 	}
 
@@ -234,6 +234,27 @@ func TestValidateAnswerCheck(t *testing.T) {
 	dir = material(t, planYAML("pilot", "count-datasets"), map[string]string{"count-datasets": emptyCheck}, nil)
 	if problems := loadAndValidate(t, dir); !hasProblem(problems, "check is empty") {
 		t.Fatalf("empty check: %v", problems)
+	}
+}
+
+func TestValidateAnswerCountFrom(t *testing.T) {
+	good := strings.Replace(taskAnswer, "  answer:\n    contains: \"datasets\"\n    count: 3\n",
+		"  answer:\n    count_from: {path: /datasets, select: \"$[*].name\", prefix: garage}\n", 1)
+	dir := material(t, planYAML("pilot", "count-datasets"), map[string]string{"count-datasets": good}, nil)
+	if problems := loadAndValidate(t, dir); len(problems) != 0 {
+		t.Fatalf("count_from: %v", problems)
+	}
+	both := strings.Replace(taskAnswer, "    count: 3\n", "    count: 3\n    count_from: {path: /datasets, select: \"$[*].name\", prefix: garage}\n", 1)
+	dir = material(t, planYAML("pilot", "count-datasets"), map[string]string{"count-datasets": both}, nil)
+	if problems := loadAndValidate(t, dir); !hasProblem(problems, "exclude each other") {
+		t.Fatalf("count and count_from: %v", problems)
+	}
+	bad := strings.Replace(good, "prefix: garage", "prefix: \"\"", 1)
+	bad = strings.Replace(bad, "path: /datasets", "path: datasets", 1)
+	dir = material(t, planYAML("pilot", "count-datasets"), map[string]string{"count-datasets": bad}, nil)
+	problems := loadAndValidate(t, dir)
+	if !hasProblem(problems, "prefix is empty") || !hasProblem(problems, "must start with /") {
+		t.Fatalf("bad count_from: %v", problems)
 	}
 }
 
