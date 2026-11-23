@@ -92,8 +92,8 @@ type AnswerEvidence struct {
 	// CountFrom says where Count came from when the task derives it at check time (BM17 K2): the call,
 	// the prefix and the names that counted.
 	CountFrom *CountFromEvidence `json:"count_from,omitempty"`
-	Error  string `json:"error,omitempty"`
-	OK     bool   `json:"ok"`
+	Error     string             `json:"error,omitempty"`
+	OK        bool               `json:"ok"`
 }
 
 // CountFromEvidence is the derivation of a required number from a list read when the check ran.
