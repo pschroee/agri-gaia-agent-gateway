@@ -5,9 +5,11 @@
 package exp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 )
@@ -243,5 +245,62 @@ func TestParseJSONPath(t *testing.T) {
 		if _, err := parseJSONPath(p); err == nil {
 			t.Errorf("%q accepted", p)
 		}
+	}
+}
+
+// TestAnswerCountVectors holds the answer number rule (BM17 K1) against the shared vectors; the
+// thesis repo's abgleich_online.py reads the same file.
+func TestAnswerCountVectors(t *testing.T) {
+	raw, err := os.ReadFile("testdata/answer_count_vectors.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Description string `json:"description"`
+		Version     int    `json:"version"`
+		Vectors     []struct {
+			Name   string `json:"name"`
+			Text   string `json:"text"`
+			Want   int64  `json:"want"`
+			Number string `json:"number"`
+			OK     bool   `json:"ok"`
+		} `json:"vectors"`
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&doc); err != nil {
+		t.Fatal(err)
+	}
+	if doc.Version != 1 || len(doc.Vectors) == 0 {
+		t.Fatalf("version %d, %d vectors", doc.Version, len(doc.Vectors))
+	}
+	for _, v := range doc.Vectors {
+		t.Run(v.Name, func(t *testing.T) {
+			if got := containsNumber(v.Text, v.Want); got != v.OK {
+				t.Errorf("containsNumber(%q, %d) = %v, want %v", v.Text, v.Want, got, v.OK)
+			}
+			if tok, _ := answerNumber(v.Text); tok != v.Number {
+				t.Errorf("answerNumber(%q) = %q, want %q", v.Text, tok, v.Number)
+			}
+		})
+	}
+}
+
+func TestAnswerCountEvidenceNamesTheNumber(t *testing.T) {
+	want := int64(22)
+	f := &fakeCheckClient{lastText: "23 datasets, see\n22. [garage-notizen] and 1.22 GB"}
+	pass, evidence, err := Evaluate(context.Background(), f, answerSpec(AnswerCheck{Count: &want}), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pass {
+		t.Fatalf("23 as the answer must not pass for 22: %s", evidence)
+	}
+	var ev Evidence
+	if err := json.Unmarshal(evidence, &ev); err != nil {
+		t.Fatal(err)
+	}
+	if ev.Answer == nil || ev.Answer.Number != "23" || ev.Answer.CountOK {
+		t.Fatalf("answer evidence: %+v", ev.Answer)
 	}
 }

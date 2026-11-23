@@ -12,6 +12,8 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 // Client is what a check reads: one platform call (X1.9) or the last assistant text of the run's
@@ -85,8 +87,10 @@ type AnswerEvidence struct {
 	Count      *int64 `json:"count,omitempty"`
 	ContainsOK bool   `json:"contains_ok"`
 	CountOK    bool   `json:"count_ok"`
-	Error      string `json:"error,omitempty"`
-	OK         bool   `json:"ok"`
+	// Number is the number token the check read as the answer (first number of the text, BM17 K1).
+	Number string `json:"number,omitempty"`
+	Error  string `json:"error,omitempty"`
+	OK     bool   `json:"ok"`
 }
 
 // ConditionEvidence is one read call of the check.
@@ -212,6 +216,7 @@ func Evaluate(ctx context.Context, c Client, spec CheckSpec, created []Object) (
 			}
 			if spec.Answer.Count != nil {
 				ae.CountOK = containsNumber(text, *spec.Answer.Count)
+				ae.Number, _ = answerNumber(text)
 			}
 		}
 		ae.OK = ae.Error == "" && ae.ContainsOK && ae.CountOK
@@ -256,25 +261,119 @@ func Evaluate(ctx context.Context, c Client, spec CheckSpec, created []Object) (
 	return ev.Pass, marshalEvidence(ev), firstErr
 }
 
-// containsNumber reports whether text contains want as a whole number: the decimal form with no
-// other digit directly before or after, so that 3 does not match 13.
-func containsNumber(text string, want int64) bool {
-	needle := strconv.FormatInt(want, 10)
-	for from := 0; from <= len(text)-len(needle); {
-		i := strings.Index(text[from:], needle)
-		if i < 0 {
+// answerNumber returns the number a text gives as its answer: the first number token that is not
+// part of something else (BM17 K1). A token is a run of digits, optionally with a decimal part
+// (1.22), thousands groups (1,234) or a size (640x640). It does not count when it is
+//   - glued to a name or word (teil7, v2, 22GB) or to a sign, colon or slash before it (T10:22, -5, v1/22),
+//   - part of a date, time or range (2026-11-04, 10:22, 3-5; only the digits before - : / count),
+//   - the number of a list item (a line that starts with "22. text" or "22) text").
+//
+// Without such a token ok is false. The prompts ask for the number at the start of the answer, so
+// the first token is the answer; a count that only appears later in the text does not make it one.
+func answerNumber(text string) (token string, ok bool) {
+	for i := 0; i < len(text); {
+		if !isDigit(text[i]) {
+			i++
+			continue
+		}
+		end := i
+		for end < len(text) && isDigit(text[end]) {
+			end++
+		}
+		// Decimal part, thousands groups and sizes belong to the token.
+		for end < len(text) {
+			switch {
+			case text[end] == '.' && end+1 < len(text) && isDigit(text[end+1]):
+				end++
+				for end < len(text) && isDigit(text[end]) {
+					end++
+				}
+				continue
+			case text[end] == ',' && end+3 < len(text) && isDigit(text[end+1]) && isDigit(text[end+2]) && isDigit(text[end+3]) &&
+				(end+4 == len(text) || !isDigit(text[end+4])):
+				end += 4
+				continue
+			case (text[end] == 'x' || text[end] == 'X') && end+1 < len(text) && isDigit(text[end+1]):
+				end++
+				for end < len(text) && isDigit(text[end]) {
+					end++
+				}
+				continue
+			case strings.HasPrefix(text[end:], "×") && end+2 < len(text) && isDigit(text[end+2]):
+				end += 2
+				for end < len(text) && isDigit(text[end]) {
+					end++
+				}
+				continue
+			}
+			break
+		}
+		if numberStandsAlone(text, i, end) {
+			return text[i:end], true
+		}
+		i = end
+	}
+	return "", false
+}
+
+// numberStandsAlone reports whether the token text[start:end] is a number of its own (see answerNumber).
+func numberStandsAlone(text string, start, end int) bool {
+	if start > 0 {
+		r, _ := utf8.DecodeLastRuneInString(text[:start])
+		if unicode.IsLetter(r) || unicode.IsDigit(r) || strings.ContainsRune("_-:/.#$@", r) {
 			return false
 		}
-		start := from + i
-		end := start + len(needle)
-		left := start == 0 || !isDigit(text[start-1])
-		right := end == len(text) || !isDigit(text[end])
-		if left && right {
-			return true
-		}
-		from = end
 	}
-	return false
+	if end < len(text) {
+		r, size := utf8.DecodeRuneInString(text[end:])
+		if unicode.IsLetter(r) || r == '_' {
+			return false
+		}
+		if strings.ContainsRune("-:/", r) && end+size < len(text) && isDigit(text[end+size]) {
+			return false
+		}
+		if (r == '.' || r == ')') && end+size < len(text) && (text[end+size] == ' ' || text[end+size] == '\t') && onlyMarkupBefore(text, start) {
+			// "22. text": the number of a list item, only when more text follows on the line.
+			rest := text[end+size:]
+			if nl := strings.IndexByte(rest, '\n'); nl >= 0 {
+				rest = rest[:nl]
+			}
+			if strings.TrimSpace(rest) != "" {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// onlyMarkupBefore reports whether only spaces and Markdown marks stand between the line start and pos.
+func onlyMarkupBefore(text string, pos int) bool {
+	for i := pos - 1; i >= 0 && text[i] != '\n'; i-- {
+		if !strings.ContainsRune(" \t*>#-+", rune(text[i])) {
+			return false
+		}
+	}
+	return true
+}
+
+// numberEquals reports whether the answer token has the whole-number value want. A decimal number
+// (1.22) never equals a whole number; a size (640x640) is read by its first part.
+func numberEquals(token string, want int64) bool {
+	if i := strings.IndexAny(token, "xX×"); i >= 0 {
+		token = token[:i]
+	}
+	if strings.Contains(token, ".") {
+		return false
+	}
+	n, err := strconv.ParseInt(strings.ReplaceAll(token, ",", ""), 10, 64)
+	return err == nil && n == want
+}
+
+// containsNumber reports whether the answer of text is the whole number want (BM17 K1): the first
+// number token of the text, see answerNumber.
+func containsNumber(text string, want int64) bool {
+	token, ok := answerNumber(text)
+	return ok && numberEquals(token, want)
 }
 
 func isDigit(b byte) bool { return b >= '0' && b <= '9' }
