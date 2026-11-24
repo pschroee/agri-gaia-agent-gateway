@@ -416,6 +416,7 @@ func (m *Manager) planFinish(ctx context.Context, chatID string, st *store.PlanS
 				slog.Error("provenance of a plan step not recorded", "chat", chatID, "object", r+" "+i, "error", err)
 			}
 		}
+		m.recordStartedTasks(bg, chatID, access, req, res)
 		// The step started a platform job (A-E2, D2.2): the job is observed from here on, and the step
 		// waits for its end. The object the call created is already in the register, so a later step can
 		// name it while the job runs.

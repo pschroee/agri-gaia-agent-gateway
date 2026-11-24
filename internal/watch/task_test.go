@@ -220,3 +220,39 @@ func TestTaskInterruptedByRestart(t *testing.T) {
 		t.Errorf("%+v", p)
 	}
 }
+
+// BM17 E4 (E3-1): the tasks a successful call started, for the provenance register. The build of an
+// inference image names its task in Location like the other builds; a failed call started none; a
+// plain task reference (the annotation function) counts too.
+func TestStartedTaskIDs(t *testing.T) {
+	ok := func(loc string) platform.Result { return platform.Result{Status: "ok", HTTPStatus: 202, Location: loc} }
+	build := platform.Request{Method: "POST", Path: "/container-images/build", Body: json.RawMessage(`{"repository":"u/x","tag":"v1"}`)}
+	for name, c := range map[string]struct {
+		req  platform.Request
+		res  platform.Result
+		want string
+	}{
+		"image build":    {build, ok("/tasks/21"), "21"},
+		"training build": {platform.Request{Method: "POST", Path: "/train/config", Body: json.RawMessage(`{"dataset_id":2}`)}, ok("/tasks/22"), "22"},
+		"training start": {platform.Request{Method: "POST", Path: "/train/containers/7/run"}, ok("/tasks/23"), "23"},
+		"training stop":  {platform.Request{Method: "POST", Path: "/train/containers/7/stop"}, ok("/tasks/24"), "24"},
+		"deploy":         {platform.Request{Method: "PUT", Path: "/container-deployments/9/deploy"}, ok("/tasks/25"), "25"},
+		"undeploy":       {platform.Request{Method: "PUT", Path: "/container-deployments/9/undeploy"}, ok("/tasks/26"), "26"},
+		"failed build":   {build, platform.Result{Status: "error", HTTPStatus: 500, Location: "/tasks/27"}, ""},
+		"denied":         {build, platform.Result{Status: "denied", Location: "/tasks/28"}, ""},
+		"no task":        {platform.Request{Method: "POST", Path: "/datasets"}, ok("/datasets/3"), ""},
+	} {
+		got := StartedTaskIDs(delegation.Access{}, c.req, c.res)
+		if strings.Join(got, ",") != c.want {
+			t.Errorf("%s: %v, want %q", name, got, c.want)
+		}
+	}
+	// A plain reference of a platform_task route (the build of an annotation function answers with the bare id).
+	RegisterRoute(http.MethodPost, regexp.MustCompile(`^/test-started-plain$`), kindPlatformTask,
+		func(_ platform.Request, res platform.Result) (string, bool) { return strings.TrimSpace(res.Body), true })
+	got := StartedTaskIDs(delegation.Access{}, platform.Request{Method: "POST", Path: "/test-started-plain"},
+		platform.Result{Status: "ok", HTTPStatus: 200, Body: "34"})
+	if len(got) != 1 || got[0] != "34" {
+		t.Errorf("plain reference: %v", got)
+	}
+}

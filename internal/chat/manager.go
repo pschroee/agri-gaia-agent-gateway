@@ -2789,6 +2789,9 @@ func (m *Manager) PlatformCall(ctx context.Context, chatID, slotID, via string, 
 	if r, id, ok := delegation.Created(access, res); ok && (del != nil || alwaysAttributed(access)) {
 		m.recordDelegationObject(ctx, chatID, r, id)
 	}
+	if del != nil || alwaysAttributed(access) {
+		m.recordStartedTasks(ctx, chatID, access, req, res)
+	}
 	if ref, ok := delegation.CreatedImage(access, req, res); ok {
 		m.recordDelegationObject(ctx, chatID, delegation.ContainerImage, ref)
 	}

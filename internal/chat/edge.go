@@ -14,6 +14,7 @@ import (
 
 	"agw/internal/delegation"
 	"agw/internal/platform"
+	"agw/internal/watch"
 )
 
 // The edge guard and the provenance of images and deployments (edge D-E1, D1.7 and D1.8).
@@ -136,6 +137,17 @@ func alwaysAttributed(a delegation.Access) bool {
 		return true // the deployment itself and the task of its deploy and undeploy
 	}
 	return a.Action == delegation.Create && a.Resource == delegation.ContainerImage
+}
+
+// recordStartedTasks adds the platform tasks a successful call started to the provenance register (BM17 E4,
+// E3-1): the build of an inference image, of a training container or of an annotation function, the start and
+// stop of a training and the deploy of a container all answer with their task, and the agent that reads it back
+// reads its own object. The register stays what the gateway saw come out of its own call; a task of somebody
+// else is still foreign.
+func (m *Manager) recordStartedTasks(ctx context.Context, chatID string, access delegation.Access, req platform.Request, res platform.Result) {
+	for _, id := range watch.StartedTaskIDs(access, req, res) {
+		m.recordDelegationObject(ctx, chatID, delegation.Task, id)
+	}
 }
 
 // recordDelegationObject adds an object to this chat's provenance register. A failure is logged, not

@@ -36,3 +36,25 @@ func TaskIDs(access delegation.Access, req platform.Request, res platform.Result
 	}
 	return out
 }
+
+// StartedTaskIDs lists the platform tasks a successful call started, for the provenance register: the
+// tasks of TaskIDs, plus the task a platform_task reference names plainly (the build of an annotation
+// function answers with the bare id). A failed call started none. The ids come from the platform's answer to the
+// gateway's own call, never from what the agent claims (BM17 E4, E3-1).
+func StartedTaskIDs(access delegation.Access, req platform.Request, res platform.Result) []string {
+	if res.Status != "ok" || res.HTTPStatus < 200 || res.HTTPStatus >= 300 {
+		return nil
+	}
+	out := TaskIDs(access, req, res)
+	if kind, ref, ok := For(access, req, res); ok && kind == kindPlatformTask {
+		if id := TaskIDOf(ref); digitsRe.MatchString(id) {
+			for _, o := range out {
+				if o == id {
+					return out
+				}
+			}
+			out = append(out, id)
+		}
+	}
+	return out
+}
