@@ -691,8 +691,8 @@ func newTestRunner(t *testing.T, api *fakeExpAPI) (*expRunner, *strings.Builder,
 func TestRunOrderIsSeeded(t *testing.T) {
 	tasks := []exp.Task{{ID: "a"}, {ID: "b"}}
 	cells := []string{"mcp", "api"}
-	first := expRunOrder("pilot", tasks, cells, 2, 7)
-	second := expRunOrder("pilot", tasks, cells, 2, 7)
+	first := expRunOrder("pilot", tasks, cells, 2, 7, nil)
+	second := expRunOrder("pilot", tasks, cells, 2, 7, nil)
 	if !reflect.DeepEqual(first, second) {
 		t.Fatal("the order is not deterministic")
 	}
@@ -1691,5 +1691,57 @@ func TestExpOverLimitCountsListCost(t *testing.T) {
 	c = agwclient.Chat{Cost: 0.12}
 	if kind, _, _ := expOverLimit(lim, c, now, now, now); kind != "cost" {
 		t.Fatalf("without a list cost the billed cost counts: %q", kind)
+	}
+}
+
+// H1/D7: a cell with a task subset runs only those tasks; the other cells keep every task, and a plan without
+// subsets gets exactly the order it had before.
+func TestRunOrderCellTaskSubset(t *testing.T) {
+	tasks := []exp.Task{{ID: "a"}, {ID: "b"}, {ID: "c"}}
+	cells := []string{"x", "y"}
+	all := expRunOrder("pilot", tasks, cells, 2, 7, nil)
+	same := expRunOrder("pilot", tasks, cells, 2, 7, func(string, string) bool { return true })
+	if !reflect.DeepEqual(all, same) {
+		t.Fatal("a plan without subsets changed its order")
+	}
+	only := func(cell, task string) bool { return cell == "x" || task != "b" }
+	got := expRunOrder("pilot", tasks, cells, 2, 7, only)
+	if len(got) != len(tasks)*2*2-2 {
+		t.Fatalf("%d runs, want 10", len(got))
+	}
+	for i, pr := range got {
+		if pr.Cell == "y" && pr.Task == "b" {
+			t.Fatalf("cell y runs task b: %+v", pr)
+		}
+		if pr.Position != i+1 {
+			t.Fatalf("position %d at index %d", pr.Position, i)
+		}
+	}
+}
+
+// H1/D7: a dry run counts the runs per cell and honours the cell's task subset.
+func TestDryRunCountsRunsPerCell(t *testing.T) {
+	dir := writeRunnerMaterial(t)
+	path := filepath.Join(dir, "plan.yaml")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := strings.Replace(string(raw), "    model: main\ntasks:", "    model: main\n    tasks: [list-datasets]\ntasks:", 1)
+	if err := os.WriteFile(path, []byte(plan), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out, errw strings.Builder
+	r, err := newExpRunner(newFakeExpAPI(), expRunOptions{PlanPath: dir, DryRun: true}, &out, &errw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"6 runs (k=2)", "cell mcp-none-main: 4 runs", "cell api-none-main: 2 runs"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("missing %q in:\n%s", want, out.String())
+		}
 	}
 }

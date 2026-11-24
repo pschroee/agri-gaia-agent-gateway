@@ -208,7 +208,7 @@ func newExpRunner(api expAPI, opts expRunOptions, out, errw io.Writer) (*expRunn
 	r := &expRunner{
 		api: api, out: out, errw: errw,
 		plan: p, tasks: tasks, manifests: manifests, specsDir: dir, planName: name, planSHA: digest, lock: lock, base: m.Base, collect: opts.CollectDir,
-		order:    expRunOrder(name, tasks, cells, k, seed),
+		order:    expRunOrder(name, tasks, cells, k, seed, cellRunsTask(p)),
 		taskByID: map[string]exp.Task{}, cellByID: map[string]exp.Cell{}, models: map[string]string{},
 		k: k, seed: seed, dryRun: opts.DryRun,
 		poll: opts.Poll, limitGrace: opts.LimitGrace, startGrace: opts.StartGrace, heartbeat: opts.Heartbeat,
@@ -248,6 +248,15 @@ func newExpRunner(api expAPI, opts expRunOptions, out, errw io.Writer) (*expRunn
 	return r, nil
 }
 
+// cellRunsTask answers from the plan whether a cell runs a task. A cell unknown to the plan runs every task.
+func cellRunsTask(p *exp.Plan) func(cell, task string) bool {
+	byID := make(map[string]exp.Cell, len(p.Cells))
+	for _, c := range p.Cells {
+		byID[c.ID] = c
+	}
+	return func(cell, task string) bool { return byID[cell].RunsTask(task) }
+}
+
 // expCells returns the cells to run, in the plan's order. --cell narrows them; an unknown id is an
 // error instead of a silently smaller run.
 func expCells(p *exp.Plan, want []string) ([]string, error) {
@@ -279,12 +288,20 @@ func expCells(p *exp.Plan, want []string) ([]string, error) {
 // expRunOrder builds the order of X1.6: per task and repetition the cells in a random order seeded
 // from the plan's seed and the task/rep pair. Runs stay sequential (X1.7); only their assignment to
 // time is shuffled, so that time of day and tariff do not coincide with one binding.
-func expRunOrder(planName string, tasks []exp.Task, cells []string, k int, seed int64) []expPlannedRun {
+//
+// runs says whether a cell runs a task (a cell with a task subset, H1/D7); nil means every cell runs every task.
+// The shuffle covers only the cells that run the task, so a plan without subsets keeps its order.
+func expRunOrder(planName string, tasks []exp.Task, cells []string, k int, seed int64, runs func(cell, task string) bool) []expPlannedRun {
 	var out []expPlannedRun
 	position := 0
 	for _, t := range tasks {
 		for rep := 1; rep <= k; rep++ {
-			order := append([]string(nil), cells...)
+			order := make([]string, 0, len(cells))
+			for _, c := range cells {
+				if runs == nil || runs(c, t.ID) {
+					order = append(order, c)
+				}
+			}
 			rng := newExpRand(seed, t.ID, rep)
 			rng.Shuffle(len(order), func(i, j int) { order[i], order[j] = order[j], order[i] })
 			for _, cell := range order {
@@ -342,6 +359,20 @@ func (r *expRunner) run(ctx context.Context) error {
 		return err
 	}
 	fmt.Fprintf(r.out, "%s: %d runs (k=%d), seed %d, material %s\n", r.planName, len(r.order), r.k, r.seed, shortID(r.planSHA))
+	if r.dryRun {
+		// H1/D7: the count per cell, so that a plan with task subsets shows what each cell runs.
+		perCell := map[string]int{}
+		var cellOrder []string
+		for _, pr := range r.order {
+			if perCell[pr.Cell] == 0 {
+				cellOrder = append(cellOrder, pr.Cell)
+			}
+			perCell[pr.Cell]++
+		}
+		for _, c := range cellOrder {
+			fmt.Fprintf(r.out, "cell %s: %d runs\n", c, perCell[c])
+		}
+	}
 	if !r.dryRun {
 		// #161: the protocol names what the plan has consumed and what it may consume in total.
 		if usage, err := r.api.ExpUsage(ctx, r.planName); err != nil {

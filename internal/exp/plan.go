@@ -75,6 +75,36 @@ type Cell struct {
 	Model      string `yaml:"model"` // role of the model: main or second; any RoleName in a benchmark plan
 	// Trace: syscall trace of this cell (X7.6/#152): on | off. Empty means on.
 	Trace string `yaml:"trace,omitempty"`
+	// Tasks restricts the cell to a subset of the plan's tasks (H1/D7). Empty means every task of the plan, which is
+	// what plans without this field always meant. Each entry must be listed in the plan's tasks.
+	Tasks []string `yaml:"tasks,omitempty"`
+}
+
+// RunsTask reports whether the cell runs the task: always when the cell names no task subset, otherwise only for
+// the listed tasks.
+func (c Cell) RunsTask(task string) bool {
+	if len(c.Tasks) == 0 {
+		return true
+	}
+	for _, id := range c.Tasks {
+		if id == task {
+			return true
+		}
+	}
+	return false
+}
+
+// RunCount is the number of runs of the plan: for each cell the tasks it runs times k.
+func (p *Plan) RunCount(k int) int {
+	n := 0
+	for _, c := range p.Cells {
+		if len(c.Tasks) == 0 {
+			n += len(p.Tasks)
+		} else {
+			n += len(c.Tasks)
+		}
+	}
+	return n * k
 }
 
 // ValidateModels checks the plan's model IDs against the gateway catalogue (#156). The comparison
@@ -350,6 +380,10 @@ func validatePlan(p *Plan) []Problem {
 		add("no cell is listed; the cells are enumerated explicitly, not derived")
 	}
 	cellIDs := make(map[string]bool, len(p.Cells))
+	planTasks := make(map[string]bool, len(p.Tasks))
+	for _, id := range p.Tasks {
+		planTasks[strings.TrimSpace(id)] = true
+	}
 	for i, c := range p.Cells {
 		where := fmt.Sprintf("cell %d", i+1)
 		if strings.TrimSpace(c.ID) == "" {
@@ -372,6 +406,19 @@ func validatePlan(p *Plan) []Problem {
 		}
 		if c.Trace != "" && c.Trace != "on" && c.Trace != "off" {
 			add("%s: trace must be \"on\" or \"off\", not %q", where, c.Trace)
+		}
+		if c.Tasks != nil && len(c.Tasks) == 0 {
+			add("%s: tasks is empty; omit it to run every task of the plan", where)
+		}
+		inCellTasks := map[string]bool{}
+		for _, id := range c.Tasks {
+			switch {
+			case !planTasks[strings.TrimSpace(id)]:
+				add("%s: task %q is not listed in the plan's tasks", where, id)
+			case inCellTasks[id]:
+				add("%s: task %q is listed twice", where, id)
+			}
+			inCellTasks[id] = true
 		}
 	}
 	if p.Limits.MaxCostUSD < 0 {

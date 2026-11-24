@@ -426,3 +426,44 @@ func TestResolveFixtureRefs(t *testing.T) {
 		t.Fatalf("missing object: %v", err)
 	}
 }
+
+// H1/D7: a cell may run a subset of the plan's tasks. Without the field every task runs (old plans), an entry
+// outside the plan's tasks, a duplicate and an empty list are refused, and RunCount follows the subsets.
+func TestValidateCellTaskSubset(t *testing.T) {
+	work := "  - id: cli-instruction-no-main\n    binding: cli\n    protection: instruction\n    attack: false\n    model: main\n"
+	for _, tc := range []struct {
+		name  string
+		field string
+		want  string
+	}{
+		{"omitted", "", ""},
+		{"subset", "    tasks: [list-datasets]\n", ""},
+		{"unknown", "    tasks: [no-such-task]\n", `task "no-such-task" is not listed in the plan's tasks`},
+		{"twice", "    tasks: [list-datasets, list-datasets]\n", `task "list-datasets" is listed twice`},
+		{"empty", "    tasks: []\n", "tasks is empty"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cell := work + tc.field
+			plan := strings.Replace(planYAML("pilot", "list-datasets"), work, cell, 1)
+			dir := material(t, plan, map[string]string{"list-datasets": taskListDatasets}, nil)
+			problems := loadAndValidate(t, dir)
+			if tc.want == "" {
+				if len(problems) > 0 {
+					t.Fatalf("problems: %v", problems)
+				}
+			} else if !hasProblem(problems, tc.want) {
+				t.Fatalf("want %q, got %v", tc.want, problems)
+			}
+		})
+	}
+}
+
+func TestCellRunsTaskAndRunCount(t *testing.T) {
+	p := &Plan{Tasks: []string{"a", "b", "c"}, Cells: []Cell{{ID: "all"}, {ID: "some", Tasks: []string{"a", "c"}}}}
+	if !p.Cells[0].RunsTask("b") || p.Cells[1].RunsTask("b") || !p.Cells[1].RunsTask("c") {
+		t.Fatal("RunsTask does not follow the subset")
+	}
+	if got := p.RunCount(3); got != (3+2)*3 {
+		t.Fatalf("RunCount = %d, want 15", got)
+	}
+}
