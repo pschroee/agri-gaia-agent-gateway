@@ -49,7 +49,10 @@ func withEdgePlatform(t *testing.T, e *env, images, user string) func() []string
 			fmt.Fprint(w, images)
 		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/container-images/"):
 			fmt.Fprint(w, `[{"id":5,"repository":"test/x","tag":"v1"}]`)
+		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/tasks/"):
+			fmt.Fprint(w, `{"id":6,"status":"inprogress"}`)
 		case r.Method == http.MethodPost && r.URL.Path == "/container-images/build":
+			w.Header().Set("Location", "/tasks/6")
 			w.WriteHeader(http.StatusCreated)
 			fmt.Fprint(w, `{"id":7}`)
 		case r.Method == http.MethodPost && r.URL.Path == "/container-deployments":
@@ -284,6 +287,52 @@ func TestProvenanceWithoutDelegation(t *testing.T) {
 	}
 	if own, err := e.st.IsDelegationObject(ctx, c.ID, delegation.Task, "5"); err != nil || !own {
 		t.Fatalf("the task of the deployment is not in the register: %v %v", own, err)
+	}
+}
+
+// BM17 E4 (E3-1): the task of a build the agent started is its own object. The delegation `read task ids own`
+// lets it read that task and no other; the task of somebody else stays foreign, and no `read task *` is given.
+func TestOwnBuildTaskIsReadableOthersStayForeign(t *testing.T) {
+	e := setup(t)
+	got := withEdgePlatform(t, e, `[]`, "test")
+	ctx := context.Background()
+	c, err := e.m.Create(ctx, NewChat{Delegation: json.RawMessage(`{"rules":[
+		{"action":"create","resource":"container_image"},
+		{"action":"read","resource":"model","ids":["*"]},
+		{"action":"read","resource":"container_template","ids":["*"]},
+		{"action":"read","resource":"task","ids":["own"]}],"confirm":"none"}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	slot := e.m.live[c.ID].slot.ID
+	read := func(id string) platform.Result {
+		t.Helper()
+		res, err := e.m.PlatformCall(ctx, c.ID, slot, "cli", platform.Request{Method: http.MethodGet, Path: "/tasks/" + id})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res
+	}
+	if r := read("6"); r.Status != "denied" || r.Reason != delegation.CodeForeignObject {
+		t.Fatalf("before the build the task is foreign: %+v", r)
+	}
+	build := platform.Request{Method: http.MethodPost, Path: "/container-images/build",
+		Body: json.RawMessage(`{"container_template_id":2,"model_id":3,"repository":"test/x","tag":"v1","architecture":"amd64"}`)}
+	res, err := e.m.PlatformCall(ctx, c.ID, slot, "cli", build)
+	if err != nil || res.Status != "ok" {
+		t.Fatalf("build: %+v %v", res, err)
+	}
+	if own, err := e.st.IsDelegationObject(ctx, c.ID, delegation.Task, "6"); err != nil || !own {
+		t.Fatalf("the task of the build is not in the register: %v %v", own, err)
+	}
+	if r := read("6"); r.Status != "ok" || r.WithinDelegation == nil || !*r.WithinDelegation {
+		t.Fatalf("reading the own build task: %+v", r)
+	}
+	if r := read("7"); r.Status != "denied" || r.Reason != delegation.CodeForeignObject {
+		t.Fatalf("a task of somebody else must stay foreign: %+v", r)
+	}
+	if reached(got(), "GET /tasks/7") {
+		t.Fatal("the foreign task read reached the platform")
 	}
 }
 
