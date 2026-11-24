@@ -60,6 +60,11 @@ var ErrNotClassification = errors.New(MsgSplitNotClassification)
 // MsgNoAnnotations is the refusal of a dataset without an annotation file.
 const MsgNoAnnotations = "the dataset archive carries no annotations/annotations.xml; a split needs the annotations"
 
+// ErrNoAnnotations is the error of a dataset archive without an annotation file. ReadDataset answers it
+// together with the images it found: a dataset the model saw still excludes its images from a measurement
+// when it carries no tags (E8).
+var ErrNoAnnotations = errors.New(MsgNoAnnotations)
+
 // SelectTrain splits the annotated images of one dataset into the part that goes into the new training
 // dataset and the images that are kept back for checks (R1.2). Class by class the images are sorted by
 // their SHA-256, and every tenth position goes into the training set while the position is below the
@@ -358,7 +363,7 @@ func ReadDataset(zr *zip.Reader) (DatasetFiles, error) {
 		out.Images[path.Base(name)] = data
 	}
 	if len(out.Annotation) == 0 {
-		return DatasetFiles{}, errors.New(MsgNoAnnotations)
+		return out, ErrNoAnnotations // the images stay: a caller that only needs their hashes can use them
 	}
 	return out, nil
 }
@@ -570,8 +575,12 @@ func (s *Service) datasetFiles(ctx context.Context, chatID string, id int64) (Da
 	}
 	defer zr.Close()
 	files, err := ReadDataset(&zr.Reader)
+	if errors.Is(err, ErrNoAnnotations) {
+		// The images come with the error (see seenImages); the message names the dataset (E8).
+		return files, fmt.Errorf("dataset %d: %w", id, err)
+	}
 	if err != nil {
-		return DatasetFiles{}, err
+		return DatasetFiles{}, fmt.Errorf("dataset %d: %w", id, err)
 	}
 	s.log(ctx, chatID, "GET "+callPath, fmt.Sprintf("ok: %d images, %d bytes of annotation", len(files.Images), len(files.Annotation)))
 	return files, nil

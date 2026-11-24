@@ -76,7 +76,8 @@ The gateway measures the file you fetched out of the notebook server, so what it
 2. Train it in the notebook server with the **training** dataset of `split-dataset` as `dataset_ids` — never
    with the dataset you will check on. Every dataset a run of this chat received counts as seen afterwards;
    if that is the whole source, no held-out image is left and the check answers `not measured – no held-out
-   images`.
+   images`. A dataset without annotations counts as seen as well (its images are never measured), and it does
+   not stop a check whose `eval_dataset_id` is annotated.
 3. Fetch the result: `notebook-fetch <run_id> model.onnx`. It lands under `/workspace/notebook/<run_id>/`.
    Only a file that came out of a run of this chat can be checked — the gateway knows its SHA-256; a file it
    did not hand over is `not measured – origin unknown`.
