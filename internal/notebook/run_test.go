@@ -1314,3 +1314,33 @@ func TestPollWithoutMarkersNoRunTimes(t *testing.T) {
 		t.Fatalf("run times without markers: %v %v", p.RunStartedAt, p.RunEndedAt)
 	}
 }
+
+// The agent's notebook_stop ends the run that went in the stopped server right away (BM17 h2-b): the code of
+// the run ended with the server, so the run must not block the next one. Before, the end was only recorded by
+// a status call that found the server gone; a new run restarted the server first and was refused with
+// "still going" until a further stop.
+func TestNotebookStopEndsActiveRun(t *testing.T) {
+	st := testStore(t)
+	chatID := testChat(t, st)
+	hub := newFakeHub()
+	docker := &fakeDocker{ids: []string{"c1"}}
+	n, _ := testService(t, st, docker, hub)
+	ctx := context.Background()
+	runID := "r20260101120000-abcd"
+	if err := st.CreateNotebookRun(ctx, store.NotebookRun{ID: runID, ChatID: chatID, HubUser: "agent-test",
+		Server: n.Server(chatID), Entry: "train.py", TimeoutMin: 60, StartedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	hub.server, hub.ready = n.Server(chatID), true
+	res, err := n.Do(ctx, chatID, platform.Request{Method: http.MethodPost, Path: platform.NotebookPrefix + "/stop"})
+	if err != nil || res.Status != "ok" {
+		t.Fatalf("stop call: %+v %v", res, err)
+	}
+	if _, busy, err := st.ActiveNotebookRun(ctx, chatID); err != nil || busy {
+		t.Fatalf("the stopped run still blocks the chat: busy=%v err=%v", busy, err)
+	}
+	row, err := st.GetNotebookRun(ctx, chatID, runID)
+	if err != nil || row.FinishedAt == nil || row.ExitCode != nil {
+		t.Fatalf("stored end: %+v %v", row, err)
+	}
+}
