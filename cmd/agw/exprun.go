@@ -178,6 +178,16 @@ func newExpRunner(api expAPI, opts expRunOptions, out, errw io.Writer) (*expRunn
 			return nil, errors.New("the material deviates from plan.lock:\n" + problemLines(problems))
 		}
 	}
+	if lock != nil && !opts.DryRun {
+		// BM17 W2/E15: a frozen plan runs with the k and the seed of its file (which plan.lock checks). A different
+		// value would change the sample the lock froze and the export would not show it, so it stops here.
+		if opts.K > 0 && opts.K != p.K {
+			return nil, fmt.Errorf("--k %d differs from k %d of the frozen %s plan; a frozen plan runs with its own k", opts.K, p.K, p.Purpose)
+		}
+		if opts.SeedSet && opts.Seed != p.Seed {
+			return nil, fmt.Errorf("--seed %d differs from seed %d of the frozen %s plan; a frozen plan runs with its own seed", opts.Seed, p.Seed, p.Purpose)
+		}
+	}
 	k := p.K
 	if opts.K > 0 {
 		k = opts.K
