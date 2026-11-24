@@ -64,9 +64,12 @@ from the method (GET `read`, otherwise `update`) and is only allowed with an exp
   models, the task from `Location: /tasks/<id>` for training.
 - The register lives in Postgres (`delegation_objects`) and remains valid when the chat is resumed.
 - Provenance arises **only** from responses to create calls, never from `owner` or information supplied by the agent.
-- **Limit:** training containers are created asynchronously from a task; the response does not name their ID.
-  `own` therefore does not apply to containers; they can only be delegated by explicit IDs or `*`. This is stated as
-  a limitation in the thesis.
+- **Training containers** are created asynchronously from a task; the response does not name their ID. Since #169 the
+  gateway's watcher registers the container the build task names ("Train Container #<id> created.") once the
+  platform's list shows it on the dataset of the call, so `own` applies to it. Since E11 (pilot-bm17-c6) this happens
+  as soon as the message appears, while the task may still count as `inprogress` for minutes. A rule
+  `read training` without `ids` still covers only the list; reading an own container (status, logs, model) needs
+  `read training` with `ids: ["own"]`.
 
 ### Course of a check (Manager.PlatformCall)
 

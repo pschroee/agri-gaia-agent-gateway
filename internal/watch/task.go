@@ -186,6 +186,17 @@ func pollPlatformTask(ctx context.Context, j Job, read Reader) (Progress, error)
 		}
 	case taskFailed:
 		p.State = StateFailed
+	default:
+		// The backend writes the container row and the message "Train Container #<id> created." before the task
+		// counts as completed; in pilot-bm17-c6 (23.11.2026) the task stayed "inprogress" for minutes after it.
+		// The container can be started from then on, so it enters the register already now, under the same
+		// check as at the end (the task of this chat names it, the platform's list shows it for the dataset).
+		// The job stays running; a failed read of the list only waits for the next poll.
+		if chain == chainConfig && builtContainerRe.MatchString(strings.TrimSpace(doc.Message)) {
+			if created, _, err := builtContainer(ctx, read, doc, target); err == nil && created != nil {
+				p.Created = created
+			}
+		}
 	}
 	return p, nil
 }
