@@ -227,6 +227,10 @@ func (n *Notebooks) Status(ctx context.Context, chatID, runID string) (RunInfo, 
 					info.Note = stoppedRunNote
 				}
 			}
+			if info.Note == "" && row.FinishedAt != nil && row.ExitCode == nil {
+				// An end without an exit code is a stop of the server while the run went (the stop call records it).
+				info.Note = stoppedRunNote
+			}
 			if info.Note == "" {
 				info.Note = serverGoneNote
 			}
@@ -361,11 +365,35 @@ func (n *Notebooks) stopResult(ctx context.Context, chatID, user, server string)
 	if err := n.hub.Stop(ctx, user, server); err != nil {
 		return unavailableHub(err), nil
 	}
+	// The code of a run went with the server. Its end is recorded now, without an exit code: left open, the
+	// run would block the next one, because the next run starts the server again and the status call then
+	// finds a container and reads no end (BM17 h2-b: three stops before a new run was accepted).
+	if err := n.endActiveRun(ctx, chatID); err != nil {
+		return errorResult("the server stopped, but the end of its run is not recorded: %v", err)
+	}
 	// Who stopped it is recorded where the caller is known (own code C-E4): the user's own stop route marks the
 	// job in Manager.StopJob, the agent's own call in Manager.PlatformCall — this call cannot tell the two apart
 	// (the invocation is set for the tools with steps, the tool call id is a header the client sets).
 	return jsonResult(map[string]any{"server": server, "state": "stopped",
 		"note": "the files of earlier runs stay in the server; a new run starts it again"})
+}
+
+// endActiveRun records the end of the chat's run that has not ended (without an exit code) after its server was stopped.
+func (n *Notebooks) endActiveRun(ctx context.Context, chatID string) error {
+	for {
+		run, busy, err := n.store.ActiveNotebookRun(ctx, chatID)
+		if err != nil {
+			return err
+		}
+		if !busy {
+			return nil
+		}
+		if ok, err := n.store.EndNotebookRun(ctx, run.ID, n.now()); err != nil {
+			return err
+		} else if !ok {
+			return nil
+		}
+	}
 }
 
 // runsResult answers notebook_runs: the chat's runs, newest first.
