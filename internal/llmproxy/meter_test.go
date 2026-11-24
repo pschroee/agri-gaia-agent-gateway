@@ -144,6 +144,9 @@ func TestRecordsCallWithCost(t *testing.T) {
 	if c.ChatID != "chat-1" || c.SlotID != "p-1" || c.Model != "p/m1" || c.ResponseID != "resp-1" || c.Status != 200 || c.Cost < want-1e-12 || c.Cost > want+1e-12 {
 		t.Fatalf("call: %+v (expected cost %v)", c, want)
 	}
+	if c.ListCost < want-1e-12 || c.ListCost > want+1e-12 {
+		t.Fatalf("list cost %v, expected %v (no tariff in this catalog: equal to the cost)", c.ListCost, want)
+	}
 	if len(c.ToolCalls) != 1 || c.ToolCalls[0].Name != "bash" {
 		t.Fatalf("tool calls: %+v", c.ToolCalls)
 	}

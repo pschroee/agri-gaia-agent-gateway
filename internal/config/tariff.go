@@ -116,6 +116,21 @@ func (t *Tariff) IsPeak(at time.Time) bool {
 	return false
 }
 
+// ListCost computes the cost of a response at the fixed list price of the catalog (the peak tariff, factor 1),
+// whatever the time of day. Experiment runs measure and limit with this price, so that the same behaviour costs
+// the same at any hour (BM17 E3, K1); Cost stays what the provider bills.
+func (c *Catalog) ListCost(modelID string, u Usage) (cost float64, ok bool) {
+	p := c.EffectivePricing(modelID)
+	if p == nil {
+		return 0, false
+	}
+	if _, _, found := c.Lookup(modelID); !found {
+		return 0, false
+	}
+	return (float64(u.Input)*p.Input + float64(u.Output)*p.Output +
+		float64(u.CacheRead)*p.CacheRead + float64(u.CacheWrite)*p.CacheWrite) / 1e6, true
+}
+
 // Cost computes the cost of a response in USD at time at.
 // peak reports whether the peak tariff applied (without a tariff: always a flat price, peak=false).
 func (c *Catalog) Cost(modelID string, u Usage, at time.Time) (cost float64, peak bool, ok bool) {

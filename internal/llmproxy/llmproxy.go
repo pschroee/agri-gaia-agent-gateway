@@ -291,6 +291,9 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				if cost, peak, ok := p.cat.Cost(c.Model, c.Usage, started); ok {
 					c.Cost, c.Peak = cost, peak
 				}
+				if lc, ok := p.cat.ListCost(c.Model, c.Usage); ok {
+					c.ListCost = lc
+				}
 				p.rec.Record(c)
 			}}
 			return nil

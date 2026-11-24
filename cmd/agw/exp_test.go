@@ -1401,7 +1401,7 @@ func TestRunSendsLimitsWithChat(t *testing.T) {
 	if got == nil || got.MaxCostUSD != 0.5 || got.MaxTokens != 40000 || got.MaxDuration != "7m" {
 		t.Fatalf("limits sent: %+v", got)
 	}
-	if !strings.Contains(out.String(), "run limits sent to the gateway: 0.5 USD, 40000 tokens (input + output without cache reads), 7m") {
+	if !strings.Contains(out.String(), "run limits sent to the gateway: 0.5 USD (at list price), 40000 tokens (input + output without cache reads), 7m") {
 		t.Fatalf("start line missing: %s", out.String())
 	}
 }
@@ -1652,5 +1652,24 @@ func TestCleanupDeploymentBeforeImage(t *testing.T) {
 	want := []string{"PUT /container-deployments/32/undeploy", "GET /container-deployments/32", "DELETE /container-deployments/32", "DELETE /container-images/agent-exp/garage-fahrzeug:v1"}
 	if strings.Join(seq, "|") != strings.Join(want, "|") {
 		t.Fatalf("cleanup order: %v", seq)
+	}
+}
+
+// BM17 E3 K1: the runner's own limit check counts the cost at the fixed list price, like the gateway; a gateway
+// that reports none falls back to the billed cost.
+func TestExpOverLimitCountsListCost(t *testing.T) {
+	now := time.Now()
+	lim := exp.Limits{MaxCostUSD: 0.10}
+	c := agwclient.Chat{Cost: 0.05, ListCost: 0.11}
+	if kind, _, _ := expOverLimit(lim, c, now, now, now); kind != "cost" {
+		t.Fatalf("list cost 0.11 must pass the limit 0.10 although 0.05 is billed: %q", kind)
+	}
+	c = agwclient.Chat{Cost: 0.05, ListCost: 0.09}
+	if kind, _, _ := expOverLimit(lim, c, now, now, now); kind != "" {
+		t.Fatalf("list cost 0.09 is under the limit: %q", kind)
+	}
+	c = agwclient.Chat{Cost: 0.12}
+	if kind, _, _ := expOverLimit(lim, c, now, now, now); kind != "cost" {
+		t.Fatalf("without a list cost the billed cost counts: %q", kind)
 	}
 }

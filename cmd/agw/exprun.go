@@ -341,7 +341,7 @@ func (r *expRunner) run(ctx context.Context) error {
 				orDefault(usage.DurationTotal, "0s"), r.plan.Limits.PlanTokens(), roundDuration(r.plan.Limits.PlanDuration()))
 		}
 	}
-	fmt.Fprintf(r.out, "run limits sent to the gateway: %s USD, %d tokens (input + output without cache reads), %s\n",
+	fmt.Fprintf(r.out, "run limits sent to the gateway: %s USD (at list price), %d tokens (input + output without cache reads), %s\n",
 		strconv.FormatFloat(r.plan.Limits.MaxCostUSD, 'f', -1, 64), r.plan.Limits.MaxTokens, orDefault(r.plan.Limits.MaxDuration, "default"))
 	if r.lock != nil && !r.dryRun {
 		// X8.5: the material matches the lock; now the environment must as well. A dry run prints the order
@@ -776,8 +776,8 @@ func (r *expRunner) waitEnd(ctx context.Context, chatID string) (status, reason 
 // expOverLimit names the first limit of the plan that the chat has passed (kind, measured value, limit), else "".
 func expOverLimit(lim exp.Limits, c agwclient.Chat, now, startedAt, deadline time.Time) (kind, value, bound string) {
 	switch {
-	case lim.MaxCostUSD > 0 && c.Cost >= lim.MaxCostUSD:
-		return "cost", fmt.Sprintf("%.4f USD", c.Cost), fmt.Sprintf("%.4f USD", lim.MaxCostUSD)
+	case lim.MaxCostUSD > 0 && expLimitCost(c) >= lim.MaxCostUSD:
+		return "cost", fmt.Sprintf("%.4f USD", expLimitCost(c)), fmt.Sprintf("%.4f USD", lim.MaxCostUSD)
 	case lim.MaxTokens > 0 && c.Tokens.Input+c.Tokens.Output >= lim.MaxTokens:
 		return "tokens", fmt.Sprintf("%d", c.Tokens.Input+c.Tokens.Output), fmt.Sprintf("%d", lim.MaxTokens)
 	case !deadline.Equal(startedAt) && !now.Before(deadline):
@@ -797,8 +797,17 @@ func expLimitReason(limit string, lim exp.Limits, c agwclient.Chat, elapsed time
 	case "duration":
 		bound = lim.MaxDuration
 	}
-	return fmt.Sprintf("gateway limit %s (%s): tokens %d (+%d cache reads), %.4f USD, %s", limit, bound,
-		c.Tokens.Input+c.Tokens.Output, c.Tokens.CacheRead, c.Cost, roundDuration(elapsed))
+	return fmt.Sprintf("gateway limit %s (%s): tokens %d (+%d cache reads), %.4f USD at list price (%.4f USD billed), %s", limit, bound,
+		c.Tokens.Input+c.Tokens.Output, c.Tokens.CacheRead, expLimitCost(c), c.Cost, roundDuration(elapsed))
+}
+
+// expLimitCost is the cost the experiment limit counts: the model calls at the fixed list price, so that the same
+// behaviour costs the same at any hour (BM17 E3 K1). A gateway that does not report it yet: the billed cost.
+func expLimitCost(c agwclient.Chat) float64 {
+	if c.ListCost > 0 {
+		return c.ListCost
+	}
+	return c.Cost
 }
 
 func expLimitStatus(limit string) string {
