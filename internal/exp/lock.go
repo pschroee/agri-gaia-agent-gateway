@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -260,10 +261,70 @@ func treeSHA256(root string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// MaterialFiles hashes every file of the material that belongs to the experiment (X8.3). Output
-// directories of runs and local caches stay out: they are results, not material.
+// materialSkipDirs are result folders and local caches: they are results, not material (X8.3). The Python
+// freeze step (masterarbeit/versuch/einfrieren.py, SKIP_DIRS) uses the same list.
+var materialSkipDirs = map[string]bool{
+	".git": true, "replikation": true, "__pycache__": true, ".pytest_cache": true, ".venv": true,
+	".uv-cache": true, "ergebnisse": true, "export": true,
+}
+
+// materialSkipped reports whether a slash-separated relative path is no material: below a skipped
+// directory, the lock itself, or a compiled or compressed artefact.
+func materialSkipped(rel string) bool {
+	parts := strings.Split(rel, "/")
+	for _, part := range parts[:len(parts)-1] {
+		if materialSkipDirs[part] {
+			return true
+		}
+	}
+	return rel == "plan.lock" || strings.HasSuffix(rel, ".pyc") || strings.HasSuffix(rel, ".zst")
+}
+
+// gitTrackedFiles lists the files Git versions below dir, relative to dir and slash-separated. ok is false
+// when dir is not inside a Git work tree or git is not available (the server copy comes from git archive
+// and carries no .git); the caller then takes every file present.
+func gitTrackedFiles(dir string) (files []string, ok bool) {
+	inside, err := exec.Command("git", "-C", dir, "rev-parse", "--is-inside-work-tree").Output()
+	if err != nil || strings.TrimSpace(string(inside)) != "true" {
+		return nil, false
+	}
+	// Without --full-name, ls-files prints paths relative to dir, and "." limits the list to dir.
+	raw, err := exec.Command("git", "-C", dir, "ls-files", "-z", "--cached", "--", ".").Output()
+	if err != nil {
+		return nil, false
+	}
+	for _, name := range strings.Split(string(raw), "\x00") {
+		if name != "" {
+			files = append(files, name)
+		}
+	}
+	return files, true
+}
+
+// MaterialFiles hashes every file of the material that belongs to the experiment (X8.3). Inside a Git work
+// tree only the files Git versions count, so an untracked or ignored file (a node_modules folder, a local
+// scratch file) never enters the lock: on the server the material arrives as git archive, and a lock over
+// files that archive does not carry could never be checked there (BM17 K2). Without Git (the server copy)
+// every file present counts. Output folders of runs and local caches stay out in both cases.
 func MaterialFiles(dir string) (map[string]string, error) {
 	out := map[string]string{}
+	if tracked, ok := gitTrackedFiles(dir); ok {
+		for _, rel := range tracked {
+			if materialSkipped(rel) {
+				continue
+			}
+			path := filepath.Join(dir, filepath.FromSlash(rel))
+			if st, err := os.Stat(path); err != nil || !st.Mode().IsRegular() {
+				continue // deleted in the work tree, or a submodule
+			}
+			sum, err := FileSHA256(path)
+			if err != nil {
+				return nil, err
+			}
+			out[rel] = sum
+		}
+		return out, nil
+	}
 	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -274,16 +335,12 @@ func MaterialFiles(dir string) (map[string]string, error) {
 		}
 		rel = filepath.ToSlash(rel)
 		if d.IsDir() {
-			if rel == "." {
-				return nil
-			}
-			switch filepath.Base(rel) {
-			case ".git", "replikation", "__pycache__", ".pytest_cache", ".venv", ".uv-cache", "ergebnisse", "export":
+			if rel != "." && materialSkipDirs[filepath.Base(rel)] {
 				return fs.SkipDir
 			}
 			return nil
 		}
-		if rel == "plan.lock" || strings.HasSuffix(rel, ".pyc") || strings.HasSuffix(rel, ".zst") {
+		if materialSkipped(rel) {
 			return nil
 		}
 		sum, err := FileSHA256(path)

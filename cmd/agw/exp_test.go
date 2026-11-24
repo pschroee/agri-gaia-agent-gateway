@@ -1250,6 +1250,26 @@ func TestRunRefusedWhenSlotImageDiffers(t *testing.T) {
 	}
 }
 
+// BM17 W2/E15: --k and --seed cannot override a frozen plan; the same values and a dry run are fine.
+func TestFrozenPlanRefusesKAndSeedOverride(t *testing.T) {
+	dir := writeExpMaterial(t, "main", 20)
+	writePlanLock(t, dir, exp.Lock{})
+	_, err := newExpRunner(newFakeExpAPI(), expRunOptions{PlanPath: dir, K: 1}, io.Discard, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "--k 1 differs from k 3") {
+		t.Fatalf("want the k refusal, got %v", err)
+	}
+	_, err = newExpRunner(newFakeExpAPI(), expRunOptions{PlanPath: dir, Seed: 99, SeedSet: true}, io.Discard, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "--seed 99 differs from seed 7") {
+		t.Fatalf("want the seed refusal, got %v", err)
+	}
+	if _, err := newExpRunner(newFakeExpAPI(), expRunOptions{PlanPath: dir, K: 3, Seed: 7, SeedSet: true}, io.Discard, io.Discard); err != nil {
+		t.Fatalf("the plan's own values: %v", err)
+	}
+	if _, err := newExpRunner(newFakeExpAPI(), expRunOptions{PlanPath: dir, K: 1, DryRun: true}, io.Discard, io.Discard); err != nil {
+		t.Fatalf("dry run: %v", err)
+	}
+}
+
 func TestMainPlanRunsWithMatchingLock(t *testing.T) {
 	dir := writeExpMaterial(t, "main", 20)
 	writePlanLock(t, dir, exp.Lock{})

@@ -6,6 +6,7 @@ package exp
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -208,5 +209,101 @@ func TestCompareEnvironmentAPIIndex(t *testing.T) {
 	problems = CompareEnvironment(lock, env)
 	if len(problems) != 1 || !strings.Contains(problems[0].String(), "not frozen") {
 		t.Fatalf("lock without index: %v", problems)
+	}
+}
+
+// materialVector is the shared test vector of MaterialFiles; masterarbeit/versuch/test_einfrieren.py
+// (test_material_files_gemeinsamer_vektor) holds the same files and the same expected checksums, so that
+// Python and Go agree on which files the lock covers (BM17 K2).
+var materialVector = struct {
+	tracked   map[string]string // relative to the repository root, versioned in Git
+	untracked map[string]string // present in the work tree, not versioned (one of them ignored)
+	expected  map[string]string // MaterialFiles of the folder "versuch"
+}{
+	tracked: map[string]string{
+		"outside.yaml":               "id: outside\n",
+		"versuch/plan.yaml":          "purpose: main\nk: 3\n",
+		"versuch/aufgaben/list.yaml": "id: list\n",
+		"versuch/export/old.yaml":    "id: old\n",
+		"versuch/plan.lock":          "{}\n",
+		".gitignore":                 "node_modules/\n",
+	},
+	untracked: map[string]string{
+		"versuch/node_modules/pkg/index.js": "x = 1\n",
+		"versuch/scratch.yaml":              "id: scratch\n",
+	},
+	expected: map[string]string{
+		"aufgaben/list.yaml": "1b424de9ee7a3d081e52053beedb4ddf9c93b535265c20a1b0e460199cd179a0",
+		"plan.yaml":          "6cb3c2d22f8c43db226bbec32de36d8b7342e5df9ab16bd753c71688d58ca6f9",
+	},
+}
+
+func writeVectorFiles(t *testing.T, root string, files map[string]string) {
+	t.Helper()
+	for name, body := range files {
+		path := filepath.Join(root, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func gitIn(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-C", dir, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false"}, args...)...)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Skipf("git %v: %v %s", args, err, out)
+	}
+}
+
+// BM17 K2: inside a Git work tree an untracked or ignored file does not enter the lock.
+func TestMaterialFilesCoverOnlyTrackedFiles(t *testing.T) {
+	root := t.TempDir()
+	gitIn(t, root, "init", "-q")
+	writeVectorFiles(t, root, materialVector.tracked)
+	gitIn(t, root, "add", "-A")
+	gitIn(t, root, "commit", "-q", "-m", "x")
+	writeVectorFiles(t, root, materialVector.untracked)
+
+	got, err := MaterialFiles(filepath.Join(root, "versuch"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != len(materialVector.expected) {
+		t.Fatalf("files: %v, want %v", got, materialVector.expected)
+	}
+	for name, want := range materialVector.expected {
+		if got[name] != want {
+			t.Fatalf("%s: %q, want %q (all: %v)", name, got[name], want, got)
+		}
+	}
+	// the lock written from this set checks cleanly against the material, untracked files included
+	lock := &Lock{Files: got}
+	if problems := lock.CheckFiles(filepath.Join(root, "versuch")); len(problems) != 0 {
+		t.Fatalf("check: %v", problems)
+	}
+}
+
+// Without Git (the server copy from git archive) every file present counts, minus caches and results.
+func TestMaterialFilesWithoutGitTakeEveryFile(t *testing.T) {
+	root := t.TempDir()
+	writeVectorFiles(t, root, materialVector.tracked)
+	writeVectorFiles(t, root, materialVector.untracked)
+	got, err := MaterialFiles(filepath.Join(root, "versuch"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"plan.yaml", "aufgaben/list.yaml", "scratch.yaml", "node_modules/pkg/index.js"} {
+		if _, ok := got[want]; !ok {
+			t.Fatalf("%s missing from %v", want, got)
+		}
+	}
+	for _, not := range []string{"export/old.yaml", "plan.lock"} {
+		if _, ok := got[not]; ok {
+			t.Fatalf("%s must stay out: %v", not, got)
+		}
 	}
 }
