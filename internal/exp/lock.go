@@ -51,7 +51,7 @@ type Lock struct {
 	Models            []LockModel       `json:"models"`
 	Seed              int64             `json:"seed"`
 	K                 int               `json:"k"`
-	Runs              int               `json:"runs"` // Fallzahl: tasks × cells × k
+	Runs              int               `json:"runs"` // run count: for each cell the tasks it runs, times k (Plan.RunCount)
 	Limits            Limits            `json:"limits"`
 	Pass1Threshold    float64           `json:"pass1_threshold"`
 	Runtimes          map[string]string `json:"runtimes,omitempty"`
