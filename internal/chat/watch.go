@@ -245,7 +245,11 @@ func (m *Manager) pollJob(ctx context.Context, j store.WatchJob, kind watch.Kind
 	m.recordPhase(ctx, j, p)
 	m.runJobProgress(ctx, j, p) // seam of the training search (issue #168)
 	m.publishJob(ctx, j, p)
-	if prog.State != watch.StateRunning {
+	if prog.State == watch.StateRunning {
+		// An object the platform names while the job still runs (the container of a training build) enters
+		// the register at once: the agent may use it before the task counts as completed (pilot-bm17-c6).
+		m.recordJobObject(ctx, j, p)
+	} else {
 		m.PublishPlatformChanged(j.ChatID, PlatformChangedEvent{Source: ChangeSourceJob, JobID: j.ID, Changes: jobChanges(kind, p, true)})
 		m.finishWatched(ctx, j, p)
 	}
@@ -567,10 +571,11 @@ func objectName(st *store.PlanStep) string {
 	return "object"
 }
 
-// recordJobObject registers the object a finished job created: only from the gateway's own reading of the
-// platform (watch.Progress.Created), and only for a job of this chat (the row of watch_jobs belongs to it).
+// recordJobObject registers the object a finished or still running job created: only from the gateway's own
+// reading of the platform (watch.Progress.Created), and only for a job of this chat (the row of watch_jobs
+// belongs to it). A failed job registers nothing.
 func (m *Manager) recordJobObject(ctx context.Context, j store.WatchJob, p watch.Progress) {
-	if p.State != watch.StateDone || p.Created == nil || p.Created.ID == "" {
+	if (p.State != watch.StateDone && p.State != watch.StateRunning) || p.Created == nil || p.Created.ID == "" {
 		return
 	}
 	if !jobObjectIDRe.MatchString(p.Created.ID) {

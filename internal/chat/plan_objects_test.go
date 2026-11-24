@@ -208,3 +208,64 @@ func TestWatchNoteMentionsPlaceholder(t *testing.T) {
 		t.Fatalf("note: %s", note)
 	}
 }
+
+// pilot-bm17-c6 (23.11.2026, run s3-outdated): the build task 342 named container 188 while still "inprogress";
+// the start of 188 at that time was refused as a foreign object (platform_calls 28716) and only a later one,
+// after the task completed, went through (28730). The container now enters the register as soon as the
+// gateway's own poll reads the message and the list shows it on the dataset of the call.
+func TestBuiltContainerOwnBeforeTaskCompletes(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	f := newFakeJobs(t, e, "/tasks/342")
+	c, err := e.m.Create(ctx, NewChat{Delegation: json.RawMessage(`{"rules":[
+	  {"action":"read","resource":"dataset","ids":["*"]},
+	  {"action":"create","resource":"training"},
+	  {"action":"read","resource":"training"},
+	  {"action":"read","resource":"training","ids":["own"]},
+	  {"action":"run","resource":"training","ids":["own"]}],"confirm":"none"}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	slot := e.m.live[c.ID].slot.ID
+	call := func(method, path, body string) platform.Result {
+		t.Helper()
+		req := platform.Request{Method: method, Path: path}
+		if body != "" {
+			req.Body = json.RawMessage(body)
+		}
+		norm, err := platform.Normalize(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res, err := e.m.PlatformCall(ctx, c.ID, slot, "cli", norm)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res
+	}
+	if res := call(http.MethodPost, "/train/config", `{"architecture":"YOLOv11","category":"Object Detection","dataset_id":473,"provider":"Ultralytics"}`); res.Status != "ok" {
+		t.Fatalf("build: %+v", res)
+	}
+	f.set("GET /tasks/342", `{"completion_percentage":0.9,"creation_date":"2026-11-23T14:09:43.960751","id":342,"initiator":"agent-exp","message":"Pushing the image to the registry","status":"inprogress","title":"Train Container Buildjob: YOLOv11 (Ultralytics)"}`)
+	runWatchersOnce(t, e)
+	if res := call(http.MethodPost, "/train/containers/188/run", ""); res.Status == "ok" {
+		t.Fatalf("container 188 is not named yet and must not count as own: %+v", res)
+	}
+
+	f.set("GET /tasks/342", `{"completion_percentage":0.95,"creation_date":"2026-11-23T14:09:43.960751","id":342,"initiator":"agent-exp","message":"Train Container #188 created.","status":"inprogress","title":"Train Container Buildjob: YOLOv11 (Ultralytics)"}`)
+	f.set("GET /train/containers?limit=1000", `[{"id":63,"dataset_id":60},{"id":97,"dataset_id":193},{"id":98,"dataset_id":195},{"id":188,"dataset_id":473}]`)
+	runWatchersOnce(t, e)
+	if own, err := e.st.IsDelegationObject(ctx, c.ID, delegation.Training, "188"); err != nil || !own {
+		t.Fatalf("container 188 is not in the register while the task runs: %v %v", own, err)
+	}
+	jobs, err := e.st.ChatWatchJobs(ctx, c.ID)
+	if err != nil || len(jobs) == 0 || jobs[0].State != watch.StateRunning {
+		t.Fatalf("the build job must keep running: %+v %v", jobs, err)
+	}
+	if res := call(http.MethodGet, "/train/containers/188/status", ""); res.Status != "ok" {
+		t.Fatalf("reading the own container (28731): %+v", res)
+	}
+	if res := call(http.MethodPost, "/train/containers/188/run", ""); res.Status != "ok" {
+		t.Fatalf("starting the own container (28716): %+v", res)
+	}
+}
