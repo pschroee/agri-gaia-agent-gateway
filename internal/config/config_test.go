@@ -252,6 +252,30 @@ func TestCostWithPeakTariff(t *testing.T) {
 	}
 }
 
+// BM17 E3 K1: the list cost is the peak price at any hour, so that the same tokens give the same figure at
+// 02:00 and at 12:00 UTC, while Cost keeps what the provider bills.
+func TestListCostIsIndependentOfTheHour(t *testing.T) {
+	c, _ := ParseCatalog([]byte(tariffCatalog))
+	u := Usage{Input: 100_000, Output: 20_000, CacheRead: 500_000}
+	list, ok := c.ListCost("deepseek/deepseek-flash", u)
+	if !ok || list <= 0 {
+		t.Fatalf("list cost: %v %v", list, ok)
+	}
+	for _, at := range []string{"2026-09-29T02:00:00Z", "2026-09-29T12:00:00Z", "2026-10-03T02:00:00Z"} {
+		ts, _ := time.Parse(time.RFC3339, at)
+		billed, peak, _ := c.Cost("deepseek/deepseek-flash", u, ts)
+		if peak && (billed < list-1e-12 || billed > list+1e-12) {
+			t.Errorf("%s: peak billing %v differs from list cost %v", at, billed, list)
+		}
+		if !peak && (billed < list/2-1e-12 || billed > list/2+1e-12) {
+			t.Errorf("%s: off-peak billing %v is not half of %v", at, billed, list)
+		}
+	}
+	if _, ok := c.ListCost("x/y", u); ok {
+		t.Fatal("unknown model priced")
+	}
+}
+
 func TestCostWithoutTariffIsFlat(t *testing.T) {
 	c, _ := ParseCatalog([]byte(catalogJSON))
 	cost, peak, ok := c.Cost("deepseek/deepseek-flash", Usage{Output: 1_000_000}, time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC))

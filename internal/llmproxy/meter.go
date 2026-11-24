@@ -24,8 +24,10 @@ type Call struct {
 	Status     int          `json:"status"`
 	Usage      config.Usage `json:"usage"`
 	Cost       float64      `json:"cost"`
-	Peak       bool         `json:"peak"`
-	ToolCalls  []ToolCall   `json:"tool_calls"`
+	// ListCost: the cost at the fixed list price (peak tariff, no time of day). Experiment limits use it (BM17 E3 K1).
+	ListCost  float64    `json:"list_cost"`
+	Peak      bool       `json:"peak"`
+	ToolCalls []ToolCall `json:"tool_calls"`
 	// FinishReason of the provider (stop, tool_calls, length, …; Anthropic stop_reason).
 	FinishReason string `json:"finish_reason"`
 	// Complete: the response arrived completely (SSE with finish_reason or message_stop, JSON

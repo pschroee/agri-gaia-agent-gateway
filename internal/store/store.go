@@ -82,15 +82,17 @@ type Chat struct {
 	Title string `json:"title"`
 	Model string `json:"model"`
 	// ThinkingLevel: pi's thinking level (/effort); empty: pi's default, not read yet.
-	ThinkingLevel    string          `json:"thinking_level,omitempty"`
-	Variant          string          `json:"variant"`
-	State            string          `json:"state"`
-	Internet         bool            `json:"internet"`
-	AutoCompact      bool            `json:"auto_compact"`
-	MaxSubagents     int             `json:"max_subagents"`
-	Subagents        int             `json:"subagents"`  // started subagents (runs)
-	LLMCalls         int             `json:"llm_calls"`  // model calls captured at the proxy
-	CostOther        float64         `json:"cost_other"` // of which outside the main session's replies
+	ThinkingLevel string  `json:"thinking_level,omitempty"`
+	Variant       string  `json:"variant"`
+	State         string  `json:"state"`
+	Internet      bool    `json:"internet"`
+	AutoCompact   bool    `json:"auto_compact"`
+	MaxSubagents  int     `json:"max_subagents"`
+	Subagents     int     `json:"subagents"`  // started subagents (runs)
+	LLMCalls      int     `json:"llm_calls"`  // model calls captured at the proxy
+	CostOther     float64 `json:"cost_other"` // of which outside the main session's replies
+	// ListCost: the model calls' cost at the fixed list price, whatever the hour (BM17 E3 K1); Cost is what is billed.
+	ListCost         float64         `json:"list_cost"`
 	Compactions      int             `json:"compactions"`
 	Context          json.RawMessage `json:"context,omitempty"`
 	CreatedAt        time.Time       `json:"created_at"`
@@ -467,7 +469,7 @@ SELECT c.id::text, c.title, c.model, c.thinking_level, c.variant, c.state, c.int
   (SELECT count(*) FROM artifacts a WHERE a.chat_id = c.id AND a.kind = 'output'),
   (SELECT count(*) FROM approvals p WHERE p.chat_id = c.id AND p.state = 'pending'),
   (SELECT count(DISTINCT run_id) FROM subagent_entries s WHERE s.chat_id = c.id),
-  l.n, COALESCE(l.other,0),
+  l.n, COALESCE(l.other,0), COALESCE(l.list_cost,0),
   (SELECT jsonb_build_object('size', w.size, 'archive_size', w.archive_size, 'files', w.files, 'sha256', w.sha256,
      'saved_at', w.saved_at, 'skipped_reason', w.skipped_reason, 'skipped_size', w.skipped_size, 'skipped_at', w.skipped_at)
    FROM chat_workspaces w WHERE w.chat_id = c.id),
@@ -486,6 +488,7 @@ LEFT JOIN LATERAL (
 LEFT JOIN LATERAL (
   SELECT count(*) AS n, COALESCE(sum(x.input),0) AS input, COALESCE(sum(x.output),0) AS output,
          COALESCE(sum(x.cache_read),0) AS cache_read, COALESCE(sum(x.cost),0) AS cost,
+         COALESCE(sum(COALESCE(x.list_cost, x.cost)),0) AS list_cost,
          sum(x.cost) FILTER (WHERE x.response_id = '' OR NOT EXISTS (
              SELECT 1 FROM chat_messages mm WHERE mm.chat_id = c.id AND mm.role = 'assistant'
                AND mm.message->>'responseId' = x.response_id)) AS other
@@ -497,7 +500,7 @@ func scanChat(row pgx.Row) (Chat, error) {
 	var ctxRaw, wsRaw, delRaw, expRaw []byte
 	err := row.Scan(&c.ID, &c.Title, &c.Model, &c.ThinkingLevel, &c.Variant, &c.State, &c.Internet, &c.AutoCompact, &c.MaxSubagents, &c.Compactions, &ctxRaw, &c.CreatedAt, &c.UpdatedAt,
 		&c.Tokens.Input, &c.Tokens.Output, &c.Tokens.CacheRead, &c.Tokens.Total, &c.Cost, &c.ArtifactCount, &c.PendingApprovals,
-		&c.Subagents, &c.LLMCalls, &c.CostOther, &wsRaw, &c.Queued, &c.BackgroundRunning, &delRaw, &c.Owner, &c.Language, &c.TrashedAt, &expRaw)
+		&c.Subagents, &c.LLMCalls, &c.CostOther, &c.ListCost, &wsRaw, &c.Queued, &c.BackgroundRunning, &delRaw, &c.Owner, &c.Language, &c.TrashedAt, &expRaw)
 	if len(delRaw) > 0 {
 		c.Delegation = delRaw
 	}
@@ -1348,18 +1351,20 @@ LEFT JOIN LATERAL (
 
 // LLMCall is a model call captured at the proxy.
 type LLMCall struct {
-	ID         int64           `json:"id"`
-	ChatID     string          `json:"chat_id,omitempty"`
-	SlotID     string          `json:"slot_id"`
-	SourceIP   string          `json:"source_ip"`
-	Model      string          `json:"model"`
-	ResponseID string          `json:"response_id"`
-	Status     int             `json:"status"`
-	Input      int64           `json:"input"`
-	Output     int64           `json:"output"`
-	CacheRead  int64           `json:"cache_read"`
-	CacheWrite int64           `json:"cache_write"`
-	Cost       float64         `json:"cost"`
+	ID         int64   `json:"id"`
+	ChatID     string  `json:"chat_id,omitempty"`
+	SlotID     string  `json:"slot_id"`
+	SourceIP   string  `json:"source_ip"`
+	Model      string  `json:"model"`
+	ResponseID string  `json:"response_id"`
+	Status     int     `json:"status"`
+	Input      int64   `json:"input"`
+	Output     int64   `json:"output"`
+	CacheRead  int64   `json:"cache_read"`
+	CacheWrite int64   `json:"cache_write"`
+	Cost       float64 `json:"cost"`
+	// ListCost: the cost at the fixed list price, whatever the hour (BM17 E3 K1); 0 for older rows.
+	ListCost   float64         `json:"list_cost"`
 	Peak       bool            `json:"peak"`
 	ToolCalls  json.RawMessage `json:"tool_calls"`
 	StartedAt  time.Time       `json:"started_at"`
@@ -1390,16 +1395,18 @@ func (s *Store) AddLLMCall(ctx context.Context, c LLMCall) (LLMCall, error) {
 		c.ToolCalls = json.RawMessage("[]")
 	}
 	err := s.pool.QueryRow(ctx, `
-INSERT INTO llm_calls (chat_id, slot_id, source_ip, model, response_id, status, input, output, cache_read, cache_write, cost, peak, tool_calls, started_at, duration_ms, finish_reason, complete, request_bytes, temperature, seed, model_reported, tools_sha256)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,NULLIF($22,'')) RETURNING id`,
-		chat, c.SlotID, c.SourceIP, c.Model, c.ResponseID, c.Status, c.Input, c.Output, c.CacheRead, c.CacheWrite, c.Cost, c.Peak, []byte(c.ToolCalls), c.StartedAt, c.DurationMs, noNUL(c.FinishReason), c.Complete, c.RequestBytes, c.Temperature, c.Seed, noNUL(c.ModelReported), c.ToolsSHA256).Scan(&c.ID)
+INSERT INTO llm_calls (chat_id, slot_id, source_ip, model, response_id, status, input, output, cache_read, cache_write, cost, peak, tool_calls, started_at, duration_ms, finish_reason, complete, request_bytes, temperature, seed, model_reported, tools_sha256, list_cost)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,NULLIF($22,''),NULLIF($23::double precision,0)) RETURNING id`,
+		chat, c.SlotID, c.SourceIP, c.Model, c.ResponseID, c.Status, c.Input, c.Output, c.CacheRead, c.CacheWrite, c.Cost, c.Peak, []byte(c.ToolCalls), c.StartedAt, c.DurationMs, noNUL(c.FinishReason), c.Complete, c.RequestBytes, c.Temperature, c.Seed, noNUL(c.ModelReported), c.ToolsSHA256, c.ListCost).Scan(&c.ID)
 	return c, err
 }
 
 // ChatLLMUsage sums what a chat's model calls cost and how many tokens they used (X3.2, X3.3): llm_calls is the
-// authoritative source, subagent runs included. Tokens are input + output without the cache reads.
+// authoritative source, subagent runs included. Tokens are input + output without the cache reads. The cost is the
+// cost at the fixed list price (list_cost, the peak tariff whatever the hour; rows without it count their billed
+// cost), so that the limit does not depend on the time of day (BM17 E3, K1).
 func (s *Store) ChatLLMUsage(ctx context.Context, chatID string) (cost float64, tokens int64, err error) {
-	err = s.pool.QueryRow(ctx, `SELECT COALESCE(SUM(cost),0), COALESCE(SUM(input + output),0) FROM llm_calls WHERE chat_id=$1`, chatID).Scan(&cost, &tokens)
+	err = s.pool.QueryRow(ctx, `SELECT COALESCE(SUM(COALESCE(list_cost, cost)),0), COALESCE(SUM(input + output),0) FROM llm_calls WHERE chat_id=$1`, chatID).Scan(&cost, &tokens)
 	return cost, tokens, err
 }
 
@@ -1424,7 +1431,7 @@ func (s *Store) Toolset(ctx context.Context, sha string) (json.RawMessage, error
 
 func (s *Store) ListLLMCalls(ctx context.Context, chatID string) ([]LLMCall, error) {
 	rows, err := s.pool.Query(ctx, `
-SELECT x.id, x.slot_id, x.source_ip, x.model, x.response_id, x.status, x.input, x.output, x.cache_read, x.cache_write, x.cost, x.peak, x.tool_calls, x.started_at, x.duration_ms,
+SELECT x.id, x.slot_id, x.source_ip, x.model, x.response_id, x.status, x.input, x.output, x.cache_read, x.cache_write, x.cost, COALESCE(x.list_cost, x.cost), x.peak, x.tool_calls, x.started_at, x.duration_ms,
   (x.response_id <> '' AND EXISTS (SELECT 1 FROM chat_messages m WHERE m.chat_id = x.chat_id AND m.role = 'assistant' AND m.message->>'responseId' = x.response_id)),
   x.finish_reason, x.complete, x.request_bytes, x.temperature, x.seed, x.model_reported, COALESCE(x.tools_sha256,'')
 FROM llm_calls x WHERE x.chat_id = $1 ORDER BY x.id`, chatID)
@@ -1437,7 +1444,7 @@ FROM llm_calls x WHERE x.chat_id = $1 ORDER BY x.id`, chatID)
 		var c LLMCall
 		var tc []byte
 		if err := rows.Scan(&c.ID, &c.SlotID, &c.SourceIP, &c.Model, &c.ResponseID, &c.Status, &c.Input, &c.Output,
-			&c.CacheRead, &c.CacheWrite, &c.Cost, &c.Peak, &tc, &c.StartedAt, &c.DurationMs, &c.Main, &c.FinishReason,
+			&c.CacheRead, &c.CacheWrite, &c.Cost, &c.ListCost, &c.Peak, &tc, &c.StartedAt, &c.DurationMs, &c.Main, &c.FinishReason,
 			&c.Complete, &c.RequestBytes, &c.Temperature, &c.Seed, &c.ModelReported, &c.ToolsSHA256); err != nil {
 			return nil, err
 		}

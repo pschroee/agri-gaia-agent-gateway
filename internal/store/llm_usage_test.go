@@ -42,6 +42,35 @@ func TestChatLLMUsageSums(t *testing.T) {
 	}
 }
 
+// BM17 E3 K1: the usage sums the list cost (peak price, whatever the hour); a call without it counts its billed
+// cost, and the billed cost stays readable next to it.
+func TestChatLLMUsageSumsListCost(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	c, err := s.CreateChat(ctx, NewChat{Title: "Run", Model: "deepseek/deepseek-flash", Variant: "cli"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	for _, call := range []LLMCall{
+		{ChatID: c.ID, SlotID: "s", SourceIP: "1", Model: "p/m", Status: 200, Input: 1, Output: 1, Cost: 0.05, ListCost: 0.10, StartedAt: now},
+		{ChatID: c.ID, SlotID: "s", SourceIP: "1", Model: "p/m", Status: 200, Input: 1, Output: 1, Cost: 0.10, ListCost: 0.10, StartedAt: now},
+		{ChatID: c.ID, SlotID: "s", SourceIP: "1", Model: "p/m", Status: 200, Input: 1, Output: 1, Cost: 0.02, StartedAt: now},
+	} {
+		if _, err := s.AddLLMCall(ctx, call); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cost, _, err := s.ChatLLMUsage(ctx, c.ID)
+	if err != nil || cost < 0.2199 || cost > 0.2201 {
+		t.Fatalf("list cost sum: %v %v", cost, err)
+	}
+	calls, _ := s.ListLLMCalls(ctx, c.ID)
+	if len(calls) != 3 || calls[0].Cost != 0.05 || calls[0].ListCost != 0.10 || calls[2].ListCost != 0.02 {
+		t.Fatalf("billed and list cost: %+v", calls)
+	}
+}
+
 // X3.6/X3.7: the values the proxy sent and the model the provider reported are stored and read back; a call
 // without them reads back as NULL / empty.
 func TestLLMCallSamplingAndReportedModel(t *testing.T) {

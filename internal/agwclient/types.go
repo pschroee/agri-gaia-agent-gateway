@@ -136,6 +136,7 @@ type Chat struct {
 	SubagentsRunning int             `json:"subagents_running"` // subagents running right now
 	LLMCalls         int             `json:"llm_calls"`         // model calls recorded at the LLM proxy
 	CostOther        float64         `json:"cost_other"`        // cost outside the main session's responses
+	ListCost         float64         `json:"list_cost"`         // model calls at the fixed list price (what the experiment cost limit counts)
 	Context          *ContextUsage   `json:"context,omitempty"`
 	Running          bool            `json:"running"`
 	SlotID           string          `json:"slot_id,omitempty"`

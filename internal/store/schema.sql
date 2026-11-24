@@ -416,6 +416,8 @@ ALTER TABLE chat_queue ADD COLUMN IF NOT EXISTS context jsonb;
 -- Size in bytes of the request body of a model call that the proxy forwarded unchanged (issue #69). Sizes only, never
 -- contents. NULL: not measured (older rows).
 ALTER TABLE llm_calls ADD COLUMN IF NOT EXISTS request_bytes bigint;
+-- Cost at the fixed list price (peak tariff, no time of day); NULL for older rows (BM17 E3, K1). Experiment limits sum it.
+ALTER TABLE llm_calls ADD COLUMN IF NOT EXISTS list_cost double precision;
 
 -- Effect class of a platform call (issue #63): read, write, compute or irreversible; NULL for older
 -- entries and for calls that are no platform calls. Approvals carry the class of the call they ask about.
