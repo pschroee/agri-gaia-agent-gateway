@@ -138,6 +138,24 @@ func (f *fakePlatform) dataset(id int64, name string, images []testImage) {
 	f.datasets[id] = datasetFixture{name: name, files: files, zip: datasetZip(id, images)}
 }
 
+// datasetWithoutAnnotations registers a dataset whose archive holds images only, like the garage recordings
+// uploaded without an annotation file: the download works, but ReadDataset finds no annotation.
+func (f *fakePlatform) datasetWithoutAnnotations(id int64, name string, images []testImage) {
+	files := map[string]string{}
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	for _, im := range images {
+		files[im.Name] = im.Data
+		w, err := zw.Create(fmt.Sprintf("datasets/%d/%s", id, im.Name))
+		if err != nil {
+			panic(err)
+		}
+		_, _ = io.WriteString(w, im.Data)
+	}
+	_ = zw.Close()
+	f.datasets[id] = datasetFixture{name: name, files: files, zip: buf.Bytes()}
+}
+
 // model registers a model: its name, its format and the bytes of GET /models/<id>/download.
 func (f *fakePlatform) model(id int64, name, format string, file []byte) {
 	f.models[id] = modelFixture{name: name, format: format, file: file}

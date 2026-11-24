@@ -335,6 +335,105 @@ func TestSeenAllNotebookDatasets(t *testing.T) {
 	}
 }
 
+// A dataset the notebook server received that carries no annotation file (images only, like the garage
+// recordings) still counts as seen, but it must not stop a check whose eval_dataset_id is annotated (E8, N3).
+// The image of that dataset that lies in the evaluation dataset as a copy is no held-out image.
+func TestSeenDatasetWithoutAnnotationsDoesNotStopTheCheck(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+	chat := testChat(t, st, "unannotated seen dataset")
+	f := newFakePlatform(t)
+	plain := []testImage{
+		{Name: "A01_0001.jpg", Data: "garage-frame-1"}, {Name: "A01_0002.jpg", Data: "garage-frame-2"},
+		{Name: "A02_0001.jpg", Data: "garage-frame-3"},
+	}
+	source := classImages(30)
+	for i := range source {
+		source[i].Name = "fresh-" + source[i].Name
+		source[i].Data = "fresh-" + source[i].Data
+	}
+	// A copy of a garage frame, tagged in the evaluation dataset: seen, so it is never measured.
+	source = append(source, testImage{Name: "copy-of-frame.png", Data: plain[0].Data, Tags: []string{"0"}})
+	f.datasetWithoutAnnotations(556, "garage-frames", plain)
+	f.dataset(8, "mnist-check-120", source)
+	if err := st.CreateNotebookRun(ctx, notebookRun(chat.ID, "r20260101120000-aaaa", []int64{556})); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.RecordNotebookFetch(ctx, store.NotebookFetch{ChatID: chat.ID, RunID: "r20260101120000-aaaa",
+		Path: "model.onnx", SHA256: ownModelSHA, Size: int64(len(ownModelBytes))}); err != nil {
+		t.Fatal(err)
+	}
+	runtime := &answerRuntime{t: t, reply: func([]byte) string { return noPredictions }}
+	svc := New(NewRunner(runtime, "img"), st, 12)
+	svc.Plat = f.client()
+	rep := startOwnCheck(t, svc, st, chat.ID,
+		`{"path":"/workspace/notebook/r20260101120000-aaaa/model.onnx","eval_dataset_id":8}`)
+	if rep.Figures.EvalDataset.ID != 8 {
+		t.Errorf("the evaluation dataset: %+v", rep.Figures.EvalDataset)
+	}
+	var ids []int64
+	for _, d := range rep.Figures.SeenDatasets {
+		ids = append(ids, d.ID)
+	}
+	if len(ids) != 1 || ids[0] != 556 {
+		t.Errorf("the seen datasets: %v (the dataset without annotations still counts)", ids)
+	}
+	if rep.Measured == 0 {
+		t.Fatalf("nothing was measured: %v", rep.Reasons)
+	}
+	frame := "images/" + Sha256Hex([]byte(plain[0].Data)) + ".png"
+	for _, n := range tarImageNames(t, runtime.blob) {
+		if n == frame {
+			t.Errorf("the seen garage frame was measured: %v", n)
+		}
+	}
+}
+
+// A dataset without annotations that the check has to read as its evaluation dataset fails with a message
+// that names it, so the agent knows which dataset is meant (E8, N3).
+func TestUnannotatedEvalDatasetErrorNamesTheDataset(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+	chat := testChat(t, st, "unannotated eval dataset")
+	f := newFakePlatform(t)
+	f.datasetWithoutAnnotations(556, "garage-frames", []testImage{{Name: "A01_0001.jpg", Data: "garage-frame-1"}})
+	if err := st.CreateNotebookRun(ctx, notebookRun(chat.ID, "r20260101120000-aaaa", []int64{556})); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.RecordNotebookFetch(ctx, store.NotebookFetch{ChatID: chat.ID, RunID: "r20260101120000-aaaa",
+		Path: "model.onnx", SHA256: ownModelSHA, Size: int64(len(ownModelBytes))}); err != nil {
+		t.Fatal(err)
+	}
+	runtime := &answerRuntime{t: t, reply: func([]byte) string { return noPredictions }}
+	svc := New(NewRunner(runtime, "img"), st, 12)
+	svc.Plat = f.client()
+	res, err := svc.Do(ctx, chat.ID, platform.Request{Method: "POST", Path: platform.AssessPrefix + "/checks",
+		Body:    []byte(`{"path":"/workspace/notebook/r20260101120000-aaaa/model.onnx","eval_dataset_id":556}`),
+		Uploads: []platform.Upload{{Field: "modelfile", Name: "model.onnx", SHA256: ownModelSHA, Data: ownModelBytes}}})
+	if err != nil || res.Status != "ok" {
+		t.Fatalf("the check did not start: %+v %v", res, err)
+	}
+	var started struct {
+		CheckID string `json:"check_id"`
+	}
+	if err := json.Unmarshal([]byte(res.Body), &started); err != nil {
+		t.Fatal(err)
+	}
+	var row store.Assessment
+	waitFor(t, "the failed own-model check", func() bool {
+		r, err := st.Assessment(ctx, chat.ID, started.CheckID)
+		if err != nil {
+			return false
+		}
+		row = r
+		return r.State == store.AssessFinished || r.State == store.AssessFailed
+	})
+	if row.State != store.AssessFailed || !strings.Contains(row.Error, "dataset 556") ||
+		!strings.Contains(row.Error, "no annotations/annotations.xml") {
+		t.Errorf("state %s, error %q: want a failure that names dataset 556", row.State, row.Error)
+	}
+}
+
 // The class order the agent declares is only compared with the order the gateway derives (R2.4): the same
 // order leaves the verdict alone, another one is a reason of its own, and without a declaration nothing is
 // compared.

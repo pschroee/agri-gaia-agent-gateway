@@ -966,7 +966,9 @@ func (s *Service) measure(in *JudgeInput, out Output, sample, measured []checkIm
 	in.Accuracy, in.MacroF1 = figures.Accuracy, figures.MacroF1
 	counts := map[string]int{}
 	for _, it := range seen {
-		counts[it.Class]++
+		if it.Class != "" {
+			counts[it.Class]++
+		}
 	}
 	in.Baseline = Majority(counts, truth)
 	passed := 0
@@ -1069,6 +1071,20 @@ func (s *Service) seenImages(ctx context.Context, chatID string, ids []int64) (m
 			continue
 		}
 		files, err := s.datasetFiles(ctx, chatID, id)
+		if errors.Is(err, ErrNoAnnotations) {
+			// A dataset without tags (the garage recordings): its images were seen all the same, so they
+			// never count as held out, but they carry no class (Class stays empty: no class order, no
+			// baseline) and the dataset needs no annotation to count (E8, N3).
+			images += len(files.Images)
+			refs = append(refs, s.seenRef(ctx, chatID, id))
+			for _, data := range files.Images {
+				sha := Sha256Hex(data)
+				if _, ok := seen[sha]; !ok {
+					seen[sha] = Item{SHA: sha}
+				}
+			}
+			continue
+		}
 		if err != nil {
 			return nil, nil, nil, 0, false, err
 		}
@@ -1082,11 +1098,7 @@ func (s *Service) seenImages(ctx context.Context, chatID string, ids []int64) (m
 		} else {
 			images += len(items)
 		}
-		ref := DatasetRef{ID: id}
-		if info, err := s.datasetInfo(ctx, chatID, id); err == nil {
-			ref.Name = info.Name
-		}
-		refs = append(refs, ref)
+		refs = append(refs, s.seenRef(ctx, chatID, id))
 		for _, it := range items {
 			data, name := imageOfSHA(files, it.SHA)
 			if name == "" {
@@ -1100,6 +1112,15 @@ func (s *Service) seenImages(ctx context.Context, chatID string, ids []int64) (m
 		}
 	}
 	return seen, seenImages, refs, images, notClass, nil
+}
+
+// seenRef names a dataset the model could have seen for the report.
+func (s *Service) seenRef(ctx context.Context, chatID string, id int64) DatasetRef {
+	ref := DatasetRef{ID: id}
+	if info, err := s.datasetInfo(ctx, chatID, id); err == nil {
+		ref.Name = info.Name
+	}
+	return ref
 }
 
 // imageOfSHA finds the image bytes of a SHA-256 in an archive (they were hashed right before).
@@ -1171,7 +1192,9 @@ func PartitionImages(items []checkImage) (validation, holdout []checkImage) {
 func classesOf(seen map[string]Item, items []checkImage) []string {
 	set := map[string]bool{}
 	for _, it := range seen {
-		set[it.Class] = true
+		if it.Class != "" { // an image of a dataset without tags is seen, but has no class (E8)
+			set[it.Class] = true
+		}
 	}
 	for _, it := range items {
 		set[it.Class] = true
@@ -1192,7 +1215,7 @@ func missingClass(seen map[string]Item, truth []string) string {
 	}
 	names := map[string]bool{}
 	for _, it := range seen {
-		if !have[it.Class] {
+		if it.Class != "" && !have[it.Class] {
 			names[it.Class] = true
 		}
 	}
