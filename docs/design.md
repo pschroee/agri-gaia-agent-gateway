@@ -800,7 +800,12 @@ subagent.
    supervisor, starts the operation `bg`: `bash -c` as uid 10001 in its own process group, output streamed and
    additionally written to `/tmp/agw-bg/bg-<n>.log` (at most 256 MiB, like the file for long commands, H1). As soon as the
    command is running, `agw-exec` reports the process group; then the endpoint responds. The start is recorded in
-   `tool_executions` (tool `bash`, operation `bg_start`).
+   `tool_executions` (tool `bash`, operation `bg_start`). Like `bash` and `workflow`, the operation `bg` is exempt
+   from the fixed 10-minute limit of the child process (`opLimit`, `cmd/agw-exec/serve.go`), which applies to file
+   operations and searches only; a task ends on its own end, its `timeout`, `bg_stop` or the end of the chat. Until
+   2026-11-25 the exemption missed `bg`, and every task that reached 10 minutes ended as `lost` (BM17). An operation that
+   ends at this limit reports its own code `oplimit` (`execproto.CodeOpLimit`) instead of `aborted`; a background
+   task would then end as `timeout`, never as `lost`. File operations keep the text "Operation aborted".
 2. The register reads the output along to the end (checksum, excerpt, rolling tail of 100 KiB) and reports
    the state at most every 2 s (SSE `background`, `output`).
 3. **End by push, not by polling.** The end arrives as the last frame over the existing connection of the

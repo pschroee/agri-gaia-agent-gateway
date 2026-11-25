@@ -37,6 +37,11 @@ const (
 	OpCancel    = "cancel"     // abort the running operation with the same ID
 )
 
+// CodeOpLimit is the code of an operation that the child process ended at its own fixed upper
+// limit (file operations and searches, 10 min). It is not "aborted": nobody aborted it and its
+// sandbox is still there, so a background task must not count as lost (BM17).
+const CodeOpLimit = "oplimit"
+
 // Ops are all operations except cancel.
 var Ops = []string{OpRead, OpWrite, OpMkdir, OpStat, OpReaddir, OpAccess, OpImageType, OpBash, OpBg, OpGrep, OpGlob, OpReadLines, OpWorkflow}
 

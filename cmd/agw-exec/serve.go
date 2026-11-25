@@ -511,6 +511,30 @@ func killUID(uid int) int {
 	return n
 }
 
+// opLimit is the fixed upper limit of an operation in the child process. It applies to file
+// operations and searches only: bash and bg end on their own timeout or an abort, a workflow on
+// its own end. A variable so that tests can shorten it.
+var opLimit = 10 * time.Minute
+
+// errOpLimit is the cause of the cancellation when the child process ends an operation at opLimit.
+var errOpLimit = errors.New("fixed upper limit of the operation reached")
+
+// endCode is the code of an operation whose context has ended: execproto.CodeOpLimit at the
+// child's own limit, otherwise "aborted" (cancel by the orchestrator, end of stdin).
+func endCode(ctx context.Context) string {
+	if errors.Is(context.Cause(ctx), errOpLimit) {
+		return execproto.CodeOpLimit
+	}
+	return "aborted"
+}
+
+// opLimited reports whether the operation ends at opLimit. A background task (OpBg) is not
+// limited: it runs until the command ends, its timeout expires or the orchestrator aborts it
+// (BM17, bg-3 in s3-weak-input ended after exactly 10 min as "lost").
+func opLimited(op string) bool {
+	return op != execproto.OpBash && op != execproto.OpBg && op != execproto.OpWorkflow
+}
+
 // opMain is the child process: one request from the first line of stdin;
 // the end of stdin aborts the operation.
 func opMain() int {
@@ -524,7 +548,12 @@ func opMain() int {
 	if err := notDumpable(); err != nil {
 		return 2
 	}
-	r := bufio.NewReaderSize(os.Stdin, 64<<10)
+	return serveOp(os.Stdin, os.Stdout)
+}
+
+// serveOp runs one request read from in and writes its frames to out.
+func serveOp(in io.Reader, out io.Writer) int {
+	r := bufio.NewReaderSize(in, 64<<10)
 	line, err := readLine(r, execproto.MaxFrameBytes)
 	if err != nil {
 		return 2
@@ -533,8 +562,8 @@ func opMain() int {
 	if err := json.Unmarshal(line, &req); err != nil {
 		return 2
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx, cancel := context.WithCancelCause(context.Background())
+	defer cancel(nil)
 	// Further lines on stdin are input (workflow only); the end of stdin aborts.
 	// An empty "input" frame ends the input without aborting.
 	input := make(chan []byte, 64)
@@ -548,7 +577,7 @@ func opMain() int {
 		for {
 			line, err := readLine(r, execproto.MaxFrameBytes)
 			if err != nil {
-				cancel()
+				cancel(nil)
 				return
 			}
 			if req.Op != execproto.OpWorkflow || closed {
@@ -570,16 +599,27 @@ func opMain() int {
 			}
 		}
 	}()
-	if req.Op != execproto.OpBash && req.Op != execproto.OpWorkflow {
+	finished := make(chan struct{})
+	defer close(finished)
+	if opLimited(req.Op) {
 		// File operations and searches have a fixed upper limit.
 		go func() {
-			time.Sleep(10 * time.Minute)
-			cancel()
-			time.Sleep(5 * time.Second)
-			os.Exit(3)
+			limit := time.NewTimer(opLimit)
+			defer limit.Stop()
+			select {
+			case <-finished:
+				return
+			case <-limit.C:
+			}
+			cancel(errOpLimit)
+			select {
+			case <-finished:
+			case <-time.After(5 * time.Second):
+				os.Exit(3)
+			}
 		}()
 	}
-	w := bufio.NewWriterSize(os.Stdout, 64<<10)
+	w := bufio.NewWriterSize(out, 64<<10)
 	var mu sync.Mutex
 	emit := func(f execproto.Frame) {
 		b, _ := json.Marshal(f)
