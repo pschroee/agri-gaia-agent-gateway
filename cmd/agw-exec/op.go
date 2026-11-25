@@ -530,7 +530,7 @@ func runBash(ctx context.Context, req execproto.Request, emit func(execproto.Fra
 	select {
 	case werr = <-waitDone:
 	case <-ctx.Done():
-		reason = "aborted"
+		reason = endCode(ctx)
 	case <-timer:
 		reason = "timeout"
 	}
@@ -550,11 +550,15 @@ func runBash(ctx context.Context, req execproto.Request, emit func(execproto.Fra
 	defer outMu.Unlock()
 	full, spillErr := sp.finish()
 	if reason != "" {
-		if reason == "aborted" {
+		if reason != "timeout" {
 			// On abort also kill stragglers of the group.
 			_ = syscall.Kill(-pgid, syscall.SIGKILL)
 		}
-		emit(execproto.Frame{Done: true, Error: reason, Code: reason, FullOutputPath: full, SpillError: spillErr})
+		msg := reason
+		if reason == execproto.CodeOpLimit {
+			msg = fmt.Sprintf("fixed limit of %s of the execution helper reached", opLimit)
+		}
+		emit(execproto.Frame{Done: true, Error: msg, Code: reason, FullOutputPath: full, SpillError: spillErr})
 		return
 	}
 	code := 0
@@ -733,7 +737,7 @@ func grep(ctx context.Context, searchPath string, a execproto.GrepArgs) (execpro
 	}
 	werr := cmd.Wait()
 	if ctx.Err() != nil {
-		return res, &opError{"aborted", "Operation aborted"}
+		return res, &opError{endCode(ctx), "Operation aborted"}
 	}
 	if !res.LimitReached && werr != nil {
 		var ee *exec.ExitError
@@ -815,7 +819,7 @@ func glob(ctx context.Context, searchPath string, a execproto.GlobArgs) (execpro
 	cmd.Stderr = &limitedBuffer{b: &stderr, max: 64 << 10}
 	err := cmd.Run()
 	if ctx.Err() != nil {
-		return execproto.GlobResult{}, &opError{"aborted", "Operation aborted"}
+		return execproto.GlobResult{}, &opError{endCode(ctx), "Operation aborted"}
 	}
 	res := execproto.GlobResult{Paths: []string{}}
 	for _, l := range strings.Split(stdout.String(), "\n") {
@@ -905,7 +909,7 @@ func readLines(ctx context.Context, p string, a execproto.LinesArgs) (execproto.
 	}
 	for n := 0; ; n++ {
 		if n%1024 == 0 && ctx.Err() != nil {
-			return res, &opError{"aborted", "Operation aborted"}
+			return res, &opError{endCode(ctx), "Operation aborted"}
 		}
 		chunk, err := br.ReadSlice('\n')
 		if len(chunk) > 0 {

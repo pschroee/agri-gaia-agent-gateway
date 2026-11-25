@@ -516,6 +516,18 @@ func killUID(uid int) int {
 // its own end. A variable so that tests can shorten it.
 var opLimit = 10 * time.Minute
 
+// errOpLimit is the cause of the cancellation when the child process ends an operation at opLimit.
+var errOpLimit = errors.New("fixed upper limit of the operation reached")
+
+// endCode is the code of an operation whose context has ended: execproto.CodeOpLimit at the
+// child's own limit, otherwise "aborted" (cancel by the orchestrator, end of stdin).
+func endCode(ctx context.Context) string {
+	if errors.Is(context.Cause(ctx), errOpLimit) {
+		return execproto.CodeOpLimit
+	}
+	return "aborted"
+}
+
 // opLimited reports whether the operation ends at opLimit. A background task (OpBg) is not
 // limited: it runs until the command ends, its timeout expires or the orchestrator aborts it
 // (BM17, bg-3 in s3-weak-input ended after exactly 10 min as "lost").
@@ -550,8 +562,8 @@ func serveOp(in io.Reader, out io.Writer) int {
 	if err := json.Unmarshal(line, &req); err != nil {
 		return 2
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx, cancel := context.WithCancelCause(context.Background())
+	defer cancel(nil)
 	// Further lines on stdin are input (workflow only); the end of stdin aborts.
 	// An empty "input" frame ends the input without aborting.
 	input := make(chan []byte, 64)
@@ -565,7 +577,7 @@ func serveOp(in io.Reader, out io.Writer) int {
 		for {
 			line, err := readLine(r, execproto.MaxFrameBytes)
 			if err != nil {
-				cancel()
+				cancel(nil)
 				return
 			}
 			if req.Op != execproto.OpWorkflow || closed {
@@ -599,7 +611,7 @@ func serveOp(in io.Reader, out io.Writer) int {
 				return
 			case <-limit.C:
 			}
-			cancel()
+			cancel(errOpLimit)
 			select {
 			case <-finished:
 			case <-time.After(5 * time.Second):

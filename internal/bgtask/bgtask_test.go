@@ -284,6 +284,29 @@ func TestFinishStates(t *testing.T) {
 	}
 }
 
+// BM17, e11 s3-weak-input, bg-3: "background task started" at 06:52:15.880Z, "background task
+// ended … state=lost" at 07:02:16.060Z, i.e. at the fixed 10-minute limit of the execution helper
+// plus the time to end it. A frame with the helper's own code at that limit is a timeout, not a lost
+// sandbox.
+func TestFinishAtHelperLimitIsNotLost(t *testing.T) {
+	started, _ := time.Parse(time.RFC3339Nano, "2026-11-25T06:52:15.880Z")
+	ended, _ := time.Parse(time.RFC3339Nano, "2026-11-25T07:02:16.060Z")
+	if d := ended.Sub(started); d < 10*time.Minute || d > 10*time.Minute+time.Second {
+		t.Fatalf("duration %s is not the 10-minute limit", d)
+	}
+	f := execproto.Frame{Done: true, Code: execproto.CodeOpLimit, Error: "fixed limit of 10m0s of the execution helper reached"}
+	tk := &task{t: store.BackgroundTask{Seq: 3, StartedAt: started}, done: make(chan struct{}), sum: newHash()}
+	got := tk.finish(f, nil, true)
+	if got.State != store.BgTimeout || got.Error != f.Error {
+		t.Fatalf("%s (%s) instead of timeout", got.State, got.Error)
+	}
+	// The same end as before the fix ("aborted" from the helper's own cancel) was read as lost.
+	old := &task{t: store.BackgroundTask{Seq: 3, StartedAt: started}, done: make(chan struct{}), sum: newHash()}
+	if got := old.finish(execproto.Frame{Done: true, Code: "aborted", Error: "aborted"}, nil, true); got.State != store.BgLost || got.Error != "execution sandbox gone" {
+		t.Fatalf("aborted: %s (%s)", got.State, got.Error)
+	}
+}
+
 func TestExcerptAndTail(t *testing.T) {
 	tk := &task{t: store.BackgroundTask{Seq: 1}, done: make(chan struct{}), sum: newHash()}
 	w := tk.write(&fakeNotifier{})

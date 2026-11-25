@@ -415,6 +415,10 @@ func (t *task) finish(f execproto.Frame, err error, started bool) store.Backgrou
 		t.t.State, t.t.StoppedBy = store.BgStopped, t.stoppedBy
 	case f.Code == "timeout":
 		t.t.State, t.t.Error = store.BgTimeout, "timeout"
+	case f.Code == execproto.CodeOpLimit:
+		// A fixed limit of the execution helper, not a lost sandbox (BM17: bg-3 was reported as
+		// "execution sandbox gone" after exactly 10 min, while its sandbox kept running).
+		t.t.State, t.t.Error = store.BgTimeout, f.Error
 	case f.Error == "" && err == nil && f.Exit != nil:
 		t.t.State, t.t.ExitCode = store.BgExited, f.Exit
 	case errors.Is(err, execbox.ErrLost) || errors.Is(err, execbox.ErrClosed) || errors.Is(err, context.Canceled) || f.Code == "aborted":

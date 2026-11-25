@@ -5,6 +5,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"io"
 	"path/filepath"
@@ -95,12 +96,33 @@ func TestOpLimitEndsFileOperation(t *testing.T) {
 	if d := time.Since(start); d > 10*time.Second {
 		t.Fatalf("ended only after %s", d)
 	}
-	if last := frames[len(frames)-1]; last.Code != "aborted" {
+	// Its own code, not "aborted"; the text the agent sees stays the same.
+	if last := frames[len(frames)-1]; last.Code != execproto.CodeOpLimit || last.Error != "Operation aborted" {
 		t.Fatalf("end %+v", last)
 	}
 	for _, op := range []string{execproto.OpRead, execproto.OpWrite, execproto.OpGrep, execproto.OpGlob, execproto.OpReadLines} {
 		if !opLimited(op) {
 			t.Errorf("%s is not limited", op)
 		}
+	}
+}
+
+// Should a command ever end at the limit, it reports CodeOpLimit, not "aborted"; an abort by the
+// orchestrator stays "aborted".
+func TestBashEndCodeAtLimit(t *testing.T) {
+	bashAvailable(t)
+	dir := t.TempDir()
+	t.Setenv("AGW_EXEC_BG_DIR", dir)
+	for _, c := range []struct {
+		cause error
+		want  string
+	}{{errOpLimit, execproto.CodeOpLimit}, {nil, "aborted"}} {
+		ctx, cancel := context.WithCancelCause(context.Background())
+		time.AfterFunc(200*time.Millisecond, func() { cancel(c.cause) })
+		_, last := do(t, ctx, execproto.Request{Op: execproto.OpBg, Command: "sleep 30", Cwd: dir, Spill: execproto.BgLogPath(1)})
+		if last.Code != c.want || last.Exit != nil {
+			t.Errorf("cause %v: end %+v", c.cause, last)
+		}
+		cancel(nil)
 	}
 }
