@@ -431,6 +431,8 @@ type ExpEnvironment struct {
 	GatewayCommit     string               `json:"gateway_commit"`
 	GatewayDescribe   string               `json:"gateway_describe"`
 	CatalogSHA256     string               `json:"catalog_sha256"`
+	CatalogFileSHA256 string               `json:"catalog_file_sha256,omitempty"`
+	Catalog           json.RawMessage      `json:"catalog,omitempty"`
 	SkillsSHA256      string               `json:"skills_sha256"`
 	InstructionSHA256 string               `json:"instruction_sha256"`
 	APIIndexSHA256    string               `json:"api_index_sha256"`

@@ -453,7 +453,7 @@ func (r *expRunner) checkPlanLimits(ctx context.Context) error {
 func expEnvironment(e agwclient.ExpEnvironment) exp.Environment {
 	out := exp.Environment{
 		GatewayVersion: e.GatewayVersion, GatewayCommit: e.GatewayCommit, GatewayDescribe: e.GatewayDescribe,
-		CatalogSHA256: e.CatalogSHA256, SkillsSHA256: e.SkillsSHA256, InstructionSHA256: e.InstructionSHA256,
+		CatalogSHA256: e.CatalogSHA256, CatalogFileSHA256: e.CatalogFileSHA256, Catalog: e.Catalog, SkillsSHA256: e.SkillsSHA256, InstructionSHA256: e.InstructionSHA256,
 		APIIndexSHA256: e.APIIndexSHA256, InferenceRuntime: e.InferenceRuntime, ImagesPi: e.ImagesPi, ImagesExec: e.ImagesExec,
 	}
 	for _, s := range e.Slots {

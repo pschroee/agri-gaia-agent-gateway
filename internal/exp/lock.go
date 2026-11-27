@@ -34,15 +34,18 @@ type LockModel struct {
 
 // Lock is the content of plan.lock (X8.3). The checksums are lowercase hex SHA-256.
 type Lock struct {
-	CreatedAt         string            `json:"created_at"`
-	Plan              string            `json:"plan"`
-	Purpose           string            `json:"purpose"`
-	GatewayVersion    string            `json:"gateway_version"`
-	GatewayCommit     string            `json:"gateway_commit"`
-	GatewayDescribe   string            `json:"gateway_describe"`
-	ImagePi           string            `json:"image_pi"`
-	ImageExec         string            `json:"image_exec"`
-	CatalogSHA256     string            `json:"catalog_sha256"`
+	CreatedAt       string `json:"created_at"`
+	Plan            string `json:"plan"`
+	Purpose         string `json:"purpose"`
+	GatewayVersion  string `json:"gateway_version"`
+	GatewayCommit   string `json:"gateway_commit"`
+	GatewayDescribe string `json:"gateway_describe"`
+	ImagePi         string `json:"image_pi"`
+	ImageExec       string `json:"image_exec"`
+	CatalogSHA256   string `json:"catalog_sha256"` // the effective catalog (file, AGW_LLM_* provider, AGW_MODEL)
+	// CatalogFileSHA256 is the checksum of the models.json file alone; informative, the check compares
+	// catalog_sha256 only.
+	CatalogFileSHA256 string            `json:"catalog_file_sha256,omitempty"`
 	SkillsSHA256      string            `json:"skills_sha256"`
 	InstructionSHA256 string            `json:"instruction_sha256"`
 	APIIndexSHA256    string            `json:"api_index_sha256"`
@@ -61,10 +64,15 @@ type Lock struct {
 // Environment is the answer of GET /api/exp/environment (X8.5): the identity of the gateway build and
 // the images the warm experiment slots actually run.
 type Environment struct {
-	GatewayVersion    string            `json:"gateway_version"`
-	GatewayCommit     string            `json:"gateway_commit"`
-	GatewayDescribe   string            `json:"gateway_describe"`
+	GatewayVersion  string `json:"gateway_version"`
+	GatewayCommit   string `json:"gateway_commit"`
+	GatewayDescribe string `json:"gateway_describe"`
+	// CatalogSHA256 is the SHA-256 of the effective catalog (models.json, the provider built from AGW_LLM_*,
+	// AGW_MODEL and AGW_LLM_EXTRA_HOST, canonical JSON, no key values). CatalogFileSHA256 is the file alone,
+	// Catalog the effective catalog itself.
 	CatalogSHA256     string            `json:"catalog_sha256"`
+	CatalogFileSHA256 string            `json:"catalog_file_sha256,omitempty"`
+	Catalog           json.RawMessage   `json:"catalog,omitempty"`
 	SkillsSHA256      string            `json:"skills_sha256"`
 	InstructionSHA256 string            `json:"instruction_sha256"`
 	APIIndexSHA256    string            `json:"api_index_sha256"`

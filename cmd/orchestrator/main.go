@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/signal"
 	"slices"
+	"strings"
 	"syscall"
 	"time"
 
@@ -73,21 +74,18 @@ func run() error {
 			"max_cost_usd", env.ExpMaxCostUSD, "max_tokens", env.ExpMaxTokens,
 			"max_duration", env.ExpMaxDuration.String(), "temperature", env.ExpTemperature)
 	}
-	cat, err := config.LoadCatalog(env.CatalogPath)
+	// The catalogue the orchestrator runs with: models.json, the provider built from AGW_LLM_* and the default
+	// model from AGW_MODEL. Every mistyped setting stops the start here, with a message that names it.
+	cat, err := config.LoadEffectiveCatalog(env.CatalogPath, os.Getenv)
 	if err != nil {
 		return err
-	}
-	if env.DefaultModel != "" {
-		if _, _, ok := cat.Lookup(env.DefaultModel); !ok {
-			return errors.New("AGW_DEFAULT_MODEL not in the catalogue: " + env.DefaultModel)
-		}
-		cat.Default = env.DefaultModel
 	}
 	for _, p := range cat.Providers {
 		if p.APIKey() == "" {
 			slog.Warn("no key set for provider", "provider", p.ID, "variable", p.APIKeyEnv)
 		}
 	}
+	logModelConfig(cat)
 	if err := env.CheckAuth(); err != nil {
 		return err
 	}
@@ -469,7 +467,7 @@ func run() error {
 	}
 	// X8: read the identity of this build once; the experiment environment endpoint and the lock check
 	// report it.
-	environment := api.BuildEnvironment(env)
+	environment := api.BuildEnvironment(env, cat)
 	apiSrv := &http.Server{Addr: env.HTTPAddr, Handler: (&api.Server{M: m, Pool: p, Cat: cat, Env: env, Web: webFS, Blocked: blocked, Token: env.APIToken, AllowedHosts: env.AllowedHosts,
 		OIDC: auth, FrameAncestors: env.FrameAncestors, Platform: plat, ExpFixtures: expFixtures,
 		ExpAPIToken: env.ExpAPIToken, ExpAccount: expAccount, Environment: environment, APIIndex: apiIndex}).Handler(),
@@ -598,4 +596,19 @@ func newTitler(cat *config.Catalog, model string) chat.Titler {
 		return nil
 	}
 	return titler.New(cat, model)
+}
+
+// logModelConfig reports the model setting of this start: the default model, and for a provider built from
+// the environment its tags, thinking mode and limits. It says whether a key is present, never the key.
+func logModelConfig(cat *config.Catalog) {
+	prov, m, ok := cat.Lookup(cat.Default)
+	if !ok {
+		return
+	}
+	attrs := []any{"provider", prov.ID, "model", m.ID, "default", cat.Default, "max_tokens", m.MaxTokens, "context_window", m.ContextWindow,
+		"key_present", prov.APIKey() != ""}
+	if m.Thinking != "" {
+		attrs = append(attrs, "thinking", m.Thinking, "tags", strings.Join(m.RequestTags, ","), "extra_host", cat.ExtraHost != "")
+	}
+	slog.Info("model configuration", attrs...)
 }

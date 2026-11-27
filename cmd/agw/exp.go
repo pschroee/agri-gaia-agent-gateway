@@ -543,8 +543,8 @@ func (a *app) cmdExpEnvironment(args []string) error {
 	}
 	fmt.Fprintf(a.stdout, "gateway   version %s  describe %s  commit %s\n",
 		env.GatewayVersion, orNone(env.GatewayDescribe), env.GatewayCommit)
-	fmt.Fprintf(a.stdout, "catalog   sha256 %s\nskills    sha256 %s\ninstruction sha256 %s\napi index sha256 %s\n",
-		orNone(env.CatalogSHA256), orNone(env.SkillsSHA256), orNone(env.InstructionSHA256), orNone(env.APIIndexSHA256))
+	fmt.Fprintf(a.stdout, "catalog   sha256 %s (effective)  file %s\nskills    sha256 %s\ninstruction sha256 %s\napi index sha256 %s\n",
+		orNone(env.CatalogSHA256), orNone(env.CatalogFileSHA256), orNone(env.SkillsSHA256), orNone(env.InstructionSHA256), orNone(env.APIIndexSHA256))
 	fmt.Fprintf(a.stdout, "inference runtime: %s\n", orNone(env.InferenceRuntime))
 	fmt.Fprintf(a.stdout, "images_pi   %s\nimages_exec %s\n", strings.Join(env.ImagesPi, ", "), strings.Join(env.ImagesExec, ", "))
 	fmt.Fprintf(a.stdout, "%d experiment slot(s)\n", len(env.Slots))
