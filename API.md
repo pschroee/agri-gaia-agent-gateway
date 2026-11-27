@@ -261,7 +261,10 @@ type LLMCall = { id: number; slot_id: string; source_ip: string; model: string; 
   request_bytes?: number /* size of the request body the proxy forwarded to the provider, in bytes (issue #69); sizes only, no contents; missing on calls recorded before */;
   temperature?: number /* X3.6: the temperature the proxy sent for an experiment run; missing = not sent (product chat or the model does not take it) */;
   seed?: number /* X3.6: the seed sent for an experiment run; missing = not sent */;
-  model_reported?: string /* X3.7: the model the provider reported in the response, with its system fingerprint where it reports one; missing for older rows and responses without either */ };
+  model_reported?: string /* X3.7: the model the provider reported in the response, with its system fingerprint where it reports one; missing for older rows and responses without either */;
+  reasoning: number /* issue #279: thinking tokens (usage.completion_tokens_details.reasoning_tokens), part of output; 0 when not reported */;
+  upstream_headers?: Record<string, string> /* the response headers named in AGW_LLM_INSTANCE_HEADERS (lower case, values cut at 256 characters): which instance of a model farm served the call; missing when none */;
+  request_meta?: { thinking?: "on" | "off"; max_tokens?: number; tags?: string[] } /* the shape of the request as the proxy sent it; never message content */ };
 
 // Operation the orchestrator executed for a tool in the execution sandbox (E9).
 // Proven, because it executed and recorded it itself. One tool call can have several
@@ -385,7 +388,7 @@ type ActivityPage = { calls: ActivityCall[]; chats: Record<string, { id: string;
 | `GET /api/config` | `{internet_default: boolean, approval_timeout_s: number, artifact_max_mb: number, idle_timeout_s: number, auto_compact_default: boolean, compact_reserve_tokens: number, compact_keep_recent_tokens: number, max_subagents: number /* at the same time per chat, fixed */, max_subagents_default: number /* deprecated, = max_subagents */, max_subagents_limit: number /* deprecated, = max_subagents */, workspace_max_mb: number /* 0 = workspace is not backed up */, bg_wakes_per_hour: number /* 0 = never wake */, bg_keepalive_s: number, auto_turns_max: number /* consecutive turns without the user, 0 = none */, max_failed_tool_calls: number /* failed tool calls in a row, all tools, 0 = off (#217) */, max_failed_same_tool: number /* the same for one tool, 0 = off (#217) */, inference_runtime: string /* default runtime of inference images (AGW_INFERENCE_RUNTIME, #230) */, platform_gpu: string /* expected | none | "" = unknown (AGW_PLATFORM_GPU, #248) */, search_max_hours: number /* the longest a training search runs (#168) */, executed_tools: string[] /* tools whose execution is proven at the socket, sorted */, toolsets: Variant /* bindings of every new chat (AGW_TOOLSETS) */, gateway_version: string, gateway_commit: string, gateway_describe: string /* identity of this build, X8.1 */}` | defaults for the UI |
 | `GET /api/pool` | `Pool` | pool status (the UI polls every second) |
 | `GET /api/platform` | `{configured: boolean, api_url?, login?: "user" \| "account", account?: string /* login account only */, client_id?, token_exchange?: boolean, probe?: {reachable, http_status?, latency_ms, error?, checked_at}, last_exchange?: {chat_id, at, ok, error?}}` | binding to the platform, read-only. `probe`: unauthenticated `GET` on the API base, any HTTP answer counts as reachable, cached 10 s. `last_exchange`: newest token exchange among the user's own chats, also a failed one (e.g. the user's login expired); in memory only, empty after a restart until the next platform call. `{configured: false}` without `AGW_PLATFORM_API_URL` |
-| `GET /api/exp/usage?plan=<plan>` | `{tokens_total, duration_total, runs}` | what the plan has consumed so far (#161): `input + output` of its chats from `llm_calls` without cache reads, the wall-clock time of its attempts (`duration_total`, Go duration such as `1h2m3s`) and their number. The runner checks the plan's `tokens_total` and `duration_total` before every run; `agw exp export` puts the sums into `manifest.json` |
+| `GET /api/exp/usage?plan=<plan>` | `{tokens_total, output_tokens_total, duration_total, runs}` | what the plan has consumed so far (#161): `input + output` of its chats from `llm_calls` without cache reads, the wall-clock time of its attempts (`duration_total`, Go duration such as `1h2m3s`) and their number. The runner checks the plan's `tokens_total` and `duration_total` before every run; `agw exp export` puts the sums into `manifest.json` |
 | `GET /api/exp/export?plan=<plan>&table=<table>` | JSONL stream (`application/x-ndjson`), one object per row | experiment export (X5.7): `runs`, `platform_calls`, `tool_executions`, `llm_calls`, `reconcile`, `fixtures`, `syscalls`, `turns`; **only** `AGW_EXP_API_TOKEN` as bearer is accepted, never the browser session or `AGW_API_TOKEN`. Columns in `X-Agw-Columns` (JSON array), gateway version in `X-Agw-Gateway-Version`. `agw exp export` writes JSONL, CSV and `manifest.json` (checksums, row counts) |
 | `GET /api/chats` | `Chat[]` | newest first, by `updated_at`; a rename (`/rename`) does not change `updated_at`, so the chat keeps its place |
 | `POST /api/chats` `{model?, variant?, title?, message?, internet?, auto_compact?, delegation?, language?, async?}` | `Chat` (201) | takes a slot from the pool; the chat gets the bindings of `AGW_TOOLSETS` (see *Bindings of new chats*): `variant` may be left out, a `variant` naming another combination is refused with 400; `max_subagents` in the body is ignored (the limit is fixed, see *Limit for subagents*); with `message` it is sent immediately. `language`: preferred language according to the browser (BCP 47, only letters, digits, hyphen, at most 35 characters, otherwise 400), see *User language*. 503 if no slot is free. `async: true` (without `message`): returns at once also when no slot is free, see *Creating a chat without waiting* |
@@ -1268,7 +1271,15 @@ An experiment chat (`experiment` in `Chat`, X0) is held to the limits of its run
   403 `model not allowed in this experiment run: <m>`. Titles from the model are off for these chats (the runner
   sets the title).
 - The sum of `llm_calls.cost` of the chat stays below `AGW_EXP_MAX_COST_USD` (default 0.02 USD, from the 17.10.2026 pilot).
+  For a run that carries limits from a plan, the plan's `max_cost_usd` applies instead and **0 means no cost limit**
+  (a model without a list price, such as a self-hosted one, has no cost to count; `agw exp validate` refuses
+  `max_cost_usd > 0` for such a model: `cost limit not applicable: <model> has no list price; set max_cost_usd: 0`).
 - `input + output` of the chat's calls (without `cache_read`) stays below `AGW_EXP_MAX_TOKENS` (default 50 000).
+  With `limits.token_basis: output` in the plan (sent as `experiment.limits.token_basis`; `uncached`, the default, or
+  `output`) the limit counts the **output tokens** instead, thinking included. A provider that reports cached
+  input only sometimes, or spreads requests over instances with separate caches, makes the uncached input measure
+  the infrastructure and not the model; output tokens every provider reports the same way. The plan-wide
+  `tokens_total` follows the same basis (`GET /api/exp/usage` reports both sums).
 - The run ends within `AGW_EXP_MAX_DURATION` (default 5m) of the chat's creation.
 
 Over the whole plan the runner itself enforces `limits.tokens_total` (default 12 000 000) and
@@ -1285,6 +1296,20 @@ For these runs the proxy sets `temperature` (`AGW_EXP_TEMPERATURE`) and the run'
 catalog entry says it takes them (`sampling` per model: `{"temperature": true, "seed": false}`). `llm_calls.temperature`
 and `.seed` hold the values actually sent (NULL = not sent), `llm_calls.model_reported` the model (with its system
 fingerprint where reported) from the provider's answer. The defaults are placeholders until the pilot runs fix them.
+
+A model of the environment provider (README, "Choosing the model through the environment") has its **tags** set by
+the proxy in every request, whatever the sandbox sent (a duplicated `tags` key is refused with 400). Three more
+columns of `llm_calls`, in `GET /api/chats/{id}/llm_calls` and in the export of the table: `reasoning` (the thinking
+tokens, `usage.completion_tokens_details.reasoning_tokens`, part of `output`; 0 when the provider reports none),
+`upstream_headers` (object: the response headers named in `AGW_LLM_INSTANCE_HEADERS`, lower case, values cut at 256
+characters, so a model farm's instance is known per call) and `request_meta` (object: `thinking` `"on"`/`"off"`
+from `chat_template_kwargs.enable_thinking` or DeepSeek's `thinking.type`, `max_tokens`, `tags`; never message
+content).
+
+`agw exp run` books a run that ends in an error as a **provider error** (`provider_error: …`) when the proxy in
+front of the model ended it: status 5xx, 429 or 408 in pi's message, or a response stream that the provider side
+cut off (the chat's last recorded call has status 200 and `complete: false`, and no run limit caused the end:
+`provider_error: response stream ended early`).
 
 ## Attachments to messages
 
@@ -2809,7 +2834,7 @@ the account's `sub` as owner, so ownership checks work unchanged.
 |---|---|
 | `POST /api/chats` | creates an experiment chat: `experiment: {protection, cell, run, seed, trace}` plus `delegation`, `model`, `variant` (binding) and `message` (the task) |
 | `GET /api/models` | the model catalogue; the runner and `agw exp validate` compare the plan's IDs with it (#156) |
-| `GET /api/exp/environment` | `{gateway_version, gateway_commit, gateway_describe, catalog_sha256, skills_sha256, instruction_sha256, inference_runtime, images_pi, images_exec, slots: [{id, variant, state, chat_id?, image_pi?, image_exec?}]}` — the identity of the build and the images the warm experiment slots actually run (X8.5); `agw exp environment [--json]` |
+| `GET /api/exp/environment` | `{gateway_version, gateway_commit, gateway_describe, catalog_sha256, catalog_file_sha256, catalog, skills_sha256, instruction_sha256, inference_runtime, images_pi, images_exec, slots: [{id, variant, state, chat_id?, image_pi?, image_exec?}]}` — the identity of the build and the images the warm experiment slots actually run (X8.5); `catalog_sha256` is the checksum of the **effective** catalog (file, `AGW_LLM_*` provider, `AGW_MODEL`, `AGW_LLM_EXTRA_HOST`; canonical JSON, never a key value), `catalog_file_sha256` the file alone and `catalog` the effective catalog itself; `agw exp environment [--json]` |
 | `POST /api/exp/runs/start` | records one attempt: `{id, key, plan, plan_sha256, cell, task, rep, seed, position, model}`; `409` if the id exists. The gateway fills `gateway_version` itself (X8.1) |
 | `POST /api/exp/runs/chat` | links the attempt to its chat: `{id, chat}`; the gateway records `image_pi`, `image_exec`, `catalog_sha256`, `skills_sha256` of that slot (X8.2) and the `inference_runtime` of the setup (#237; column `inference_runtime` of the table `runs`) |
 | `POST /api/exp/runs/end` | closes the attempt: `{id, status, end_reason, pass, check_evidence}`; status is the end reason (`done`, `limit_cost`, `limit_tokens`, `limit_duration`, `error`, `aborted`) |

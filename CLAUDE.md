@@ -625,6 +625,14 @@ refer to this repository.
   was from 16.10., before `models.json` declared `["text","image"]`. `config.Catalog.ChatModel` resolves the chat's
   model (stored ID, otherwise the default) for `capabilities`, `assess.ReviewAllowed` and the pre-annotation
   alike; `TestVisionMatchesImageReview` keeps the two answers on one catalog entry.
+- **The effective catalogue is the file plus one provider from `AGW_LLM_*`** (#279): `config.LoadEffectiveCatalog`
+  appends the provider that `config.EnvProvider` builds from the environment and sets the default from `AGW_MODEL`
+  (older name `AGW_DEFAULT_MODEL`). `catalog_sha256` is the SHA-256 of `EffectiveJSON()` (canonical, no key values,
+  with `AGW_LLM_EXTRA_HOST`), so a switch in `.env` breaks the lock; `catalog_file_sha256` is the file alone. The JSON
+  fragments are checked against a Go mirror of pi's `models.json` schema (`envprovider.go`, pinned to
+  `PiSchemaVersion`; `TestPiSchemaMirrorVersion` fails when `PI_VERSION` in the Dockerfile moves without it). pi's RPC
+  does not report a `models.json` error; the worker therefore treats a catalogue model that pi does not list as
+  rejected configuration and refuses to start slots (`worker.MissingFromRegistry`).
 
 ## Testing
 
