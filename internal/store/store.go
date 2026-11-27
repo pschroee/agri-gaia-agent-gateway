@@ -147,7 +147,25 @@ type Experiment struct {
 	Limits *RunLimits `json:"limits,omitempty"`
 	// Internet: the task's field (BM1): off (empty) or request. BM2 acts on it; here it is only stored.
 	Internet string `json:"internet,omitempty"`
+	// Compaction: pi's automatic compaction for this run (#281): nil or mode off is the default of experiments (none,
+	// X2.5); mode auto lets pi summarise the context when fewer than ReserveTokens of the context window are free.
+	Compaction *RunCompaction `json:"compaction,omitempty"`
 }
+
+// Compaction modes of a run and of the plan's compaction field.
+const (
+	CompactionOff  = "off"
+	CompactionAuto = "auto"
+)
+
+// RunCompaction is the compaction setting of one experiment run (#281), taken from the plan.
+type RunCompaction struct {
+	Mode          string `json:"mode"`
+	ReserveTokens int64  `json:"reserve_tokens,omitempty"`
+}
+
+// Auto reports whether the run compacts automatically.
+func (c *RunCompaction) Auto() bool { return c != nil && c.Mode == CompactionAuto }
 
 // RunLimits are the limits of one experiment run (#206). Tokens are input + output without cache reads (X3.3).
 type RunLimits struct {

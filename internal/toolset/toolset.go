@@ -14,6 +14,7 @@ package toolset
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -166,12 +167,47 @@ const ExperimentNetPrefix = "exp-net:"
 // SplitExperiment splits an experiment variant into the binding key ("exp:mcp" → "mcp", true; the same for
 // "exp-net:mcp"). Any other variant comes back unchanged with false.
 func SplitExperiment(variant string) (base string, experiment bool) {
+	variant, _ = SplitCompactReserve(variant)
 	for _, p := range []string{ExperimentPrefix, ExperimentNetPrefix} {
 		if strings.HasPrefix(variant, p) {
 			return strings.TrimPrefix(variant, p), true
 		}
 	}
 	return variant, false
+}
+
+// CompactReserveMark introduces the compaction reserve in the variant of an experiment chat ("exp:cli~cr26214").
+// pi reads the reserve from its settings file when it starts, so a slot has one reserve for its whole life; a plan
+// that turns compaction on (#281) therefore gets its own slots, like a task with internet does. SplitExperiment
+// cuts the mark off, so everything that reads the binding of a variant is unaffected.
+const CompactReserveMark = "~cr"
+
+// WithCompactReserve appends the compaction reserve to a variant; reserve <= 0 returns the variant unchanged.
+func WithCompactReserve(variant string, reserve int64) string {
+	if reserve <= 0 {
+		return variant
+	}
+	variant, _ = SplitCompactReserve(variant)
+	return variant + CompactReserveMark + strconv.FormatInt(reserve, 10)
+}
+
+// SplitCompactReserve cuts the reserve off a variant; without one it returns the variant and 0.
+func SplitCompactReserve(variant string) (rest string, reserve int64) {
+	i := strings.LastIndex(variant, CompactReserveMark)
+	if i < 0 {
+		return variant, 0
+	}
+	n, err := strconv.ParseInt(variant[i+len(CompactReserveMark):], 10, 64)
+	if err != nil || n <= 0 {
+		return variant, 0
+	}
+	return variant[:i], n
+}
+
+// CompactReserve is the reserve a variant carries (0: none, pi's default from the environment applies).
+func CompactReserve(variant string) int64 {
+	_, n := SplitCompactReserve(variant)
+	return n
 }
 
 // ExperimentInternet reports whether the variant is an experiment variant that may request internet.

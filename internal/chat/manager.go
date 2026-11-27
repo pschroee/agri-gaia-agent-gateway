@@ -689,6 +689,43 @@ func (m *Manager) experimentOf(ctx context.Context, chatID string) *store.Experi
 	return c.Experiment
 }
 
+// compactionHeadroom is pi's own margin below the context window: it cuts the output limit of a request to
+// window - estimated input - 4096 (pi-ai simple-options.js), so a reserve below max_tokens + 4096 lets the threshold
+// come when the next answer no longer fits (#281).
+const compactionHeadroom = 4096
+
+// experimentCompaction checks the compaction setting of an experiment chat and returns the reserve for the slot
+// (0: compaction off, the setting of the environment applies). The reserve must hold the next answer
+// (max_tokens of the model) and pi's headroom, and it must leave the larger part of the window to the context.
+func (m *Manager) experimentCompaction(model string, c *store.RunCompaction) (int64, error) {
+	if c == nil {
+		return 0, nil
+	}
+	switch c.Mode {
+	case "", store.CompactionOff:
+		if c.ReserveTokens != 0 {
+			return 0, fmt.Errorf("%w: compaction: reserve_tokens needs mode auto", ErrInvalid)
+		}
+		return 0, nil
+	case store.CompactionAuto:
+	default:
+		return 0, fmt.Errorf("%w: compaction: mode must be off or auto, not %q", ErrInvalid, c.Mode)
+	}
+	if c.ReserveTokens <= 0 {
+		return 0, fmt.Errorf("%w: compaction: mode auto needs reserve_tokens", ErrInvalid)
+	}
+	if window := m.cat.ContextWindow(model); window > 0 && c.ReserveTokens > window/2 {
+		return 0, fmt.Errorf("%w: compaction: reserve_tokens %d is more than half of the context window (%d)", ErrInvalid, c.ReserveTokens, window)
+	}
+	if _, mod, ok := m.cat.Lookup(model); ok && mod.MaxTokens > 0 {
+		if floor := int64(mod.MaxTokens) + compactionHeadroom; c.ReserveTokens < floor {
+			return 0, fmt.Errorf("%w: compaction: reserve_tokens %d is below max_tokens + %d = %d of %s; compaction would come too late for the answer",
+				ErrInvalid, c.ReserveTokens, compactionHeadroom, floor, model)
+		}
+	}
+	return c.ReserveTokens, nil
+}
+
 func (m *Manager) Create(ctx context.Context, req NewChat) (ChatView, error) {
 	if req.Model == "" {
 		req.Model = m.cat.Default
@@ -725,6 +762,10 @@ func (m *Manager) Create(ctx context.Context, req NewChat) (ChatView, error) {
 		default:
 			return ChatView{}, fmt.Errorf("%w: internet %q", ErrInvalid, experiment.Internet)
 		}
+		compactReserve, err := m.experimentCompaction(req.Model, experiment.Compaction)
+		if err != nil {
+			return ChatView{}, err
+		}
 		base := m.opt.Toolsets
 		if req.Variant != "" {
 			ts, err := toolset.FromVariant(req.Variant)
@@ -733,7 +774,8 @@ func (m *Manager) Create(ctx context.Context, req NewChat) (ChatView, error) {
 			}
 			base = ts
 		}
-		req.Variant = toolset.ExperimentVariant(base.Key(), experiment.Internet == "request")
+		// #281: pi reads the reserve at its start, so a plan with compaction gets slots of its own.
+		req.Variant = toolset.WithCompactReserve(toolset.ExperimentVariant(base.Key(), experiment.Internet == "request"), compactReserve)
 	} else {
 		if req.Variant != "" {
 			ts, err := toolset.FromVariant(req.Variant)
@@ -769,7 +811,9 @@ func (m *Manager) Create(ctx context.Context, req NewChat) (ChatView, error) {
 		// X2.5: no compaction in experiment chats. The instruction of the treatment must stay in the
 		// context for the whole run; otherwise it could vanish with a summary and the levels would
 		// differ by run length. A run that exceeds the context window ends with an error.
-		autoCompact = false
+		// #281, decision of the author (27.11.2026): a plan may turn compaction on for all its runs alike
+		// (compaction.mode auto); every other plan stays without.
+		autoCompact = experiment.Compaction.Auto()
 	}
 	lang, err := NormalizeLanguage(req.Language)
 	if err != nil {
@@ -926,7 +970,7 @@ func (m *Manager) attachSlot(ctx context.Context, c store.Chat, session []byte, 
 	}
 	key := ts.Key()
 	if experiment {
-		key = toolset.ExperimentVariant(key, toolset.ExperimentInternet(c.Variant))
+		key = toolset.WithCompactReserve(toolset.ExperimentVariant(key, toolset.ExperimentInternet(c.Variant)), toolset.CompactReserve(c.Variant))
 	}
 	if slot == nil {
 		if slot, err = m.pool.AcquireWait(ctx, key, c.ID, m.opt.AcquireTimeout); err != nil {
@@ -1728,6 +1772,17 @@ type ContextUsage struct {
 	UpdatedAt        time.Time `json:"updated_at"`
 }
 
+// compactReserve is the reserve of the chat's slot: the one its variant carries (a plan with compaction, #281),
+// otherwise the environment's.
+func (m *Manager) compactReserve(ctx context.Context, chatID string) int64 {
+	if c, err := m.st.GetChat(ctx, chatID); err == nil {
+		if r := toolset.CompactReserve(c.Variant); r > 0 {
+			return r
+		}
+	}
+	return int64(m.opt.CompactReserveTokens)
+}
+
 // refreshInfo reads context usage and commands from pi and stores them.
 func (m *Manager) refreshInfo(ctx context.Context, chatID string, a Agent) {
 	if resp, err := callT(a, map[string]any{"type": "get_session_stats"}, callTimeout); err == nil {
@@ -1740,7 +1795,7 @@ func (m *Manager) refreshInfo(ctx context.Context, chatID string, a Agent) {
 		}
 		if json.Unmarshal(resp.Data, &d) == nil && d.ContextUsage != nil {
 			u := ContextUsage{Tokens: d.ContextUsage.Tokens, Window: d.ContextUsage.ContextWindow, Percent: d.ContextUsage.Percent,
-				ReserveTokens: int64(m.opt.CompactReserveTokens), KeepRecentTokens: int64(m.opt.CompactKeepRecent), UpdatedAt: time.Now()}
+				ReserveTokens: m.compactReserve(ctx, chatID), KeepRecentTokens: int64(m.opt.CompactKeepRecent), UpdatedAt: time.Now()}
 			u.ThresholdTokens = u.Window - u.ReserveTokens
 			if b, err := json.Marshal(u); err == nil {
 				_ = m.st.SetContext(ctx, chatID, b)

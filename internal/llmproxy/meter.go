@@ -57,7 +57,8 @@ type Call struct {
 	// the instance that served the call behind a model farm; values are cut at 256 characters.
 	UpstreamHeaders map[string]string `json:"upstream_headers,omitempty"`
 	// RequestMeta: what the proxy actually sent about the request's shape: "thinking" ("on"/"off", from
-	// chat_template_kwargs.enable_thinking or thinking.type), "max_tokens" and "tags". Never message content.
+	// chat_template_kwargs.enable_thinking or thinking.type), "max_tokens", "tags" and "purpose" ("compaction"
+	// for pi's summarisation request, #281). Never message content.
 	RequestMeta map[string]any `json:"request_meta,omitempty"`
 }
 

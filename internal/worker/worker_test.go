@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"slices"
 	"strings"
@@ -336,6 +337,34 @@ func TestSystemNoteLanguageLetters(t *testing.T) {
 		n := SystemNoteFor(v, 2, nil, "")
 		if !strings.Contains(n, "own letters (ä, ö, ü, ß, é …) everywhere, also in tool arguments such as titles, notes and descriptions; never transliterate") {
 			t.Errorf("%s: system note without the letters rule", v)
+		}
+	}
+}
+
+// Issue #281: a slot of a plan with compaction gets its own reserve in pi's settings; every other slot keeps the environment's.
+func TestSettingsForCompactReserve(t *testing.T) {
+	f := &Factory{Env: config.Env{CompactReserveTokens: 16384, CompactKeepRecent: 20000}}
+	f.settings = base64.StdEncoding.EncodeToString(PiSettings(f.Env))
+	reserve := func(variant string) (int, int) {
+		t.Helper()
+		raw, err := base64.StdEncoding.DecodeString(f.settingsFor(variant))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var s struct {
+			Compaction struct {
+				Reserve int `json:"reserveTokens"`
+				Keep    int `json:"keepRecentTokens"`
+			} `json:"compaction"`
+		}
+		if err := json.Unmarshal(raw, &s); err != nil {
+			t.Fatal(err)
+		}
+		return s.Compaction.Reserve, s.Compaction.Keep
+	}
+	for variant, want := range map[string]int{"cli": 16384, "exp:cli": 16384, "exp:cli~cr26214": 26214, "exp-net:cli,mcp~cr13": 13} {
+		if got, keep := reserve(variant); got != want || keep != 20000 {
+			t.Errorf("%s: reserve %d keep %d, want %d and 20000", variant, got, keep, want)
 		}
 	}
 }

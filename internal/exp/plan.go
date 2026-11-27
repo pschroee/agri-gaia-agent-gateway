@@ -46,18 +46,39 @@ var RoleName = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
 // Plan is the content of plan.yaml or pilot.yaml. The cells are listed explicitly: the second
 // model does not run every combination of the other factors.
 type Plan struct {
-	Purpose        string   `yaml:"purpose"`
-	Seed           int64    `yaml:"seed"`
-	K              int      `yaml:"k"`
-	Models         []Model  `yaml:"models"`
-	Cells          []Cell   `yaml:"cells"`
-	Tasks          []string `yaml:"tasks"`
-	Limits         Limits   `yaml:"limits"`
-	Pass1Threshold float64  `yaml:"pass1_threshold"`
+	Purpose string   `yaml:"purpose"`
+	Seed    int64    `yaml:"seed"`
+	K       int      `yaml:"k"`
+	Models  []Model  `yaml:"models"`
+	Cells   []Cell   `yaml:"cells"`
+	Tasks   []string `yaml:"tasks"`
+	Limits  Limits   `yaml:"limits"`
+	// Compaction: pi's automatic compaction for every run of the plan (#281). Omitted or mode off: none, the
+	// default of experiments (X2.5). A stage that needs it says so in its own plan, for all its models alike.
+	Compaction     Compaction `yaml:"compaction,omitempty"`
+	Pass1Threshold float64    `yaml:"pass1_threshold"`
 	// ProbeMainMaterial lets a pilot run tasks and attack fixtures of the main plan (a dry run of the whole material,
 	// not a measurement). Without it X7.1 keeps pilots apart from the main runs.
 	ProbeMainMaterial bool `yaml:"probe_main_material"`
 }
+
+// Compaction modes of the plan's compaction field.
+const (
+	CompactionOff  = "off"
+	CompactionAuto = "auto"
+)
+
+// Compaction is the plan's compaction setting. Mode auto lets pi summarise the context as soon as fewer than
+// ReserveTokens of the model's context window are free; ReserveTokens must hold the model's next answer
+// (max_tokens) plus pi's headroom of 4096 tokens plus the error of pi's estimate of the new tool results, and is
+// the same for every model of the plan. The gateway refuses a run whose reserve is below max_tokens + 4096.
+type Compaction struct {
+	Mode          string `yaml:"mode,omitempty" json:"mode,omitempty"`
+	ReserveTokens int64  `yaml:"reserve_tokens,omitempty" json:"reserve_tokens,omitempty"`
+}
+
+// Auto reports whether the plan compacts automatically.
+func (c Compaction) Auto() bool { return c.Mode == CompactionAuto }
 
 // Model names one model of the plan. ID may be a placeholder such as <HAUPTMODELL> until the
 // model is fixed (XE5).
@@ -148,6 +169,23 @@ func ValidateCostLimit(p *Plan, priced map[string]bool) []Problem {
 		if has, known := priced[id]; known && !has {
 			problems = append(problems, Problem{Where: fmt.Sprintf("model %d", i+1),
 				Text: fmt.Sprintf("cost limit not applicable: %s has no list price; set max_cost_usd: 0", id)})
+		}
+	}
+	return problems
+}
+
+// ValidateCompaction checks the plan's compaction reserve against the context windows of the catalogue (#281):
+// windows maps each model ID to its context window (0 or missing: unknown). The reserve must be below half of the
+// window; the gateway checks the floor (max_tokens + 4096) when it creates the chat. An empty map means "not checked".
+func ValidateCompaction(p *Plan, windows map[string]int64) []Problem {
+	if p == nil || len(windows) == 0 || !p.Compaction.Auto() {
+		return nil
+	}
+	var problems []Problem
+	for i, m := range p.Models {
+		if w := windows[strings.TrimSpace(m.ID)]; w > 0 && p.Compaction.ReserveTokens > w/2 {
+			problems = append(problems, Problem{Where: fmt.Sprintf("model %d", i+1),
+				Text: fmt.Sprintf("compaction.reserve_tokens %d is more than half of the context window of %s (%d)", p.Compaction.ReserveTokens, m.ID, w)})
 		}
 	}
 	return problems
@@ -485,6 +523,18 @@ func validatePlan(p *Plan) []Problem {
 		} else if d <= 0 {
 			add("limits.duration_total must be positive, not %s", d)
 		}
+	}
+	switch c := p.Compaction; c.Mode {
+	case "", CompactionOff:
+		if c.ReserveTokens != 0 {
+			add("compaction.reserve_tokens is only for mode %q", CompactionAuto)
+		}
+	case CompactionAuto:
+		if c.ReserveTokens < 1 {
+			add("compaction.reserve_tokens must be at least 1 with mode %q, not %d", CompactionAuto, c.ReserveTokens)
+		}
+	default:
+		add("compaction.mode must be %q or %q, not %q", CompactionOff, CompactionAuto, c.Mode)
 	}
 	if p.Pass1Threshold < 0 || p.Pass1Threshold > 1 {
 		add("pass1_threshold must be between 0 and 1, not %v", p.Pass1Threshold)

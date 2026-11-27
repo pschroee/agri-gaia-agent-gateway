@@ -155,8 +155,41 @@ func instanceHeaders(h http.Header, names []string) map[string]string {
 	return out
 }
 
+// compactionSystemPrompt starts the system prompt of pi's summarisation request (pi-coding-agent
+// compaction/utils.js, SUMMARIZATION_SYSTEM_PROMPT). The request carries no tools and one user message with the
+// conversation; the proxy marks it in request_meta (purpose "compaction", #281) so that the evaluation sees the
+// summaries apart from the agent's own turns.
+const compactionSystemPrompt = "You are a context summarization assistant."
+
+// PurposeCompaction is the value of request_meta["purpose"] for a summarisation request of pi.
+const PurposeCompaction = "compaction"
+
+// isCompactionRequest reports whether the first message is pi's summarisation system prompt. Only that first
+// message is looked at, and only its start; the text is never recorded.
+func isCompactionRequest(first json.RawMessage) bool {
+	var m struct {
+		Role    string          `json:"role"`
+		Content json.RawMessage `json:"content"`
+	}
+	if json.Unmarshal(first, &m) != nil || (m.Role != "system" && m.Role != "developer") {
+		return false
+	}
+	var text string
+	if json.Unmarshal(m.Content, &text) != nil {
+		var parts []struct {
+			Text string `json:"text"`
+		}
+		if json.Unmarshal(m.Content, &parts) != nil || len(parts) == 0 {
+			return false
+		}
+		text = parts[0].Text
+	}
+	return strings.HasPrefix(strings.TrimSpace(text), compactionSystemPrompt)
+}
+
 // requestMetaOf describes the shape of the request as it is sent (after the proxy's own fields are set):
-// whether thinking was asked for, the output limit and the tags. Only these; never the messages.
+// whether thinking was asked for, the output limit, the tags and whether it is a compaction request. Only
+// these; never the messages.
 func requestMetaOf(body []byte) map[string]any {
 	var req struct {
 		MaxTokens           *int64          `json:"max_tokens"`
@@ -168,6 +201,7 @@ func requestMetaOf(body []byte) map[string]any {
 		Thinking *struct {
 			Type string `json:"type"`
 		} `json:"thinking"`
+		Messages []json.RawMessage `json:"messages"`
 	}
 	if json.Unmarshal(body, &req) != nil {
 		return nil
@@ -190,6 +224,9 @@ func requestMetaOf(body []byte) map[string]any {
 	var tags []string
 	if json.Unmarshal(req.Tags, &tags) == nil && len(tags) > 0 {
 		meta["tags"] = tags
+	}
+	if len(req.Messages) > 0 && isCompactionRequest(req.Messages[0]) {
+		meta["purpose"] = PurposeCompaction
 	}
 	return meta
 }

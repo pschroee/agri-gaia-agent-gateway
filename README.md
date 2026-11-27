@@ -87,7 +87,8 @@ lock. `GET /api/exp/environment` also reports `catalog_file_sha256` (the file al
 catalog).
 
 Plans may count tokens by output (`limits.token_basis: output`) instead of by uncached input plus output, for a
-provider that reports cached input unreliably (`API.md`).
+provider that reports cached input unreliably (`API.md`). A plan may turn pi's automatic compaction on for all its runs
+(`compaction: {mode: auto, reserve_tokens: N}`); without the field experiments run without compaction (`API.md`).
 
 ## Layout
 
