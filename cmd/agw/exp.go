@@ -503,11 +503,9 @@ func (a *app) cmdExpValidate(args []string) error {
 		if err != nil {
 			return fmt.Errorf("model catalogue: %w", err)
 		}
-		known := make([]string, len(models))
-		for i, model := range models {
-			known[i] = model.ID
-		}
+		known, priced := catalogueModels(models)
 		problems = append(problems, exp.ValidateModels(m.Plan, known)...)
+		problems = append(problems, exp.ValidateCostLimit(m.Plan, priced)...)
 	} else {
 		fmt.Fprintln(a.stderr, "model IDs not checked: AGW_EXP_API_TOKEN is not set")
 	}
@@ -726,12 +724,14 @@ func expLimitReport(limits exp.Limits, usage agwclient.ExpUsage) (map[string]any
 		return nil, fmt.Errorf("usage duration %q: %w", usage.DurationTotal, err)
 	}
 	tokenLimit, durationLimit := limits.PlanTokens(), limits.PlanDuration()
+	tokensUsed := planTokensUsed(limits, usage)
 	return map[string]any{
 		"tokens_total":       tokenLimit,
+		"token_basis":        limits.Basis(),
 		"duration_total":     durationLimit.String(),
-		"tokens_used":        usage.TokensTotal,
+		"tokens_used":        tokensUsed,
 		"duration_used":      used.Round(time.Second).String(),
-		"tokens_remaining":   max(tokenLimit-usage.TokensTotal, 0),
+		"tokens_remaining":   max(tokenLimit-tokensUsed, 0),
 		"duration_remaining": max(durationLimit-used, 0).Round(time.Second).String(),
 	}, nil
 }

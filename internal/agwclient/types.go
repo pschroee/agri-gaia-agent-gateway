@@ -373,6 +373,7 @@ type ExpRunLimits struct {
 	MaxCostUSD  float64 `json:"max_cost_usd"`
 	MaxTokens   int64   `json:"max_tokens"`
 	MaxDuration string  `json:"max_duration"`
+	TokenBasis  string  `json:"token_basis,omitempty"` // "uncached" (default) or "output"
 }
 
 // WatchJob is an observed platform job of a chat (GET /api/chats/{id}/jobs, A-E2).
@@ -419,9 +420,10 @@ type ExpRun struct {
 // ExpUsage is GET /api/exp/usage (#161): what a plan has consumed so far. Tokens are input + output
 // of the plan's chats without cache reads (X3.3); the duration is the wall-clock time of its attempts.
 type ExpUsage struct {
-	TokensTotal   int64  `json:"tokens_total"`
-	DurationTotal string `json:"duration_total"`
-	Runs          int    `json:"runs"`
+	TokensTotal       int64  `json:"tokens_total"`
+	OutputTokensTotal int64  `json:"output_tokens_total"` // output tokens incl. thinking, for token_basis "output"
+	DurationTotal     string `json:"duration_total"`
+	Runs              int    `json:"runs"`
 }
 
 // ExpEnvironment is GET /api/exp/environment (X8.5): the identity of the gateway build, the checksums

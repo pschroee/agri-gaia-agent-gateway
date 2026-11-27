@@ -378,12 +378,12 @@ func (r *expRunner) run(ctx context.Context) error {
 		if usage, err := r.api.ExpUsage(ctx, r.planName); err != nil {
 			fmt.Fprintf(r.errw, "plan usage not readable: %v\n", err)
 		} else {
-			fmt.Fprintf(r.out, "plan usage: %d tokens, %s (limit %d tokens, %s)\n", usage.TokensTotal,
+			fmt.Fprintf(r.out, "plan usage: %d tokens (%s), %s (limit %d tokens, %s)\n", planTokensUsed(r.plan.Limits, usage), tokenBasisText(r.plan.Limits),
 				orDefault(usage.DurationTotal, "0s"), r.plan.Limits.PlanTokens(), roundDuration(r.plan.Limits.PlanDuration()))
 		}
 	}
-	fmt.Fprintf(r.out, "run limits sent to the gateway: %s USD (at list price), %d tokens (input + output without cache reads), %s\n",
-		strconv.FormatFloat(r.plan.Limits.MaxCostUSD, 'f', -1, 64), r.plan.Limits.MaxTokens, orDefault(r.plan.Limits.MaxDuration, "default"))
+	fmt.Fprintf(r.out, "run limits sent to the gateway: %s, %d tokens (%s), %s\n",
+		costLimitText(r.plan.Limits.MaxCostUSD), r.plan.Limits.MaxTokens, tokenBasisText(r.plan.Limits), orDefault(r.plan.Limits.MaxDuration, "default"))
 	if r.lock != nil && !r.dryRun {
 		// X8.5: the material matches the lock; now the environment must as well. A dry run prints the order
 		// without touching the gateway.
@@ -410,11 +410,8 @@ func (r *expRunner) checkModels(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("model catalogue: %w", err)
 	}
-	known := make([]string, len(models))
-	for i, model := range models {
-		known[i] = model.ID
-	}
-	problems := exp.ValidateModels(r.plan, known)
+	known, priced := catalogueModels(models)
+	problems := append(exp.ValidateModels(r.plan, known), exp.ValidateCostLimit(r.plan, priced)...)
 	if len(problems) == 0 {
 		return nil
 	}
@@ -425,6 +422,32 @@ func (r *expRunner) checkModels(ctx context.Context) error {
 	return errors.New(strings.TrimRight(b.String(), "\n"))
 }
 
+// catalogueModels lists the model IDs of the gateway's catalogue and whether each has a list price.
+func catalogueModels(models []agwclient.Model) (known []string, priced map[string]bool) {
+	known, priced = make([]string, len(models)), make(map[string]bool, len(models))
+	for i, model := range models {
+		known[i], priced[model.ID] = model.ID, model.Pricing != nil
+	}
+	return known, priced
+}
+
+// planTokensUsed is what the plan's token budget counts: input + output without cache reads, or the output
+// tokens alone under token_basis "output" (issue #279).
+func planTokensUsed(lim exp.Limits, usage agwclient.ExpUsage) int64 {
+	if lim.Basis() == exp.TokenBasisOutput {
+		return usage.OutputTokensTotal
+	}
+	return usage.TokensTotal
+}
+
+// chatTokensUsed is the same for one run's chat.
+func chatTokensUsed(lim exp.Limits, c agwclient.Chat) int64 {
+	if lim.Basis() == exp.TokenBasisOutput {
+		return c.Tokens.Output
+	}
+	return c.Tokens.Input + c.Tokens.Output
+}
+
 // checkPlanLimits stops the plan when its total token or duration budget is used up (#161). It runs
 // before every attempt that is not skipped, so the plan ends before a further chat is created.
 func (r *expRunner) checkPlanLimits(ctx context.Context) error {
@@ -432,8 +455,8 @@ func (r *expRunner) checkPlanLimits(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("plan usage: %w", err)
 	}
-	if limit := r.plan.Limits.PlanTokens(); usage.TokensTotal >= limit {
-		return fmt.Errorf("plan limit reached: tokens (%d of %d used)", usage.TokensTotal, limit)
+	if limit, used := r.plan.Limits.PlanTokens(), planTokensUsed(r.plan.Limits, usage); used >= limit {
+		return fmt.Errorf("plan limit reached: tokens (%d of %d used, %s)", used, limit, tokenBasisText(r.plan.Limits))
 	}
 	var used time.Duration // an empty field means nothing has run yet
 	if usage.DurationTotal != "" {
@@ -717,7 +740,7 @@ func (r *expRunner) createChat(ctx context.Context, pr expPlannedRun, task exp.T
 			Internet: task.Internet,
 			// #206: the gateway enforces the plan's run limits, not its own defaults.
 			Limits: &agwclient.ExpRunLimits{MaxCostUSD: r.plan.Limits.MaxCostUSD, MaxTokens: r.plan.Limits.MaxTokens,
-				MaxDuration: r.plan.Limits.MaxDuration},
+				MaxDuration: r.plan.Limits.MaxDuration, TokenBasis: r.plan.Limits.Basis()},
 		},
 	}
 	for attempt := 0; ; attempt++ {
@@ -801,8 +824,8 @@ func (r *expRunner) waitEnd(ctx context.Context, chatID string) (status, reason 
 			}
 		}
 		if now.Sub(lastBeat) >= r.heartbeat {
-			fmt.Fprintf(r.errw, "run still going: %s, tokens %d (+%d cache reads), %s\n", roundDuration(now.Sub(startedAt)),
-				c.Tokens.Input+c.Tokens.Output, c.Tokens.CacheRead, fmtCost(c.Cost))
+			fmt.Fprintf(r.errw, "run still going: %s, tokens %d (%s, +%d cache reads), %s\n", roundDuration(now.Sub(startedAt)),
+				chatTokensUsed(r.plan.Limits, c), tokenBasisText(r.plan.Limits), c.Tokens.CacheRead, fmtCost(c.Cost))
 			lastBeat = now
 		}
 		select {
@@ -819,8 +842,8 @@ func expOverLimit(lim exp.Limits, c agwclient.Chat, now, startedAt, deadline tim
 	switch {
 	case lim.MaxCostUSD > 0 && expLimitCost(c) >= lim.MaxCostUSD:
 		return "cost", fmt.Sprintf("%.4f USD", expLimitCost(c)), fmt.Sprintf("%.4f USD", lim.MaxCostUSD)
-	case lim.MaxTokens > 0 && c.Tokens.Input+c.Tokens.Output >= lim.MaxTokens:
-		return "tokens", fmt.Sprintf("%d", c.Tokens.Input+c.Tokens.Output), fmt.Sprintf("%d", lim.MaxTokens)
+	case lim.MaxTokens > 0 && chatTokensUsed(lim, c) >= lim.MaxTokens:
+		return "tokens", fmt.Sprintf("%d", chatTokensUsed(lim, c)), fmt.Sprintf("%d", lim.MaxTokens)
 	case !deadline.Equal(startedAt) && !now.Before(deadline):
 		return "duration", roundDuration(now.Sub(startedAt)), lim.MaxDuration
 	}
@@ -835,11 +858,14 @@ func expLimitReason(limit string, lim exp.Limits, c agwclient.Chat, elapsed time
 		bound = fmt.Sprintf("%.4f USD", lim.MaxCostUSD)
 	case "tokens":
 		bound = fmt.Sprintf("%d tokens", lim.MaxTokens)
+		if lim.Basis() == exp.TokenBasisOutput {
+			bound = fmt.Sprintf("%d output tokens", lim.MaxTokens)
+		}
 	case "duration":
 		bound = lim.MaxDuration
 	}
 	return fmt.Sprintf("gateway limit %s (%s): tokens %d (+%d cache reads), %.4f USD at list price (%.4f USD billed), %s", limit, bound,
-		c.Tokens.Input+c.Tokens.Output, c.Tokens.CacheRead, expLimitCost(c), c.Cost, roundDuration(elapsed))
+		chatTokensUsed(lim, c), c.Tokens.CacheRead, expLimitCost(c), c.Cost, roundDuration(elapsed))
 }
 
 // expLimitCost is the cost the experiment limit counts: the model calls at the fixed list price, so that the same
@@ -1373,4 +1399,20 @@ func (r *expRunner) seedRun(ctx context.Context, pr expPlannedRun, id string, ta
 		return nil
 	}
 	return objects, release, nil
+}
+
+// tokenBasisText names what the token limit counts, for messages.
+func tokenBasisText(lim exp.Limits) string {
+	if lim.Basis() == exp.TokenBasisOutput {
+		return "output tokens"
+	}
+	return "input + output without cache reads"
+}
+
+// costLimitText: the run's cost limit for messages; 0 means no cost limit (issue #279).
+func costLimitText(usd float64) string {
+	if usd == 0 {
+		return "no cost limit"
+	}
+	return strconv.FormatFloat(usd, 'f', -1, 64) + " USD (at list price)"
 }
