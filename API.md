@@ -2868,3 +2868,68 @@ training container ids from the answers are removed (X1.10), and the attempt is 
 `agw exp status --plan <dir|file>` counts attempts per cell and status; `agw exp abort <run>` ends one attempt from
 outside. An attempt that a crashed process left in `started` is superseded by `key#2` (then `key#3`, …) on the next
 start; an attempt that ended — also as `aborted` — is never repeated (X1.5).
+
+**Events, hook, pause and abort of `agw exp run` (issue #280).** A long plan needs a supervisor that sees what the
+runner does. The runner writes events and can call a program; both carry the same JSON and nothing else: no prompt, no
+answer of the agent, no secret.
+
+- `--events <file>` (or `AGW_EXP_EVENTS`) appends one JSON object per line to the file; `--events -` writes them to
+  stdout and moves the text lines to stderr. `--timestamps` starts every text line with the UTC time
+  (`2026-11-28T07:12:03Z …`). Writing may fail (full disk, closed pipe): the runner says so once and goes on.
+- `--hook <program> [args]` (or `AGW_EXP_HOOK`; one string, split at spaces, **no shell**) starts the program once per
+  event, one after the other, in a worker of its own. The event is the JSON line on **stdin**, its name is in
+  `AGW_EXP_EVENT`. The time limit is `--hook-timeout` (10 s); after it the whole process group is killed. A hook that
+  fails, hangs or is slow never delays or stops a run: its exit status, the first 500 characters of its stderr and a
+  timeout are only written as a text line `hook: …`. A queue of 256 events holds what the hook has not taken yet; when it
+  is full the oldest `progress` event is dropped. At the end the runner waits at most twice the time limit for the rest.
+  The gateway image is distroless (no shell, no `kill`, no `curl`), so inside the container a hook can only start `/agw` or
+  `/orchestrator`; run with `--events -` there and call the hook outside, on the stream, with the same contract.
+- `--pause-file <file>` and `--pause-wait <duration>`: before every run that is not skipped the runner emits
+  `run_pending`, waits `--pause-wait` (default 0; the time for a supervisor to check the host before the run) and then looks
+  for the file. If it exists the runner deletes it, emits `paused` with the file's content (at most 200 characters) as
+  `reason` and exits with **75**. The run that is going on is never interrupted: a request that comes during a run is seen
+  before the next one. Start the same command again to continue (X1.5).
+- **SIGINT or SIGTERM** abort the chat of the run in progress (`POST /api/exp/chats/abort`, one minute), remove the fixtures,
+  emit `abort` and exit with **130**. The attempt stays `started`. The next start **supersedes** it as before and now first
+  aborts its chat (if it has one), waits until the chat is quiet (at most two minutes) and removes the objects the chat
+  created, so that it neither holds the slot nor leaves objects for the next count. Failures of that clean-up are only
+  reported. Without the abort the chat went on in its slot and the next run failed with "no free slot".
+- **Exit codes:** 0 plan ended, 1 error, 2 usage, 75 paused on request, 130 interrupted.
+- `agw exp status --plan <dir|file> --progress` prints the progress of the whole plan as JSON: `plan`, `progress` (as in
+  the events), `cells` (`{id: {planned, ended, started, done, error, aborted, limits, pass}}`) and `last_errors` (the five
+  newest runs in `error`: `key`, `attempt`, `time`, `reason`).
+
+*Event format.* One line per event, `v` is 1. Every event has `v`, `ts` (UTC, RFC 3339 with milliseconds and `Z`), `seq`
+(counts from 1 per process, without gaps), `session` (random id of the process), `event`, `plan` and `material` (first eight
+characters of the material digest). Further fields by event (all optional unless named):
+
+| `event` | when | further fields |
+|---|---|---|
+| `plan_start` | after the checks, before the first run | `cells`, `k`, `seed`, `runs` (runs in the scope of this call: `--cell` narrows it), `lock` (bool), `ended_before`, `progress` |
+| `resumed` | right after `plan_start`, when runs ended before or an attempt in `started` is replaced | `ended_before`, `superseded` (ids of the replaced attempts), `progress` |
+| `cell_start` | before the first run of a cell **in the order of this call** | `cell`, `progress` (with the cell figures) |
+| `run_pending` | before every run that is not skipped, before the pause point | `cell`, `task`, `rep`, `key`, `attempt` (the id the attempt will get, `key` or `key#n`) |
+| `run_start` | after the attempt is recorded | `cell`, `task`, `rep`, `key`, `attempt` |
+| `run_end` | after the attempt is closed | `cell`, `task`, `rep`, `key`, `attempt`, `chat`, `status`, `pass` (`true`, `false` or `null` when the run was not judged online), `reason` (at most 300 characters), `duration_s`, `tokens` `{input, output, cache_read}` (absent when no chat ran) |
+| `progress` | after every run that ran | `cell`, `progress`, `counts` (whole plan) |
+| `cell_end` | after the last run of a cell in the order of this call | `cell`, `progress`, `counts` (this cell), `complete` (every planned run of the cell has ended) |
+| `paused` | pause file found, exit 75 | `reason`, `progress` |
+| `abort` | interrupt, exit 130 | `progress`; `cell`, `task`, `rep`, `key`, `attempt`, `chat` of the attempt that was interrupted |
+| `error` | the call stops with an error | `kind`, `message` (at most 500 characters), `progress`; the run fields when an attempt was in progress |
+| `plan_end` | every run of the order is ended | `runs` (executed in this call), `skipped`, `duration_s`, `progress`, `counts` |
+
+`kind` is one of `plan_limit` (plan token or time budget used up), `environment` (model catalogue, lock, environment),
+`fixtures` (seeding, removal or base-dataset check), `build` (an image build outlived its run), `api` (a call to the
+gateway failed) and `other`. An error before the plan starts (a problem in the material itself) is only printed. A dry run
+emits no events.
+
+`progress` is `{plan_ended, plan_total, percent, cell_ended, cell_total, mean_run_s, eta_s, eta_basis}`. It counts the whole
+plan, also with `--cell`; a run is ended when its newest attempt is not `started`. `mean_run_s` is the mean duration of the
+ended runs from `started_at`/`ended_at`. `eta_s` is the sum over the open runs of the mean of the ended runs **of the same
+task**, or of all ended runs for a task without one (`eta_basis` `task` when every open run had its own task, else
+`plan`); both are `null` while no run has ended. Pauses between runs are not in the estimate. `counts` is
+`{done, error, aborted, limits, pass}` over the ended runs (`limits` adds the three `limit_*` statuses).
+
+```json
+{"v":1,"ts":"2026-11-28T07:12:03.412Z","seq":5,"session":"3fa91c07b2de","event":"run_end","plan":"main","material":"9c1d2e3f","cell":"cli-none-no-main","task":"s1-list-garage","rep":1,"key":"main/cli-none-no-main/s1-list-garage/1","attempt":"main/cli-none-no-main/s1-list-garage/1","chat":"6b0a…","status":"done","pass":true,"duration_s":412.3,"tokens":{"input":81234,"output":9120,"cache_read":402113}}
+```

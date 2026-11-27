@@ -77,6 +77,18 @@ type expRunOptions struct {
 	// CollectDir is the root for collected results; empty means defaultCollectDir.
 	CollectDir string
 
+	// Events receives one JSON line per event (issue #280); nil writes none.
+	Events io.Writer
+	// Hook is the program (and its arguments, no shell) that gets every event on stdin; empty calls none.
+	Hook []string
+	// HookTimeout is the time limit of one hook call; zero means 10 s.
+	HookTimeout time.Duration
+	// PauseFile asks the runner to stop before the next run when the file exists; the runner deletes it.
+	PauseFile string
+	// PauseWait is how long the runner waits before it looks at PauseFile (so that a supervisor can check the host
+	// before every run); zero checks at once.
+	PauseWait time.Duration
+
 	// Poll, StartGrace and Heartbeat are the waiting intervals (tests shorten them).
 	Poll time.Duration
 	// LimitGrace is how long a limit may stay exceeded before the runner reports that the gateway did not enforce it (#213).
@@ -112,6 +124,16 @@ type expRunner struct {
 	base      *exp.BaseSet // grundbestand.yaml, nil when absent (BM1)
 	collect   string       // root of the collected results
 	order     []expPlannedRun
+	fullOrder []expPlannedRun // every cell of the plan: what the progress counts, whatever --cell selects
+
+	// Issue #280: the event stream, the pause request and the state of the current run.
+	emit      *expEmitter
+	pauseFile string
+	pauseWait time.Duration
+	latest    map[string]agwclient.ExpRun // newest attempt per run key; updated after every run
+	current   *expCurrent                 // the attempt in progress, for the abort event
+	// supersedeWait bounds the wait for the chat of an interrupted attempt to become quiet (E11).
+	supersedeWait time.Duration
 
 	taskByID map[string]exp.Task
 	cellByID map[string]exp.Cell
@@ -141,14 +163,20 @@ const expBuildWait = 30 * time.Minute
 
 // runExpPlan loads the material, builds the order and runs it.
 func runExpPlan(ctx context.Context, api expAPI, opts expRunOptions, out, errw io.Writer) error {
+	ignoreSIGPIPE()
 	r, err := newExpRunner(api, opts, out, errw)
 	if err != nil {
 		return err
 	}
+	defer r.emit.Close()
 	return r.run(ctx)
 }
 
 func newExpRunner(api expAPI, opts expRunOptions, out, errw io.Writer) (*expRunner, error) {
+	if len(opts.Hook) > 0 {
+		// The hook worker writes its log lines to the same streams as the runner.
+		out, errw = &syncWriter{w: out}, &syncWriter{w: errw}
+	}
 	if opts.PlanPath == "" {
 		return nil, usagef("--plan is required")
 	}
@@ -219,6 +247,10 @@ func newExpRunner(api expAPI, opts expRunOptions, out, errw io.Writer) (*expRunn
 		noSlotRetries: 20,
 		buildWait:     expBuildWait,
 		registryWait:  2 * time.Minute,
+
+		fullOrder: expFullOrder(name, p, tasks, k, seed),
+		pauseFile: opts.PauseFile, pauseWait: opts.PauseWait,
+		supersedeWait: 2 * time.Minute,
 	}
 	if r.poll <= 0 {
 		r.poll = 10 * time.Second
@@ -237,6 +269,9 @@ func newExpRunner(api expAPI, opts expRunOptions, out, errw io.Writer) (*expRunn
 	}
 	if r.collect == "" {
 		r.collect = defaultCollectDir
+	}
+	if !opts.DryRun {
+		r.emit = newExpEmitter(opts.Events, newExpHook(opts.Hook, opts.HookTimeout, errw), r.now, errw, name, shortID(digest))
 	}
 	for _, t := range tasks {
 		r.taskByID[t.ID] = t
@@ -358,6 +393,8 @@ func expAttempt(id, key string) int {
 func (r *expRunner) run(ctx context.Context) error {
 	// #156: a mistyped model ID fails here, before the first chat is created.
 	if err := r.checkModels(ctx); err != nil {
+		err = kindErr(kindEnvironment, err)
+		r.emitStop(evError, err)
 		return err
 	}
 	fmt.Fprintf(r.out, "%s: %d runs (k=%d), seed %d, material %s\n", r.planName, len(r.order), r.k, r.seed, shortID(r.planSHA))
@@ -391,10 +428,14 @@ func (r *expRunner) run(ctx context.Context) error {
 		// without touching the gateway.
 		env, err := r.api.ExpEnvironment(ctx)
 		if err != nil {
-			return fmt.Errorf("the experiment environment is not readable: %w", err)
+			err = kindErr(kindEnvironment, fmt.Errorf("the experiment environment is not readable: %w", err))
+			r.emitStop(evError, err)
+			return err
 		}
 		if problems := exp.CompareEnvironment(r.lock, expEnvironment(env)); len(problems) > 0 {
-			return errors.New("the environment deviates from plan.lock:\n" + problemLines(problems))
+			err = kindErr(kindEnvironment, errors.New("the environment deviates from plan.lock:\n"+problemLines(problems)))
+			r.emitStop(evError, err)
+			return err
 		}
 		fmt.Fprintf(r.out, "environment: gateway %s, images match plan.lock\n", env.GatewayVersion)
 	}
@@ -455,10 +496,10 @@ func chatTokensUsed(lim exp.Limits, c agwclient.Chat) int64 {
 func (r *expRunner) checkPlanLimits(ctx context.Context) error {
 	usage, err := r.api.ExpUsage(ctx, r.planName)
 	if err != nil {
-		return fmt.Errorf("plan usage: %w", err)
+		return kindErr(kindAPI, fmt.Errorf("plan usage: %w", err))
 	}
 	if limit, used := r.plan.Limits.PlanTokens(), planTokensUsed(r.plan.Limits, usage); used >= limit {
-		return fmt.Errorf("plan limit reached: tokens (%d of %d used, %s)", used, limit, tokenBasisText(r.plan.Limits))
+		return kindErr(kindPlanLimit, fmt.Errorf("plan limit reached: tokens (%d of %d used, %s)", used, limit, tokenBasisText(r.plan.Limits)))
 	}
 	var used time.Duration // an empty field means nothing has run yet
 	if usage.DurationTotal != "" {
@@ -468,8 +509,8 @@ func (r *expRunner) checkPlanLimits(ctx context.Context) error {
 		}
 	}
 	if limit := r.plan.Limits.PlanDuration(); used >= limit {
-		return fmt.Errorf("plan limit reached: duration (%s of %s used)",
-			roundDuration(used), roundDuration(limit))
+		return kindErr(kindPlanLimit, fmt.Errorf("plan limit reached: duration (%s of %s used)",
+			roundDuration(used), roundDuration(limit)))
 	}
 	return nil
 }
@@ -513,18 +554,50 @@ func (r *expRunner) runAll(ctx context.Context, counts map[string]int) error {
 	if !r.dryRun {
 		runs, err := r.api.ExpRuns(ctx, r.planName, "")
 		if err != nil {
+			err = kindErr(kindAPI, err)
+			r.emitStop(evError, err)
 			return err
 		}
 		existing = expLatestByKey(runs)
 	}
+	r.latest = existing
 	// #214: say up front how many runs ended in an earlier start of this plan and are not run again.
-	if ended := r.endedBefore(existing); ended > 0 {
-		fmt.Fprintf(r.out, "plan %s: %d of %d runs ended before and are skipped\n", r.planName, ended, len(r.order))
+	endedBefore := r.endedBefore(existing)
+	if endedBefore > 0 {
+		fmt.Fprintf(r.out, "plan %s: %d of %d runs ended before and are skipped\n", r.planName, endedBefore, len(r.order))
 	}
-	executed, skipped := 0, 0
-	for _, pr := range r.order {
+	r.emitPlanStart(existing, endedBefore)
+	began := r.now()
+	executed, skipped, err := r.loop(ctx, existing, counts)
+	switch {
+	case err == nil:
+	case errors.Is(err, errExpPaused):
+		return err
+	case ctx.Err() != nil:
+		// An interrupt: the chat of the run in progress is aborted and its attempt stays "started" (E10).
+		r.emitStop(evAbort, ctx.Err())
+		return ctx.Err()
+	default:
+		r.emitStop(evError, err)
+		return err
+	}
+	fmt.Fprintf(r.out, "%d runs: %d executed, %d skipped, %d done, %d error, %d aborted, %d limits\n",
+		len(r.order), executed, skipped, counts["done"], counts["error"], counts["aborted"],
+		counts["limit_cost"]+counts["limit_tokens"]+counts["limit_duration"])
+	if skipped > 0 {
+		fmt.Fprintf(r.out, "%d runs had ended before; a plan runs every run once. To run them again, copy the plan "+
+			"under a new file name (the plan id is the file name).\n", skipped)
+	}
+	r.emitPlanEnd(executed, skipped, r.now().Sub(began))
+	return nil
+}
+
+// loop works through the order of this call. It returns how many runs it executed and skipped.
+func (r *expRunner) loop(ctx context.Context, existing map[string]agwclient.ExpRun, counts map[string]int) (executed, skipped int, err error) {
+	firstOf, lastOf := cellBounds(r.order)
+	for i, pr := range r.order {
 		if err := ctx.Err(); err != nil {
-			return err
+			return executed, skipped, err
 		}
 		if r.dryRun {
 			line := fmt.Sprintf("run %s (%s, task %s, rep %d)", pr.Key, pr.Cell, pr.Task, pr.Rep)
@@ -534,26 +607,34 @@ func (r *expRunner) runAll(ctx context.Context, counts map[string]int) error {
 			fmt.Fprintln(r.out, line)
 			continue
 		}
+		if firstOf[pr.Cell] == i {
+			r.emitCell(evCellStart, pr.Cell, false)
+		}
 		prev, hasPrev := existing[pr.Key]
+		if !hasPrev || prev.Status == expStarted {
+			r.emitRunPending(pr, prev, hasPrev)
+			if err := r.pauseCheck(ctx, pr); err != nil {
+				return executed, skipped, err
+			}
+		}
 		out, err := r.runOne(ctx, pr, prev, hasPrev)
 		if err != nil {
-			return err
+			return executed, skipped, err
 		}
+		r.current = nil
 		if out.skipped {
 			skipped++
-			continue
+		} else {
+			executed++
+			counts[out.status]++
+			r.noteEnded(pr, out)
+			r.emitProgress(pr.Cell)
 		}
-		executed++
-		counts[out.status]++
+		if lastOf[pr.Cell] == i {
+			r.emitCell(evCellEnd, pr.Cell, true)
+		}
 	}
-	fmt.Fprintf(r.out, "%d runs: %d executed, %d skipped, %d done, %d error, %d aborted, %d limits\n",
-		len(r.order), executed, skipped, counts["done"], counts["error"], counts["aborted"],
-		counts["limit_cost"]+counts["limit_tokens"]+counts["limit_duration"])
-	if skipped > 0 {
-		fmt.Fprintf(r.out, "%d runs had ended before; a plan runs every run once. To run them again, copy the plan "+
-			"under a new file name (the plan id is the file name).\n", skipped)
-	}
-	return nil
+	return executed, skipped, nil
 }
 
 // endedBefore counts the runs of the plan whose latest attempt is over: runOne skips them (X1.5).
@@ -570,6 +651,11 @@ func (r *expRunner) endedBefore(existing map[string]agwclient.ExpRun) int {
 type expOutcome struct {
 	status  string
 	skipped bool
+	// What the progress and the events need from an attempt that ran.
+	id      string
+	pass    *bool
+	started time.Time
+	ended   time.Time
 }
 
 // runOne executes one run: create the attempt and its chat, wait for the end, check, clean up and
@@ -598,18 +684,18 @@ func (r *expRunner) runOne(ctx context.Context, pr expPlannedRun, prev agwclient
 	}
 	// BM1: a run in protection none can change a base dataset; check them before every run that uses one.
 	if err := r.checkBase(ctx, task); err != nil {
-		return expOutcome{}, fmt.Errorf("run %s: %w", id, err)
+		return expOutcome{}, kindErr(kindFixtures, fmt.Errorf("run %s: %w", id, err))
 	}
 	// #207: the fixtures of the task are made fresh for every run and removed after it. This happens before the
 	// run exists, so that a failing seed leaves no record and the plan can be started again.
 	objects, release, err := r.seedRun(ctx, pr, id, task)
 	if err != nil {
-		return expOutcome{}, err
+		return expOutcome{}, kindErr(kindFixtures, err)
 	}
 	out, err := r.execute(ctx, pr, id, prev, hasPrev, task, cell, objects)
 	if rerr := release(); rerr != nil {
 		if err == nil {
-			err = rerr
+			err = kindErr(kindFixtures, rerr)
 		} else {
 			fmt.Fprintf(r.errw, "%v\n", rerr)
 		}
@@ -620,9 +706,13 @@ func (r *expRunner) runOne(ctx context.Context, pr expPlannedRun, prev agwclient
 // execute runs one attempt from the supersede of an interrupted one to the closed record.
 func (r *expRunner) execute(ctx context.Context, pr expPlannedRun, id string, prev agwclient.ExpRun, hasPrev bool,
 	task exp.Task, cell exp.Cell, objects map[string]string) (expOutcome, error) {
+	// Stays set when the call fails, for the abort and error events; the loop clears it after a run that went through.
+	r.current = &expCurrent{pr: pr, id: id}
 	if hasPrev {
+		// E11: an interrupted attempt may still have a chat that runs in its slot and objects on the platform.
+		r.settleInterrupted(ctx, pr, prev)
 		if err := r.api.ExpSupersedeRun(ctx, prev.ID, id); err != nil {
-			return expOutcome{}, fmt.Errorf("%s: supersede the interrupted attempt: %w", pr.Key, err)
+			return expOutcome{}, kindErr(kindAPI, fmt.Errorf("%s: supersede the interrupted attempt: %w", pr.Key, err))
 		}
 		fmt.Fprintf(r.out, "run %s: the interrupted attempt becomes aborted, starting %s\n", pr.Key, id)
 	}
@@ -632,15 +722,18 @@ func (r *expRunner) execute(ctx context.Context, pr expPlannedRun, id string, pr
 		Rep: pr.Rep, Seed: pr.Seed, Position: pr.Position, Model: model, Status: expStarted,
 	}
 	if err := r.api.ExpStartRun(ctx, run); err != nil {
-		return expOutcome{}, fmt.Errorf("%s: start: %w", pr.Key, err)
+		return expOutcome{}, kindErr(kindAPI, fmt.Errorf("%s: start: %w", pr.Key, err))
 	}
 	started := r.now()
+	r.emitRun(evRunStart, pr, id, "")
 	fail := func(status, reason string) (expOutcome, error) {
 		if err := r.api.ExpEndRun(ctx, agwclient.ExpRunEnd{ID: id, Status: status, EndReason: reason}); err != nil {
-			return expOutcome{}, fmt.Errorf("%s: ending the run failed: %w", pr.Key, err)
+			return expOutcome{}, kindErr(kindAPI, fmt.Errorf("%s: ending the run failed: %w", pr.Key, err))
 		}
 		fmt.Fprintf(r.out, "run %s %s (%s)\n", pr.Key, status, reason)
-		return expOutcome{status: status}, nil
+		ended := r.now()
+		r.emitRunEnd(pr, id, r.currentChat(), status, reason, nil, ended.Sub(started), nil)
+		return expOutcome{status: status, id: id, started: started, ended: ended}, nil
 	}
 
 	chat, err := r.createChat(ctx, pr, task, cell, model, objects)
@@ -650,6 +743,7 @@ func (r *expRunner) execute(ctx context.Context, pr expPlannedRun, id string, pr
 		}
 		return fail("error", "chat: "+err.Error())
 	}
+	r.current.chat = chat.ID
 	if r.lock != nil {
 		// X8.5: the slot that carries this run must use the frozen images. The warm slots were checked before
 		// the plan started; this catches a slot that started later (for example after a rebuild).
@@ -659,15 +753,22 @@ func (r *expRunner) execute(ctx context.Context, pr expPlannedRun, id string, pr
 		}
 	}
 	if err := r.api.ExpSetRunChat(ctx, id, chat.ID); err != nil {
-		return expOutcome{}, fmt.Errorf("%s: recording the chat: %w", pr.Key, err)
+		return expOutcome{}, kindErr(kindAPI, fmt.Errorf("%s: recording the chat: %w", pr.Key, err))
 	}
+	r.current.chat = chat.ID
 	status, reason, det, err := r.waitEnd(ctx, chat.ID)
 	if err != nil {
 		if ctx.Err() != nil {
-			// The run stays "started"; the next start supersedes it (X1.5).
+			// The run stays "started"; the next start supersedes it (X1.5). Its chat must not go on in the slot (E10).
+			r.abortInterrupted(ctx, chat.ID)
 			return expOutcome{}, ctx.Err()
 		}
 		return fail("error", "wait: "+err.Error())
+	}
+	if ctx.Err() != nil {
+		// Interrupted between the end of the chat and the check: nothing was judged, the attempt stays "started".
+		r.abortInterrupted(ctx, chat.ID)
+		return expOutcome{}, ctx.Err()
 	}
 	created, objsErr := r.createdObjects(ctx, chat.ID)
 	if objsErr != nil {
@@ -691,15 +792,18 @@ func (r *expRunner) execute(ctx context.Context, pr expPlannedRun, id string, pr
 	cleanErr := r.cleanup(ctx, chat.ID, det)
 	if err := r.api.ExpEndRun(ctx, agwclient.ExpRunEnd{ID: id, Status: status, EndReason: reason,
 		Pass: passPtr, CheckEvidence: evidence}); err != nil {
-		return expOutcome{}, fmt.Errorf("%s: ending the run failed: %w", pr.Key, err)
+		return expOutcome{}, kindErr(kindAPI, fmt.Errorf("%s: ending the run failed: %w", pr.Key, err))
 	}
+	ended := r.now()
 	fmt.Fprintf(r.out, "run %s %s pass=%s chat=%s %s tokens %d (+%d cache reads)\n", pr.Key, status, passText, shortID(chat.ID),
-		roundDuration(r.now().Sub(started)), det.Chat.Tokens.Input+det.Chat.Tokens.Output, det.Chat.Tokens.CacheRead)
+		roundDuration(ended.Sub(started)), det.Chat.Tokens.Input+det.Chat.Tokens.Output, det.Chat.Tokens.CacheRead)
 	if reason != "" && status != "done" {
 		fmt.Fprintf(r.errw, "  %s\n", reason)
 	}
+	tokens := &expEventTokens{Input: det.Chat.Tokens.Input, Output: det.Chat.Tokens.Output, CacheRead: det.Chat.Tokens.CacheRead}
+	r.emitRunEnd(pr, id, chat.ID, status, reason, passPtr, ended.Sub(started), tokens)
 	// BM11: a build that is still running would put its image into the next run; the plan does not go on.
-	return expOutcome{status: status}, cleanErr
+	return expOutcome{status: status, id: id, pass: passPtr, started: started, ended: ended}, kindErr(kindBuild, cleanErr)
 }
 
 func roundDuration(d time.Duration) string {
