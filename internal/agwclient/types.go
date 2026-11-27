@@ -38,6 +38,8 @@ type Model struct {
 	Pricing  *Pricing `json:"pricing,omitempty"`
 	Tariff   *Tariff  `json:"tariff,omitempty"`
 	PeakNow  *bool    `json:"peak_now,omitempty"`
+	// ContextWindow in tokens (0 = unknown).
+	ContextWindow int64 `json:"context_window,omitempty"`
 }
 
 type Variant struct {
@@ -375,6 +377,14 @@ type ExperimentProfile struct {
 	Limits *ExpRunLimits `json:"limits,omitempty"`
 	// Internet: the task's field (BM1): off | request; empty means off.
 	Internet string `json:"internet,omitempty"`
+	// Compaction: the plan's compaction setting (#281); nil means off.
+	Compaction *ExpCompaction `json:"compaction,omitempty"`
+}
+
+// ExpCompaction mirrors store.RunCompaction (#281): mode "off" or "auto"; auto needs reserve_tokens.
+type ExpCompaction struct {
+	Mode          string `json:"mode"`
+	ReserveTokens int64  `json:"reserve_tokens,omitempty"`
 }
 
 // ExpRunLimits mirrors store.RunLimits (#206): tokens are input + output without cache reads (X3.3).

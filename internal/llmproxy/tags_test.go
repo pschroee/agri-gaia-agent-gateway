@@ -178,3 +178,35 @@ func TestSetFieldsKeepsOthersAndSortsNewOnes(t *testing.T) {
 		t.Fatalf("no fields: %s %v", out, err)
 	}
 }
+
+// Issue #281: pi's summarisation request is marked in request_meta, an ordinary turn is not. Only the start of the
+// first message is read; its text is never recorded.
+func TestProxyMarksCompactionRequest(t *testing.T) {
+	rec := &fakeRecorder{chat: "chat-1"}
+	srv, _ := farmProxy(t, rec, farmReply)
+	sys := "You are a context summarization assistant. Your task is to read a conversation."
+	for _, body := range []string{
+		`{"model":"plain","messages":[{"role":"system","content":"` + sys + `"},{"role":"user","content":"<conversation>secret</conversation>"}]}`,
+		`{"model":"plain","messages":[{"role":"developer","content":[{"type":"text","text":"` + sys + `"}]},{"role":"user","content":"x"}]}`,
+		`{"model":"plain","messages":[{"role":"system","content":"You are pi, a coding agent."},{"role":"user","content":"hello"}]}`,
+		`{"model":"plain","messages":[{"role":"user","content":"` + sys + `"}]}`,
+		`{"model":"plain"}`,
+	} {
+		if resp, out := postModel(t, srv, body); resp.StatusCode != 200 {
+			t.Fatalf("%s: %d %s", body, resp.StatusCode, out)
+		}
+	}
+	c := rec.calls
+	if c[0].RequestMeta["purpose"] != PurposeCompaction || c[1].RequestMeta["purpose"] != PurposeCompaction {
+		t.Fatalf("compaction requests: %v %v", c[0].RequestMeta, c[1].RequestMeta)
+	}
+	for i := 2; i < 5; i++ {
+		if _, has := c[i].RequestMeta["purpose"]; has {
+			t.Fatalf("call %d marked: %v", i, c[i].RequestMeta)
+		}
+	}
+	b, _ := json.Marshal(c[0].RequestMeta)
+	if strings.Contains(string(b), "secret") || strings.Contains(string(b), "summarization") {
+		t.Fatalf("meta carries message text: %s", b)
+	}
+}

@@ -160,3 +160,29 @@ func TestVariantExpNet(t *testing.T) {
 		t.Fatal("ExperimentVariant")
 	}
 }
+
+// Issue #281: the compaction reserve rides in the variant of an experiment slot and never changes the binding.
+func TestCompactReserveInVariant(t *testing.T) {
+	v := WithCompactReserve(ExperimentVariant("cli", false), 26214)
+	if v != "exp:cli~cr26214" || CompactReserve(v) != 26214 {
+		t.Fatalf("variant %q, reserve %d", v, CompactReserve(v))
+	}
+	if base, exp := SplitExperiment(v); base != "cli" || !exp {
+		t.Fatalf("split: %q %v", base, exp)
+	}
+	net := WithCompactReserve(ExperimentVariant("cli,mcp", true), 100)
+	if base, exp := SplitExperiment(net); base != "cli,mcp" || !exp || !ExperimentInternet(net) || !ValidVariant(net) {
+		t.Fatalf("net variant %q: %q %v", net, base, exp)
+	}
+	if WithCompactReserve("exp:cli", 0) != "exp:cli" || WithCompactReserve("exp:cli~cr5", 9) != "exp:cli~cr9" {
+		t.Fatal("reserve 0 changes nothing; a second reserve replaces the first")
+	}
+	for _, bad := range []string{"exp:cli", "exp:cli~cr", "exp:cli~crx", "exp:cli~cr-3", "exp:cli~cr0"} {
+		if CompactReserve(bad) != 0 {
+			t.Errorf("%q: reserve %d", bad, CompactReserve(bad))
+		}
+	}
+	if rest, r := SplitCompactReserve("exp:cli~crx"); rest != "exp:cli~crx" || r != 0 {
+		t.Fatalf("unreadable mark stays: %q %d", rest, r)
+	}
+}

@@ -414,6 +414,7 @@ func (r *expRunner) checkModels(ctx context.Context) error {
 	}
 	known, priced := catalogueModels(models)
 	problems := append(exp.ValidateModels(r.plan, known), exp.ValidateCostLimit(r.plan, priced)...)
+	problems = append(problems, exp.ValidateCompaction(r.plan, catalogueWindows(models))...)
 	if len(problems) == 0 {
 		return nil
 	}
@@ -740,6 +741,8 @@ func (r *expRunner) createChat(ctx context.Context, pr expPlannedRun, task exp.T
 			Trace: exp.TraceValue(cell.Trace),
 			// BM1: the task's internet field; empty means off. BM2 acts on it in the gateway.
 			Internet: task.Internet,
+			// #281: the plan's compaction setting, the same for every run of the plan.
+			Compaction: compactionProfile(r.plan),
 			// #206: the gateway enforces the plan's run limits, not its own defaults.
 			Limits: &agwclient.ExpRunLimits{MaxCostUSD: r.plan.Limits.MaxCostUSD, MaxTokens: r.plan.Limits.MaxTokens,
 				MaxDuration: r.plan.Limits.MaxDuration, TokenBasis: r.plan.Limits.Basis()},
@@ -776,11 +779,13 @@ func (r *expRunner) waitEnd(ctx context.Context, chatID string) (status, reason 
 	seenActive := false
 	var overSince time.Time
 	lastBeat := startedAt
+	compactions := newCompactionLog(r.errw, chatID) // #281
 	for {
 		det, err = r.api.Chat(ctx, chatID)
 		if err != nil {
 			return "", "", det, err
 		}
+		compactions.observe(det)
 		jobs, err := r.api.Jobs(ctx, chatID)
 		if err != nil {
 			return "", "", det, err

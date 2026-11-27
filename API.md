@@ -1303,8 +1303,21 @@ columns of `llm_calls`, in `GET /api/chats/{id}/llm_calls` and in the export of 
 tokens, `usage.completion_tokens_details.reasoning_tokens`, part of `output`; 0 when the provider reports none),
 `upstream_headers` (object: the response headers named in `AGW_LLM_INSTANCE_HEADERS`, lower case, values cut at 256
 characters, so a model farm's instance is known per call) and `request_meta` (object: `thinking` `"on"`/`"off"`
-from `chat_template_kwargs.enable_thinking` or DeepSeek's `thinking.type`, `max_tokens`, `tags`; never message
-content).
+from `chat_template_kwargs.enable_thinking` or DeepSeek's `thinking.type`, `max_tokens`, `tags`, and `purpose`
+`"compaction"` on pi's summarisation request, recognised by the start of its system prompt; never message content).
+The summary calls count like every other call of the chat (tokens, cost, duration); filter on
+`request_meta.purpose` to see them apart from the agent's own turns. A summary that hit the token cap shows as
+`finish_reason: length`.
+
+**Compaction per plan (#281).** An experiment chat runs without compaction (X2.5) unless the plan says
+`compaction: {mode: auto, reserve_tokens: N}` (sent as `experiment.compaction`; `off` or absent is the default). The
+gateway then turns pi's `set_auto_compaction` on for every chat of the plan and starts its slots with `reserveTokens: N`
+in pi's settings (the slot variant carries the reserve, `exp:cli~cr26214`; pi reads it only at its start, so these
+slots start on demand). pi compacts before the next request when the estimated context exceeds
+`context window - N`. The gateway refuses `N` below `max_tokens + 4096` of the model (`400`, compaction would come
+too late for the answer) and above half of the window; `agw exp validate` checks the shape and, with
+`AGW_EXP_API_TOKEN`, the window. Every compaction is stored as a message with the role `compaction` (reason, tokens
+before, estimated tokens after, usage of the summary), and `agw exp run` writes one line per compaction to the run log.
 
 `agw exp run` books a run that ends in an error as a **provider error** (`provider_error: …`) when the proxy in
 front of the model ended it: status 5xx, 429 or 408 in pi's message, or a response stream that the provider side

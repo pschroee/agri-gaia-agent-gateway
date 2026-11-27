@@ -506,6 +506,7 @@ func (a *app) cmdExpValidate(args []string) error {
 		known, priced := catalogueModels(models)
 		problems = append(problems, exp.ValidateModels(m.Plan, known)...)
 		problems = append(problems, exp.ValidateCostLimit(m.Plan, priced)...)
+		problems = append(problems, exp.ValidateCompaction(m.Plan, catalogueWindows(models))...)
 	} else {
 		fmt.Fprintln(a.stderr, "model IDs not checked: AGW_EXP_API_TOKEN is not set")
 	}

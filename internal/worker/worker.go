@@ -614,6 +614,18 @@ func NewFactory(rt *sandbox.Runtime, cat *config.Catalog, env config.Env) (*Fact
 		settings: base64.StdEncoding.EncodeToString(PiSettings(env))}, nil
 }
 
+// settingsFor is the settings.json of a slot: the factory's, except for the compaction reserve of a plan that turns
+// compaction on (#281; the variant carries the reserve, pi reads it only at its start).
+func (f *Factory) settingsFor(variant string) string {
+	reserve := toolset.CompactReserve(variant)
+	if reserve <= 0 {
+		return f.settings
+	}
+	env := f.Env
+	env.CompactReserveTokens = int(reserve)
+	return base64.StdEncoding.EncodeToString(PiSettings(env))
+}
+
 // PiSettings is pi's settings.json. Long waits during an upload must not cut the model
 // connection. defaultSubagentOnlyExtensions loads the tool redirection (P2) and the web search
 // including web-gate.ts (internet only) into every child session of pi-subagents (foreground and
@@ -866,7 +878,7 @@ func (f *Factory) Create(ctx context.Context, slotID, variant string) (chat.Agen
 		return nil, fmt.Errorf("execution sandbox: %w", err)
 	}
 	// Subagents may not start further subagents (depth 1).
-	piEnv := []string{"AGW_PI_MODELS_JSON=" + f.modelsB64, "AGW_PI_SETTINGS_JSON=" + f.settings, "AGW_SLOT=" + slotID, "PI_SUBAGENT_MAX_DEPTH=1"}
+	piEnv := []string{"AGW_PI_MODELS_JSON=" + f.modelsB64, "AGW_PI_SETTINGS_JSON=" + f.settingsFor(variant), "AGW_SLOT=" + slotID, "PI_SUBAGENT_MAX_DEPTH=1"}
 	piEnv = append(piEnv, WebEnv(f.Env)...)
 	if hide := BridgeHide(variant); hide != "" {
 		piEnv = append(piEnv, "AGW_BRIDGE_HIDE="+hide)
