@@ -321,8 +321,26 @@ func (a *app) cmdExpRun(args []string) error {
 	collectDir := fs.String("collect-dir", defaultCollectDir, "directory for results a task collects before the cleanup (collect:)")
 	var cells multiFlag
 	fs.Var(&cells, "cell", "cell to run (repeatable; default: every cell of the plan)")
-	if _, err := a.parse(fs, args, 0, 0, "agw exp run --plan <dir|file> [--cell <id>]... [--k N] [--seed N] [--collect-dir <dir>] [--dry-run]"); err != nil {
+	events := fs.String("events", "", "append every event as one JSON line to this file; - writes them to stdout and the text lines to stderr (env AGW_EXP_EVENTS)")
+	hook := fs.String("hook", "", "program (and arguments, split at spaces, no shell) that gets every event as JSON on stdin and the event name in AGW_EXP_EVENT (env AGW_EXP_HOOK)")
+	hookTimeout := fs.Duration("hook-timeout", defaultHookTimeout, "time limit of one hook call; the hook process group is killed after it")
+	pauseFile := fs.String("pause-file", "", "stop with exit code 75 before the next run when this file exists; the file is deleted")
+	pauseWait := fs.Duration("pause-wait", 0, "wait this long before each run, then look at --pause-file")
+	timestamps := fs.Bool("timestamps", false, "start every text line with the UTC time")
+	if _, err := a.parse(fs, args, 0, 0, "agw exp run --plan <dir|file> [--cell <id>]... [--k N] [--seed N] [--collect-dir <dir>] [--dry-run] [--events <file|->] [--hook <program>] [--hook-timeout D] [--pause-file <file>] [--pause-wait D] [--timestamps]"); err != nil {
 		return err
+	}
+	getenv := a.getenv
+	if getenv == nil {
+		getenv = os.Getenv
+	}
+	set := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
+	if !set["events"] {
+		*events = getenv("AGW_EXP_EVENTS")
+	}
+	if !set["hook"] {
+		*hook = getenv("AGW_EXP_HOOK")
 	}
 	if *path == "" {
 		return usagef("--plan is required")
@@ -347,15 +365,41 @@ func (a *app) cmdExpRun(args []string) error {
 		}
 		return errSilentFailure
 	}
-	opts := expRunOptions{PlanPath: *path, Cells: cells, K: *k, Seed: *seed, SeedSet: seedSet, DryRun: *dry, CollectDir: *collectDir}
+	opts := expRunOptions{PlanPath: *path, Cells: cells, K: *k, Seed: *seed, SeedSet: seedSet, DryRun: *dry, CollectDir: *collectDir,
+		Hook: strings.Fields(*hook), HookTimeout: *hookTimeout, PauseFile: *pauseFile, PauseWait: *pauseWait}
+	out, errw := a.stdout, a.stderr
+	if *events == "-" {
+		// The events own stdout; the text lines move to stderr.
+		opts.Events, out = a.stdout, a.stderr
+	} else if *events != "" {
+		f, err := os.OpenFile(*events, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+		if err != nil {
+			return fmt.Errorf("--events: %w", err)
+		}
+		defer f.Close()
+		opts.Events = f
+	}
+	if *timestamps {
+		out, errw = stampedWriters(out, errw)
+	}
 	if *dry {
-		return runExpPlan(a.ctx, nil, opts, a.stdout, a.stderr)
+		return runExpPlan(a.ctx, nil, opts, out, errw)
 	}
 	c, err := a.expClient()
 	if err != nil {
 		return err
 	}
-	return runExpPlan(a.ctx, c, opts, a.stdout, a.stderr)
+	return runExpPlan(a.ctx, c, opts, out, errw)
+}
+
+// stampedWriters puts the UTC time in front of every line of the text output. When both streams are the same writer
+// they share one stamper, so that a line is never split between them.
+func stampedWriters(out, errw io.Writer) (io.Writer, io.Writer) {
+	so := &timestampWriter{w: out, now: time.Now}
+	if out == errw {
+		return so, so
+	}
+	return so, &timestampWriter{w: errw, now: time.Now}
 }
 
 // cmdExpStatus shows how many runs of a plan exist per cell and status. A run that a newer attempt
@@ -363,7 +407,8 @@ func (a *app) cmdExpRun(args []string) error {
 func (a *app) cmdExpStatus(args []string) error {
 	fs := a.flags("exp status")
 	path := fs.String("plan", "", "material directory with plan.yaml, or a plan file")
-	if _, err := a.parse(fs, args, 0, 0, "agw exp status --plan <dir|file> [--json]"); err != nil {
+	progress := fs.Bool("progress", false, "print the progress of the whole plan as JSON: share ended, remaining time, counts per cell, last errors")
+	if _, err := a.parse(fs, args, 0, 0, "agw exp status --plan <dir|file> [--json] [--progress]"); err != nil {
 		return err
 	}
 	if *path == "" {
@@ -380,6 +425,9 @@ func (a *app) cmdExpStatus(args []string) error {
 	runs, err := c.ExpRuns(a.ctx, m.PlanID, "")
 	if err != nil {
 		return err
+	}
+	if *progress {
+		return a.printJSON(expProgressReport(m.PlanID, expFullOrder(m.PlanID, m.Plan, m.Tasks, m.Plan.K, m.Plan.Seed), runs))
 	}
 	if a.json {
 		return a.printJSON(runs)

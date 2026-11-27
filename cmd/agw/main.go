@@ -61,8 +61,11 @@ Commands:
   exp unseed --plan <dir|file> --cell <id>  remove that cell's fixtures by their recorded ids
   exp verify --plan <dir|file> --cell <id>  compare the live fixtures with the recorded checksums
   exp run --plan <dir|file> [--cell <id>]... [--k N] [--seed N] [--collect-dir <dir>] [--dry-run]
-                                run the plan's runs, one after the other, each in a fresh chat
-  exp status --plan <dir|file>  runs per cell and status
+          [--events <file|->] [--hook <program>] [--hook-timeout D] [--pause-file <file>] [--pause-wait D] [--timestamps]
+                                run the plan's runs, one after the other, each in a fresh chat; events as JSON lines,
+                                an optional hook program, a pause request by file (exit 75), SIGINT aborts the chat (exit 130)
+  exp status --plan <dir|file> [--progress]
+                                runs per cell and status; --progress: share ended, remaining time and counts as JSON
   exp abort <run>               abort a run's chat and close the run as aborted
   exp export --plan <name|file> --out <dir> [--format jsonl,csv]
                                 write the protocol of a plan as JSONL and CSV plus manifest.json
@@ -89,6 +92,7 @@ type app struct {
 	stdout io.Writer
 	stderr io.Writer
 	color  bool
+	getenv func(string) string
 }
 
 func main() {
@@ -108,6 +112,7 @@ func isTerminal(w io.Writer) bool {
 
 func realMain(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(string) string) int {
 	a := &app{ctx: ctx, stdin: bufio.NewReader(stdin), stdout: stdout, stderr: stderr}
+	a.getenv = getenv
 	a.color = isTerminal(stderr) && getenv("NO_COLOR") == ""
 	a.url = getenv("AGW_URL")
 	if a.url == "" {
@@ -147,6 +152,10 @@ func (a *app) exitCode(err error) int {
 	}
 	if errors.Is(err, errFlagParse) {
 		return 2
+	}
+	if errors.Is(err, errExpPaused) {
+		fmt.Fprintln(a.stderr, "agw: paused on request; start the same command again to continue")
+		return exitPaused
 	}
 	if errors.Is(err, context.Canceled) {
 		fmt.Fprintln(a.stderr, "agw: aborted")
