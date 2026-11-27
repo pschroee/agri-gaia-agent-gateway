@@ -562,18 +562,6 @@ func EnvProvider(getenv func(string) string) (*Provider, string, string, error) 
 	if pf.Compat != nil {
 		p.Compat, _ = json.Marshal(pf.Compat)
 	}
-	// The title call (package titler) goes to the provider directly: the tags place it like every other
-	// call, and a Qwen chat template gets the thinking switched off, which would use up its few tokens.
-	title := map[string]any{}
-	if len(m.RequestTags) > 0 {
-		title["tags"] = m.RequestTags
-	}
-	if p.ThinkingFormat(m) == "qwen-chat-template" {
-		title["chat_template_kwargs"] = map[string]any{"enable_thinking": false}
-	}
-	if len(title) > 0 {
-		p.TitleRequest, _ = json.Marshal(title)
-	}
 	return p, agwModel, extra, nil
 }
 

@@ -95,6 +95,15 @@ func (c *Client) Title(ctx context.Context, chatModel, text, chatLang string) (R
 			{"role": "user", "content": fmt.Sprintf(userFmt, langName, text)},
 		},
 	}
+	// The model's request tags place the title call like every other call of the model (a tag group of a model
+	// farm), and a Qwen chat template gets thinking switched off, which would use up the few tokens before a
+	// title comes. Both follow from the catalog; no setting of their own.
+	if len(model.RequestTags) > 0 {
+		req["tags"] = model.RequestTags
+	}
+	if prov.ThinkingFormat(model) == "qwen-chat-template" {
+		req["chat_template_kwargs"] = map[string]any{"enable_thinking": false}
+	}
 	// Provider-specific settings from the catalog, e.g. for DeepSeek turning off thinking,
 	// which would otherwise use up the few tokens before a title comes.
 	if len(prov.TitleRequest) > 0 {

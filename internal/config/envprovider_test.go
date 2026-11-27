@@ -92,15 +92,6 @@ func TestEnvProviderFullQwenSetting(t *testing.T) {
 	if p.ThinkingFormat(m) != "qwen-chat-template" {
 		t.Fatalf("thinking format: %q", p.ThinkingFormat(m))
 	}
-	// The title call gets the tag and no thinking.
-	var title map[string]any
-	if err := json.Unmarshal(p.TitleRequest, &title); err != nil {
-		t.Fatal(err)
-	}
-	kw, _ := title["chat_template_kwargs"].(map[string]any)
-	if kw["enable_thinking"] != false || title["tags"] == nil {
-		t.Fatalf("title request: %v", title)
-	}
 }
 
 func TestEnvProviderUnknownField(t *testing.T) {

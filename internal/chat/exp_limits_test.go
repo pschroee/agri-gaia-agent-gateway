@@ -379,3 +379,66 @@ func TestAbortExperimentRunStopsNotebookServer(t *testing.T) {
 		t.Fatalf("stopped: %v", nb.stopped)
 	}
 }
+
+// addRunCallOut stores a model call with input and output tokens, as the proxy would record it.
+func addRunCallOut(t *testing.T, e *env, chatID string, input, output int64) {
+	t.Helper()
+	_, err := e.st.AddLLMCall(context.Background(), store.LLMCall{ChatID: chatID, SlotID: "s", SourceIP: "10.0.0.2",
+		Model: "deepseek/deepseek-flash", Status: 200, Input: input, Output: output, StartedAt: time.Now()})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Issue #279: with token_basis "output" the token limit counts the output tokens (thinking included) and ignores
+// the uncached input, which a model farm reports unreliably; without it the limit counts input + output (X3.3).
+func TestExpLimitOutputBasis(t *testing.T) {
+	e := setup(t)
+	allowExperiment(e)
+	e.m.opt.ExpMaxCostUSD, e.m.opt.ExpMaxTokens, e.m.opt.ExpMaxDuration = 0, 0, 0
+	out := createLimited(t, e, &store.RunLimits{MaxTokens: 1000, TokenBasis: store.TokenBasisOutput})
+	addRunCallOut(t, e, out.ID, 900000, 600)
+	if err := e.m.chatBudget(out.ID); err != nil {
+		t.Fatalf("a huge input does not count under the output basis: %v", err)
+	}
+	addRunCallOut(t, e, out.ID, 1, 500)
+	if err := e.m.chatBudget(out.ID); err == nil || !strings.Contains(err.Error(), "experiment run limit reached: tokens") {
+		t.Fatalf("1100 output tokens over the limit of 1000: %v", err)
+	}
+	unc := createLimited(t, e, &store.RunLimits{MaxTokens: 1000, TokenBasis: store.TokenBasisUncached})
+	addRunCallOut(t, e, unc.ID, 900, 200)
+	if err := e.m.chatBudget(unc.ID); err == nil || !strings.Contains(err.Error(), "experiment run limit reached: tokens") {
+		t.Fatalf("input + output 1100 over 1000 on the default basis: %v", err)
+	}
+}
+
+func TestCreateChatRejectsBadTokenBasis(t *testing.T) {
+	e := setup(t)
+	allowExperiment(e)
+	p := experimentProfile("none")
+	p.Limits = &store.RunLimits{MaxTokens: 10, TokenBasis: "total"}
+	_, err := e.m.Create(context.Background(), NewChat{Experiment: p, Delegation: json.RawMessage(experimentDelegation),
+		Owner: "sub-1", OwnerName: experimentUser})
+	if !errors.Is(err, ErrInvalid) {
+		t.Fatalf("token_basis total: want ErrInvalid, got %v", err)
+	}
+}
+
+// Issue #279: for a run with a plan profile, a cost limit of 0 means "off": the gateway's default
+// (AGW_EXP_MAX_COST_USD) does not apply, because the model may have no list price to count.
+func TestCostLimitZeroOff(t *testing.T) {
+	e := setup(t)
+	allowExperiment(e)
+	e.m.opt.ExpMaxCostUSD, e.m.opt.ExpMaxTokens, e.m.opt.ExpMaxDuration = 0.50, 0, 0
+	c := createLimited(t, e, &store.RunLimits{MaxCostUSD: 0, MaxTokens: 1000000})
+	addRunCall(t, e, c.ID, 5, 10)
+	if err := e.m.chatBudget(c.ID); err != nil {
+		t.Fatalf("a profile with max_cost_usd 0 has no cost limit: %v", err)
+	}
+	// A run without any profile limits keeps the gateway's default.
+	plain := createExperiment(t, e, "none", NewChat{})
+	addRunCall(t, e, plain.ID, 5, 10)
+	if err := e.m.chatBudget(plain.ID); err == nil || !strings.Contains(err.Error(), "experiment run limit reached: cost") {
+		t.Fatalf("the default cost limit must apply without a profile: %v", err)
+	}
+}

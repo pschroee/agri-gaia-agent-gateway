@@ -793,6 +793,9 @@ func (m *Manager) Create(ctx context.Context, req NewChat) (ChatView, error) {
 				if l.MaxCostUSD < 0 || l.MaxTokens < 0 {
 					return ChatView{}, fmt.Errorf("%w: experiment limits: negative value", ErrInvalid)
 				}
+				if l.TokenBasis != "" && l.TokenBasis != store.TokenBasisUncached && l.TokenBasis != store.TokenBasisOutput {
+					return ChatView{}, fmt.Errorf("%w: experiment limits: token_basis must be uncached or output, not %q", ErrInvalid, l.TokenBasis)
+				}
 				if l.MaxDuration != "" {
 					if d, err := time.ParseDuration(l.MaxDuration); err != nil || d < 0 {
 						return ChatView{}, fmt.Errorf("%w: experiment limits: unreadable duration %q", ErrInvalid, l.MaxDuration)

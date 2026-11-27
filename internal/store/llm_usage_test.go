@@ -33,7 +33,7 @@ func TestChatLLMUsageSums(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	cost, tokens, err := s.ChatLLMUsage(ctx, c.ID)
+	cost, tokens, _, err := s.ChatLLMUsage(ctx, c.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +61,7 @@ func TestChatLLMUsageSumsListCost(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	cost, _, err := s.ChatLLMUsage(ctx, c.ID)
+	cost, _, _, err := s.ChatLLMUsage(ctx, c.ID)
 	if err != nil || cost < 0.2199 || cost > 0.2201 {
 		t.Fatalf("list cost sum: %v %v", cost, err)
 	}
@@ -128,5 +128,43 @@ func TestSetExperimentLimitOnce(t *testing.T) {
 	}
 	if ok, err := s.SetExperimentLimit(ctx, product.ID, "duration"); err != nil || ok {
 		t.Fatalf("product chat: ok=%v err=%v", ok, err)
+	}
+}
+
+// Issue #279: a call carries the response headers that name the serving instance, the shape of the request as sent
+// and the thinking tokens; the usage reports the output sum next to the uncached one. Rows without them read as
+// empty, not as null.
+func TestLLMCallFarmFieldsAndOutputUsage(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	c, err := s.CreateChat(ctx, NewChat{Title: "Run", Model: "farm/Org/M", Variant: "cli"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	if _, err := s.AddLLMCall(ctx, LLMCall{ChatID: c.ID, SlotID: "s", SourceIP: "1", Model: "farm/Org/M", Status: 200, StartedAt: now,
+		Input: 1000, Output: 300, Reasoning: 250,
+		UpstreamHeaders: map[string]string{"x-farm-api-base": "http://node-a.example.internal:8000/v1"},
+		RequestMeta:     map[string]any{"thinking": "on", "max_tokens": 12288, "tags": []string{"gb10"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AddLLMCall(ctx, LLMCall{ChatID: c.ID, SlotID: "s", SourceIP: "1", Model: "farm/Org/M", Status: 200, StartedAt: now,
+		Input: 5, Output: 7}); err != nil {
+		t.Fatal(err)
+	}
+	calls, err := s.ListLLMCalls(ctx, c.ID)
+	if err != nil || len(calls) != 2 {
+		t.Fatalf("list: %+v %v", calls, err)
+	}
+	if calls[0].Reasoning != 250 || calls[0].UpstreamHeaders["x-farm-api-base"] != "http://node-a.example.internal:8000/v1" ||
+		calls[0].RequestMeta["thinking"] != "on" || calls[0].RequestMeta["max_tokens"] != float64(12288) {
+		t.Fatalf("first call: %+v", calls[0])
+	}
+	if calls[1].Reasoning != 0 || len(calls[1].UpstreamHeaders) != 0 || len(calls[1].RequestMeta) != 0 {
+		t.Fatalf("second call: %+v", calls[1])
+	}
+	_, tokens, output, err := s.ChatLLMUsage(ctx, c.ID)
+	if err != nil || tokens != 1312 || output != 307 {
+		t.Fatalf("usage: tokens=%d output=%d %v", tokens, output, err)
 	}
 }

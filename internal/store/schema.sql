@@ -519,6 +519,12 @@ ALTER TABLE tool_executions ADD COLUMN IF NOT EXISTS args_truncated boolean NOT 
 ALTER TABLE tool_executions ADD COLUMN IF NOT EXISTS command_bytes bigint;
 ALTER TABLE tool_executions ADD COLUMN IF NOT EXISTS command_sha256 text;
 
+-- Model farm (issue #279): the response headers that name the serving instance, the shape of the request as sent
+-- (thinking on/off, max_tokens, tags) and the tokens the model spent on thinking (part of "output").
+ALTER TABLE llm_calls ADD COLUMN IF NOT EXISTS upstream_headers jsonb NOT NULL DEFAULT '{}';
+ALTER TABLE llm_calls ADD COLUMN IF NOT EXISTS request_meta jsonb NOT NULL DEFAULT '{}';
+ALTER TABLE llm_calls ADD COLUMN IF NOT EXISTS reasoning bigint NOT NULL DEFAULT 0;
+
 -- X5.6: the tool list of every model call as a checksum; the lists themselves once, keyed by that checksum.
 ALTER TABLE llm_calls ADD COLUMN IF NOT EXISTS tools_sha256 text;
 CREATE TABLE IF NOT EXISTS llm_toolsets (

@@ -263,3 +263,25 @@ func TestMeterFinishReasonAndCompleteness(t *testing.T) {
 		t.Fatalf("Anthropic: %+v", r)
 	}
 }
+
+// Thinking tokens come as usage.completion_tokens_details.reasoning_tokens, in JSON and in the final SSE chunk;
+// they stay part of the output tokens.
+func TestMeterReasoningTokens(t *testing.T) {
+	m := newMeter("openai-completions")
+	m.Write([]byte(`{"id":"r","choices":[{"message":{"content":"x"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":300,"completion_tokens_details":{"reasoning_tokens":250}}}`))
+	if r := m.Result(); r.Reasoning != 250 || r.Usage.Output != 300 {
+		t.Fatalf("JSON: reasoning %d, usage %+v", r.Reasoning, r.Usage)
+	}
+	m = newMeter("openai-completions")
+	m.Write([]byte(`data: {"id":"r","choices":[{"delta":{"content":"x"}}]}` + "\n\n" +
+		`data: {"id":"r","choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":40,"completion_tokens_details":{"reasoning_tokens":31}}}` + "\n\ndata: [DONE]\n\n"))
+	if r := m.Result(); r.Reasoning != 31 || r.Usage.Output != 40 {
+		t.Fatalf("SSE: reasoning %d, usage %+v", r.Reasoning, r.Usage)
+	}
+	// A provider that reports none leaves 0.
+	m = newMeter("openai-completions")
+	m.Write([]byte(`{"id":"r","choices":[],"usage":{"prompt_tokens":1,"completion_tokens":2}}`))
+	if r := m.Result(); r.Reasoning != 0 {
+		t.Fatalf("none reported: %d", r.Reasoning)
+	}
+}
