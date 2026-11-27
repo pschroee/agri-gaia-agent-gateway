@@ -501,7 +501,10 @@ func newFakeExpAPI() *fakeExpAPI {
 		chatPolled: map[string]int{},
 		// The catalogue the runner validates the plan against (#156); writeRunnerMaterial uses
 		// deepseek/flash, placeholder IDs are skipped.
-		models: []agwclient.Model{{ID: "deepseek/flash"}, {ID: "deepseek/deepseek-flash"}},
+		models: []agwclient.Model{
+			{ID: "deepseek/flash", Pricing: &agwclient.Pricing{Input: 0.14, Output: 0.28}},
+			{ID: "deepseek/deepseek-flash", Pricing: &agwclient.Pricing{Input: 0.14, Output: 0.28}},
+		},
 	}
 }
 
@@ -1071,7 +1074,7 @@ func TestValidateChecksModelIDs(t *testing.T) {
 			http.NotFound(w, r)
 			return
 		}
-		_, _ = io.WriteString(w, `[{"id":"deepseek/deepseek-flash"}]`)
+		_, _ = io.WriteString(w, `[{"id":"deepseek/deepseek-flash","pricing":{"input":0.14,"output":0.28}}]`)
 	}))
 	defer srv.Close()
 	t.Setenv("AGW_URL", srv.URL)
