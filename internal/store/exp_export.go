@@ -148,10 +148,12 @@ ORDER BY e.id`)
 		return s.exportQuery(ctx, plan, table,
 			[]string{"run_id", "cell", "task", "rep", "id", "chat_id", "slot_id", "model", "response_id", "status",
 				"tokens_in", "tokens_out", "input", "output", "cache_read", "cache_write", "cost", "list_cost", "peak", "tool_calls",
-				"started_at", "duration_ms", "finish_reason", "complete", "request_bytes", "tools_sha256"},
+				"started_at", "duration_ms", "finish_reason", "complete", "request_bytes", "tools_sha256",
+				"reasoning", "upstream_headers", "request_meta"},
 			`SELECT r.run_id, r.cell, r.task, r.rep, x.id, COALESCE(x.chat_id::text,''), x.slot_id, x.model, x.response_id,
   x.status, x.input AS tokens_in, x.output AS tokens_out, x.input, x.output, x.cache_read, x.cache_write, x.cost, COALESCE(x.list_cost, x.cost) AS list_cost, x.peak,
-  x.tool_calls, x.started_at, x.duration_ms, x.finish_reason, x.complete, x.request_bytes, COALESCE(x.tools_sha256,'')
+  x.tool_calls, x.started_at, x.duration_ms, x.finish_reason, x.complete, x.request_bytes, COALESCE(x.tools_sha256,''),
+  x.reasoning, x.upstream_headers, x.request_meta
 FROM llm_calls x JOIN plan_chats r ON r.chat_id = x.chat_id ORDER BY x.id`)
 	case "turns":
 		return s.exportQuery(ctx, plan, table,

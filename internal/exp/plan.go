@@ -134,6 +134,25 @@ func ValidateModels(p *Plan, known []string) []Problem {
 	return problems
 }
 
+// ValidateCostLimit checks the cost limit against the models' list prices (issue #279): priced maps each model ID
+// of the gateway's catalogue to whether it has a list price. A model without one (a self-hosted model) has no
+// cost to count, and a USD limit on a price of zero would be silently without effect; the plan says
+// max_cost_usd: 0 instead, which is checked and means "no cost limit". An empty map means "not checked".
+func ValidateCostLimit(p *Plan, priced map[string]bool) []Problem {
+	if p == nil || len(priced) == 0 || p.Limits.MaxCostUSD <= 0 {
+		return nil
+	}
+	var problems []Problem
+	for i, m := range p.Models {
+		id := strings.TrimSpace(m.ID)
+		if has, known := priced[id]; known && !has {
+			problems = append(problems, Problem{Where: fmt.Sprintf("model %d", i+1),
+				Text: fmt.Sprintf("cost limit not applicable: %s has no list price; set max_cost_usd: 0", id)})
+		}
+	}
+	return problems
+}
+
 // TraceValue resolves the plan's trace field: only "off" disables it, everything else (including
 // an empty field) is "on", the default for experiments.
 func TraceValue(v string) string {
@@ -161,6 +180,26 @@ type Limits struct {
 	MaxDuration   string  `yaml:"max_duration" json:"max_duration"`
 	TokensTotal   int64   `yaml:"tokens_total" json:"tokens_total"`
 	DurationTotal string  `yaml:"duration_total" json:"duration_total"`
+	// TokenBasis says what max_tokens and tokens_total count: "uncached" (the default, also when empty) is
+	// input + output without cache reads (X3.3); "output" is the output tokens, thinking included. A provider
+	// that reports cached input only sometimes, or whose requests are spread over instances with separate
+	// caches, makes the uncached input measure the infrastructure and not the model (issue #279); output
+	// tokens every provider reports the same way.
+	TokenBasis string `yaml:"token_basis,omitempty" json:"token_basis,omitempty"`
+}
+
+// Token bases of Limits.TokenBasis.
+const (
+	TokenBasisUncached = "uncached"
+	TokenBasisOutput   = "output"
+)
+
+// Basis is the plan's token basis; an empty field is "uncached".
+func (l Limits) Basis() string {
+	if l.TokenBasis == "" {
+		return TokenBasisUncached
+	}
+	return l.TokenBasis
 }
 
 // PlanTokens is the token budget over the whole plan.
@@ -423,6 +462,9 @@ func validatePlan(p *Plan) []Problem {
 	}
 	if p.Limits.MaxCostUSD < 0 {
 		add("limits.max_cost_usd must not be negative, not %v", p.Limits.MaxCostUSD)
+	}
+	if b := p.Limits.TokenBasis; b != "" && b != TokenBasisUncached && b != TokenBasisOutput {
+		add("limits.token_basis must be %q or %q, not %q", TokenBasisUncached, TokenBasisOutput, b)
 	}
 	if p.Limits.MaxTokens < 1 {
 		add("limits.max_tokens must be at least 1, not %d", p.Limits.MaxTokens)

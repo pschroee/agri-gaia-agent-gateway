@@ -425,6 +425,7 @@ type fakeExpAPI struct {
 	calls      []agwclient.ExpCallRequest
 	aborted    []string
 	chatPolled map[string]int
+	llmCalls   map[string][]agwclient.LLMCall // model calls per chat (end reason of a cut response stream)
 	seq        int
 	models     []agwclient.Model
 	createErr  error
@@ -500,7 +501,10 @@ func newFakeExpAPI() *fakeExpAPI {
 		chatPolled: map[string]int{},
 		// The catalogue the runner validates the plan against (#156); writeRunnerMaterial uses
 		// deepseek/flash, placeholder IDs are skipped.
-		models: []agwclient.Model{{ID: "deepseek/flash"}, {ID: "deepseek/deepseek-flash"}},
+		models: []agwclient.Model{
+			{ID: "deepseek/flash", Pricing: &agwclient.Pricing{Input: 0.14, Output: 0.28}},
+			{ID: "deepseek/deepseek-flash", Pricing: &agwclient.Pricing{Input: 0.14, Output: 0.28}},
+		},
 	}
 }
 
@@ -617,6 +621,11 @@ func (f *fakeExpAPI) ExpRuns(context.Context, string, string) ([]agwclient.ExpRu
 
 func (f *fakeExpAPI) ExpUsage(context.Context, string) (agwclient.ExpUsage, error) {
 	return f.usage, nil
+}
+
+// LLMCalls returns the model calls a test scripted for the chat (none by default).
+func (f *fakeExpAPI) LLMCalls(_ context.Context, id string) ([]agwclient.LLMCall, error) {
+	return f.llmCalls[id], nil
 }
 
 func (f *fakeExpAPI) ExpObjects(_ context.Context, chatID string) ([]agwclient.ExpObject, error) {
@@ -1065,7 +1074,7 @@ func TestValidateChecksModelIDs(t *testing.T) {
 			http.NotFound(w, r)
 			return
 		}
-		_, _ = io.WriteString(w, `[{"id":"deepseek/deepseek-flash"}]`)
+		_, _ = io.WriteString(w, `[{"id":"deepseek/deepseek-flash","pricing":{"input":0.14,"output":0.28}}]`)
 	}))
 	defer srv.Close()
 	t.Setenv("AGW_URL", srv.URL)

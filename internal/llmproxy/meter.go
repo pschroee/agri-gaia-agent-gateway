@@ -50,6 +50,15 @@ type Call struct {
 	// so that the recorder can store it once in llm_toolsets.
 	ToolsSHA256 string          `json:"tools_sha256,omitempty"`
 	Tools       json.RawMessage `json:"-"`
+	// Reasoning: tokens the model spent on thinking (usage.completion_tokens_details.reasoning_tokens; they are
+	// part of Usage.Output), 0 when the provider does not report them.
+	Reasoning int64 `json:"reasoning"`
+	// UpstreamHeaders: the response headers the catalog names for the model (instance_headers), which identify
+	// the instance that served the call behind a model farm; values are cut at 256 characters.
+	UpstreamHeaders map[string]string `json:"upstream_headers,omitempty"`
+	// RequestMeta: what the proxy actually sent about the request's shape: "thinking" ("on"/"off", from
+	// chat_template_kwargs.enable_thinking or thinking.type), "max_tokens" and "tags". Never message content.
+	RequestMeta map[string]any `json:"request_meta,omitempty"`
 }
 
 // ToolCall is a tool call requested by the model. ID is the
@@ -122,6 +131,9 @@ type rawUsage struct {
 	PromptTokensDetails  *struct {
 		CachedTokens int64 `json:"cached_tokens"`
 	} `json:"prompt_tokens_details"`
+	CompletionTokensDetails *struct {
+		ReasoningTokens int64 `json:"reasoning_tokens"`
+	} `json:"completion_tokens_details"`
 	// Anthropic
 	InputTokens              int64 `json:"input_tokens"`
 	OutputTokens             int64 `json:"output_tokens"`
@@ -327,6 +339,9 @@ func (m *meter) mergeUsage(u *rawUsage) {
 	if u.PromptTokensDetails != nil {
 		d.PromptTokensDetails = u.PromptTokensDetails
 	}
+	if u.CompletionTokensDetails != nil {
+		d.CompletionTokensDetails = u.CompletionTokensDetails
+	}
 }
 
 // Result returns what was collected. Tokens as with pi: input without cache hits.
@@ -348,6 +363,9 @@ func (m *meter) Result() Call {
 				cached = u.PromptTokensDetails.CachedTokens
 			}
 			c.Usage = config.Usage{Input: u.PromptTokens - cached, Output: u.CompletionTokens, CacheRead: cached}
+		}
+		if u.CompletionTokensDetails != nil {
+			c.Reasoning = u.CompletionTokensDetails.ReasoningTokens
 		}
 	}
 	c.FinishReason = strings.ToValidUTF8(m.finish, "")

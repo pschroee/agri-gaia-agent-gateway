@@ -150,6 +150,30 @@ services:
       AGW_MAX_FAILED_SAME_TOOL: ${AGW_MAX_FAILED_SAME_TOOL:-5}
       AGW_INFERENCE_RUNTIME: ${AGW_INFERENCE_RUNTIME:-triton}
       AGW_PLATFORM_GPU: ${AGW_PLATFORM_GPU:-}
+      # The model the gateway uses, chosen in .env alone (README, "Choosing the model through the environment").
+      # Empty values mean: models.json as it is. The key named by AGW_LLM_API_KEY_ENV comes from .env itself.
+      AGW_MODEL: ${AGW_MODEL:-}
+      AGW_LLM_PROVIDER: ${AGW_LLM_PROVIDER:-}
+      AGW_LLM_BASE_URL: ${AGW_LLM_BASE_URL:-}
+      AGW_LLM_MODEL_ID: ${AGW_LLM_MODEL_ID:-}
+      AGW_LLM_API_KEY_ENV: ${AGW_LLM_API_KEY_ENV:-}
+      AGW_LLM_API: ${AGW_LLM_API:-}
+      AGW_LLM_CONTEXT_WINDOW: ${AGW_LLM_CONTEXT_WINDOW:-}
+      AGW_LLM_MAX_TOKENS: ${AGW_LLM_MAX_TOKENS:-}
+      AGW_LLM_INPUT: ${AGW_LLM_INPUT:-}
+      AGW_LLM_THINKING: ${AGW_LLM_THINKING:-}
+      AGW_LLM_TAGS: ${AGW_LLM_TAGS:-}
+      AGW_LLM_SAMPLING: ${AGW_LLM_SAMPLING:-}
+      AGW_LLM_SELF_HOSTED: ${AGW_LLM_SELF_HOSTED:-}
+      AGW_LLM_INSTANCE_HEADERS: ${AGW_LLM_INSTANCE_HEADERS:-}
+      AGW_LLM_EXTRA_HOST: ${AGW_LLM_EXTRA_HOST:-}
+      AGW_LLM_PROVIDER_JSON: ${AGW_LLM_PROVIDER_JSON:-}
+      AGW_LLM_MODEL_JSON: ${AGW_LLM_MODEL_JSON:-}
+    # Name resolution for an endpoint that only an internal DNS knows: AGW_LLM_EXTRA_HOST is "name:ip", and
+    # the name must be the host of AGW_LLM_BASE_URL (checked at start). Only the orchestrator talks to the
+    # model endpoint; the sandboxes never see the name. The placeholder keeps the file valid without a value.
+    extra_hosts:
+      - "${AGW_LLM_EXTRA_HOST:-agw-no-extra-host.invalid:127.0.0.1}"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - sockets:/run/agw

@@ -132,6 +132,75 @@ func toolsetOf(body []byte) (sha string, tools json.RawMessage, ok bool) {
 	return hex.EncodeToString(sum[:]), canon, true
 }
 
+// maxInstanceHeader bounds the value of a recorded response header.
+const maxInstanceHeader = 256
+
+// instanceHeaders picks the named response headers (the ones that identify the serving instance behind a
+// model farm). Names are recorded lower case; an absent header is left out, a long value cut.
+func instanceHeaders(h http.Header, names []string) map[string]string {
+	var out map[string]string
+	for _, n := range names {
+		v := strings.ToValidUTF8(h.Get(n), "")
+		if v == "" {
+			continue
+		}
+		if r := []rune(v); len(r) > maxInstanceHeader {
+			v = string(r[:maxInstanceHeader])
+		}
+		if out == nil {
+			out = map[string]string{}
+		}
+		out[strings.ToLower(n)] = v
+	}
+	return out
+}
+
+// requestMetaOf describes the shape of the request as it is sent (after the proxy's own fields are set):
+// whether thinking was asked for, the output limit and the tags. Only these; never the messages.
+func requestMetaOf(body []byte) map[string]any {
+	var req struct {
+		MaxTokens           *int64          `json:"max_tokens"`
+		MaxCompletionTokens *int64          `json:"max_completion_tokens"`
+		Tags                json.RawMessage `json:"tags"`
+		ChatTemplateKwargs  *struct {
+			EnableThinking *bool `json:"enable_thinking"`
+		} `json:"chat_template_kwargs"`
+		Thinking *struct {
+			Type string `json:"type"`
+		} `json:"thinking"`
+	}
+	if json.Unmarshal(body, &req) != nil {
+		return nil
+	}
+	meta := map[string]any{}
+	switch {
+	case req.MaxTokens != nil:
+		meta["max_tokens"] = *req.MaxTokens
+	case req.MaxCompletionTokens != nil:
+		meta["max_tokens"] = *req.MaxCompletionTokens
+	}
+	switch {
+	case req.ChatTemplateKwargs != nil && req.ChatTemplateKwargs.EnableThinking != nil:
+		meta["thinking"] = onOff(*req.ChatTemplateKwargs.EnableThinking)
+	case req.Thinking != nil && req.Thinking.Type == "enabled":
+		meta["thinking"] = "on"
+	case req.Thinking != nil && req.Thinking.Type == "disabled":
+		meta["thinking"] = "off"
+	}
+	var tags []string
+	if json.Unmarshal(req.Tags, &tags) == nil && len(tags) > 0 {
+		meta["tags"] = tags
+	}
+	return meta
+}
+
+func onOff(b bool) string {
+	if b {
+		return "on"
+	}
+	return "off"
+}
+
 func deny(w http.ResponseWriter, code int, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
@@ -241,8 +310,22 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			sentSeed = &s
 		}
 	}
-	if sentTemp != nil || sentSeed != nil {
-		rewritten, err := setSampling(body, sentTemp, sentSeed)
+	// The proxy owns these fields of the request, whatever the sandbox sent: the tags of the model (a tag group
+	// of a model farm, placing every call) and, for an experiment run, temperature and seed (X3.6). The sandbox
+	// cannot get around the tags by calling the proxy itself, because the proxy overwrites them here, and a
+	// duplicated key is refused (setFields).
+	owned := map[string]json.RawMessage{}
+	if len(mcfg.RequestTags) > 0 {
+		owned["tags"], _ = json.Marshal(mcfg.RequestTags)
+	}
+	if sentTemp != nil {
+		owned["temperature"] = json.RawMessage(strconv.FormatFloat(*sentTemp, 'g', -1, 64))
+	}
+	if sentSeed != nil {
+		owned["seed"] = json.RawMessage(strconv.FormatInt(*sentSeed, 10))
+	}
+	if len(owned) > 0 {
+		rewritten, err := setFields(body, owned)
 		if err != nil {
 			slog.Warn("LLM proxy: request refused", "provider", provID, "reason", err)
 			deny(w, http.StatusBadRequest, err.Error())
@@ -250,6 +333,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		body = rewritten
 	}
+	requestMeta := requestMetaOf(body)
 	// X5.6: the tool list of the request as sent (the sampling fields do not touch it).
 	toolsSHA, toolsJSON, hasTools := toolsetOf(body)
 	target, err := url.Parse(prov.Upstream)
@@ -282,6 +366,8 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				c.ChatID, c.SlotID, c.SourceIP, c.Status = chatID, slotID, srcIP, status
 				c.Model = provID + "/" + model
 				c.Temperature, c.Seed = sentTemp, sentSeed
+				c.RequestMeta = requestMeta
+				c.UpstreamHeaders = instanceHeaders(resp.Header, mcfg.InstanceHeaders)
 				c.StartedAt, c.Duration = started, time.Since(started)
 				c.DurationMs = c.Duration.Milliseconds()
 				c.RequestBytes = int64(len(body))

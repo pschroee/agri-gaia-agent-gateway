@@ -48,6 +48,19 @@ type Model struct {
 	// sent for an experiment run, because some providers reject unknown fields. The proxy only sets the
 	// values; everything else of the request stays untouched.
 	Sampling *Sampling `json:"sampling,omitempty"`
+	// The fields below come from the environment provider (envprovider.go); a model of models.json leaves
+	// them empty. ThinkingLevelMap is pi's thinkingLevelMap (null = level not offered), Compat and Headers
+	// the model's pi fields, PiExtra the remaining pi fields (inputLimits, promptCache, samplingParams) as
+	// canonical JSON. RequestTags are set by the proxy in every request (a tag group of a model farm), and
+	// InstanceHeaders names the response headers that identify the instance that served a call.
+	// Thinking is "on", "off" or "user" (AGW_LLM_THINKING).
+	ThinkingLevelMap map[string]*string `json:"thinking_level_map,omitempty"`
+	Compat           json.RawMessage    `json:"compat,omitempty"`
+	Headers          map[string]string  `json:"headers,omitempty"`
+	PiExtra          json.RawMessage    `json:"pi_extra,omitempty"`
+	RequestTags      []string           `json:"request_tags,omitempty"`
+	InstanceHeaders  []string           `json:"instance_headers,omitempty"`
+	Thinking         string             `json:"thinking,omitempty"`
 }
 
 // Sampling: the sampling fields a model accepts (X3.6). The catalog states them per model; nothing is
@@ -75,11 +88,14 @@ func (m Model) ReadsImages() bool {
 }
 
 type Provider struct {
-	ID        string          `json:"id"`
-	Upstream  string          `json:"upstream"`
-	API       string          `json:"api"`
-	APIKeyEnv string          `json:"api_key_env"`
-	Compat    json.RawMessage `json:"compat,omitempty"`
+	ID string `json:"id"`
+	// DisplayName and Headers are pi provider fields from the environment provider (pi's "name" and "headers").
+	DisplayName string            `json:"name,omitempty"`
+	Headers     map[string]string `json:"headers,omitempty"`
+	Upstream    string            `json:"upstream"`
+	API         string            `json:"api"`
+	APIKeyEnv   string            `json:"api_key_env"`
+	Compat      json.RawMessage   `json:"compat,omitempty"`
 	// TitleRequest: extra fields the orchestrator's title call (package titler) sends.
 	TitleRequest json.RawMessage `json:"title_request,omitempty"`
 	Tariff       *Tariff         `json:"tariff,omitempty"`
@@ -92,6 +108,9 @@ func (p Provider) APIKey() string { return os.Getenv(p.APIKeyEnv) }
 type Catalog struct {
 	Default   string     `json:"default"`
 	Providers []Provider `json:"providers"`
+	// ExtraHost is AGW_LLM_EXTRA_HOST ("name:ip"), the host mapping Compose gives the orchestrator for an
+	// internal endpoint. It is part of the effective catalog (and its checksum), never of models.json.
+	ExtraHost string `json:"-"`
 
 	regMu     sync.RWMutex
 	registry  map[string]RegistryModel // "provider/model" from get_available_models
@@ -292,35 +311,46 @@ func (c *Catalog) PiModelsJSON(proxyBase string) ([]byte, error) {
 		CacheWrite float64 `json:"cacheWrite"`
 	}
 	type piModel struct {
-		ID            string  `json:"id"`
-		Name          string  `json:"name,omitempty"`
-		Reasoning     bool    `json:"reasoning"`
-		ContextWindow int     `json:"contextWindow,omitempty"`
-		MaxTokens     int     `json:"maxTokens,omitempty"`
-		Cost          *piCost `json:"cost,omitempty"`
+		ID               string             `json:"id"`
+		Name             string             `json:"name,omitempty"`
+		Reasoning        bool               `json:"reasoning"`
+		ThinkingLevelMap map[string]*string `json:"thinkingLevelMap,omitempty"`
+		Input            []string           `json:"input,omitempty"`
+		ContextWindow    int                `json:"contextWindow,omitempty"`
+		MaxTokens        int                `json:"maxTokens,omitempty"`
+		Cost             *piCost            `json:"cost,omitempty"`
+		Headers          map[string]string  `json:"headers,omitempty"`
+		Compat           json.RawMessage    `json:"compat,omitempty"`
 	}
 	type piProvider struct {
-		BaseURL string          `json:"baseUrl"`
-		API     string          `json:"api"`
-		APIKey  string          `json:"apiKey"`
-		Compat  json.RawMessage `json:"compat,omitempty"`
-		Models  []piModel       `json:"models,omitempty"`
+		Name    string            `json:"name,omitempty"`
+		BaseURL string            `json:"baseUrl"`
+		API     string            `json:"api"`
+		APIKey  string            `json:"apiKey"`
+		Headers map[string]string `json:"headers,omitempty"`
+		Compat  json.RawMessage   `json:"compat,omitempty"`
+		Models  []json.RawMessage `json:"models,omitempty"`
 	}
 	doc := struct {
 		Providers map[string]piProvider `json:"providers"`
 	}{Providers: map[string]piProvider{}}
 	base := strings.TrimRight(proxyBase, "/")
 	for _, p := range c.Providers {
-		pp := piProvider{BaseURL: base + "/llm/" + p.ID, API: p.API, APIKey: "agw-proxy", Compat: p.Compat}
+		pp := piProvider{Name: p.DisplayName, BaseURL: base + "/llm/" + p.ID, API: p.API, APIKey: "agw-proxy", Headers: p.Headers, Compat: p.Compat}
 		for _, m := range p.Models {
 			if m.PiBuiltin {
 				continue // pi keeps model, compat and prices from its registry
 			}
-			pm := piModel{ID: m.ID, Name: m.Name, Reasoning: m.Reasoning, ContextWindow: m.ContextWindow, MaxTokens: m.MaxTokens}
+			pm := piModel{ID: m.ID, Name: m.Name, Reasoning: m.Reasoning, ThinkingLevelMap: m.ThinkingLevelMap, Input: m.Input,
+				ContextWindow: m.ContextWindow, MaxTokens: m.MaxTokens, Headers: m.Headers, Compat: m.Compat}
 			if m.Pricing != nil {
 				pm.Cost = &piCost{m.Pricing.Input, m.Pricing.Output, m.Pricing.CacheRead, m.Pricing.CacheWrite}
 			}
-			pp.Models = append(pp.Models, pm)
+			raw, err := mergePiExtra(pm, m.PiExtra)
+			if err != nil {
+				return nil, fmt.Errorf("model %s/%s: %w", p.ID, m.ID, err)
+			}
+			pp.Models = append(pp.Models, raw)
 		}
 		doc.Providers[p.ID] = pp
 	}

@@ -191,9 +191,12 @@ func (s *Store) ListExpRuns(ctx context.Context, plan, cell string) ([]ExpRun, e
 // Duration is the wall-clock time of every attempt, a superseded one with the time it used and a
 // running one up to now.
 type ExpUsage struct {
-	TokensTotal   int64  `json:"tokens_total"`
-	DurationTotal string `json:"duration_total"`
-	Runs          int    `json:"runs"`
+	TokensTotal int64 `json:"tokens_total"`
+	// OutputTokensTotal: the output tokens of the plan's chats (thinking included), for a plan whose
+	// limits.token_basis is "output" (issue #279).
+	OutputTokensTotal int64  `json:"output_tokens_total"`
+	DurationTotal     string `json:"duration_total"`
+	Runs              int    `json:"runs"`
 }
 
 // ExpUsage sums tokens and duration of every attempt of a plan.
@@ -206,9 +209,11 @@ func (s *Store) ExpUsage(ctx context.Context, plan string) (ExpUsage, error) {
 		SELECT
 		  COALESCE((SELECT SUM(x.input + x.output) FROM llm_calls x
 		            WHERE x.chat_id IN (SELECT r.chat_id FROM exp_runs r WHERE r.plan=$1 AND r.chat_id IS NOT NULL)), 0),
+		  COALESCE((SELECT SUM(x.output) FROM llm_calls x
+		            WHERE x.chat_id IN (SELECT r.chat_id FROM exp_runs r WHERE r.plan=$1 AND r.chat_id IS NOT NULL)), 0),
 		  COALESCE(SUM(EXTRACT(EPOCH FROM (COALESCE(ended_at, now()) - started_at)))::bigint, 0),
 		  COUNT(*)
-		FROM exp_runs WHERE plan=$1`, plan).Scan(&u.TokensTotal, &seconds, &u.Runs)
+		FROM exp_runs WHERE plan=$1`, plan).Scan(&u.TokensTotal, &u.OutputTokensTotal, &seconds, &u.Runs)
 	if err != nil {
 		return ExpUsage{}, err
 	}

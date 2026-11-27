@@ -132,3 +132,43 @@ func TestTitleRejectsForeignScript(t *testing.T) {
 		t.Fatalf("result %+v, error %v", r, err)
 	}
 }
+
+// Issue #279: the title call goes to the provider directly. A model with request tags sends them, and a Qwen chat
+// template gets thinking switched off, which would use up the few tokens before a title comes.
+func TestTitlerQwenNoThinking(t *testing.T) {
+	var got map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(b, &got)
+		io.WriteString(w, `{"choices":[{"message":{"content":"Merge data"}}],"usage":{"prompt_tokens":10,"completion_tokens":3}}`)
+	}))
+	defer srv.Close()
+	cat := &config.Catalog{Providers: []config.Provider{{
+		ID: "farm", Upstream: srv.URL, API: "openai-completions",
+		Compat: json.RawMessage(`{"thinkingFormat":"qwen-chat-template"}`),
+		Models: []config.Model{{ID: "Org/M", RequestTags: []string{"gb10"}}},
+	}}}
+	if _, err := New(cat, "").Title(context.Background(), "farm/Org/M", "how do I merge two dataframes?", ""); err != nil {
+		t.Fatal(err)
+	}
+	kw, _ := got["chat_template_kwargs"].(map[string]any)
+	if kw["enable_thinking"] != false {
+		t.Fatalf("chat_template_kwargs: %v", got)
+	}
+	if tags, _ := got["tags"].([]any); len(tags) != 1 || tags[0] != "gb10" {
+		t.Fatalf("tags: %v", got["tags"])
+	}
+	if got["model"] != "Org/M" {
+		t.Fatalf("model: %v", got["model"])
+	}
+	// Another thinking format leaves the request alone.
+	cat.Providers[0].Compat = nil
+	cat.Providers[0].Models[0].RequestTags = nil
+	got = nil
+	if _, err := New(cat, "").Title(context.Background(), "farm/Org/M", "how do I merge two dataframes?", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, has := got["chat_template_kwargs"]; has || got["tags"] != nil {
+		t.Fatalf("no tags and no Qwen template, nothing added: %v", got)
+	}
+}

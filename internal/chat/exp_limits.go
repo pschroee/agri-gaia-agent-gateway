@@ -132,7 +132,7 @@ func (m *Manager) experimentLimit(chatID, at string) error {
 	if d := m.expDurationLimit(exp); d > 0 && !created.IsZero() && time.Since(created) >= d {
 		return m.hitExperimentLimit(ctx, chatID, at, ExpLimitDuration)
 	}
-	cost, tokens, err := m.st.ChatLLMUsage(ctx, chatID)
+	cost, tokens, output, err := m.st.ChatLLMUsage(ctx, chatID)
 	if err != nil {
 		// An unreadable usage must not block the run: the duration still bounds it.
 		slog.Error("experiment run usage not readable", "chat", chatID, "error", err)
@@ -141,8 +141,9 @@ func (m *Manager) experimentLimit(chatID, at string) error {
 	if lim := m.expCostLimit(exp); lim > 0 && cost >= lim {
 		return m.hitExperimentLimit(ctx, chatID, at, ExpLimitCost)
 	}
-	// tokens are input + output without cache reads (X3.3, #206)
-	if lim := m.expTokenLimit(exp); lim > 0 && tokens >= lim {
+	// tokens are input + output without cache reads (X3.3, #206), or the output alone when the run's token
+	// basis says so (#279)
+	if lim := m.expTokenLimit(exp); lim > 0 && expTokensUsed(exp, tokens, output) >= lim {
 		return m.hitExperimentLimit(ctx, chatID, at, ExpLimitTokens)
 	}
 	return nil
@@ -150,11 +151,24 @@ func (m *Manager) experimentLimit(chatID, at string) error {
 
 // expCostLimit, expTokenLimit and expDurationLimit give the limit of the run's profile (#206), else the gateway's
 // default from AGW_EXP_MAX_*.
+//
+// The cost limit differs: a run that carries a profile from a plan has the plan's value, and 0 there means "no
+// cost limit" (a model without a list price has nothing to count, issue #279). Only a run without a profile
+// takes the gateway's default.
 func (m *Manager) expCostLimit(exp *store.Experiment) float64 {
-	if exp.Limits != nil && exp.Limits.MaxCostUSD > 0 {
+	if exp.Limits != nil {
 		return exp.Limits.MaxCostUSD
 	}
 	return m.opt.ExpMaxCostUSD
+}
+
+// expTokensUsed is what the token limit counts: input + output without cache reads (the default basis), or
+// the output alone (token_basis "output").
+func expTokensUsed(exp *store.Experiment, uncached, output int64) int64 {
+	if exp.Limits != nil && exp.Limits.TokenBasis == store.TokenBasisOutput {
+		return output
+	}
+	return uncached
 }
 
 func (m *Manager) expTokenLimit(exp *store.Experiment) int64 {

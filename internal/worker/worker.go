@@ -909,7 +909,11 @@ func (f *Factory) Create(ctx context.Context, slotID, variant string) (chat.Agen
 		slog.Warn("pi reports at startup", "slot", slotID, "stderr", tail(s, 400))
 	}
 	if !f.Cat.HasRegistry() {
-		f.loadRegistry(rctx, w)
+		if err := f.loadRegistry(rctx, w); err != nil {
+			slog.Error("pi rejected the model configuration; no slot can start until it is corrected", "error", err)
+			cleanup()
+			return nil, err
+		}
 	}
 	slog.Info("slot ready", "slot", slotID, "variant", variant, "pi", w.inst.Name, "exec", w.exec.Name, "ms", time.Since(began).Milliseconds())
 	return w, nil
@@ -970,19 +974,25 @@ func withRole(l map[string]string, role string) map[string]string {
 	return out
 }
 
-// loadRegistry takes over prices and names from pi's own model registry.
-func (f *Factory) loadRegistry(ctx context.Context, w *Worker) {
+// loadRegistry takes over prices and names from pi's own model registry. It also checks that pi accepted the
+// models.json the gateway wrote: when pi cannot load the file (a rejected field), it falls back to its built-in
+// models and the RPC does not report the error, so a model of the catalog that pi does not list is the sign
+// (second stage of the check of the AGW_LLM_* settings, which the gateway already checked strictly at start).
+func (f *Factory) loadRegistry(ctx context.Context, w *Worker) error {
 	resp, err := w.rpc.Call(ctx, map[string]any{"type": "get_available_models"})
 	if err != nil {
 		slog.Warn("pi model registry not readable", "error", err)
-		return
+		return nil
 	}
 	var d struct {
 		Models []config.RegistryModel `json:"models"`
 	}
 	if err := json.Unmarshal(resp.Data, &d); err != nil {
 		slog.Warn("pi model registry unparsable", "error", err)
-		return
+		return nil
+	}
+	if missing := MissingFromRegistry(f.Cat, d.Models); len(missing) > 0 {
+		return fmt.Errorf("pi does not list %s: it did not accept the models.json written from the catalog", strings.Join(missing, ", "))
 	}
 	ver := "?"
 	if out, err := w.ExecPi(ctx, []string{"pi", "--version"}, nil); err == nil {
@@ -990,6 +1000,25 @@ func (f *Factory) loadRegistry(ctx context.Context, w *Worker) {
 	}
 	f.Cat.SetRegistry(ver, d.Models)
 	slog.Info("pi model registry loaded", "models", len(d.Models), "pi", ver)
+	return nil
+}
+
+// MissingFromRegistry lists the models of the catalog that pi must know from the models.json written for it
+// (those that are not pi_builtin) but does not list.
+func MissingFromRegistry(cat *config.Catalog, reg []config.RegistryModel) []string {
+	have := map[string]bool{}
+	for _, r := range reg {
+		have[r.Provider+"/"+r.ID] = true
+	}
+	var missing []string
+	for _, p := range cat.Providers {
+		for _, m := range p.Models {
+			if id := p.ID + "/" + m.ID; !m.PiBuiltin && !have[id] {
+				missing = append(missing, id)
+			}
+		}
+	}
+	return missing
 }
 
 func tail(s string, n int) string {

@@ -24,14 +24,26 @@ import (
 // BuildEnvironment reads the identity of this build once at startup (X8.1/X8.2). The catalogue and the
 // skill directory are files of the image; a missing file leaves the checksum empty, which the lock check
 // reports instead of silently accepting it.
-func BuildEnvironment(env config.Env) exp.Environment {
-	catalog, _ := exp.FileSHA256(env.CatalogPath)
+//
+// The catalogue checksum is the one of the effective catalogue (the file, the provider built from AGW_LLM_*,
+// AGW_MODEL): switching the model in the .env changes it. The file's own checksum and the effective catalogue
+// are reported next to it; no key value is ever part of it.
+func BuildEnvironment(env config.Env, cat *config.Catalog) exp.Environment {
+	fileSHA, _ := exp.FileSHA256(env.CatalogPath)
+	var catalog string
+	var effective []byte
+	if cat != nil {
+		catalog, _ = cat.EffectiveSHA256()
+		effective, _ = cat.EffectiveJSON()
+	}
 	skills, _ := exp.TreeSHA256(env.SkillsPath)
 	return exp.Environment{
 		GatewayVersion:    version.String(),
 		GatewayCommit:     version.Commit,
 		GatewayDescribe:   version.Describe,
 		CatalogSHA256:     catalog,
+		CatalogFileSHA256: fileSHA,
+		Catalog:           effective,
 		SkillsSHA256:      skills,
 		InstructionSHA256: chat.RightsInstructionSHA256(),
 	}

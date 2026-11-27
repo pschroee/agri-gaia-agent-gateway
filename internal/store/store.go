@@ -154,7 +154,16 @@ type RunLimits struct {
 	MaxCostUSD  float64 `json:"max_cost_usd"`
 	MaxTokens   int64   `json:"max_tokens"`
 	MaxDuration string  `json:"max_duration"` // Go duration, e.g. "5m"; empty: the gateway's default
+	// TokenBasis says what MaxTokens counts: "uncached" (empty: input + output without cache reads, X3.3) or
+	// "output" (output tokens, thinking included; for a provider that does not report cached input reliably).
+	TokenBasis string `json:"token_basis,omitempty"`
 }
+
+// Token bases of RunLimits.TokenBasis and of the plan's limits.token_basis.
+const (
+	TokenBasisUncached = "uncached"
+	TokenBasisOutput   = "output"
+)
 
 type NewChat struct {
 	Title, Model, Variant string
@@ -1384,6 +1393,12 @@ type LLMCall struct {
 	ModelReported string `json:"model_reported,omitempty"`
 	// ToolsSHA256: checksum of the canonical tool list of this call (X5.6); the list itself is in llm_toolsets.
 	ToolsSHA256 string `json:"tools_sha256,omitempty"`
+	// Reasoning: thinking tokens (usage.completion_tokens_details.reasoning_tokens), part of Output; 0 when not
+	// reported. UpstreamHeaders: the response headers that name the serving instance. RequestMeta: the shape of
+	// the request as sent (thinking, max_tokens, tags). Issue #279.
+	Reasoning       int64             `json:"reasoning"`
+	UpstreamHeaders map[string]string `json:"upstream_headers,omitempty"`
+	RequestMeta     map[string]any    `json:"request_meta,omitempty"`
 }
 
 func (s *Store) AddLLMCall(ctx context.Context, c LLMCall) (LLMCall, error) {
@@ -1394,20 +1409,45 @@ func (s *Store) AddLLMCall(ctx context.Context, c LLMCall) (LLMCall, error) {
 	if len(c.ToolCalls) == 0 {
 		c.ToolCalls = json.RawMessage("[]")
 	}
-	err := s.pool.QueryRow(ctx, `
-INSERT INTO llm_calls (chat_id, slot_id, source_ip, model, response_id, status, input, output, cache_read, cache_write, cost, peak, tool_calls, started_at, duration_ms, finish_reason, complete, request_bytes, temperature, seed, model_reported, tools_sha256, list_cost)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,NULLIF($22,''),NULLIF($23::double precision,0)) RETURNING id`,
-		chat, c.SlotID, c.SourceIP, c.Model, c.ResponseID, c.Status, c.Input, c.Output, c.CacheRead, c.CacheWrite, c.Cost, c.Peak, []byte(c.ToolCalls), c.StartedAt, c.DurationMs, noNUL(c.FinishReason), c.Complete, c.RequestBytes, c.Temperature, c.Seed, noNUL(c.ModelReported), c.ToolsSHA256, c.ListCost).Scan(&c.ID)
+	upstream, err := json.Marshal(nonNilStrings(c.UpstreamHeaders))
+	if err != nil {
+		return c, err
+	}
+	meta, err := json.Marshal(nonNilAny(c.RequestMeta))
+	if err != nil {
+		return c, err
+	}
+	err = s.pool.QueryRow(ctx, `
+INSERT INTO llm_calls (chat_id, slot_id, source_ip, model, response_id, status, input, output, cache_read, cache_write, cost, peak, tool_calls, started_at, duration_ms, finish_reason, complete, request_bytes, temperature, seed, model_reported, tools_sha256, list_cost, reasoning, upstream_headers, request_meta)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,NULLIF($22,''),NULLIF($23::double precision,0),$24,$25::jsonb,$26::jsonb) RETURNING id`,
+		chat, c.SlotID, c.SourceIP, c.Model, c.ResponseID, c.Status, c.Input, c.Output, c.CacheRead, c.CacheWrite, c.Cost, c.Peak, []byte(c.ToolCalls), c.StartedAt, c.DurationMs, noNUL(c.FinishReason), c.Complete, c.RequestBytes, c.Temperature, c.Seed, noNUL(c.ModelReported), c.ToolsSHA256, c.ListCost,
+		c.Reasoning, upstream, meta).Scan(&c.ID)
 	return c, err
 }
 
+// nonNilStrings and nonNilAny keep the jsonb columns objects ('{}') instead of JSON null.
+func nonNilStrings(m map[string]string) map[string]string {
+	if m == nil {
+		return map[string]string{}
+	}
+	return m
+}
+
+func nonNilAny(m map[string]any) map[string]any {
+	if m == nil {
+		return map[string]any{}
+	}
+	return m
+}
+
 // ChatLLMUsage sums what a chat's model calls cost and how many tokens they used (X3.2, X3.3): llm_calls is the
-// authoritative source, subagent runs included. Tokens are input + output without the cache reads. The cost is the
+// authoritative source, subagent runs included. tokens is input + output without the cache reads, output the
+// output alone (thinking included; the plan's token_basis "output" counts it, issue #279). The cost is the
 // cost at the fixed list price (list_cost, the peak tariff whatever the hour; rows without it count their billed
 // cost), so that the limit does not depend on the time of day (BM17 E3, K1).
-func (s *Store) ChatLLMUsage(ctx context.Context, chatID string) (cost float64, tokens int64, err error) {
-	err = s.pool.QueryRow(ctx, `SELECT COALESCE(SUM(COALESCE(list_cost, cost)),0), COALESCE(SUM(input + output),0) FROM llm_calls WHERE chat_id=$1`, chatID).Scan(&cost, &tokens)
-	return cost, tokens, err
+func (s *Store) ChatLLMUsage(ctx context.Context, chatID string) (cost float64, tokens, output int64, err error) {
+	err = s.pool.QueryRow(ctx, `SELECT COALESCE(SUM(COALESCE(list_cost, cost)),0), COALESCE(SUM(input + output),0), COALESCE(SUM(output),0) FROM llm_calls WHERE chat_id=$1`, chatID).Scan(&cost, &tokens, &output)
+	return cost, tokens, output, err
 }
 
 // PutToolset stores a tool list once, keyed by its checksum (X5.6).
@@ -1433,7 +1473,8 @@ func (s *Store) ListLLMCalls(ctx context.Context, chatID string) ([]LLMCall, err
 	rows, err := s.pool.Query(ctx, `
 SELECT x.id, x.slot_id, x.source_ip, x.model, x.response_id, x.status, x.input, x.output, x.cache_read, x.cache_write, x.cost, COALESCE(x.list_cost, x.cost), x.peak, x.tool_calls, x.started_at, x.duration_ms,
   (x.response_id <> '' AND EXISTS (SELECT 1 FROM chat_messages m WHERE m.chat_id = x.chat_id AND m.role = 'assistant' AND m.message->>'responseId' = x.response_id)),
-  x.finish_reason, x.complete, x.request_bytes, x.temperature, x.seed, x.model_reported, COALESCE(x.tools_sha256,'')
+  x.finish_reason, x.complete, x.request_bytes, x.temperature, x.seed, x.model_reported, COALESCE(x.tools_sha256,''),
+  x.reasoning, x.upstream_headers, x.request_meta
 FROM llm_calls x WHERE x.chat_id = $1 ORDER BY x.id`, chatID)
 	if err != nil {
 		return nil, err
@@ -1442,11 +1483,18 @@ FROM llm_calls x WHERE x.chat_id = $1 ORDER BY x.id`, chatID)
 	out := []LLMCall{}
 	for rows.Next() {
 		var c LLMCall
-		var tc []byte
+		var tc, upstream, meta []byte
 		if err := rows.Scan(&c.ID, &c.SlotID, &c.SourceIP, &c.Model, &c.ResponseID, &c.Status, &c.Input, &c.Output,
 			&c.CacheRead, &c.CacheWrite, &c.Cost, &c.ListCost, &c.Peak, &tc, &c.StartedAt, &c.DurationMs, &c.Main, &c.FinishReason,
-			&c.Complete, &c.RequestBytes, &c.Temperature, &c.Seed, &c.ModelReported, &c.ToolsSHA256); err != nil {
+			&c.Complete, &c.RequestBytes, &c.Temperature, &c.Seed, &c.ModelReported, &c.ToolsSHA256,
+			&c.Reasoning, &upstream, &meta); err != nil {
 			return nil, err
+		}
+		if len(upstream) > 0 && string(upstream) != "{}" {
+			_ = json.Unmarshal(upstream, &c.UpstreamHeaders)
+		}
+		if len(meta) > 0 && string(meta) != "{}" {
+			_ = json.Unmarshal(meta, &c.RequestMeta)
 		}
 		c.ChatID, c.ToolCalls = chatID, tc
 		out = append(out, c)
