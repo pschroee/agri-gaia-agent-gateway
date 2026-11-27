@@ -305,6 +305,15 @@ type LLMCall struct {
 	StartedAt  string        `json:"started_at"`
 	DurationMs int64         `json:"duration_ms"`
 	Main       bool          `json:"main"`
+	// FinishReason and Complete: whether the response came to its end (M1); a status 200 with Complete false is a
+	// response stream the provider side cut off.
+	FinishReason string `json:"finish_reason,omitempty"`
+	Complete     bool   `json:"complete"`
+	// Issue #279: thinking tokens (part of Output), the response headers that name the serving instance and the
+	// shape of the request as sent.
+	Reasoning       int64             `json:"reasoning,omitempty"`
+	UpstreamHeaders map[string]string `json:"upstream_headers,omitempty"`
+	RequestMeta     map[string]any    `json:"request_meta,omitempty"`
 }
 
 // SubagentPayload: filled depending on Kind (task/text: Text; tool_call: Name, Arguments;

@@ -425,6 +425,7 @@ type fakeExpAPI struct {
 	calls      []agwclient.ExpCallRequest
 	aborted    []string
 	chatPolled map[string]int
+	llmCalls   map[string][]agwclient.LLMCall // model calls per chat (end reason of a cut response stream)
 	seq        int
 	models     []agwclient.Model
 	createErr  error
@@ -617,6 +618,11 @@ func (f *fakeExpAPI) ExpRuns(context.Context, string, string) ([]agwclient.ExpRu
 
 func (f *fakeExpAPI) ExpUsage(context.Context, string) (agwclient.ExpUsage, error) {
 	return f.usage, nil
+}
+
+// LLMCalls returns the model calls a test scripted for the chat (none by default).
+func (f *fakeExpAPI) LLMCalls(_ context.Context, id string) ([]agwclient.LLMCall, error) {
+	return f.llmCalls[id], nil
 }
 
 func (f *fakeExpAPI) ExpObjects(_ context.Context, chatID string) ([]agwclient.ExpObject, error) {

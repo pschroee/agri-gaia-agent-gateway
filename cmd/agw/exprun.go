@@ -53,6 +53,8 @@ type expAPI interface {
 	ExpSupersedeRun(ctx context.Context, id, by string) error
 	ExpRuns(ctx context.Context, plan, cell string) ([]agwclient.ExpRun, error)
 	ExpUsage(ctx context.Context, plan string) (agwclient.ExpUsage, error)
+	// LLMCalls lists the model calls the gateway recorded for the chat (the end reason of a cut response stream).
+	LLMCalls(ctx context.Context, id string) ([]agwclient.LLMCall, error)
 	ExpObjects(ctx context.Context, chatID string) ([]agwclient.ExpObject, error)
 	ExpCall(ctx context.Context, req agwclient.ExpCallRequest) (agwclient.ExpCallResult, error)
 	// ExpDataset reads GET /datasets/{id} without a chat: the check of the base datasets runs before the run's chat exists (BM1).
@@ -816,7 +818,7 @@ func (r *expRunner) waitEnd(ctx context.Context, chatID string) (status, reason 
 		}
 		if !c.Running && !c.Resuming && c.Queued == 0 && open == 0 {
 			if seenActive {
-				status, reason = expEndReason(det)
+				status, reason = r.endReason(ctx, chatID, det)
 				return status, reason, det, nil
 			}
 			if now.Sub(startedAt) >= r.startGrace {
@@ -915,7 +917,40 @@ func (r *expRunner) abort(ctx context.Context, chatID string) {
 
 // expEndReason reads the outcome of the chat's last assistant turn. An error that pi reports there
 // is the run's error; an abort is the run's abort.
-var providerErrorRe = regexp.MustCompile(`^\s*(5\d\d|429)\b`)
+//
+// 408 is a request timeout: a model farm behind a proxy with a time limit (LiteLLM, a firewall) ends a request
+// that runs too long, and the model is not at fault. The gateway's proxy retries 5xx and 429 for up to 15 minutes
+// (retry.go); a 408 comes after the limit and is not retried.
+var providerErrorRe = regexp.MustCompile(`^\s*(5\d\d|429|408)\b`)
+
+// streamCutReason decides whether an error end that matches no provider error is a response stream that the
+// provider side cut off: the chat's last recorded model call was answered with status 200 but never came to its
+// end (no finish_reason, no [DONE]), and no limit of the run caused the end. Nothing about the model's behaviour
+// can be read from such an end, so it is booked as a provider error (D9, issue #279).
+func streamCutReason(status, reason string, calls []agwclient.LLMCall, limited bool) (string, string) {
+	if status != "error" || strings.HasPrefix(reason, "provider_error:") || limited || len(calls) == 0 {
+		return status, reason
+	}
+	if last := calls[len(calls)-1]; last.Status == 200 && !last.Complete {
+		return "error", "provider_error: response stream ended early"
+	}
+	return status, reason
+}
+
+// endReason is expEndReason plus the check of the recorded model calls (streamCutReason). A call list that cannot
+// be read leaves the reason as expEndReason gave it.
+func (r *expRunner) endReason(ctx context.Context, chatID string, det agwclient.ChatDetail) (string, string) {
+	status, reason := expEndReason(det)
+	if status != "error" || strings.HasPrefix(reason, "provider_error:") {
+		return status, reason
+	}
+	calls, err := r.api.LLMCalls(ctx, chatID)
+	if err != nil {
+		return status, reason
+	}
+	limited := det.Chat.Experiment != nil && det.Chat.Experiment.Limit != ""
+	return streamCutReason(status, reason, calls, limited)
+}
 
 func expEndReason(det agwclient.ChatDetail) (status, reason string) {
 	for i := len(det.Messages) - 1; i >= 0; i-- {
